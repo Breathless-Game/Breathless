@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deep Breath</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <div id="hud" class="hidden">
+      <section id="breath" class="panel">
+        <div class="row">
+          <span id="breath-chip" class="chip breathing">BREATHING</span>
+          <span id="hold-time">0.0s</span>
+        </div>
+        <canvas id="trace" width="440" height="96"></canvas>
+        <div class="row small">
+          <span id="source">Presage · live</span>
+          <span id="vitals"></span>
+        </div>
+        <div id="hint" class="small hint"></div>
+      </section>
+
+      <div id="cam-wrap"><video id="cam" playsinline muted></video></div>
+
+      <section id="depth">
+        <div class="zone" style="--top: 0%; --h: 30%">Shallows</div>
+        <div class="zone reef" style="--top: 30%; --h: 33.3%">Reef</div>
+        <div class="zone abyss" style="--top: 63.3%; --h: 36.7%">Abyss</div>
+        <div id="depth-marker"><span id="depth-label">0 m</span></div>
+      </section>
+
+      <div id="emergency" class="hidden">
+        <div class="label">OUT OF AIR · SURFACE!</div>
+        <div class="bar"><div id="emergency-fill"></div></div>
+      </div>
+
+      <div id="center-msg"></div>
+
+      <section id="net" class="panel">
+        <div class="small muted">NET</div>
+        <div id="net-slots"></div>
+      </section>
+
+      <section id="bank" class="panel">
+        <div class="small muted">BANKED</div>
+        <div id="bank-count">0 fish</div>
+        <div id="bank-value" class="small"></div>
+        <button id="report-btn" class="mini">♥ Health report (H)</button>
+      </section>
+
+      <div id="toasts"></div>
+      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>N</b> night · <b>K</b> breath input</div>
+    </div>
+
+    <div id="overlay">
+      <div class="card">
+        <h1>DEEP<span>BREATH</span></h1>
+        <p class="tagline">Your real lungs are the oxygen tank.</p>
+        <ol>
+          <li><b>Hold your breath</b> in real life and your diver can dive.</li>
+          <li>The deeper you go, the rarer the fish. Mythics live in the Abyss.</li>
+          <li><b>Breathe underwater</b> and you are out of air: race to the surface or lose your net.</li>
+          <li>Surface to bank your catch.</li>
+        </ol>
+        <div class="buttons">
+          <button id="start-live" class="primary">Start with camera</button>
+          <button id="start-keys">Play with keyboard</button>
+        </div>
+        <button id="open-report" class="link">View my health report</button>
+        <p class="small muted">Breath detection by Presage SmartSpectra · face and chest visible, good light</p>
+        <div id="calib" class="hidden">
+          <div id="calib-step">Connecting to breath sensor…</div>
+          <div id="calib-sub" class="small muted"></div>
+          <button id="calib-skip" class="link">skip</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="collection" class="hidden">
+      <div class="collection-head">
+        <div>
+          <h2>Collection</h2>
+          <div id="wallet" class="small"></div>
+        </div>
+        <button id="collection-close">Close (C)</button>
+      </div>
+      <div id="collection-grid"></div>
+    </div>
+
+    <div id="report" class="hidden"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

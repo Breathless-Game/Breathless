@@ -1,0 +1,15 @@
+{
+  "name": "deepbreath-sensor",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node index.mjs",
+    "sim": "node index.mjs --sim"
+  },
+  "dependencies": {
+    "@smartspectra/node-sdk": "^3.4.0",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  }
+}
