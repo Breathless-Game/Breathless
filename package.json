@@ -7,6 +7,8 @@
     "game": "npm --prefix game run dev",
     "dev": "node scripts/dev.mjs",
     "showcase:gif": "node scripts/capture-showcase.mjs",
-    "setup": "npm --prefix sensor install && npm --prefix game install"
+    "setup": "npm --prefix sensor install && npm --prefix game install",
+    "build": "npm --prefix game run build",
+    "start": "node sensor/index.mjs --serve game/dist"
   }
 }
