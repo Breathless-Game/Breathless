@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>屏息 Breathless · Showcase</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/showcase.css" />
+  </head>
+  <body>
+    <main class="stage">
+      <figure class="card">
+        <canvas id="showcase"></canvas>
+        <div class="gauge"></div>
+        <figcaption class="lockup">
+          <span class="cn">屏息</span>
+          <h1>BREATH<span>LESS</span></h1>
+          <svg class="trace" viewBox="0 0 400 34" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="trace-ink" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0" stop-color="#eaf8ff" stop-opacity="0.55" />
+                <stop offset="0.5" stop-color="#eaf8ff" stop-opacity="0.55" />
+                <stop offset="0.64" stop-color="#6ab8ff" />
+                <stop offset="1" stop-color="#6ab8ff" />
+              </linearGradient>
+            </defs>
+            <!-- Breathing, one last breath in, then the hold. -->
+            <path
+              id="trace-line"
+              d="M0 17 C10 17 14 6 24 6 S38 28 48 28 S62 6 72 6 S86 28 96 28 S110 6 120 6 S134 28 144 28 S158 2 172 2 S190 17 210 17 L400 17"
+            />
+            <circle id="trace-dot" r="3.4" />
+          </svg>
+          <p>Your real lungs are the oxygen tank.</p>
+        </figcaption>
+      </figure>
+    </main>
+    <script type="module" src="/src/showcase.ts"></script>
+  </body>
+</html>
