@@ -3,6 +3,13 @@ import { disposeTree, flatMat, jitter } from './lowpoly';
 import { MAPS, mapDepth, type MapDef, type MapId } from './maps';
 import { Rng } from './rng';
 import { RENDER_QUALITY, type RenderQuality } from './render-quality';
+import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
+import { WaterSurfaceMaterial } from './water';
+import { WeatherCycle, type WeatherMode } from './weather';
+import { RainEffect } from './rain';
+import { Atmosphere } from './sky';
+import { SunShafts } from './sunshafts';
+import { SceneColorGrade } from './color-grade';
 import { buildScenery, type Scenery } from './scenery';
 
 export const HALF_WIDTH = 70;
@@ -46,19 +53,35 @@ export class World {
   boat: THREE.Group;
   private surfaceBase: Float32Array;
   private kelps: Kelp[] = [];
-  private rays: THREE.Mesh[] = [];
+  readonly shafts = new SunShafts();
+  readonly atmosphere = new Atmosphere();
+  readonly colorGrade = new SceneColorGrade();
   private snow: THREE.Points;
   private quality: RenderQuality;
+  private lightingEffects = true;
   private lastDecorationTime = 0;
+  readonly dayCycle = new DayCycle();
+  readonly weather = new WeatherCycle();
+  readonly rain = new RainEffect();
+  private weatherTime = 0;
+  private cloudTime = 0;
+  private waveTime = 0;
+  private lighting: LightingState = this.dayCycle.state;
+  private skyColor = new THREE.Color();
+  private horizonColor = new THREE.Color();
+  private waterBackground = new THREE.Color();
   // Everything on and near the bottom. Rebuilt when the map changes.
   private terrain = new THREE.Group();
   private scenery: Scenery | null = null;
-  private sky = new THREE.Color();
-  private nightSky = new THREE.Color();
+  private daySkyTint: [number, number, number] = [1, 1, 1];
+  private nightSkyTint: [number, number, number] = [1, 1, 1];
+  private surfaceTint = new THREE.Color(1, 1, 1);
+  private lastSceneTime = 0;
+  private lastCameraY = 1.5;
+  private lastCameraX = 0;
   map: MapDef;
   /** World y of the seabed for the current map (negative). */
   seabedY: number;
-  night = false;
 
   constructor(quality: RenderQuality = RENDER_QUALITY.high, map: MapDef = MAPS.ocean) {
     this.quality = quality;
@@ -72,9 +95,9 @@ export class World {
     this.sun = new THREE.DirectionalLight('#fff6dd', 2.2);
     this.sun.position.set(20, 60, 30);
     this.scene.add(this.hemi, this.sun);
+    this.scene.add(this.rain, this.atmosphere, this.shafts.group);
 
     this.scene.add(this.terrain);
-    this.buildRays(rng);
     this.snow = this.buildSnow(rng);
     this.surface = this.buildSurface();
     this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
@@ -87,10 +110,22 @@ export class World {
     this.map = map;
     this.seabedY = -mapDepth(map);
     waterColors = toPalette(map);
-    this.sky.set(map.sky);
-    this.nightSky.set(map.nightSky);
-    (this.surface.material as THREE.MeshStandardMaterial).color.set(map.surface);
+    // Apply each map's palette relative to the open-ocean reference while
+    // preserving the continuous dawn/dusk colors and the weather transition.
+    const skyTint = (color: string, reference: string): [number, number, number] => {
+      const tint = new THREE.Color(color).convertLinearToSRGB();
+      const base = new THREE.Color(reference).convertLinearToSRGB();
+      return [tint.r / base.r, tint.g / base.g, tint.b / base.b];
+    };
+    this.daySkyTint = skyTint(map.sky, MAPS.ocean.sky);
+    this.nightSkyTint = skyTint(map.nightSky, MAPS.ocean.nightSky);
+    const surfaceBase = new THREE.Color(MAPS.ocean.surface);
+    this.surfaceTint.set(map.surface);
+    this.surfaceTint.setRGB(this.surfaceTint.r / surfaceBase.r, this.surfaceTint.g / surfaceBase.g, this.surfaceTint.b / surfaceBase.b);
 
+    // Quality hides kelp by detaching it. Reattach it before disposing the old
+    // map so low-quality map switches also release every plant's GPU buffers.
+    for (const kelp of this.kelps) this.terrain.add(kelp.root);
     disposeTree(this.terrain);
     this.terrain.clear();
     this.kelps = [];
@@ -113,6 +148,8 @@ export class World {
     this.scenery = buildScenery(map);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
+    this.colorGrade.apply(this.scene);
+    this.updateLighting(this.lastSceneTime, this.lastCameraY, this.lastCameraX);
   }
 
   private buildSeabed(rng: Rng) {
@@ -126,6 +163,7 @@ export class World {
       pos.setY(i, h);
     }
     const g = geo.toNonIndexed();
+    geo.dispose();
     g.computeVertexNormals();
     const colors: number[] = [];
     const sand = new THREE.Color(this.map.sand);
@@ -265,35 +303,6 @@ export class World {
     }
   }
 
-  private buildRays(rng: Rng) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 4;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createLinearGradient(0, 0, 0, 128);
-    grad.addColorStop(0, 'rgba(255,255,240,0.55)');
-    grad.addColorStop(1, 'rgba(255,255,240,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 4, 128);
-    const tex = new THREE.CanvasTexture(canvas);
-    for (let i = 0; i < 14; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        opacity: rng.range(0.25, 0.5),
-        side: THREE.DoubleSide,
-        fog: false,
-      });
-      const ray = new THREE.Mesh(new THREE.PlaneGeometry(rng.range(1.5, 4), 34), mat);
-      ray.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), -16, rng.range(-14, -3));
-      ray.rotation.z = rng.range(-0.35, -0.15);
-      this.rays.push(ray);
-      this.scene.add(ray);
-    }
-  }
-
   private buildSnow(rng: Rng) {
     const n = 1400;
     const pos = new Float32Array(n * 3);
@@ -314,17 +323,10 @@ export class World {
 
   private buildSurface() {
     const geo = this.surfaceGeometry();
-    const mat = new THREE.MeshStandardMaterial({
-      color: '#8fe3f2',
-      flatShading: true,
-      transparent: true,
-      opacity: 0.72,
-      side: THREE.DoubleSide,
-      roughness: 0.25,
-      metalness: 0.1,
-    });
+    const mat = new WaterSurfaceMaterial();
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(0, 0, -30);
+    mesh.renderOrder = 1;
     this.scene.add(mesh);
     return mesh;
   }
@@ -339,14 +341,13 @@ export class World {
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
     this.quality = quality;
+    this.rain.setQuality(quality);
+    this.shafts.setQuality(quality);
     this.kelps.forEach((kelp, i) => {
       kelp.root.visible = i < quality.kelpCount;
       // Hidden objects still receive Three.js matrix updates while in the scene.
       if (kelp.root.visible) this.terrain.add(kelp.root);
       else this.terrain.remove(kelp.root);
-    });
-    this.rays.forEach((ray, i) => {
-      ray.visible = i < quality.rayCount && !this.night && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
     });
     this.snow.geometry.setDrawRange(0, quality.snowCount);
     if (surfaceChanged) {
@@ -605,63 +606,125 @@ export class World {
     return boat;
   }
 
-  setNight(night: boolean) {
-    this.night = night;
-    (this.snow.material as THREE.PointsMaterial).color.set(night ? '#7ff7ff' : '#e8fbff');
+  get night(): boolean {
+    return this.lighting.nightMix > 0.55;
   }
 
-  update(time: number, cameraY: number) {
+  setTimeOfDay(mode: TimeOfDay) {
+    this.dayCycle.setMode(mode);
+  }
+
+  setWeather(mode: WeatherMode) {
+    this.weather.setMode(mode);
+  }
+
+  setLightingEffects(enabled: boolean) {
+    this.lightingEffects = enabled;
+    this.sun.visible = enabled;
+    (this.surface.material as WaterSurfaceMaterial).setEffectsEnabled(enabled);
+    if (!enabled) this.shafts.group.visible = false;
+  }
+
+  advanceTime(dt: number, running = true) {
+    this.lighting = this.dayCycle.advance(dt, running);
+    const weather = this.weather.advance(dt, running);
+    if (running && Number.isFinite(dt) && dt > 0) {
+      this.weatherTime += dt;
+      this.cloudTime += dt * (0.15 + weather.wind * 0.5);
+      this.waveTime += dt * (1 + weather.wind * 0.35);
+    }
+  }
+
+  update(time: number, cameraY: number, cameraX = 0) {
     const elapsed = time - this.lastDecorationTime;
     if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
       this.updateDecorations(time, Math.min(elapsed, 0.25));
       this.lastDecorationTime = time;
     }
+    this.updateLighting(time, cameraY, cameraX);
+  }
 
-    // Water colour, fog and light fall off with depth.
+  updateLighting(time: number, cameraY: number, cameraX = 0) {
+    this.lastSceneTime = time;
+    this.lastCameraY = cameraY;
+    this.lastCameraX = cameraX;
+    const weather = this.weather.state;
+    const baseLight = this.lighting;
+    const overcast = weather.cloud * 0.85;
+    const mixSky = (color: readonly number[], day: readonly number[], night: readonly number[]): [number, number, number] =>
+      color.map((c, i) => {
+        const tint = THREE.MathUtils.lerp(this.daySkyTint[i], this.nightSkyTint[i], baseLight.nightMix);
+        const overcastColor = THREE.MathUtils.lerp(day[i], night[i], baseLight.nightMix);
+        return THREE.MathUtils.clamp(THREE.MathUtils.lerp(c, overcastColor, overcast) * tint, 0, 1);
+      }) as [number, number, number];
+    const lighting: LightingState = {
+      ...baseLight,
+      skyColor: mixSky(baseLight.skyColor, [0.36, 0.44, 0.51], [0.04, 0.065, 0.12]),
+      horizonColor: mixSky(baseLight.horizonColor, [0.57, 0.63, 0.67], [0.08, 0.12, 0.19]),
+      sunIntensity: baseLight.sunIntensity * (1 - weather.cloud * 0.88),
+      ambientIntensity: baseLight.ambientIntensity * (1 - weather.cloud * 0.28),
+    };
+    this.skyColor.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
+    this.horizonColor.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
+    this.atmosphere.update(lighting, weather, cameraY, cameraX, this.cloudTime, this.quality);
+    this.colorGrade.update(lighting, weather, cameraY, this.lightingEffects);
+
+    // The same continuous light state drives both sides of the waterline.
     const depth = -cameraY;
     const fog = this.scene.fog as THREE.Fog;
     if (depth < 0) {
-      const sky = this.night ? this.nightSky : this.sky;
-      (this.scene.background as THREE.Color).copy(sky);
-      fog.color.copy(sky);
-      [fog.near, fog.far] = this.map.haze;
+      this.scene.background = this.horizonColor;
+      fog.color.copy(this.horizonColor);
+      fog.near = this.map.haze[0] * THREE.MathUtils.lerp(1, 0.45, weather.rain);
+      fog.far = this.map.haze[1] * THREE.MathUtils.lerp(1, 0.475, weather.rain);
     } else {
-      const c = waterColorAt(depth, this.night);
-      (this.scene.background as THREE.Color).copy(c);
-      fog.color.copy(c);
+      this.waterBackground.copy(waterColorAt(depth));
+      this.waterBackground.lerp(this.horizonColor, 0.06 * Math.max(0, 1 - depth / 60));
+      this.waterBackground.multiplyScalar(THREE.MathUtils.lerp(1, 0.35, lighting.nightMix) * (1 - weather.cloud * 0.12));
+      this.scene.background = this.waterBackground;
+      fog.color.copy(this.waterBackground);
       fog.near = 6;
       fog.far = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
     }
-    const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1) * (this.night ? 0.35 : 1);
-    this.hemi.intensity = 1.4 * light;
-    this.sun.intensity = 2.2 * light * light;
+    const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1);
+    this.sun.color.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
+    this.hemi.color.copy(this.skyColor).lerp(this.horizonColor, 0.3);
+    // Sky pixels are dark at night; use their hue without losing all fill light.
+    this.hemi.color.lerp(this.sun.color, 0.2 + 0.6 * lighting.nightMix);
+    this.hemi.intensity = lighting.ambientIntensity * light;
+    this.sun.position.set(...lighting.direction).multiplyScalar(80);
+    this.sun.intensity = lighting.sunIntensity * light * light;
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;
-      if (this.scenery.group.visible) this.scenery.update(time, this.night);
+      if (this.scenery.group.visible) this.scenery.update(time, this.night, weather, this.lightingEffects);
     }
-    const rayOpacity = this.night ? 0 : 0.35 * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
-    this.rays.forEach((ray, i) => {
-      ray.visible = i < this.quality.rayCount && rayOpacity > 0;
-      (ray.material as THREE.MeshBasicMaterial).opacity = rayOpacity;
-    });
+    this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
+    (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
+    const waterMaterial = this.surface.material as WaterSurfaceMaterial;
+    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather);
+    waterMaterial.color.multiply(this.surfaceTint);
+    this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
   }
 
   private updateDecorations(time: number, dt: number) {
     // Waves.
+    const wind = this.weather.state.wind;
+    const waveTime = this.waveTime;
+    const swell = 1 + wind * 0.75;
     const pos = this.surface.geometry.attributes.position;
     const base = this.surfaceBase;
     const waves = this.map.waves;
     for (let i = 0; i < pos.count; i++) {
       const x = base[i * 3];
       const z = base[i * 3 + 2];
-      pos.setY(i, (Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25) * waves);
+      pos.setY(i, (Math.sin(x * 0.15 + waveTime * 1.3) * 0.35 + Math.cos(z * 0.2 + waveTime * 0.9) * 0.25) * swell * waves);
     }
     pos.needsUpdate = true;
     this.surface.geometry.computeVertexNormals();
 
-    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18 * waves;
-    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05 * waves;
+    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
+    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
 
     for (const k of this.kelps) {
       if (!k.root.visible) continue;
