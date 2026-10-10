@@ -3,6 +3,7 @@ import { EVENT_DEFS, SURFACE_VIEW_DEPTH, UNDERWATER_DEPTH } from './event-schedu
 import { WorldEvents, type Detail, type EventContext } from './events';
 import { MAPS, MAP_ORDER, mapDepth, type MapId } from './maps';
 import { RENDER_QUALITY } from './render-quality';
+import type { WeatherMode } from './weather';
 import { World } from './world';
 
 // Dev-only page (http://localhost:5173/events-lab.html): the real World for
@@ -51,6 +52,8 @@ detailSelect.value = String(detail);
 const depthInput = $<HTMLInputElement>('depth');
 const camxInput = $<HTMLInputElement>('camx');
 const nightInput = $<HTMLInputElement>('night');
+const weatherSelect = $<HTMLSelectElement>('weather');
+const lightingInput = $<HTMLInputElement>('lighting');
 const autoInput = $<HTMLInputElement>('auto');
 
 function setMap(id: MapId) {
@@ -85,7 +88,20 @@ function setCameraX(x: number) {
 function setNight(on: boolean) {
   night = on;
   nightInput.checked = on;
-  world.setNight(on);
+  world.setTimeOfDay(on ? 'night' : 'morning');
+  // Settle the transition now instead of over the next two seconds.
+  world.advanceTime(5, false);
+}
+
+function setWeather(mode: WeatherMode) {
+  weatherSelect.value = mode;
+  world.setWeather(mode);
+  world.advanceTime(6, false);
+}
+
+function setLighting(on: boolean) {
+  lightingInput.checked = on;
+  world.setLightingEffects(on);
 }
 
 /** Fire an event, first moving the camera to where it can be seen. */
@@ -96,6 +112,8 @@ function trigger(id: string) {
     if (!def.underwater && depth > (def.maxDepth ?? SURFACE_VIEW_DEPTH)) setDepth(0);
     if (def.when === 'night' && !night) setNight(true);
     if (def.when === 'day' && night) setNight(false);
+    if (def.minStorm !== undefined && world.weather.state.storm < def.minStorm) setWeather('storm');
+    if (def.maxCloud !== undefined && world.weather.state.cloud > def.maxCloud) setWeather('clear');
   }
   // trigger() places the event with the context from the latest update(), so pass
   // the new depth and clock along first (a zero-length step).
@@ -120,6 +138,8 @@ detailSelect.onchange = () => setDetail(Number(detailSelect.value) as Detail);
 depthInput.oninput = () => setDepth(Number(depthInput.value));
 camxInput.oninput = () => setCameraX(Number(camxInput.value));
 nightInput.onchange = () => setNight(nightInput.checked);
+weatherSelect.onchange = () => setWeather(weatherSelect.value as WeatherMode);
+lightingInput.onchange = () => setLighting(lightingInput.checked);
 autoInput.onchange = () => (events.auto = autoInput.checked);
 $('hide').onclick = () => $('panel').classList.toggle('hidden');
 
@@ -149,14 +169,20 @@ function updateContext() {
   ctx.night = night;
   ctx.cameraX = camX;
   ctx.aspect = camera.aspect;
+  const weather = world.weather.state;
+  ctx.storm = weather.storm;
+  ctx.cloud = weather.cloud;
+  ctx.lightingEffects = world.lightingEffectsEnabled;
   ctx.shelfDepth = Math.min(38, mapDepth(MAPS[mapId]) * 0.6);
 }
 
 function simulate(dt: number) {
   time += dt;
   updateContext();
-  world.update(time, ctx.cameraY);
+  world.advanceTime(dt);
+  world.update(time, ctx.cameraY, camX);
   events.update(time, dt, ctx);
+  world.quietWeatherLightning = events.activeId === 'lightning';
   const shake = events.shake;
   camera.position.set(
     camX + shake * Math.sin(time * 47.3) * Math.cos(time * 13.1),
@@ -246,6 +272,9 @@ function frame() {
 
 setMap(mapId);
 setDetail(detail);
+// Fixed light and weather unless the panel changes them.
+setNight(false);
+setWeather('clear');
 frame();
 
 Object.assign(window, {
@@ -258,6 +287,8 @@ Object.assign(window, {
     setDetail,
     setDepth,
     setNight,
+    setWeather,
+    setLighting,
     setCameraX,
     /** Freeze the clock (step() still advances it). */
     pause(on = true) {

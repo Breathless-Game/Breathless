@@ -59,6 +59,11 @@ export class World {
   private snow: THREE.Points;
   private quality: RenderQuality;
   private lightingEffects = true;
+  /**
+   * Set while a world event plays its own lightning (see events.ts), so the
+   * storm's sheet lightning holds off and the two never flash together.
+   */
+  quietWeatherLightning = false;
   private lastDecorationTime = 0;
   readonly dayCycle = new DayCycle();
   readonly weather = new WeatherCycle();
@@ -128,7 +133,7 @@ export class World {
     // Quality hides kelp by detaching it. Reattach it before disposing the old
     // map so low-quality map switches also release every plant's GPU buffers.
     for (const kelp of this.kelps) this.terrain.add(kelp.root);
-    disposeTree(this.terrain);
+    disposeTree(this.terrain, this.scene);
     this.terrain.clear();
     this.kelps = [];
     const rng = new Rng(TERRAIN_SEED[map.id]);
@@ -145,7 +150,7 @@ export class World {
 
     if (this.scenery) {
       this.scene.remove(this.scenery.group);
-      disposeTree(this.scenery.group);
+      disposeTree(this.scenery.group, this.scene);
     }
     this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
@@ -362,11 +367,13 @@ export class World {
     if (detailChanged && this.scenery) {
       const { visible } = this.scenery.group;
       this.scene.remove(this.scenery.group);
-      disposeTree(this.scenery.group);
+      disposeTree(this.scenery.group, this.scene);
       this.scenery = buildScenery(this.map, quality.detail);
       this.scenery.group.visible = visible;
       this.updateScenery(this.lastDecorationTime, 0);
       this.scene.add(this.scenery.group);
+      // setMap grades the whole scene; a tier switch must grade the rebuilt shore too.
+      this.colorGrade.apply(this.scenery.group);
     }
   }
 
@@ -630,6 +637,10 @@ export class World {
     this.weather.setMode(mode);
   }
 
+  get lightingEffectsEnabled(): boolean {
+    return this.lightingEffects;
+  }
+
   setLightingEffects(enabled: boolean) {
     this.lightingEffects = enabled;
     this.sun.visible = enabled;
@@ -730,6 +741,8 @@ export class World {
     if (!this.scenery) return;
     const env = this.sceneryEnv;
     env.weather = this.weather.state;
+    // `state` is a fresh copy, so silencing the storm here touches nothing else.
+    if (this.quietWeatherLightning) env.weather.storm = 0;
     env.lightingEffects = this.lightingEffects;
     env.waveTime = this.waveTime;
     env.swell = this.swell();

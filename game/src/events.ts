@@ -36,6 +36,11 @@ export interface EventContext {
   cameraX?: number;
   /** Optional viewport width / height, so events stay in frame on narrow screens. Defaults to 1.6. */
   aspect?: number;
+  /** The "Lighting effects" setting: off rules out (and stops) the aurora and lightning. Defaults to on. */
+  lightingEffects?: boolean;
+  /** Current weather, 0-1 (WeatherState.storm / .cloud). Lightning needs a storm; cloud hides the aurora. */
+  storm?: number;
+  cloud?: number;
 }
 
 export interface WorldEventsOptions {
@@ -217,6 +222,7 @@ class Kit {
   /** True when the context passed a camera x, so events may stay close to it. */
   aimed = false;
   aspect = 1.6;
+  cloud = 0;
   private textures: { soft?: THREE.Texture; bubble?: THREE.Texture } = {};
   private pools: { puff?: Particles; bubbles?: Particles; rings?: Rings } = {};
 
@@ -309,6 +315,7 @@ class Kit {
     this.night = ctx.night;
     this.depth = ctx.depth;
     this.shelfDepth = ctx.shelfDepth;
+    this.cloud = THREE.MathUtils.clamp(ctx.cloud ?? 0, 0, 1);
     // Same falloff World uses for its own lights.
     this.light = THREE.MathUtils.clamp(1 + ctx.cameraY / 75, 0.12, 1) * (ctx.night ? 0.35 : 1);
   }
@@ -822,7 +829,8 @@ class AuroraSurge extends Effect {
 
   step() {
     const t = this.t;
-    const env = smoothstep(0, 3, t) * (1 - smoothstep(this.duration - 5, this.duration, t));
+    // Cloud dims it like the scenery's own aurora.
+    const env = smoothstep(0, 3, t) * (1 - smoothstep(this.duration - 5, this.duration, t)) * (1 - this.k.cloud);
     for (let i = 0; i < this.ribbons.length; i++) {
       const r = this.ribbons[i];
       (r.mesh.material as THREE.MeshBasicMaterial).opacity = env * (0.8 + 0.2 * Math.sin(t * 3.1 + r.phase));
@@ -1351,10 +1359,10 @@ class Lightning extends Effect {
   // Fog and background are lerped toward the flash colour and restored exactly.
   private flashColor = new THREE.Color('#e6eeff');
   private flashing = false;
-  private savedFog = new THREE.Color();
-  private savedBg = new THREE.Color();
-  private wroteFog = new THREE.Color();
-  private wroteBg = new THREE.Color();
+  // Fog colour, background colour and the sky dome's two colours (see flash()).
+  private targets: (THREE.Color | null)[] = [null, null, null, null];
+  private saved = [new THREE.Color(), new THREE.Color(), new THREE.Color(), new THREE.Color()];
+  private wrote = [new THREE.Color(), new THREE.Color(), new THREE.Color(), new THREE.Color()];
   private steamed = false;
 
   build() {
@@ -1534,33 +1542,50 @@ class Lightning extends Effect {
     this.shake = t > 0.9 ? 0.1 * pulse(clamp01((t - 0.9) / 2.3), 0.08) : 0;
   }
 
-  private flash(amount: number) {
+  /**
+   * The colours a flash lights up: the fog, the background, and the sky dome's
+   * sky and horizon (any visible scene child with uSky / uHorizon uniforms, as
+   * World's Atmosphere has). World writes them all every frame.
+   */
+  private gatherTargets() {
     const scene = this.k.scene;
     const fog = scene.fog as THREE.Fog | null;
     const bg = scene.background as THREE.Color | null;
-    const fogColor = fog && fog.color ? fog.color : null;
-    const bgColor = bg && bg.isColor ? bg : null;
-    if (!this.flashing) {
-      this.flashing = true;
-      if (fogColor) this.savedFog.copy(fogColor);
-      if (bgColor) this.savedBg.copy(bgColor);
-    } else {
-      // World rewrites these every frame; pick up its fresh value as the new base.
-      if (fogColor && !fogColor.equals(this.wroteFog)) this.savedFog.copy(fogColor);
-      if (bgColor && !bgColor.equals(this.wroteBg)) this.savedBg.copy(bgColor);
+    const t = this.targets;
+    t[0] = fog && fog.color ? fog.color : null;
+    t[1] = bg && bg.isColor ? bg : null;
+    t[2] = t[3] = null;
+    const children = scene.children;
+    for (let i = 0; i < children.length; i++) {
+      const u = ((children[i] as THREE.Mesh).material as THREE.ShaderMaterial | undefined)?.uniforms;
+      if (children[i].visible && u && u.uSky && u.uHorizon) {
+        t[2] = u.uSky.value as THREE.Color;
+        t[3] = u.uHorizon.value as THREE.Color;
+        break;
+      }
     }
-    if (fogColor) this.wroteFog.copy(fogColor.copy(this.savedFog).lerp(this.flashColor, amount));
-    if (bgColor) this.wroteBg.copy(bgColor.copy(this.savedBg).lerp(this.flashColor, amount));
+  }
+
+  private flash(amount: number) {
+    this.gatherTargets();
+    for (let i = 0; i < this.targets.length; i++) {
+      const c = this.targets[i];
+      if (!c) continue;
+      // Whatever we did not write ourselves is World's fresh value: the new base.
+      if (!this.flashing || !c.equals(this.wrote[i])) this.saved[i].copy(c);
+      this.wrote[i].copy(c.copy(this.saved[i]).lerp(this.flashColor, i >= 2 ? amount * 0.7 : amount));
+    }
+    this.flashing = true;
   }
 
   stop() {
     if (this.flashing) {
-      const scene = this.k.scene;
-      const fog = scene.fog as THREE.Fog | null;
-      const bg = scene.background as THREE.Color | null;
+      this.gatherTargets();
       // Only restore what is still ours: if World already rewrote it, it is right.
-      if (fog && fog.color && fog.color.equals(this.wroteFog)) fog.color.copy(this.savedFog);
-      if (bg && bg.isColor && bg.equals(this.wroteBg)) bg.copy(this.savedBg);
+      for (let i = 0; i < this.targets.length; i++) {
+        const c = this.targets[i];
+        if (c && c.equals(this.wrote[i])) c.copy(this.saved[i]);
+      }
       this.flashing = false;
     }
     this.bolt.visible = this.disc.visible = false;
@@ -2032,6 +2057,7 @@ export class WorldEvents {
   private infos: WorldEventInfo[] = [];
   private active: Effect | null = null;
   private activeInfo: WorldEventInfo | null = null;
+  private activeDef: EventDef | null = null;
   private now = 0;
   private ctx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
 
@@ -2045,6 +2071,11 @@ export class WorldEvents {
   /** The events possible on the current map. */
   get events(): readonly WorldEventInfo[] {
     return this.infos;
+  }
+
+  /** The running event's id, or null. */
+  get activeId(): string | null {
+    return this.activeInfo ? this.activeInfo.id : null;
   }
 
   /** Camera shake amplitude in world units right now (0 when calm). */
@@ -2091,7 +2122,15 @@ export class WorldEvents {
     c.shelfDepth = ctx.shelfDepth;
     c.cameraX = ctx.cameraX;
     c.aspect = ctx.aspect;
+    c.lightingEffects = ctx.lightingEffects;
+    c.storm = ctx.storm;
+    c.cloud = ctx.cloud;
     this.kit.setContext(ctx);
+    // Lighting effects switched off mid-show: the aurora or lightning goes at once.
+    if (this.activeDef?.lightingEffect && ctx.lightingEffects === false) {
+      this.halt();
+      this.schedule.end(time);
+    }
     if (!this.active && this.auto) {
       const def = this.schedule.tick(time, ctx);
       if (def) this.begin(def);
@@ -2111,12 +2150,23 @@ export class WorldEvents {
   /** Start an event now, replacing any running one. False if it isn't on this map. */
   trigger(id: string): boolean {
     if (!this.effects.has(id)) return false;
+    // A light show stays off while the "Lighting effects" setting is.
+    if (this.ctx.lightingEffects === false && this.schedule.events.some((d) => d.id === id && d.lightingEffect)) return false;
     this.halt();
     const def = this.schedule.force(id);
     if (!def) return false;
     this.kit.setContext(this.ctx);
     this.begin(def);
     return true;
+  }
+
+  /**
+   * End whatever is playing and start over: the next event comes the first-event
+   * delay after the next update(). For leaving a dive (menus show no events).
+   */
+  stop() {
+    this.halt();
+    this.schedule.reset();
   }
 
   dispose() {
@@ -2136,6 +2186,7 @@ export class WorldEvents {
     effect.shake = 0;
     effect.start();
     this.active = effect;
+    this.activeDef = def;
     this.activeInfo = this.infos.find((i) => i.id === def.id) ?? null;
     if (this.activeInfo) this.onEvent?.(this.activeInfo);
   }
@@ -2146,6 +2197,7 @@ export class WorldEvents {
     this.active.stop();
     this.kit.clearPools();
     this.active = null;
+    this.activeDef = null;
     this.activeInfo = null;
   }
 

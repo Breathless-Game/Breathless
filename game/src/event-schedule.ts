@@ -19,12 +19,23 @@ export interface EventDef {
   weight?: number;
   /** Weight multiplier once the diver is below the shelf (the trench). */
   deepBias?: number;
+  /** A light show: off while the "Lighting effects" setting is off. */
+  lightingEffect?: boolean;
+  /** Needs at least this much storm (WeatherState.storm, 0-1). */
+  minStorm?: number;
+  /** Hidden behind cloud cover heavier than this (WeatherState.cloud, 0-1). */
+  maxCloud?: number;
 }
 
 export interface ScheduleContext {
   depth: number;
   night: boolean;
   shelfDepth: number;
+  /** The "Lighting effects" setting. Defaults to on. */
+  lightingEffects?: boolean;
+  /** Current weather (WeatherState.storm and .cloud, 0-1). Unknown weather filters nothing. */
+  storm?: number;
+  cloud?: number;
 }
 
 /** Underwater events only start below this depth (metres). */
@@ -40,12 +51,14 @@ export const EVENT_DEFS: readonly EventDef[] = [
   { id: 'avalanche', label: 'Avalanche on the north face!', map: 'fjord', underwater: false },
   // The calved berg drifts close enough to be seen from just under the surface.
   { id: 'calving', label: 'Iceberg calving! A chunk of ice breaks away.', map: 'fjord', underwater: false, maxDepth: UNDERWATER_DEPTH },
-  { id: 'aurora', label: 'The aurora flares overhead!', map: 'fjord', underwater: false, when: 'night', weight: 1.5 },
+  // The scenery's own aurora fades behind cloud the same way.
+  { id: 'aurora', label: 'The aurora flares overhead!', map: 'fjord', underwater: false, when: 'night', weight: 1.5, lightingEffect: true, maxCloud: 0.5 },
   { id: 'rockfall', label: 'Rockfall! Stones tumble from a pillar.', map: 'tianchi', underwater: false },
   { id: 'cranes', label: 'A flock of cranes crosses the sky.', map: 'tianchi', underwater: false, when: 'day' },
   { id: 'mist', label: 'A mist surge rolls across the lake.', map: 'tianchi', underwater: false },
   { id: 'whale', label: 'A whale breaches in the distance!', map: 'ocean', underwater: false },
-  { id: 'lightning', label: 'Lightning strikes the sea!', map: 'ocean', underwater: false },
+  // Only in a storm, where it is the big strike; World holds its sheet lightning off meanwhile.
+  { id: 'lightning', label: 'Lightning strikes the sea!', map: 'ocean', underwater: false, weight: 2, lightingEffect: true, minStorm: 0.5 },
   { id: 'ship', label: 'A ship passes on the horizon.', map: 'ocean', underwater: false },
   { id: 'leviathan', label: 'Something huge glides past in the deep...', map: 'any', underwater: true },
   { id: 'vent', label: 'A bubble vent bursts below!', map: 'any', underwater: true },
@@ -63,6 +76,9 @@ export function isEligible(d: EventDef, ctx: ScheduleContext): boolean {
   if (!d.underwater && ctx.depth > (d.maxDepth ?? SURFACE_VIEW_DEPTH)) return false;
   if (d.when === 'night' && !ctx.night) return false;
   if (d.when === 'day' && ctx.night) return false;
+  if (d.lightingEffect && ctx.lightingEffects === false) return false;
+  if (d.minStorm !== undefined && ctx.storm !== undefined && ctx.storm < d.minStorm) return false;
+  if (d.maxCloud !== undefined && ctx.cloud !== undefined && ctx.cloud > d.maxCloud) return false;
   return true;
 }
 
@@ -157,6 +173,12 @@ export class EventSchedule {
     this.mapDefs = eventsForMap(map, this.defs);
     this.current = null;
     this.last = null;
+    this.due = null;
+  }
+
+  /** Forget any running event and wait the first-event delay again (e.g. a new dive). */
+  reset() {
+    this.current = null;
     this.due = null;
   }
 
