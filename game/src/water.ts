@@ -79,6 +79,12 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
             normal = normalize(mat3(viewMatrix) * waterNormal);
           }
         `)
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+          // The sky and small solar glints below already model this interface.
+          // Subdue the standard material's broad lobe so the same light source
+          // does not produce a second, overexposed sheet of reflected glare.
+          reflectedLight.directSpecular *= 0.24;
+        `)
         .replace('#include <opaque_fragment>', `
           if (uWaterEffects > 0.5) {
             vec3 waterView = normalize(cameraPosition - vWaterWorldPosition);
@@ -112,7 +118,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
 
   customProgramCacheKey(): string {
     // Quality and time of day change uniforms, never shader programs.
-    return 'deepbreath-water-sky-v4';
+    return 'deepbreath-water-sky-v5';
   }
 
   setEffectsEnabled(enabled: boolean): void {
