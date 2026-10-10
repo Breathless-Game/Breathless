@@ -300,6 +300,7 @@ node sensor/analyze.mjs --trace=lo --holdRatio=0.45
 ├── .env.example            PRESAGE_API_KEY、SENSOR_PORT
 ├── intro/HackRU26.md       比赛介绍和时间线（中英双语）
 ├── design/game-design-document.md  策划案：三张地图、小怪、升级、改进点
+├── assets/                 素材库：每个鱼种和鱼竿的图片与参数
 ├── sensor/                 Node 憋气传感器服务
 │   ├── index.mjs           WS 服务、每个连接一个 Session、Presage SDK、模拟器（含模拟心率）
 │   ├── breath-detector.mjs 憋气检测（第 5 节）
@@ -308,6 +309,7 @@ node sensor/analyze.mjs --trace=lo --holdRatio=0.45
 └── game/                   Vite + TypeScript + Three.js
     ├── index.html          HUD、标题卡、收藏面板、报告面板的 DOM
     ├── vite.config.ts      端口 5173；Node polyfills（Umi 和 Irys 需要）
+    ├── asset-library.html  素材库的预览页，只在开发服务器上有（src/asset-library.ts）
     ├── tests/              node --test：自动画质的单元测试
     └── src/
         ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
@@ -335,6 +337,8 @@ node sensor/analyze.mjs --trace=lo --holdRatio=0.45
 ---
 
 ## 7. 游戏设计参数
+
+17 个鱼种和鱼竿的图片、每个鱼种的参数，见[素材库](assets/README.zh-CN.md)。
 
 ### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
 
