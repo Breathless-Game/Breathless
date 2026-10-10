@@ -2,8 +2,8 @@ import './polyfills';
 import {
   createGenericFile,
   generateSigner,
-  keypairIdentity,
   publicKey,
+  signerIdentity,
   sol,
   type Umi,
 } from '@metaplex-foundation/umi';
@@ -14,33 +14,25 @@ import { base58 } from '@metaplex-foundation/umi/serializers';
 import { RARITY, fishValue, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, type MapId } from './maps';
 import { fishCard } from './portrait';
+import { ownerAddress, sessionSigner, walletState } from './wallet';
 
-// Everything here runs in the browser against Solana devnet. The player gets a
-// burner wallet stored in localStorage; it pays for the Irys upload and the
-// Metaplex Core mint, and owns the resulting fish NFTs.
+// Everything here runs in the browser against Solana devnet. The identity is
+// the player's session wallet (see wallet.ts): it pays for the Irys upload and
+// the Metaplex Core mint without a prompt. The fish NFTs belong to the Phantom owner.
 
 const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://api.devnet.solana.com';
-const WALLET_KEY = 'deepbreath.wallet';
 const SYMBOL = 'DIVE';
 
 let umi: Umi | null = null;
+let umiOwner: string | null = null;
 
 function getUmi(): Umi {
-  if (umi) return umi;
+  const owner = walletState().owner;
+  if (umi && umiOwner === owner) return umi;
   const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
-  let secret: Uint8Array | null = null;
-  try {
-    const raw = localStorage.getItem(WALLET_KEY);
-    if (raw) secret = Uint8Array.from(JSON.parse(raw));
-  } catch {}
-  if (!secret) {
-    secret = u.eddsa.generateKeypair().secretKey;
-    try {
-      localStorage.setItem(WALLET_KEY, JSON.stringify(Array.from(secret)));
-    } catch {}
-  }
-  u.use(keypairIdentity(u.eddsa.createKeypairFromSecretKey(secret)));
+  u.use(signerIdentity(sessionSigner(u)));
   umi = u;
+  umiOwner = owner;
   return u;
 }
 
@@ -112,6 +104,9 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const asset = generateSigner(u);
   const { signature } = await create(u, {
     asset,
+    owner: publicKey(ownerAddress(u)),
+    payer: sessionSigner(u),
+    authority: sessionSigner(u),
     name: spec.name,
     uri,
     plugins: [

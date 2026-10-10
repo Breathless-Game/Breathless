@@ -18,6 +18,8 @@ import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import { GearPanel } from './gear-panel';
 import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
+import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
+import { LoginGate, mountWalletRow } from './login';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -107,7 +109,7 @@ let breathSince: number | null = null; // when the sensor last flipped to "breat
 
 function loadBank(): FishSpec[] {
   try {
-    return JSON.parse(localStorage.getItem('deepbreath.bank') ?? '[]');
+    return JSON.parse(localStorage.getItem(storageKey('bank')) ?? '[]');
   } catch {
     return [];
   }
@@ -115,7 +117,7 @@ function loadBank(): FishSpec[] {
 
 function saveBank() {
   try {
-    localStorage.setItem('deepbreath.bank', JSON.stringify(bank));
+    localStorage.setItem(storageKey('bank'), JSON.stringify(bank));
   } catch {}
 }
 
@@ -440,6 +442,7 @@ function onEscape() {
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
+  else if (loginGate.visible) showTitle(false);
   else if (workbench.visible && phase === 'menu') workbench.escape();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
@@ -524,16 +527,63 @@ const workbench = new Workbench({
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
+  loginGate.hide();
   workbench.hide();
   titleScreen.show(intro);
 }
 
+// Phantom is required: START goes through the login gate unless a wallet is connected.
+const loginGate = new LoginGate(() => showTitle(false));
+mountWalletRow(document.getElementById('set-wallet')!);
+
 function openWorkbench() {
-  titleScreen.dropAway('START', () => {
+  titleScreen.dropAway('START', async () => {
     titleScreen.hide();
-    workbench.show(true);
+    await walletRestored; // a silent reconnect may still be in flight
+    if (walletState().connected) workbench.show(true);
+    else loginGate.show();
   });
 }
+
+// ---- Wallet -------------------------------------------------------------
+// Progress above starts as defaults: storage is per wallet, and saves are
+// no-ops until Phantom connects. The first connect loads that wallet's
+// progress in place; switching accounts or disconnecting reloads the page,
+// so nothing in memory from one wallet can be saved under another.
+let walletOwner: string | null = null;
+
+function loadWalletProgress() {
+  bank.splice(0, bank.length, ...loadBank());
+  Object.assign(equipment, loadEquipment());
+  Object.assign(mapProgress, loadMapProgress());
+  if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
+  health.reload();
+  if (world.map.id !== mapProgress.selected) {
+    world.setMap(MAPS[mapProgress.selected]);
+    maxDepth = mapDepth(world.map);
+    populate();
+    showMapOnHud();
+  }
+  hud.setBank(bank);
+  refreshEquipment();
+  mapPicker.render();
+  noteBankValue(false);
+}
+
+onWalletChange((s) => {
+  if (s.owner === walletOwner) return;
+  if (walletOwner) {
+    location.reload();
+    return;
+  }
+  walletOwner = s.owner;
+  loadWalletProgress();
+  if (loginGate.visible) {
+    loginGate.hide();
+    workbench.show(true);
+  }
+});
+const walletRestored = restoreWallet();
 
 function openStartCard() {
   titleScreen.hide();
@@ -668,6 +718,7 @@ Object.assign(window, {
   fishes,
   keys,
   renderQuality,
+  walletState,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;

@@ -1,4 +1,5 @@
 import { ZONES, fishValue, type FishSpec, type Zone } from './fish';
+import { storageKey } from './wallet';
 
 // The three waters from the design doc (design/game-design-document.md, section 6).
 // A map is pure data: how deep you may dive, when it unlocks, and its palette.
@@ -145,7 +146,7 @@ const KEY = 'deepbreath.maps';
 export function loadMapProgress(): MapProgress {
   const progress: MapProgress = { selected: 'fjord', bestValue: 0, unlockAll: false };
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}');
+    const saved = JSON.parse(localStorage.getItem(storageKey(KEY)) ?? '{}');
     if (saved.selected in MAPS) progress.selected = saved.selected;
     if (Number.isFinite(saved.bestValue)) progress.bestValue = saved.bestValue;
     progress.unlockAll = saved.unlockAll === true;
@@ -155,7 +156,7 @@ export function loadMapProgress(): MapProgress {
 
 export function saveMapProgress(progress: MapProgress) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(progress));
+    localStorage.setItem(storageKey(KEY), JSON.stringify(progress));
   } catch {}
 }
 

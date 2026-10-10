@@ -1,10 +1,17 @@
 import { fishValue, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, type MapId } from './maps';
 import { fishCard } from './portrait';
+import { sessionBalance, topUpSession, walletState } from './wallet';
+import { isUserRejection } from './wallet-storage';
 
-// The collection panel: banked fish as NFT cards, plus the devnet wallet.
+// The collection panel: banked fish as NFT cards, plus the devnet wallets
+// (Phantom owns the fish; the game wallet pays mint fees without prompts).
 // Chain code is loaded lazily the first time the panel opens, so a Solana
 // hiccup can never break the dive itself.
+
+/** Below this the game wallet can't cover many mints: offer a Phantom top-up. */
+const FUND_BELOW_SOL = 0.02;
+const FUND_SOL = 0.1;
 
 type Chain = typeof import('./chain');
 
@@ -47,21 +54,48 @@ export class Vault {
   }
 
   private async refreshWallet(note = '') {
+    const { owner, session } = walletState();
+    if (!owner || !session) {
+      this.walletEl.textContent = 'Connect Phantom to mint.';
+      return;
+    }
     this.walletEl.textContent = 'Connecting to Solana devnet…';
     try {
       const c = await this.loadChain();
-      const addr = c.walletAddress();
-      let bal = '…';
+      let sol: number | null = null;
       try {
-        bal = `${(await c.balanceSol()).toFixed(3)} SOL`;
-      } catch {
-        bal = 'balance unavailable';
-      }
-      this.walletEl.innerHTML = `Devnet wallet <a target="_blank" rel="noopener" href="${c.explorer('address', addr)}">${short(addr)}</a> · <b>${bal}</b> <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+        sol = await sessionBalance();
+      } catch {}
+      const bal = sol == null ? 'balance unavailable' : `${sol.toFixed(3)} SOL`;
+      const link = (a: string) => `<a target="_blank" rel="noopener" href="${c.explorer('address', a)}">${short(a)}</a>`;
+      const fund = sol != null && sol < FUND_BELOW_SOL ? ` <button id="fund" class="mini primary">Fund game wallet (${FUND_SOL} SOL)</button>` : '';
+      this.walletEl.innerHTML = `Phantom ${link(owner)} · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
       this.walletEl.querySelector('.note')!.textContent = note;
       $('airdrop').addEventListener('click', () => this.airdrop());
+      if (fund) $('fund').addEventListener('click', () => this.fund());
     } catch (e) {
       this.walletEl.textContent = `Solana unavailable: ${(e as Error).message}`;
+    }
+  }
+
+  /** Phantom sends devnet SOL to the game wallet (one prompt). */
+  private async fund() {
+    const btn = $('fund') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Approve in Phantom…';
+    try {
+      await topUpSession(FUND_SOL);
+      await this.refreshWallet('Game wallet funded.');
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      console.error('top-up failed', e);
+      await this.refreshWallet(
+        isUserRejection(e)
+          ? 'Top-up cancelled.'
+          : /insufficient|debit an account|0x1\b/i.test(msg)
+            ? 'Your Phantom wallet needs devnet SOL (faucet.solana.com), and Phantom must be on Devnet.'
+            : `Top-up failed: ${msg.slice(0, 100)}`,
+      );
     }
   }
 
@@ -143,7 +177,7 @@ export class Vault {
       const err = document.createElement('div');
       err.className = 'err';
       err.textContent = /insufficient|0x1\b|debit an account/i.test(msg)
-        ? 'Not enough devnet SOL. Airdrop first.'
+        ? 'Game wallet is out of SOL. Fund it above.'
         : `Mint failed: ${msg.slice(0, 120)}`;
       cap.appendChild(err);
     }
