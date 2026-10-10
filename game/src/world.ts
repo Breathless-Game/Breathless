@@ -12,12 +12,14 @@ import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
 import { buildScenery, type Scenery } from './scenery';
 
-// Keep the playable corridor wide enough for long horizontal swims. All
-// terrain, particles, fish and diver bounds derive from this single value.
+// Keep the default corridor wide enough for long horizontal swims. The
+// maximum corridor below is used when the player opens a new map edge.
 export const HALF_WIDTH = 140;
+/** Maximum horizontal edge supported by the generated seabed geometry. */
+export const MAX_HALF_WIDTH = HALF_WIDTH + 60;
 
-// Preserve the old seabed triangle density after widening the floor from 260
-// to 400 world units.
+// Preserve the old seabed triangle density while widening the floor to cover
+// the full dynamic corridor plus a small camera buffer.
 const SEABED_SEGMENTS_X = 120;
 
 // Each map lays out its terrain from its own seed. The ocean keeps the seed the
@@ -163,7 +165,9 @@ export class World {
   }
 
   private buildSeabed(rng: Rng) {
-    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 120, 90, SEABED_SEGMENTS_X, 30);
+    // Keep the full generated floor under the maximum interactive corridor.
+    // The extra ten metres on each side gives the camera a small visual buffer.
+    const geo = new THREE.PlaneGeometry(MAX_HALF_WIDTH * 2 + 20, 90, SEABED_SEGMENTS_X, 30);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
     for (let i = 0; i < pos.count; i++) {
@@ -195,7 +199,7 @@ export class World {
       const geo = jitter(new THREE.IcosahedronGeometry(r, rng.next() < 0.5 ? 0 : 1), rng, r * 0.18);
       const mesh = new THREE.Mesh(geo, flatMat(rng.pick(palette)));
       const y = this.seabedY + Math.pow(rng.next(), 1.6) * (-this.seabedY - 10);
-      mesh.position.set(rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20), y, rng.range(-38, -14));
+      mesh.position.set(rng.range(-MAX_HALF_WIDTH - 10, MAX_HALF_WIDTH + 10), y, rng.range(-38, -14));
       mesh.rotation.set(rng.range(0, 6), rng.range(0, 6), rng.range(0, 6));
       mesh.scale.y = rng.range(0.6, 1.3);
       this.terrain.add(mesh);
@@ -204,7 +208,7 @@ export class World {
     for (let i = 0; i < 16; i++) {
       const r = rng.range(1.5, 4);
       const mesh = new THREE.Mesh(jitter(new THREE.IcosahedronGeometry(r, 0), rng, r * 0.2), flatMat(rng.pick(palette)));
-      mesh.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), this.seabedY + r * 0.4, rng.range(-6, 6));
+      mesh.position.set(rng.range(-MAX_HALF_WIDTH, MAX_HALF_WIDTH), this.seabedY + r * 0.4, rng.range(-6, 6));
       this.terrain.add(mesh);
     }
   }
@@ -236,7 +240,7 @@ export class World {
       // Coral lives mostly in the reef band.
       const onFloor = rng.next() < 0.45;
       const y = onFloor ? this.seabedY + 1 : -rng.range(16, 42);
-      group.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), y, onFloor ? rng.range(-12, 4) : rng.range(-16, -9));
+      group.position.set(rng.range(-MAX_HALF_WIDTH, MAX_HALF_WIDTH), y, onFloor ? rng.range(-12, 4) : rng.range(-16, -9));
       group.rotation.y = rng.range(0, Math.PI * 2);
       this.terrain.add(group);
     }
@@ -264,13 +268,13 @@ export class World {
       // Most lie fallen on the bottom; some still stand, leaning.
       const standing = rng.next() < 0.3;
       log.rotation.set(rng.range(-0.2, 0.2), rng.range(0, 6), standing ? rng.range(-0.35, 0.35) : Math.PI / 2 + rng.range(-0.15, 0.15));
-      log.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), this.seabedY + (standing ? 0 : r), rng.range(-14, 4));
+      log.position.set(rng.range(-MAX_HALF_WIDTH, MAX_HALF_WIDTH), this.seabedY + (standing ? 0 : r), rng.range(-14, 4));
       this.terrain.add(log);
     }
     for (let i = 0; i < 16; i++) {
       const w = rng.range(7, 16);
       const shelf = new THREE.Mesh(jitter(new THREE.BoxGeometry(w, rng.range(0.9, 1.8), rng.range(4, 7)), rng, 0.5), flatMat(rng.pick(this.map.rocks)));
-      shelf.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), -rng.range(12, 36), rng.range(-17, -11));
+      shelf.position.set(rng.range(-MAX_HALF_WIDTH - 10, MAX_HALF_WIDTH + 10), -rng.range(12, 36), rng.range(-17, -11));
       shelf.rotation.z = rng.range(-0.08, 0.08);
       this.terrain.add(shelf);
     }
@@ -281,7 +285,7 @@ export class World {
     for (let i = 0; i < plants; i++) {
       const root = new THREE.Group();
       const z = rng.next() < 0.25 ? rng.range(4, 8) : rng.range(-14, -4);
-      root.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), this.seabedY + 0.5, z);
+      root.position.set(rng.range(-MAX_HALF_WIDTH - 10, MAX_HALF_WIDTH + 10), this.seabedY + 0.5, z);
       const color = new THREE.Color().setHSL(rng.range(hue[0], hue[1]), 0.55, rng.range(0.22, 0.35));
       const mat = flatMat(color, { side: THREE.DoubleSide });
       const tall = rng.int(10, 26);
@@ -317,7 +321,7 @@ export class World {
     const n = 1400;
     const pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
-      pos[i * 3] = rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20);
+      pos[i * 3] = rng.range(-MAX_HALF_WIDTH - 10, MAX_HALF_WIDTH + 10);
       pos[i * 3 + 1] = rng.range(this.seabedY, -0.5);
       pos[i * 3 + 2] = rng.range(-18, 10);
     }
@@ -343,7 +347,7 @@ export class World {
 
   private surfaceGeometry() {
     const [x, y] = this.quality.surfaceSegments;
-    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 160, 120, x, y);
+    const geo = new THREE.PlaneGeometry(MAX_HALF_WIDTH * 2 + 40, 120, x, y);
     geo.rotateX(-Math.PI / 2);
     return geo;
   }
@@ -775,7 +779,7 @@ export class World {
     const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
     const currentX = (0.08 + wind * 0.18) * Math.sin(time * 0.34);
     const currentZ = (0.05 + wind * 0.1) * Math.cos(time * 0.27);
-    const width = (HALF_WIDTH + 20) * 2;
+    const width = (MAX_HALF_WIDTH + 10) * 2;
     const depth = 28;
     for (let i = 0; i < this.quality.snowCount; i++) {
       let y = snowPos.getY(i) - 0.24 * dt;
@@ -783,8 +787,8 @@ export class World {
       snowPos.setY(i, y);
       let x = snowPos.getX(i) + currentX * dt;
       let z = snowPos.getZ(i) + currentZ * dt;
-      if (x < -HALF_WIDTH - 20) x += width;
-      else if (x > HALF_WIDTH + 20) x -= width;
+      if (x < -MAX_HALF_WIDTH - 10) x += width;
+      else if (x > MAX_HALF_WIDTH + 10) x -= width;
       if (z < -18) z += depth;
       else if (z > 10) z -= depth;
       snowPos.setX(i, x);
