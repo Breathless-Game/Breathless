@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { ROD_TIERS } from './equipment';
 
-export type UpgradeId = 'rod' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
+export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
 export type UpgradeLevel = 1 | 2 | 3;
 
 export interface UpgradeDef {
@@ -17,7 +17,8 @@ export interface UpgradeDef {
 }
 
 export const UPGRADES: UpgradeDef[] = [
-  { id: 'rod', group: 'boat', name: 'Fishing rod', nameZh: '鱼竿', effects: ['1 roll per bite', 'Best of 2 rolls', 'Best of 3 rolls'], prices: [0, 60, 400] },
+  { id: 'rod', group: 'dive', name: 'Net shaft', nameZh: '鱼竿杆身', effects: ['Tool reach 1.2 m', 'Tool reach 1.55 m', 'Tool reach 1.9 m'], prices: [0, 100, 500] },
+  { id: 'reel', group: 'dive', name: 'Recovery reel', nameZh: '高速回收线轮', effects: ['Base swing recovery', '20% faster recovery', '40% faster recovery'], prices: [0, 120, 600] },
   { id: 'bait', group: 'boat', name: 'Bait', nameZh: '鱼饵', effects: ['Bite wait ×1.0', 'Bite wait ×0.8', 'Bite wait ×0.6'], prices: [0, 40, 300] },
   { id: 'boatSpeed', group: 'boat', name: 'Boat engine', nameZh: '船 · 速度', effects: ['Trip takes 2 h', 'Trip takes 1 h', 'Trip takes 30 min'], prices: [0, 80, 500] },
   { id: 'boatHull', group: 'boat', name: 'Boat hull', nameZh: '船 · 耐久', effects: ['Durability 3', 'Durability 5', 'Durability 8'], prices: [0, 80, 500] },
@@ -150,6 +151,21 @@ function buildBait(level: UpgradeLevel) {
     group.add(treble);
   }
   addHook(group, hook, 0.5, colors.metal);
+  return group;
+}
+
+/** Compact spool and clutch model for the diver's high-speed recovery reel. */
+function buildReel(level: UpgradeLevel) {
+  const group = new THREE.Group();
+  const colors = palette(level);
+  const radius = 0.16 + level * 0.025;
+  const spool = addMesh(group, new THREE.CylinderGeometry(radius, radius, 0.12, 8), colors.metal, new THREE.Vector3(0, 0.08, 0));
+  spool.rotation.x = Math.PI / 2;
+  addMesh(group, new THREE.TorusGeometry(radius * 0.82, 0.025, 5, 10), colors.accent, new THREE.Vector3(0, 0.08, 0)).rotation.x = Math.PI / 2;
+  addMesh(group, new THREE.BoxGeometry(0.12 + level * 0.03, 0.08, 0.28), colors.body, new THREE.Vector3(0, -0.1, 0));
+  const handle = addMesh(group, new THREE.BoxGeometry(0.22, 0.035, 0.035), colors.accent, new THREE.Vector3(radius + 0.1, 0.08, 0));
+  handle.rotation.z = -0.4;
+  cylinderBetween(group, new THREE.Vector3(-0.25, -0.1, 0), new THREE.Vector3(0.25, -0.1, 0), 0.025, colors.metal, 5);
   return group;
 }
 
@@ -317,7 +333,8 @@ function normalize(group: THREE.Group) {
 /** Build a centred, icon-sized display model for one upgrade level. */
 export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel): THREE.Group {
   const inner = id === 'rod' ? buildRod(level)
-    : id === 'bait' ? buildBait(level)
+    : id === 'reel' ? buildReel(level)
+      : id === 'bait' ? buildBait(level)
       : id === 'boatSpeed' ? buildBoatSpeed(level)
         : id === 'boatHull' ? buildBoatHull(level)
           : id === 'boatDeck' ? buildBoatDeck(level)

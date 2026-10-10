@@ -18,14 +18,11 @@ import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
+import { deriveStats, loadEquipment, nextSlotTier, rodTier, saveEquipment, upgradeSlot, type EquipmentState, type EquipmentSlot } from './equipment';
 
 // ---- Tuning -------------------------------------------------------------
-const SWIM_ACCEL = 24;
 const DRAG = 2.4;
-const MAX_SPEED = 7.5;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
-const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 const FISH_PER_ZONE = [16, 16, 12];
@@ -104,6 +101,28 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: FishSpec[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+// The persistent inventory is filtered by the workbench for each dive. A null
+// loadout means the debug/title state where all owned upgrades are available.
+let activeLoadout: readonly UpgradeId[] | null = null;
+const currentStats = () => deriveStats(equipment, activeLoadout ?? undefined);
+const activeLevel = (slot: EquipmentSlot): number => {
+  const packed = activeLoadout;
+  if (packed && !packed.includes(slot)) return 1;
+  if (slot === 'net') return equipment.netLevel;
+  if (slot === 'rod') return equipment.rodGearLevel;
+  if (slot === 'reel') return equipment.reelLevel;
+  if (slot === 'fins') return equipment.finsLevel;
+  if (slot === 'tank') return equipment.tankLevel;
+  return equipment.lampLevel;
+};
+function applyEquipmentVisuals() {
+  diver.setNetLevel(activeLevel('net'));
+  diver.setRodLevel(activeLevel('rod'));
+  diver.setFinsLevel(activeLevel('fins'));
+  diver.setTankLevel(activeLevel('tank'));
+  diver.setLampLevel(activeLevel('lamp'));
+  diver.setReelLevel(activeLevel('reel'));
+}
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
@@ -122,42 +141,47 @@ function saveBank() {
 }
 
 const currentTier = () => rodTier(equipment);
-hud.setNet(net, currentTier().capacity);
+hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const vault = new Vault(bank, saveBank);
 const health = new HealthLog();
 const report = new Report(health);
-const gear = new GearPanel(() => buyNextRod());
+const gear = new GearPanel((slot) => buyNextUpgrade(slot));
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
 diver.setNetLevel(currentTier().level);
+applyEquipmentVisuals();
 let nowMs = 0;
 
 function refreshEquipment() {
   const tier = currentTier();
+  const stats = currentStats();
   saveEquipment(equipment);
   hud.setEquipment(equipment, tier);
-  hud.setNet(net, tier.capacity);
+  hud.setNet(net, stats.netCapacity);
   gear.render(equipment);
-  diver.setNetLevel(tier.level);
+  applyEquipmentVisuals();
 }
 
-function buyNextRod() {
-  const next = nextRodTier(equipment);
+function buyNextUpgrade(slot: EquipmentSlot = 'net') {
+  const next = nextSlotTier(equipment, slot);
   if (!next) {
-    gear.showNotice('The net is already at maximum level.');
+    gear.showNotice(`${nextSlotLabel(slot)} is already at maximum level.`);
     return;
   }
-  const upgraded = upgrade(equipment);
+  const upgraded = upgradeSlot(equipment, slot);
   if (!upgraded) {
     gear.showNotice(`Need ${next.cost - equipment.pearls} more Pearls.`);
     hud.message(`Need ${next.cost - equipment.pearls} more Pearls`, 1500);
     return;
   }
-  equipment.rodLevel = upgraded.rodLevel;
-  equipment.pearls = upgraded.pearls;
+  Object.assign(equipment, upgraded);
   refreshEquipment();
-  hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+  hud.message(`${nextSlotLabel(slot)} upgraded: Level ${next.level}`, 1800);
+}
+
+function nextSlotLabel(slot: EquipmentSlot) {
+  return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp' } as const)[slot];
 }
 
 // ---- Input --------------------------------------------------------------
@@ -219,16 +243,19 @@ function axis(neg: string[], pos: string[]) {
 
 // ---- Catching -----------------------------------------------------------
 function tryCatch() {
+  // The net must finish its visible recovery before another throw. The reel
+  // upgrade shortens that recovery without changing breath input or rarity.
+  if (diver.swinging) return;
   diver.swing();
   if (diver.pos.y > -SURFACE_DEPTH) return;
-  const tier = currentTier();
-  if (net.length >= tier.capacity) {
+  const stats = currentStats();
+  if (net.length >= stats.netCapacity) {
     hud.message('Net full! Surface to bank it.');
     return;
   }
   const p = diver.netPoint();
   let best: Fish | null = null;
-  let bestD = tier.catchRadius;
+  let bestD = stats.catchRadius;
   for (const f of fishes) {
     const d = Math.hypot(f.pos.x - p.x, f.pos.y - p.y);
     if (d < bestD) {
@@ -241,7 +268,7 @@ function tryCatch() {
   scene.remove(best.mesh.group);
   const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
   net.push(caught);
-  hud.setNet(net, tier.capacity);
+  hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
   const zone = best.zone;
   const map = world.map;
@@ -260,7 +287,7 @@ function bankNet() {
   hud.message(`Banked ${net.length} fish · +${reward} Pearls`);
   hud.toast(rarest, 'BANKED');
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  hud.setNet(net, currentStats().netCapacity);
   hud.setBank(bank);
   noteBankValue(true);
 }
@@ -317,7 +344,7 @@ function blackout() {
   const lost = net.length;
   health.end(nowMs, 'blackout', lost);
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  hud.setNet(net, currentStats().netCapacity);
   hud.message(lost ? `BLACKOUT · ${lost} fish lost` : 'BLACKOUT', 2200);
   hud.setEmergency(null);
   setTimeout(() => {
@@ -455,7 +482,10 @@ function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  activeLoadout = null;
+  loadout = [];
+  applyEquipmentVisuals();
+  hud.setNet(net, currentStats().netCapacity);
   hud.setEmergency(null);
   outOfAir = false;
   breathSince = null;
@@ -515,7 +545,8 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
-// Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
+// Gear packed on the workbench for this dive. The selected slots are applied
+// when the map transition starts, so an omitted accessory falls back to tier 1.
 let loadout: UpgradeId[] = [];
 
 const workbench = new Workbench({
@@ -523,6 +554,9 @@ const workbench = new Workbench({
   setUnlockAll: setDemoUnlock,
   dive(id, gear) {
     loadout = gear;
+    activeLoadout = [...gear];
+    applyEquipmentVisuals();
+    hud.setNet(net, currentStats().netCapacity);
     selectMap(id);
     openStartCard();
   },
@@ -613,20 +647,22 @@ function update(dt: number, time: number) {
       if (Math.random() < 0.02) hud.message('Hold your breath to dive', 900);
     }
     if (outOfAir && ay < 0) ay = 0;
-    diver.vel.x += ax * SWIM_ACCEL * dt;
-    diver.vel.y += ay * SWIM_ACCEL * dt;
+    const stats = currentStats();
+    diver.vel.x += ax * stats.swimAcceleration * dt;
+    diver.vel.y += ay * stats.swimAcceleration * dt;
   }
 
   if (outOfAir) {
     diver.vel.y += EMERGENCY_LIFT * dt;
-    emergency -= dt / EMERGENCY_SECONDS;
+    emergency -= dt / currentStats().emergencySeconds;
     if (Math.random() < dt * 8) diver.exhale(1);
     if (emergency <= 0 && phase === 'play') blackout();
   }
 
   // Water drag, speed cap, and gentle buoyancy at the surface.
   diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  const cap = outOfAir ? 10 : MAX_SPEED;
+  // Fins improve ordinary swimming only. Emergency ascent keeps its own cap.
+  const cap = outOfAir ? 10 : currentStats().swimSpeed;
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   diver.pos.addScaledVector(diver.vel, dt);
