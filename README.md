@@ -389,7 +389,7 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 | `deepbreath.bank` | 入库的鱼（`FishSpec[]`，铸造后带 `assetId`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
-| `deepbreath.settings` | 玩家设置：`quality`（high / medium / low）、`showCamera`、`showHelp` |
+| `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`showCamera`、`showHelp` |
 
 重置：在浏览器控制台执行 `localStorage.clear()`。
 
@@ -404,6 +404,27 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 - Presage 一直卡在 `starting`：检查 `.env` 里的 key，看浏览器是否真的在发帧（HUD 的 frames 计数），以及光线够不够。
 
 ---
+
+### 自动画质
+
+暂停菜单的 Settings → Render quality 默认选 Auto；也可以手动选择高、中、低档并保存，手动档位不会自动降级。已有手动设置继续生效。暂停时不参与帧率采样，切换摄像头预览或操作提示不会重置 Auto 已降到的档位。
+
+游戏根据浏览器提供的 CPU 逻辑核心数和设备内存提示选择初始画质：不超过 4 核或 4 GB 时用低档；至少 8 核且内存提示不低于 8 GB（或浏览器不提供内存提示）时用高档；其他情况用中档。这些提示不能准确代表 GPU 性能，因此运行中还会检查实际帧间隔。
+
+| 参数 | 低 | 中 | 高 |
+| --- | --- | --- | --- |
+| DPR 上限 | 1 | 1.5 | 2 |
+| 渲染像素预算 | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
+| 海带 / 光束 / 粒子 | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| 水面分段 | 30 × 8 | 60 × 16 | 90 × 24 |
+| 装饰动画更新上限 | 20 Hz | 30 Hz | 60 Hz |
+
+大屏幕可能使用低于 1 的 DPR 以保持像素预算；HUD 仍使用浏览器原生分辨率。启动宽限期后，连续两个 3 秒窗口平均低于 45 FPS 时降一级；降档后有 6 秒冷却，同一会话只降不升。隐藏标签页和孤立长停顿不参与判断，持续极低帧率仍会触发降档。
+
+低档启动时关闭抗锯齿；运行中降档保留创建 WebGL 上下文时的抗锯齿设置，以免重建上下文中断游戏。装饰节流不改变潜水员、鱼、呼吸和光照的逐帧更新；头灯、昼夜、雾色和 NFT 卡图分辨率保留。夜间与深水里不可见的光束直接停止渲染，隐藏海带移出场景以避免矩阵更新。
+
+- `npm --prefix game test`：画质分级、像素预算、持续卡顿、后台恢复和降档冷却测试。
+- 控制台查看 `renderQuality.level` 和 `renderQuality.settings`，确认当前档位与预算。
 
 ## 12. 当前状态与待办
 
