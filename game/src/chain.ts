@@ -2,8 +2,8 @@ import './polyfills';
 import {
   createGenericFile,
   generateSigner,
-  keypairIdentity,
   publicKey,
+  signerIdentity,
   sol,
   type Umi,
 } from '@metaplex-foundation/umi';
@@ -15,34 +15,25 @@ import { zoneName } from './depth-odds';
 import { RARITY, ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
 import { fishCard } from './portrait';
-import { ownerAddress, ownerSigner, sessionSigner } from './wallet';
+import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
 
-// Everything here runs in the browser against Solana devnet. The player gets a
-// burner wallet stored in localStorage; it pays for the Irys upload and the
-// Metaplex Core mint, and owns the resulting fish NFTs.
+// Everything here runs in the browser against Solana devnet. The identity is
+// the player's session wallet (see wallet.ts): it pays for the Irys upload and
+// the Metaplex Core mint without a prompt. The fish NFTs belong to the Phantom owner.
 
 const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://api.devnet.solana.com';
-const WALLET_KEY = 'deepbreath.wallet';
 const SYMBOL = 'DIVE';
 
 let umi: Umi | null = null;
+let umiOwner: string | null = null;
 
 export function getUmi(): Umi {
-  if (umi) return umi;
+  const owner = walletState().owner;
+  if (umi && umiOwner === owner) return umi;
   const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
-  let secret: Uint8Array | null = null;
-  try {
-    const raw = localStorage.getItem(WALLET_KEY);
-    if (raw) secret = Uint8Array.from(JSON.parse(raw));
-  } catch {}
-  if (!secret) {
-    secret = u.eddsa.generateKeypair().secretKey;
-    try {
-      localStorage.setItem(WALLET_KEY, JSON.stringify(Array.from(secret)));
-    } catch {}
-  }
-  u.use(keypairIdentity(u.eddsa.createKeypairFromSecretKey(secret)));
+  u.use(signerIdentity(sessionSigner(u)));
   umi = u;
+  umiOwner = owner;
   return u;
 }
 

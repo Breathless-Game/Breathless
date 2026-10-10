@@ -21,6 +21,8 @@ import { GearPanel } from './gear-panel';
 import { loadEquipment, nextRodTier, planUpgrade, rodTier, saveEquipment, totalPearls, type EquipmentState } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
+import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
+import { LoginGate, mountWalletRow } from './login';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -209,10 +211,11 @@ let breathSince: number | null = null; // when the sensor last flipped to "breat
 function loadBank(): BankedFish[] {
   try {
     // Fish banked under the old rule were paid on surfacing: migrateBank marks them legacy.
-    const { bank, changed } = migrateBank(JSON.parse(localStorage.getItem('deepbreath.bank') ?? '[]'));
+    const key = storageKey('bank');
+    const { bank, changed } = migrateBank(JSON.parse(localStorage.getItem(key) ?? '[]'));
     if (changed) {
       try {
-        localStorage.setItem('deepbreath.bank', JSON.stringify(bank));
+        localStorage.setItem(key, JSON.stringify(bank));
       } catch {}
     }
     return bank;
@@ -223,7 +226,7 @@ function loadBank(): BankedFish[] {
 
 function saveBank() {
   try {
-    localStorage.setItem('deepbreath.bank', JSON.stringify(bank));
+    localStorage.setItem(storageKey('bank'), JSON.stringify(bank));
   } catch {}
 }
 
@@ -239,7 +242,7 @@ const nftQueue = new NftQueue(bank, saveBank, {
   },
 });
 const vault = new Vault(bank, nftQueue);
-nftQueue.start();
+// The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
 const report = new Report(health);
 const gear = new GearPanel(() => buyNextRod());
@@ -315,7 +318,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !pauseMenu.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !loginGate.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
@@ -443,14 +446,20 @@ function showMapOnHud() {
   );
 }
 
+/** Put the world on a map: scenery, its fish and trench school, and the HUD's zones and shelf. */
+function applyMap(id: MapId) {
+  if (id === world.map.id) return;
+  world.setMap(MAPS[id]);
+  populate(); // also swaps the old trench school for one under the new shelf
+  showMapOnHud();
+}
+
 /** anyMap: the workbench's chart lets you pick any place, locked or not. */
 function selectMap(id: MapId, anyMap = false) {
   if (phase !== 'menu' || id === world.map.id || (!anyMap && !isUnlocked(MAPS[id], mapProgress))) return;
   mapProgress.selected = id;
   saveMapProgress(mapProgress);
-  world.setMap(MAPS[id]);
-  populate(); // also swaps the old trench school for one under the new shelf
-  showMapOnHud();
+  applyMap(id);
   mapPicker.render();
 }
 
@@ -599,6 +608,7 @@ function onEscape() {
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
+  else if (loginGate.visible) showTitle(false);
   else if (workbench.visible && phase === 'menu') workbench.escape();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
@@ -695,15 +705,63 @@ const workbench = new Workbench({
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
+  loginGate.hide();
   workbench.hide();
   benchPan = 0;
   titleScreen.setPan(0);
   titleScreen.show(intro);
 }
 
+// Phantom is required: START goes through the login gate unless a wallet is connected.
+const loginGate = new LoginGate(() => showTitle(false));
+mountWalletRow(document.getElementById('set-wallet')!);
+
 function openWorkbench() {
-  if (!workbench.visible) workbench.show(true);
+  if (workbench.visible || loginGate.visible) return;
+  // A silent reconnect may still be in flight.
+  void walletRestored.then(() => {
+    if (workbench.visible || loginGate.visible) return;
+    if (walletState().connected) workbench.show(true);
+    else loginGate.show();
+  });
 }
+
+// ---- Wallet -------------------------------------------------------------
+// Progress above starts as defaults: storage is per wallet, and saves are
+// no-ops until Phantom connects. The first connect loads that wallet's
+// progress in place; switching accounts or disconnecting reloads the page,
+// so nothing in memory from one wallet can be saved under another.
+let walletOwner: string | null = null;
+
+function loadWalletProgress() {
+  bank.splice(0, bank.length, ...loadBank());
+  Object.assign(equipment, loadEquipment());
+  Object.assign(mapProgress, loadMapProgress());
+  if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
+  health.reload();
+  applyMap(mapProgress.selected); // the same switch the map picker makes
+  hud.setBank(bank);
+  refreshEquipment();
+  mapPicker.render();
+  noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
+  // Resume fish this wallet left queued to mint or sell.
+  nftQueue.start();
+}
+
+onWalletChange((s) => {
+  if (s.owner === walletOwner) return;
+  if (walletOwner) {
+    location.reload();
+    return;
+  }
+  walletOwner = s.owner;
+  loadWalletProgress();
+  if (loginGate.visible) {
+    loginGate.hide();
+    workbench.show(true);
+  }
+});
+const walletRestored = restoreWallet();
 
 function openStartCard() {
   titleScreen.hide();
@@ -924,6 +982,7 @@ Object.assign(window, {
   renderQuality,
   nftQueue,
   setTimeOfDay,
+  walletState,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;
