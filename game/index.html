@@ -47,11 +47,13 @@
         <div class="small muted">BANKED</div>
         <div id="bank-count">0 fish</div>
         <div id="bank-value" class="small"></div>
+        <div id="gear-summary" class="small"></div>
+        <button id="gear-open" class="mini">⚙ Rod upgrades (G)</button>
         <button id="report-btn" class="mini">♥ Health report (H)</button>
       </section>
 
       <div id="toasts"></div>
-      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
+      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
     </div>
 
     <div id="title-screen" class="hidden">
@@ -163,6 +165,38 @@
         <button id="collection-close">Close (C)</button>
       </div>
       <div id="collection-grid"></div>
+    </div>
+
+    <div id="gear-panel" class="hidden">
+      <div class="gear-head">
+        <div>
+          <div class="small muted">FISHING GEAR</div>
+          <h2>Net workshop</h2>
+          <div id="gear-level"></div>
+        </div>
+        <button id="gear-close">Close (G)</button>
+      </div>
+      <div class="gear-card">
+        <div class="gear-icon">◌</div>
+        <div>
+          <div class="small muted">CURRENT LOADOUT</div>
+          <div id="gear-effect" class="gear-effect"></div>
+          <div id="gear-pearls" class="gear-pearls"></div>
+        </div>
+      </div>
+      <div class="gear-upgrade-card">
+        <div class="row">
+          <div>
+            <div class="small muted">NEXT UPGRADE</div>
+            <div id="gear-next" class="gear-next"></div>
+          </div>
+          <div id="gear-progress-label" class="small"></div>
+        </div>
+        <progress id="gear-progress" value="0" max="1"></progress>
+        <button id="gear-upgrade" class="primary">Upgrade</button>
+        <div id="gear-notice" class="gear-notice hidden"></div>
+      </div>
+      <p class="small muted gear-footnote">Banked fish earn Pearls. Upgrades change the net's visible size, capacity and catch radius; they never extend breath time.</p>
     </div>
 
     <div id="report" class="hidden"></div>
