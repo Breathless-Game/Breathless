@@ -90,9 +90,11 @@ export class BreathTest {
         this.enter(0, now);
       } else {
         const waited = (now - this.connectingSince) / 1000;
-        this.sub.textContent = !s.connected
-          ? 'Breath sensor offline: is `npm run sensor` running?'
-          : s.hint || `Waiting for Presage… ${waited.toFixed(0)} s`;
+        this.sub.textContent = s.error
+          ? s.error
+          : !s.connected
+            ? 'Breath sensor offline: is `npm run sensor` running?'
+            : s.hint || `Waiting for Presage… ${waited.toFixed(0)} s`;
       }
       return;
     }
