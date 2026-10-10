@@ -63,9 +63,9 @@ const MAP_TOP = 0.03; // gear resting on the chart sits this much higher
 const PICKUP_S = 0.75; // the chart's flight from the table to the middle of the screen
 const SCATTER_S = 0.55; // gear on the chart hopping off before it is picked up
 const SHADOW_Z = 0.7; // where the title fish's shadows fall, from the table's back edge
+const KNOCK = 0.12; // how hard a thud on the table lifts the chart's paper, per unit of impact speed
 const HELD_CURL = 0.55; // held up, the ends still curl a little: it's paper
 const TILT = { x: 0.16, y: 0.22 }; // how far the held chart leans toward the pointer, radians edge to edge
-const FLICK = 0.00015; // how hard a fast pointer sets the held chart flapping (per move event)
 const STEP = 1 / 120;
 
 // Camera: aimed above the table, so the table fills the lower half and the title
@@ -147,6 +147,7 @@ export class Workbench {
   private heldQ = new THREE.Quaternion(); // the chart squared to the camera, before the pointer's tilt
   private tilt = { x: 0, y: 0 };
   private pointer = { x: 0.5, y: 0.5, t: 0 }; // fractions of the screen
+  private stirFrom: { x: number; z: number; t: number } | null = null; // last pointer spot on the paper (its local x/z)
   private mapTex: THREE.CanvasTexture;
   private mapHover = 0;
   private slotRings: THREE.Mesh[] = [];
@@ -541,14 +542,24 @@ export class Workbench {
   }
 
   /**
-   * The chart's paper: it ripples a little more under the pointer on the table;
-   * held up, it tilts gently toward the pointer and its pins ride along on it.
+   * The chart's paper (paper.ts). On the table it rests on the tabletop and the
+   * gear lying on it presses it flat there; held up, it tilts gently toward the
+   * pointer and its pins ride along on it.
    */
   private updateSheet(dt: number) {
     const s = this.sheet;
     const held = this.state === 'chart';
-    const k = 1 - Math.exp(-dt * 6);
-    s.ruffle = lerp(s.ruffle, this.mapHover * 0.5, k);
+    s.onTable = this.map.parent === this.scene && this.map.position.y < 0.05;
+    s.press(
+      s.onTable
+        ? this.pieces
+            .filter((p) => p.mode === 'free' && p.grounded && this.onMap(p))
+            .map((p) => {
+              const at = this.mapMesh.worldToLocal(tmpV.set(p.pos.x, 0, p.pos.z));
+              return { x: at.x, z: at.z, r: p.r * 0.8 };
+            })
+        : [],
+    );
     if (held) {
       // Lean toward the pointer: a few degrees each way, eased.
       this.tilt.x = lerp(this.tilt.x, (this.pointer.y - 0.5) * TILT.x, 1 - Math.exp(-dt * 4));
@@ -697,6 +708,11 @@ export class Workbench {
   private thud(p: Piece, speed: number) {
     this.shake = Math.min(0.22, this.shake + speed * 0.01);
     this.puff(p.pos.x, p.pos.z, p.r * 1.3);
+    // The chart's paper feels it too: its edges jump and flap, more the nearer it lands.
+    if (this.sheet.onTable) {
+      const at = this.mapMesh.worldToLocal(tmpV.set(p.pos.x, 0, p.pos.z));
+      this.sheet.knock(at.x, at.z, speed * KNOCK, 1.2);
+    }
     for (const q of this.pieces) {
       if (q === p || q.mode !== 'free' || !q.grounded) continue;
       const d = Math.hypot(q.pos.x - p.pos.x, q.pos.z - p.pos.z);
@@ -832,20 +848,26 @@ export class Workbench {
     this.setHover(this.pick(e), e);
   }
 
-  /** For the held chart: where the pointer is (it leans that way), and a quick flick sets it flapping. */
+  /**
+   * Where the pointer is (the held chart leans that way), and, when it moves over
+   * the paper, where on the paper: it wrinkles there (paper.ts), not as a whole.
+   */
   private trackPointer(e: PointerEvent) {
-    const x = e.clientX / window.innerWidth;
-    const y = e.clientY / window.innerHeight;
     const now = performance.now();
-    const dt = Math.max(1, now - this.pointer.t);
-    if (this.state === 'chart' && this.pointer.t && dt < 100) {
-      const vx = ((x - this.pointer.x) * window.innerWidth) / dt; // px/ms
-      const vy = ((y - this.pointer.y) * window.innerHeight) / dt;
-      // The air it drags: ends lift, and it twists the way the pointer went, so a shake flaps it.
-      const flick = Math.min(Math.hypot(vx, vy), 6) * FLICK * 1000;
-      this.sheet.kick(flick * 0.6, flick * 0.3 * Math.sign(vy), flick * Math.sign(vx));
+    this.pointer = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight, t: now };
+    const over = this.state === 'chart' || (this.state === 'idle' && !this.held && this.ours(e) && !e.defaultPrevented);
+    const hit = over ? (this.setRay(e), this.ray.intersectObject(this.mapMesh, false)[0]) : undefined;
+    if (!hit) {
+      this.stirFrom = null;
+      return;
     }
-    this.pointer = { x, y, t: now };
+    const at = this.mapMesh.worldToLocal(hit.point.clone());
+    const last = this.stirFrom;
+    if (last && now - last.t < 100) {
+      const dt = Math.max(1, now - last.t) / 1000;
+      this.sheet.stir(at.x, at.z, (at.x - last.x) / dt, (at.z - last.z) / dt);
+    }
+    this.stirFrom = { x: at.x, z: at.z, t: now };
   }
 
   private onUp(e: PointerEvent) {
@@ -1008,6 +1030,8 @@ export class Workbench {
         this.chartEl.classList.add('hidden');
         // Set down: a little puff, and the gear nearby feels it.
         this.puff(MAP_AT.x, MAP_AT.z, 1.6);
+        this.sheet.onTable = true;
+        this.sheet.knock(0, 0, 1.2, 2.5); // the air under it lifts the edges as it lands
         this.shake = Math.max(this.shake, 0.04);
         this.state = 'idle';
       },
