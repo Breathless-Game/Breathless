@@ -1,11 +1,13 @@
 // Standalone PEARL market for development. The game's Vite dev server proxies
-// /api to it (game/vite.config.ts). In production the same `market.handle`
-// is meant to be mounted on the game's HTTP server instead.
+// /api to it (game/vite.config.ts). In production `npm start` (index.mjs --serve)
+// mounts the same `market.handle` on the game's HTTP server instead.
 //
 //   npm run market            (from the repo root, or `npm run market` in sensor/)
 
 import { config } from 'dotenv';
+import { mkdirSync } from 'node:fs';
 import http from 'node:http';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMarket } from './market.mjs';
 
@@ -14,7 +16,13 @@ config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 const PORT = Number(process.env.MARKET_PORT ?? 8795);
 const RPC = process.env.SOLANA_RPC ?? process.env.VITE_SOLANA_RPC ?? 'https://api.devnet.solana.com';
 
-const market = await createMarket({ rpc: RPC, dir: fileURLToPath(new URL('.', import.meta.url)) });
+// MARKET_DIR is relative to the repo root, like MARKET_ORACLE_KEYPAIR; default sensor/.
+const DIR = process.env.MARKET_DIR
+  ? resolve(fileURLToPath(new URL('..', import.meta.url)), process.env.MARKET_DIR)
+  : fileURLToPath(new URL('.', import.meta.url));
+mkdirSync(DIR, { recursive: true, mode: 0o700 });
+
+const market = await createMarket({ rpc: RPC, dir: DIR });
 
 const server = http.createServer(async (req, res) => {
   if (await market.handle(req, res)) return;

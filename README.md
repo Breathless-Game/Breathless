@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+<p align="center"><img src="docs/showcase.gif" alt="Breathless: a fjord under the aurora, where a diver holds their breath and dives down to catch fish" width="800"></p>
+
 > **Hold your real breath to dive and catch fish.** Your webcam, through Presage, detects whether you are holding your breath. The diver can only descend while you hold. The deeper you go, the rarer the fish. The moment you breathe underwater you have to race back to the surface, or you lose everything in your net. Fish you bring up can be minted as Solana NFTs and traded between players. The game also quietly records how long each hold lasted and your heart rate, and builds a health report whenever you ask for one.
 
 Low-poly 2.5D, built with Three.js + TypeScript. Mostly front end, plus a local Node sensor service.
@@ -43,8 +45,8 @@ Surface = fish banked ◀── reach the surface within 3.2 s ────┤
 - **Your breath is the air tank**: the game has no oxygen bar. Your lungs are the bar.
 - **Greed against risk**: mythic fish only live in the Abyss (below 38 m), but the farther you are from the surface, the harder it is to get back after you breathe.
 - **Night mode** (`N`): every fish rolls its rarity twice and keeps the higher result. The sea-monster risk is still on the to-do list.
-- **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it.
-- **Rod upgrades** (`G`): in this game the fishing rod is the diver's hand net. Banked fish earn Pearls; Pearls buy a bigger net with more capacity and a longer catch reach.
+- **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it. Every banked fish is minted as an NFT automatically in the background; **Sell** turns one into Pearls (section 7).
+- **Rod upgrades** (`G`): in this game the fishing rod is the diver's hand net. Selling fish earns Pearls; Pearls buy a bigger net with more capacity and a longer catch reach.
 
 ### Three maps
 
@@ -60,9 +62,9 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
 - **Depth zones**: "Sunken Forest" is the second depth zone on Heaven Lake. It uses the Coral Reef drop table; only the look and the gauge label differ. Fish only spawn in the zones a map opens, and the depth gauge on the right shows only those zones.
-- **Unlocking**: a map opens by the total catch value of banked fish (see "Catch value" in section 7). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
+- **Unlocking**: a map opens by the lifetime catch value of every fish ever banked (see "Catch value" in section 7). Selling fish never lowers it, so a map never re-locks and progress never stalls. When a dive banks enough to open a new map, a message says so.
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
-- **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
+- **Saved progress**: the selected map, the lifetime banked value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
 - **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), the in-game clock (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
 - **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying with Pearl is not wired up.
 
@@ -108,6 +110,8 @@ npm run game       # the game, http://localhost:5173
 
 (Or run `npm run dev` to start both at once. It works on macOS and Windows, and Ctrl+C stops both.)
 
+After a `git pull`, start them the same way. If the pull added a dependency, the game and the sensor notice it is missing when they start and install it first.
+
 ### Windows
 
 - **x64 machines**: follow the steps above as they are.
@@ -145,6 +149,32 @@ Click **Start with camera**. Keep your face and chest in frame, in bright light.
 
 If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` (see section 5).
 
+### Self-hosting / 自托管
+
+`npm start` is the production server: one Node process on one port serves the built game, the breath sensor (WebSocket at `/sensor`) and the PEARL market (`/api/market`, section 8) together, so a single tunnel or reverse proxy can front it.
+
+```bash
+npm run setup      # once: installs sensor/ and game/ dependencies
+npm run build      # builds game/ into game/dist
+npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. |
+| `PORT` | `8794` | HTTP + WebSocket port. Dev mode (`npm run sensor`) keeps `SENSOR_PORT`, 8787. |
+| `HOST` | `127.0.0.1` | Bind address. Loopback, because the tunnel / proxy on the same machine is the only way in. |
+| `MAX_LIVE_SESSIONS` | `1` | Players using live Presage at the same time. The SDK's native state is process-global, so it can't run two sessions in one process; `0` turns live sensing off. Anyone over the cap sees "Server busy" and plays with the keyboard. |
+| `MAX_CONN_PER_IP` | `8` | Open sensor connections per player IP (read from `CF-Connecting-IP` / `X-Forwarded-For` when the proxy is local). |
+| `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
+| `FISH_MARKET_PROGRAM_ID` | empty | PEARL market mode: empty = server mode, a program id = program mode (section 8). |
+| `MARKET_DIR` | `sensor` | Where the market keeps its keypairs and state (`.market-*`), relative to the repo root. `deploy/deploy.sh` never overwrites or deletes them; back them up. If the market can't start, the game and sensor still serve and `/api/market` answers 503. |
+| `SOLANA_RPC` | devnet | RPC the market uses (falls back to `VITE_SOLANA_RPC`). |
+
+- **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
+- **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
+- **Bandwidth.** Live mode uploads raw 640×480 RGBA frames: 1.23 MB per frame, about 37 MB/s (≈295 Mbit/s) per player at 30 fps. Fine on a LAN; over the internet most players can't upload that fast, so they send fewer frames and Presage's trace degrades below ~15 fps. Keyboard and simulator mode send no frames.
+
 ---
 
 ## 3. Controls
@@ -162,12 +192,13 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
-**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) cuts its lines, drops it, and opens the workbench; the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) pans the camera down to the workbench (the rope and its fish ride up to the top of the screen and stay live); the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
 
-**Workbench** (`workbench.ts`): a top-down wooden table. Everything drops onto it from above and collides (matter-js, table-plane physics with no gravity). The START fish is top left, the three map cards top right (chapters I / II / III, face down; a map's difficulty is the game difficulty), accessories bottom left (fins, emergency tank, headlamp), and catching gear bottom right (rod, net, bait).
-- Everything can be dragged and flung. Click a piece of gear: it zooms to the centre, the background blurs, and its description shows on the left (placeholder text for now). Click again or press any key to set it in the PACK ring in the middle (green glow = packed); do it again on packed gear to put it back in its corner. Esc cancels.
-- Click a map: the card drops into the middle, sucks in the packed gear and flips face up. Click the map itself to suck in everything on the table; the card grows to cover the screen and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the map to spit the gear back out; the card flips back and returns to the top right.
-- A locked map rattles and says what it needs; the "Unlock all maps (demo)" switch is at the bottom left.
+**Workbench** (`workbench.ts`, chart in `chart.ts`): a wooden table seen at an angle (2.5D, its own Three.js scene), with a folded sea chart in the middle and a READY tray on the right.
+- The gear (fins, emergency tank, headlamp, rod, net, bait) drops in as 3D models and lands with a thud: a bounce, a puff of dust, a camera shake, and nearby pieces jump. Hand-rolled physics: gravity, a bounce off the tabletop, circle collisions on the table.
+- Hover a piece for its name and effect. Click it to set it in the READY tray (green ring); click it there to toss it back onto the table. Pieces can also be dragged (onto the tray to get them ready) and thrown.
+- Click the chart: it lifts off the table and unfolds into a map with the three places, one per chapter (I Fjord, II Heaven Lake, III Open Ocean; a place's difficulty is the game difficulty). Pick a place to see it and your ready gear, then **Dive** (or click the place again, or Enter): the chart zooms into it and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the chart or press Esc to fold it back.
+- Locked places shake and say what they need; the "Unlock all maps (demo)" switch is at the bottom left of the chart. Esc on the bare table pans back up to the title.
 - The packed gear is passed to the game (`loadout`), but the upgrade effects aren't wired into the dive yet.
 
 **Pause details**: the game freezes completely while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
@@ -200,7 +231,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 **Why does the browser open the camera, and not Node?** macOS does not grant camera permission to a node process started from an IDE or from Claude, so the SDK's `useCamera` never receives a frame. Instead the browser captures frames and pushes them to the sensor over WebSocket, and the sensor hands them to the SDK with `useCustomInput` + `sendFrame`.
 
-### WebSocket protocol (`ws://<host>:8787`)
+### WebSocket protocol (`ws://<host>:8787` in dev, same-origin `/sensor` with `npm start`)
 
 **Browser → sensor**
 
@@ -229,6 +260,8 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
   "trace": [ /* the last 90 chest-movement samples */ ]
 }
 ```
+
+Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard.
 
 ---
 
@@ -326,6 +359,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 .
 ├── package.json            root scripts: setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev: starts sensor and game together (cross-platform)
+├── scripts/ensure-deps.mjs runs before the game and the sensor start: installs dependencies that are missing
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
@@ -339,7 +373,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
     ├── index.html          DOM for the HUD, title card, collection panel and report panel
     ├── vite.config.ts      port 5173; Node polyfills (needed by Umi and Irys)
     ├── asset-library.html  dev-only preview page for the asset library (src/asset-library.ts)
-    ├── tests/              node --test: unit tests for automatic render quality
+    ├── tests/              node --test: unit tests for automatic render quality and the fish economy
     └── src/
         ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
         ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
@@ -358,16 +392,21 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── rng.ts          mulberry32 seeded random numbers
         ├── portrait.ts     offscreen rendering: fishIcon (192 px) and fishCard (512 px, the NFT card)
         ├── hud.ts          breath panel and waveform, depth gauge, emergency bar, net slots, banked count, toasts
-        ├── vault.ts        collection panel, wallet bar, Mint button (lazy-loads chain.ts)
+        ├── vault.ts        collection panel: NFT status, Sell / Mint & sell, wallet bar
+        ├── market.ts       pure economy rules: NFT status machine, legacy migration, sell value, lifetime unlock value
+        ├── nft-queue.ts    background mint and sell queue (lazy-loads chain.ts and pearl.ts)
+        ├── pearl.ts        PEARL client: balance, sell, spend (server side: sensor/market.mjs)
         ├── chain.ts        Umi, throwaway wallet, airdrop, mintFish, burnFish
         ├── polyfills.ts    Buffer and global
         ├── health.ts       HealthLog: hold time, heart rate and recovery time for every dive
         ├── report.ts       health report: metric tiles, two charts, interpretation text, save as PDF, delete data
         ├── pause.ts        Esc pause menu: resume (3-second countdown underwater), settings, back to the main menu
         ├── title.ts        main menu: a Verlet rope with fish hanging on fishing lines, mouse dragging and pushing; the START / SETTINGS fish are the buttons
-        ├── workbench.ts    workbench: table physics (matter-js), inspect / pack gear, map cards that suck in, spit out, flip and transition
+        ├── workbench.ts    workbench: 2.5D table scene, gear drop physics, READY tray, sea chart that opens into the three places
+        ├── chart.ts        the sea chart drawing (folded map texture and the open chart)
         ├── settings.ts     player settings (render quality, camera preview, control hints), stored in localStorage
         ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
+        ├── showcase.ts     showcase page (`/showcase.html`): the scene in the GIF at the top of the README, built from the game's own diver and fish models
         └── style.css       dark glass-style HUD
 ```
 
@@ -385,7 +424,7 @@ Pictures and per-species numbers for all 17 fish species and the fishing rod are
 | Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
 | The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
 
-**Catch value** = the rarity `value` (table below) × the zone's reward multiplier (`rewardMultiplier`), rounded. A rare fish is worth 10 in the Shallows, 16 on the Reef and 25 in the Abyss. It is shown as "pts" on the toast, the HUD and the collection cards, sorts the collection, is written to the NFT metadata as `Catch value`, and counts toward map unlocks. Fish banked before this change have no stored value and count at their plain rarity value.
+**Catch value** = the rarity `value` (table below) × the zone's reward multiplier (`rewardMultiplier`), rounded. A rare fish is worth 10 in the Shallows, 16 on the Reef and 25 in the Abyss. It is shown as "pts" on the toast, the HUD and the collection cards, sorts the collection, is written to the NFT metadata as `Catch value`, counts toward map unlocks, and is what selling the fish pays in Pearls. Fish banked before this change have no stored value and count at their plain rarity value.
 
 ### Rarity (`RARITY`)
 
@@ -414,7 +453,9 @@ The fishing rod is the diver's hand net. Upgrades change only the gear; they nev
 | Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
 | Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
 
-Every fish that is banked earns its catch value in Pearls; fish lost in a blackout earn nothing. The upgrade state is saved in `deepbreath.equipment` and never deletes or spends collected fish.
+**Economy**: banking pays nothing. Each banked fish is queued as an NFT (`pending → minting → minted`, or `failed` with automatic backoff and a Retry button). Pearls come only from **selling** a minted fish in the collection: the NFT is burned and its catch value is paid in PEARL, an SPL token (see "PEARL coin" below). An unminted fish shows **Mint & sell** (the market only buys NFTs), a fish that is minting cannot be sold yet, epic and rarer fish ask to confirm, and "Sell all commons" sells the commons one by one. Upgrades burn PEARL. Fish lost in a blackout earn nothing. Rules: `game/src/market.ts`; background queue: `game/src/nft-queue.ts`.
+
+**Saves from before selling**: fish banked under the old rule already paid their Pearls, so they are marked legacy: shown as "Paid out", not sellable, not auto-minted (the manual Mint button stays). Pearls already earned become a local legacy balance, shown together with PEARL and spent first. The upgrade state is saved in `deepbreath.equipment`.
 
 ![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
 
@@ -426,12 +467,13 @@ Every fish that is banked earns its catch value in Pearls; fish lost in a blacko
 
 - **Wallet**: the first time you open the collection panel, a throwaway keypair is generated and stored in `localStorage['deepbreath.wallet']`. It is a devnet-only test wallet and its private key sits in the browser, so **never put mainnet assets in it**.
 - **Funding**: the panel has an "Airdrop 1 SOL" button, but the public devnet faucet often answers with a 429 rate limit. It is more reliable to go to <https://faucet.solana.com> (GitHub login) and request SOL for the address shown in the panel.
+- **Mint queue** (`nft-queue.ts`): one mint at a time in the background, resumed on page load. When the wallet has too little SOL it tries one airdrop; if the faucet refuses, minting pauses with a "needs devnet SOL" note in the collection and checks the balance again every minute or when the panel opens.
 - **Mint flow** (`mintFish`):
   1. `fishCard(spec)` renders a PNG, which `umi.uploader.upload` uploads to Irys devnet.
   2. `uploadJson` uploads the metadata: name, symbol `DIVE`, description, image, attributes (Rarity / Species / Zone / Depth / Length / Weight / Seed).
   3. mpl-core's `create` mints a Core asset with an on-chain **Attributes plugin** (rarity / species / depth / seed), so later game logic can read the rarity straight from the chain.
   4. The asset address is written back to `FishSpec.assetId` and saved in the bank. The card shows "✓ On-chain" and links to Solana Explorer.
-- **Burn** (NFT sink): `burnFish(assetId)` is written but not connected to the UI yet. It is meant for the gear economy.
+- **Sell** (NFT sink): `sellToMarket` in `pearl.ts` sells the NFT to the PEARL market, which burns it and pays its catch value in PEARL (see "PEARL coin" below).
 - **Optional environment variable**: `VITE_SOLANA_RPC` (defaults to `https://api.devnet.solana.com`). Every `VITE_*` variable is bundled into the front end, so **never put a secret in one**.
 - **Why Vite needs polyfills**: Umi and Irys depend on Node's `Buffer`, `stream` and `crypto`, so `vite.config.ts` uses `vite-plugin-node-polyfills`.
 
@@ -445,7 +487,7 @@ Pearls, the in-game currency, are a real SPL token, **PEARL** (decimals 0), on d
 - **Price**: the catch value comes from the fish's on-chain Attributes, or is recomputed as rarity value × zone multiplier. Anything above rarity value × 6 is rejected.
 - **Trust model**: this is a devnet hackathon build. Client wallets mint the fish, so anyone can mint a "mythic" and sell it. The rarity cap, plus `max_value` in program mode, only bounds each sale, and PEARL has no real value. The server keys (`sensor/.market-oracle.json` or `MARKET_ORACLE_KEYPAIR`, and `sensor/.market-keypair.json`) are mode 600 and gitignored. They are never logged and never go in `VITE_*`.
 - **Dev**:
-  - Run `npm run market` (port 8795, `MARKET_PORT` overrides) next to `npm run dev`. Vite proxies `/api` to it.
+  - Run `npm run market` (port 8795, `MARKET_PORT` overrides) next to `npm run dev`. Vite proxies `/api` to it. `npm start` serves the market itself (section 2, Self-hosting).
   - On start the market prints its public key. In server mode, fund that key at <https://faucet.solana.com> if the airdrop is rate-limited.
   - Tests: `npm --prefix sensor test`. Devnet sell and spend check against the running market: `npm --prefix sensor run market:e2e`.
 
@@ -484,12 +526,13 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 
 | key | Contents |
 | --- | --- |
-| `deepbreath.bank` | Banked fish (`FishSpec[]`, with the catch `value` and `map`, and an `assetId` once minted) |
+| `deepbreath.bank` | Banked fish (`FishSpec[]` with the catch `value`, `map`, NFT status `nft`, `assetId` once minted, `legacy` for fish paid out under the old rule) |
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
-| `deepbreath.equipment` | Rod level and Pearl balance (`rodLevel`, `pearls`) |
+| `deepbreath.equipment` | Rod level, cached PEARL balance and legacy local Pearls (`rodLevel`, `pearls`, `legacyPearls`) |
+| `deepbreath.pearl.pending` | PEARL sales already sent, so a retry after a timeout resumes instead of starting over |
 | `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `showCamera`, `showHelp` |
-| `deepbreath.maps` | Map progress: the selected map, the best total banked value, the demo switch |
+| `deepbreath.maps` | Map progress: the selected map, the lifetime banked value (`bestValue`), the demo switch |
 
 To reset, run `localStorage.clear()` in the browser console.
 
@@ -502,6 +545,14 @@ To reset, run `localStorage.clear()` in the browser console.
 - When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.
 - The sensor logs are in the terminal that runs `npm run sensor`. Presage status codes and ValidationCode hints are translated into the yellow hint at the top left of the HUD.
 - Presage stuck on `starting`: check the key in `.env`, check that the browser is really sending frames (the frames counter in the HUD), and check that there is enough light.
+
+### Re-recording the GIF at the top of the README
+
+Start the game first (`npm run game`), then run the command below. You need Chrome and ffmpeg on your machine. The script renders `game/showcase.html` frame by frame in headless Chrome and writes `docs/showcase.gif`, which loops seamlessly from the last frame back to the first.
+
+```bash
+npm run showcase:gif
+```
 
 ### Automatic render quality
 
@@ -538,14 +589,15 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - Health report (built on demand)
 - Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, depth limits, map picker on the start card, unlock by total banked fish value
 - Low-poly models for the upgrade parts (code only, not in the game yet)
-- Rod / net upgrade MVP: three tiers of capacity and catch radius, Pearl rewards, a visibly bigger hoop, saved locally
+- Rod / net upgrade MVP: three tiers of capacity and catch radius, a visibly bigger hoop, saved locally
+- Fish economy: every banked fish auto-minted as an NFT, selling burns it for Pearls, map progress counts lifetime value
 
 ### 🔜 To do (say so in a PR or the group chat when you pick one up)
 
 - [ ] **Test Presage breath detection on real cameras** and tune the thresholds (section 5)
 - [ ] **Official game Collection**: every fish is a standalone asset right now, so Explorer shows Verified Collection as None. We need a Collection whose authority is held by a server, and to mint fish into it, so marketplaces can filter by Collection and fakes are prevented
 - [ ] **Full gear economy**: beyond the rod / net upgrade MVP, buy air tanks, fins and a headlamp with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
-- [ ] **NFT sinks**: sell to the market for Pearl, craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets. `burnFish` is already written
+- [ ] **More NFT sinks**: selling is done; still to do: craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets
 - [ ] **Night sea monster**: high-value fish appear at night, together with the sea-monster risk
 - [ ] **Three maps, what remains**: night creatures per map, the in-game clock, boat durability and sinking on the ocean map. The design is in section 6 of the design doc
 - [ ] **Boat fishing and heart-rate gameplay**: the calm value sets the bite speed and how far away underwater fish notice you; rod, bait and boat upgrades. The design is in sections 4.2, 6.3 and 7 of the design doc

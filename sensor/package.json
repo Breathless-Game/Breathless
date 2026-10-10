@@ -4,8 +4,11 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
+    "prestart": "node ../scripts/ensure-deps.mjs sensor",
     "start": "node index.mjs",
+    "presim": "node ../scripts/ensure-deps.mjs sensor",
     "sim": "node index.mjs --sim",
+    "premarket": "node ../scripts/ensure-deps.mjs sensor",
     "market": "node market-server.mjs",
     "market:e2e": "node pearl-e2e.mjs",
     "test": "node --test market-rules.test.mjs fish-market.test.mjs"

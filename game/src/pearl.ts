@@ -52,6 +52,9 @@ const API = '/api/market';
 const PENDING_KEY = 'deepbreath.pearl.pending';
 type Pending = { mode: 'program'; tx: string; pearls: number } | { mode: 'server'; transferTx: string };
 
+const offline = () =>
+  new Error(import.meta.env?.DEV ? 'PEARL market is offline (run `npm run market`)' : 'PEARL market is offline, try again later');
+
 async function api<T>(path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
@@ -62,9 +65,11 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
         : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
     );
   } catch {
-    throw new Error('PEARL market is offline (run `npm run market`)');
+    throw offline();
   }
-  const json = (await res.json().catch(() => ({}))) as T & { error?: string };
+  // No JSON at all (a proxy error page, or a static server answering with index.html) means no market.
+  const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!json || typeof json !== 'object') throw offline();
   if (!res.ok) throw new Error(json.error ?? `PEARL market error ${res.status}`);
   return json;
 }

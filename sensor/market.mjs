@@ -63,6 +63,8 @@ export async function createMarket({
   oracleKeypair = process.env.MARKET_ORACLE_KEYPAIR,
   idl,
   log = console.log,
+  // Rate limits key on this. Behind a local proxy or tunnel pass one that reads the forwarded client IP.
+  clientIp = (req) => req.socket?.remoteAddress ?? '?',
 } = {}) {
   if (!dir) throw new Error('createMarket: dir is required');
   programId ||= null; // only the env var (or option) turns program mode on, so server mode stays the safe default
@@ -86,7 +88,8 @@ export async function createMarket({
   }
   const modeName = programId ? 'program' : 'server';
 
-  // ---- HTTP. Behind the Vite proxy every request comes from 127.0.0.1, so limits are lenient.
+  // ---- HTTP. Behind the Vite proxy every request comes from 127.0.0.1, so limits are lenient
+  // (`npm start` passes clientIp, so there they are per player).
   const limiter = new RateLimiter({ limit: 120, windowMs: 60_000 });
   const tradeLimiter = new RateLimiter({ limit: 30, windowMs: 60_000 });
 
@@ -128,7 +131,7 @@ export async function createMarket({
   async function handle(req, res) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (!url.pathname.startsWith('/api/market/')) return false;
-    const ip = req.socket?.remoteAddress ?? '?';
+    const ip = clientIp(req);
     const route = `${req.method} ${url.pathname}`;
     try {
       if (!limiter.allow(ip)) throw new HttpError(429, 'Too many requests');
