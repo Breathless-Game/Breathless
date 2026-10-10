@@ -118,12 +118,16 @@ const activeLevel = (slot: EquipmentSlot): number => {
   return equipment.lampLevel;
 };
 function applyEquipmentVisuals() {
+  const stats = currentStats();
   diver.setNetLevel(activeLevel('net'));
   diver.setRodLevel(activeLevel('rod'));
+  diver.setRodRange(stats.rodRange);
   diver.setFinsLevel(activeLevel('fins'));
   diver.setTankLevel(activeLevel('tank'));
   diver.setLampLevel(activeLevel('lamp'));
+  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
   diver.setReelLevel(activeLevel('reel'));
+  diver.setReelRecovery(stats.reelRecovery);
 }
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater

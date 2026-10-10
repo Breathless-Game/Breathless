@@ -31,6 +31,7 @@ export class Diver {
   private netScale = 1;
   private rodReachScale = 1;
   private reelRecovery = 1;
+  private lampMaxIntensity = 48;
   private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
   private bubbleGeo = new THREE.IcosahedronGeometry(0.12, 0);
   private bubbleMat = new THREE.MeshStandardMaterial({
@@ -139,6 +140,12 @@ export class Diver {
     this.updateNetScale();
   }
 
+  /** Apply the derived shaft reach, including the selected specialization path. */
+  setRodRange(range: number) {
+    this.rodReachScale = THREE.MathUtils.clamp(range / 1.2, 0.6, 2);
+    this.updateNetScale();
+  }
+
   private updateNetScale() {
     this.netArm.scale.set(this.netScale * this.rodReachScale, this.netScale, this.netScale);
   }
@@ -164,13 +171,26 @@ export class Diver {
     this.lampLevel = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
     this.headlamp.distance = [18, 28, 38][this.lampLevel - 1];
     this.headlamp.angle = [0.65, 0.85, 1.05][this.lampLevel - 1];
+    this.lampMaxIntensity = [48, 64, 82][this.lampLevel - 1];
     this.lampGroup.scale.setScalar(this.lampLevel === 3 ? 1.18 : this.lampLevel === 2 ? 1.08 : 1);
+  }
+
+  /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
+  setLampStats(distance: number, intensity: number, angle: number) {
+    this.headlamp.distance = THREE.MathUtils.clamp(distance, 1, 100);
+    this.headlamp.angle = THREE.MathUtils.clamp(angle, 0.2, 1.5);
+    this.lampMaxIntensity = Math.max(1, intensity);
   }
 
   /** Configure how quickly the net can be swung again after a catch attempt. */
   setReelLevel(level: number) {
     const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
-    this.reelRecovery = 1 + (tier - 1) * 0.2;
+    this.setReelRecovery(1 + (tier - 1) * 0.2);
+  }
+
+  /** Apply branch-adjusted recovery to the visible swing animation. */
+  setReelRecovery(recovery: number) {
+    this.reelRecovery = THREE.MathUtils.clamp(recovery, 0.25, 3);
   }
 
   swing() {
@@ -218,7 +238,7 @@ export class Diver {
       this.netArm.rotation.z = -0.35 + Math.sin(time * 1.5) * 0.05;
     }
 
-    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * [48, 64, 82][this.lampLevel - 1];
+    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
 
     for (let i = this.bubbles.length - 1; i >= 0; i--) {
       const b = this.bubbles[i];
