@@ -61,7 +61,7 @@
 ### 环境要求
 
 - **Node.js 20+**（开发机是 v20.19.5）
-- **macOS（Apple Silicon）**：Presage Node SDK 目前只在这个平台上测过
+- **macOS（Apple Silicon）** 或 **Windows**：Presage Node SDK 提供 `darwin-arm64`、`win32-x64`、`linux-x64/arm64` 的运行时。Windows 的注意事项见下方 [Windows](#windows)
 - **Chrome**，以及一个摄像头（用键盘或模拟模式的话不需要）
 
 ### 安装与运行
@@ -83,7 +83,19 @@ npm run sensor     # 憋气传感器服务，ws://localhost:8787
 npm run game       # 游戏，http://localhost:5173
 ```
 
-（也可以用 `npm run dev` 同时启动两个。）
+（也可以用 `npm run dev` 同时启动两个，macOS 和 Windows 都可以用，Ctrl+C 会一起停掉。）
+
+### Windows
+
+- **x64 电脑**：直接按上面的步骤操作即可。
+- **ARM 电脑（骁龙 Snapdragon X 等）**：Presage SDK 没有 `win32-arm64` 版本，ARM 版 Node 加载不了它。需要用 **x64 版 Node**，Windows 11 会在模拟模式下运行它：
+  1. 下载 x64 的 Node 压缩包（例如 `node-v24.x.x-win-x64.zip`），解压到任意目录。
+  2. 每个终端先把它放到 PATH 最前面，再执行 `npm run setup`、`npm run sensor`、`npm run game`：
+     ```powershell
+     $env:Path = "C:\path\to\node-v24.x.x-win-x64;$env:Path"
+     node -p process.arch   # 应该输出 x64
+     ```
+  3. **安装和运行都要用同一个 Node**：`game/` 里的 esbuild 和 rollup 也是按架构安装的。如果之前用 ARM 版 Node 装过依赖，要先删掉 `sensor/node_modules` 和 `game/node_modules` 再重新安装。
 
 打开 <http://localhost:5173>：
 
@@ -244,6 +256,7 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 ```
 .
 ├── package.json            根目录脚本：setup / sensor / game / dev
+├── scripts/dev.mjs         npm run dev：同时启动 sensor 和 game（跨平台）
 ├── .env.example            PRESAGE_API_KEY、SENSOR_PORT
 ├── intro/HackRU26.md       比赛介绍和时间线（中英双语）
 ├── sensor/                 Node 憋气传感器服务
