@@ -5,21 +5,38 @@
 //   - The trace is high-pass filtered: when you hold, it jumps with the last
 //     inhale and then decays back to flat over ~3 s instead of staying put.
 //   - Presage's apnea flag never fired during 15 s holds.
+//   - Every real release starts with an exhale: the trace drops 1.5-3.5x the
+//     breathing baseline below the hold level. Glitches mid-hold can be just
+//     as "active" but jump up, or dip only ~1x, so activity alone can't tell
+//     them apart from breathing again.
 // So we measure *activity*: how far the trace travels per second (path
 // length), which is high while breathing, falls once the post-inhale decay
 // settles, and jumps the instant you breathe again. Thresholds are ratios of
 // this person's own breathing activity, learned with a robust median that
 // ignores the start-up transient and the seconds leading into a hold.
+// A hold ends on the exhale (a big drop below the hold level), on a big jump
+// up (someone who held with empty lungs breathes in first), or, as a slow
+// fallback, on sustained breathing-sized activity. Only in its first moments,
+// when a "hold" may just be a pause between breaths, does any activity end it.
 //
 // Every threshold is an option so sensor/analyze.mjs can replay a recording
 // with different settings.
 
 export const DEFAULTS = {
   activityWindowUs: 2_000_000, // window for the hold test
-  releaseWindowUs: 750_000, // short window for the release test, so breathing again shows fast
   holdRatio: 0.38, // activity below this * baseline => holding
-  releaseRatio: 0.5, // short-window activity above this * baseline => breathing again
-  releaseHoldUs: 200_000, // ...and it has to stay there this long
+  exhaleRatio: 1.1, // trace drops this * baseline below the hold level => breathed out
+  inhaleRatio: 2.0, // or jumps this * baseline above it => breathed in
+  exhaleWindowUs: 1_500_000, // the drop has to happen within this window
+  exhaleHoldUs: 100_000, // ...and stay there this long
+  quietRatio: 0.5, // hold level only follows the trace while short-window activity is below this * baseline
+  levelTauUs: 1_000_000, // how fast the hold level follows the trace
+  trustAfterUs: 2_000_000, // for this long after a hold is detected, activity alone ends it:
+  releaseWindowUs: 750_000, //   short-window activity...
+  releaseRatio: 0.5, //   ...above this * baseline...
+  releaseHoldUs: 200_000, //   ...for this long
+  sustainedRatio: 0.8, // later, only hold-window activity above this * baseline...
+  sustainedUs: 4_000_000, // ...for this long counts without an exhale
   baselineWindowUs: 30_000_000, // learn "normal breathing" over this much history
   warmupUs: 8_000_000, // ignore Presage's start-up swings
   minBaselineUs: 6_000_000, // clean breathing needed before we call any hold
@@ -40,8 +57,14 @@ export class BreathDetector {
     this.lastBaseTs = 0;
     this.holding = false;
     this.holdStartTs = 0;
+    this.detectedTs = 0;
     this.releaseSince = null;
+    this.sustainedSince = null;
+    this.exhaleSince = null;
+    this.level = 0; // trace level while holding, following only quiet stretches
+    this.lastUpdateTs = 0;
     this.releasedTs = 0;
+    this.releaseReason = null; // what ended the last hold, for analyze.mjs
     this.talkingSince = null;
     this.apnea = null;
     this.talking = null;
@@ -71,6 +94,14 @@ export class BreathDetector {
     else this.talkingSince ??= this.lastTs;
   }
 
+  /** Highest trace value over the last `us` microseconds. */
+  #maxSince(us) {
+    const from = this.lastTs - us;
+    let m = -Infinity;
+    for (let i = this.samples.length - 1; i >= 0 && this.samples[i].ts >= from; i--) m = Math.max(m, this.samples[i].v);
+    return m;
+  }
+
   /** Path length per second over the last `us` microseconds. */
   #activity(us) {
     const from = this.lastTs - us;
@@ -97,6 +128,8 @@ export class BreathDetector {
 
   #update() {
     const o = this.o;
+    const dt = this.lastTs - this.lastUpdateTs;
+    this.lastUpdateTs = this.lastTs;
     if (this.lastTs - this.firstTs < o.warmupUs) return;
     const a = this.#activity(o.activityWindowUs);
     if (a == null) return;
@@ -112,22 +145,46 @@ export class BreathDetector {
       if ((a < o.holdRatio * B || (o.useApnea && this.apnea === true)) && !talkingLong) {
         this.holding = true;
         this.holdStartTs = this.lastTs - o.activityWindowUs;
+        this.detectedTs = this.lastTs;
         this.releaseSince = null;
+        this.sustainedSince = null;
+        this.exhaleSince = null;
+        this.level = this.samples.at(-1).v;
         // The seconds sliding into a hold are not "normal breathing".
         const cut = this.holdStartTs - 1_000_000;
         while (this.base.length && this.base.at(-1).ts > cut) this.base.pop();
       }
       return;
     }
+    const v = this.samples.at(-1).v;
     const r = this.#activity(o.releaseWindowUs);
-    if ((r != null && r > o.releaseRatio * B) || talkingLong) {
-      this.releaseSince ??= this.lastTs;
-      if (this.lastTs - this.releaseSince >= o.releaseHoldUs || talkingLong) {
-        this.holding = false;
-        this.releasedTs = this.lastTs;
-      }
-    } else {
-      this.releaseSince = null;
+    // The hold level follows the slow post-inhale decay, but freezes while the
+    // trace is jumping around so a glitch can't drag it along.
+    if (r != null && r < o.quietRatio * B) this.level += (v - this.level) * (1 - Math.exp(-dt / o.levelTauUs));
+    // An exhale is a drop both from the hold level and within the last moment,
+    // so neither a frozen level nor the slow decay alone can fake one.
+    const drop = Math.min(this.level - v, this.#maxSince(o.exhaleWindowUs) - v);
+    const breathed = drop > o.exhaleRatio * B || v - this.level > o.inhaleRatio * B;
+    this.exhaleSince = breathed ? (this.exhaleSince ?? this.lastTs) : null;
+    const young = this.lastTs - this.detectedTs < o.trustAfterUs;
+    this.releaseSince = young && r != null && r > o.releaseRatio * B ? (this.releaseSince ?? this.lastTs) : null;
+    this.sustainedSince = a > o.sustainedRatio * B ? (this.sustainedSince ?? this.lastTs) : null;
+    const since = (t, us) => t != null && this.lastTs - t >= us;
+    const why = talkingLong
+      ? 'talking'
+      : since(this.exhaleSince, o.exhaleHoldUs)
+        ? drop > o.exhaleRatio * B
+          ? 'exhale'
+          : 'inhale'
+        : since(this.releaseSince, o.releaseHoldUs)
+          ? 'activity'
+          : since(this.sustainedSince, o.sustainedUs)
+            ? 'sustained'
+            : null;
+    if (why) {
+      this.releaseReason = why;
+      this.holding = false;
+      this.releasedTs = this.lastTs;
     }
   }
 
