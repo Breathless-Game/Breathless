@@ -854,27 +854,33 @@ function snapToDiveCamera() {
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 }
 
-/**
- * The workbench's place preview: switches the world to that map and renders one
- * frame from where the dive will start, copied out. Diving expands this frame to
- * the full screen over the live scene, which is then in exactly that view.
- */
-function mapPreview(id: MapId): HTMLCanvasElement {
+// The workbench's live place preview: while it is on, every frame also renders the
+// scene from where the dive starts and copies it here. Diving grows this canvas to
+// the full screen over the live scene, which is then in exactly that view.
+const previewCanvas = document.createElement('canvas');
+const previewCamera = new THREE.PerspectiveCamera();
+let previewOn = false;
+
+/** Switches the world to that place and starts the live preview of it (null: stops it). */
+function mapPreview(id: MapId | null): HTMLCanvasElement | null {
+  previewOn = id != null;
+  if (!id) return null;
   selectMap(id, true);
-  const pos = camera.position.clone();
-  const rot = camera.quaternion.clone();
-  snapToDiveCamera();
-  world.update(time, camera.position.y, camera.position.x);
-  renderer.render(scene, camera);
+  renderPreview(); // a first frame right away, so it never shows empty
+  return previewCanvas;
+}
+
+function renderPreview() {
+  previewCamera.copy(camera); // same lens and aspect
+  cameraTarget(previewCamera.position, 0);
+  previewCamera.lookAt(previewCamera.position.x, previewCamera.position.y - 1.6, 0);
+  renderer.render(scene, previewCamera);
+  if (previewCanvas.width !== canvas.width || previewCanvas.height !== canvas.height) {
+    previewCanvas.width = canvas.width;
+    previewCanvas.height = canvas.height;
+  }
   // Copied in the same task as the render, so the drawing buffer is still there.
-  const shot = document.createElement('canvas');
-  shot.width = canvas.width;
-  shot.height = canvas.height;
-  shot.getContext('2d')!.drawImage(canvas, 0, 0);
-  camera.position.copy(pos);
-  camera.quaternion.copy(rot);
-  world.update(time, camera.position.y, camera.position.x);
-  return shot;
+  previewCanvas.getContext('2d')!.drawImage(canvas, 0, 0);
 }
 
 let time = 0;
@@ -895,6 +901,7 @@ function frame() {
     world.updateLighting(time, camera.position.y, camera.position.x);
   }
   updateTimeLabel();
+  if (previewOn) renderPreview(); // before the main view, which is what the canvas then shows
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
