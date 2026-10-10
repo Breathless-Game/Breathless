@@ -18,7 +18,9 @@ import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
+import { loadEquipment, nextRodTier, planUpgrade, rodTier, saveEquipment, totalPearls, type EquipmentState } from './equipment';
+import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
+import { NftQueue } from './nft-queue';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -102,14 +104,21 @@ let phase: Phase = 'menu';
 let outOfAir = false;
 let emergency = 1;
 let net: FishSpec[] = [];
-const bank: FishSpec[] = loadBank();
+const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
-function loadBank(): FishSpec[] {
+function loadBank(): BankedFish[] {
   try {
-    return JSON.parse(localStorage.getItem('deepbreath.bank') ?? '[]');
+    // Fish banked under the old rule were paid on surfacing: migrateBank marks them legacy.
+    const { bank, changed } = migrateBank(JSON.parse(localStorage.getItem('deepbreath.bank') ?? '[]'));
+    if (changed) {
+      try {
+        localStorage.setItem('deepbreath.bank', JSON.stringify(bank));
+      } catch {}
+    }
+    return bank;
   } catch {
     return [];
   }
@@ -124,7 +133,16 @@ function saveBank() {
 const currentTier = () => rodTier(equipment);
 hud.setNet(net, currentTier().capacity);
 hud.setBank(bank);
-const vault = new Vault(bank, saveBank);
+const nftQueue = new NftQueue(bank, saveBank, {
+  changed: () => vault.refresh(),
+  sold(fish, result) {
+    hud.setBank(bank);
+    hud.toast(fish, `SOLD · +${result.pearls} PEARLS`);
+    void syncPearls(result.pearls);
+  },
+});
+const vault = new Vault(bank, nftQueue);
+nftQueue.start();
 const health = new HealthLog();
 const report = new Report(health);
 const gear = new GearPanel(() => buyNextRod());
@@ -142,22 +160,54 @@ function refreshEquipment() {
   diver.setNetLevel(tier.level);
 }
 
-function buyNextRod() {
+/** Re-read the on-chain PEARL balance into the cache. `earned` shows a sale's Pearls before the read lands. */
+async function syncPearls(earned = 0) {
+  if (earned) {
+    equipment.pearls += earned;
+    refreshEquipment();
+  }
+  try {
+    equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    refreshEquipment();
+  } catch (e) {
+    console.warn('PEARL balance unavailable', e);
+  }
+}
+
+let buying = false;
+async function buyNextRod() {
+  if (buying) return;
   const next = nextRodTier(equipment);
   if (!next) {
     gear.showNotice('The net is already at maximum level.');
     return;
   }
-  const upgraded = upgrade(equipment);
-  if (!upgraded) {
-    gear.showNotice(`Need ${next.cost - equipment.pearls} more Pearls.`);
-    hud.message(`Need ${next.cost - equipment.pearls} more Pearls`, 1500);
+  const plan = planUpgrade(equipment);
+  if (!plan) {
+    gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
+    hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
     return;
   }
-  equipment.rodLevel = upgraded.rodLevel;
-  equipment.pearls = upgraded.pearls;
-  refreshEquipment();
-  hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+  // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
+  buying = true;
+  gear.setBusy(true);
+  try {
+    if (plan.fromChain > 0) {
+      await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
+      equipment.pearls = Math.max(0, equipment.pearls - plan.fromChain);
+    }
+    equipment.legacyPearls -= plan.fromLegacy;
+    equipment.rodLevel = plan.tier.level;
+    hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+  } catch (e) {
+    console.error('upgrade failed', e);
+    gear.showNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
+  } finally {
+    buying = false;
+    gear.setBusy(false);
+    refreshEquipment();
+    if (plan.fromChain > 0) void syncPearls();
+  }
 }
 
 // ---- Input --------------------------------------------------------------
@@ -182,8 +232,10 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+    if (vault.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
+    if (gear.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'n') {
     const nightSelected = world.dayCycle.mode === 'night'
       || (world.dayCycle.mode === 'cycle' && world.night);
@@ -210,7 +262,10 @@ function setTimeOfDay(mode: TimeOfDay) {
 }
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
-document.getElementById('gear-open')!.addEventListener('click', () => gear.toggle(true));
+document.getElementById('gear-open')!.addEventListener('click', () => {
+  gear.toggle(true);
+  void syncPearls();
+});
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
 
 function axis(neg: string[], pos: string[]) {
@@ -249,26 +304,24 @@ function tryCatch() {
   setTimeout(() => world.map === map && spawnFish(zone), 4000);
 }
 
+// Banking pays nothing: every fish is queued to become an NFT, and Pearls come only from selling one.
 function bankNet() {
   if (!net.length) return;
-  const reward = net.reduce((sum, f) => sum + fishValue(f), 0);
-  bank.push(...net);
+  bank.push(...net.map(bankEntry));
   saveBank();
-  equipment.pearls += reward;
-  refreshEquipment();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
-  hud.message(`Banked ${net.length} fish · +${reward} Pearls`);
+  hud.message(`Banked ${net.length} fish · minting NFTs…`);
   hud.toast(rarest, 'BANKED');
+  noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
   hud.setNet(net, currentTier().capacity);
   hud.setBank(bank);
-  noteBankValue(true);
+  nftQueue.kick();
 }
 
 // ---- Maps ---------------------------------------------------------------
-/** Record progress toward the next map, and say so when a dive opens one. */
-function noteBankValue(announce: boolean) {
-  const value = bankValue(bank);
+/** Record progress toward the next map (the lifetime banked value), and say so when a dive opens one. */
+function noteBankValue(announce: boolean, value: number) {
   if (value <= mapProgress.bestValue) return;
   const opened = MAP_ORDER.map((id) => MAPS[id]).filter(
     (m) => !mapProgress.unlockAll && mapProgress.bestValue < m.unlockValue && value >= m.unlockValue,
@@ -310,7 +363,7 @@ function setDemoUnlock(on: boolean) {
 
 const mapPicker = new MapPicker(mapProgress, selectMap, setDemoUnlock);
 showMapOnHud();
-noteBankValue(false);
+noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
 
 function blackout() {
   phase = 'blackout';
@@ -706,6 +759,7 @@ Object.assign(window, {
   fishes,
   keys,
   renderQuality,
+  nftQueue,
   setTimeOfDay,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {

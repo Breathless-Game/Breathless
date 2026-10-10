@@ -1,4 +1,4 @@
-import { ROD_TIERS, nextRodTier, rodTier, type EquipmentState } from './equipment';
+import { ROD_TIERS, nextRodTier, rodTier, totalPearls, type EquipmentState } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -14,6 +14,8 @@ export class GearPanel {
   private upgrade = $<HTMLButtonElement>('gear-upgrade');
   private notice = $('gear-notice');
   private onUpgrade: () => void;
+  private state: EquipmentState | null = null;
+  private busy = false;
 
   constructor(onUpgrade: () => void) {
     this.onUpgrade = onUpgrade;
@@ -35,12 +37,20 @@ export class GearPanel {
     window.setTimeout(() => this.notice.classList.add('hidden'), 2400);
   }
 
+  /** While an upgrade's on-chain PEARL spend is in flight. */
+  setBusy(busy: boolean) {
+    this.busy = busy;
+    if (this.state) this.render(this.state);
+  }
+
   render(state: EquipmentState) {
+    this.state = state;
     const tier = rodTier(state);
     const nextTier = nextRodTier(state);
+    const pearls = totalPearls(state);
     this.level.textContent = `LEVEL ${tier.level} · ${tier.name}`;
     this.effect.textContent = `${tier.capacity} fish capacity · ${tier.catchRadius.toFixed(1)} m catch radius`;
-    this.pearls.textContent = `${state.pearls} Pearls`;
+    this.pearls.textContent = `${pearls} Pearls${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''}`;
 
     if (!nextTier) {
       this.progress.max = 1;
@@ -52,13 +62,13 @@ export class GearPanel {
       return;
     }
 
-    const missing = Math.max(0, nextTier.cost - state.pearls);
+    const missing = Math.max(0, nextTier.cost - pearls);
     this.progress.max = nextTier.cost;
-    this.progress.value = Math.min(nextTier.cost, state.pearls);
-    this.progressLabel.textContent = `${Math.min(nextTier.cost, state.pearls)} / ${nextTier.cost} Pearls`;
+    this.progress.value = Math.min(nextTier.cost, pearls);
+    this.progressLabel.textContent = `${Math.min(nextTier.cost, pearls)} / ${nextTier.cost} Pearls`;
     this.next.textContent = `Next: Lv${nextTier.level} · ${nextTier.capacity} capacity · ${nextTier.catchRadius.toFixed(1)} m radius`;
-    this.upgrade.textContent = missing ? `Need ${missing} more Pearls` : `Upgrade for ${nextTier.cost} Pearls`;
-    this.upgrade.disabled = missing > 0;
+    this.upgrade.textContent = this.busy ? 'Spending PEARL…' : missing ? `Need ${missing} more Pearls` : `Upgrade for ${nextTier.cost} Pearls`;
+    this.upgrade.disabled = this.busy || missing > 0;
   }
 }
 
