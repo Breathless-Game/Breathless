@@ -14,7 +14,7 @@ import { base58 } from '@metaplex-foundation/umi/serializers';
 import { RARITY, fishValue, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, type MapId } from './maps';
 import { fishCard } from './portrait';
-import { ownerAddress, sessionSigner, walletState } from './wallet';
+import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
 
 // Everything here runs in the browser against Solana devnet. The identity is
 // the player's session wallet (see wallet.ts): it pays for the Irys upload and
@@ -26,7 +26,7 @@ const SYMBOL = 'DIVE';
 let umi: Umi | null = null;
 let umiOwner: string | null = null;
 
-function getUmi(): Umi {
+export function getUmi(): Umi {
   const owner = walletState().owner;
   if (umi && umiOwner === owner) return umi;
   const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
@@ -102,11 +102,14 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 
   onStep?.('mint');
   const asset = generateSigner(u);
+  // The session key pays and holds update authority; the player owns the fish.
+  const session = sessionSigner(u);
   const { signature } = await create(u, {
     asset,
     owner: publicKey(ownerAddress(u)),
-    payer: sessionSigner(u),
-    authority: sessionSigner(u),
+    payer: session,
+    authority: session,
+    updateAuthority: session.publicKey,
     name: spec.name,
     uri,
     plugins: [
@@ -120,7 +123,9 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
         ],
       },
     ],
-  }).sendAndConfirm(u);
+  })
+    .setFeePayer(session)
+    .sendAndConfirm(u);
 
   return { asset: asset.publicKey.toString(), signature: base58.deserialize(signature)[0], image, uri };
 }
@@ -129,6 +134,6 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 export async function burnFish(assetId: string): Promise<string> {
   const u = getUmi();
   const asset = await fetchAsset(u, publicKey(assetId));
-  const { signature } = await burn(u, { asset }).sendAndConfirm(u);
+  const { signature } = await burn(u, { asset, authority: ownerSigner(u) }).sendAndConfirm(u);
   return base58.deserialize(signature)[0];
 }

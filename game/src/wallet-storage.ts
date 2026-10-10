@@ -20,7 +20,7 @@ export const LEGACY_WALLET_KEY = 'deepbreath.wallet';
  * Every per-player key the game wrote before Phantom login, by bare name. Device
  * preferences (`deepbreath.settings`) are not progress and stay where they are.
  */
-export const LEGACY_PROGRESS = ['bank', 'equipment', 'rod', 'pearls', 'pearl', 'maps', 'health'] as const;
+export const LEGACY_PROGRESS = ['bank', 'equipment', 'rod', 'pearls', 'pearl', 'maps', 'health', 'pearl.pending'] as const;
 
 /** `bank` and `deepbreath.bank` both name the same per-wallet entry. */
 export function bareName(name: string): string {
