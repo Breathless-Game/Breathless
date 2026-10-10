@@ -408,7 +408,14 @@ if (SERVE) {
   const server = createServer(staticHandler(SERVE_DIR));
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => {});
-    if (new URL(req.url ?? '/', 'http://x').pathname !== '/sensor') return refuse(socket, 404);
+    // A malformed request line must not crash the server: new URL throws on it.
+    let pathname;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://x').pathname;
+    } catch {
+      return refuse(socket, 400);
+    }
+    if (pathname !== '/sensor') return refuse(socket, 404);
     const ip = clientIp(req);
     if ((perIp.get(ip) ?? 0) >= MAX_PER_IP) {
       log(`refused a connection: ${MAX_PER_IP} already open from one address`);
