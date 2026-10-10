@@ -12,7 +12,13 @@ import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
 import { buildScenery, type Scenery } from './scenery';
 
-export const HALF_WIDTH = 70;
+// Keep the playable corridor wide enough for long horizontal swims. All
+// terrain, particles, fish and diver bounds derive from this single value.
+export const HALF_WIDTH = 140;
+
+// Preserve the old seabed triangle density after widening the floor from 260
+// to 400 world units.
+const SEABED_SEGMENTS_X = 120;
 
 // Each map lays out its terrain from its own seed. The ocean keeps the seed the
 // single-sea version used, so its reef is where players remember it.
@@ -153,7 +159,7 @@ export class World {
   }
 
   private buildSeabed(rng: Rng) {
-    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 120, 90, 80, 30);
+    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 120, 90, SEABED_SEGMENTS_X, 30);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
     for (let i = 0; i < pos.count; i++) {
@@ -729,16 +735,29 @@ export class World {
     for (const k of this.kelps) {
       if (!k.root.visible) continue;
       k.segments.forEach((seg, i) => {
-        seg.rotation.z = Math.sin(time * 0.8 + k.phase + i * 0.35) * 0.06;
-        seg.rotation.x = Math.cos(time * 0.6 + k.phase + i * 0.3) * 0.03;
+        const sway = 0.06 * (1 + wind * 0.8);
+        seg.rotation.z = Math.sin(waveTime * 0.8 + k.phase + i * 0.35) * sway;
+        seg.rotation.x = Math.cos(waveTime * 0.6 + k.phase + i * 0.3) * sway * 0.5;
       });
     }
 
     const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
+    const currentX = (0.08 + wind * 0.18) * Math.sin(time * 0.34);
+    const currentZ = (0.05 + wind * 0.1) * Math.cos(time * 0.27);
+    const width = (HALF_WIDTH + 20) * 2;
+    const depth = 28;
     for (let i = 0; i < this.quality.snowCount; i++) {
       let y = snowPos.getY(i) - 0.24 * dt;
       if (y < this.seabedY) y = -0.5;
       snowPos.setY(i, y);
+      let x = snowPos.getX(i) + currentX * dt;
+      let z = snowPos.getZ(i) + currentZ * dt;
+      if (x < -HALF_WIDTH - 20) x += width;
+      else if (x > HALF_WIDTH + 20) x -= width;
+      if (z < -18) z += depth;
+      else if (z > 10) z -= depth;
+      snowPos.setX(i, x);
+      snowPos.setZ(i, z);
     }
     snowPos.addUpdateRange(0, this.quality.snowCount * 3);
     snowPos.needsUpdate = true;

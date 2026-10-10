@@ -445,7 +445,7 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 ### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [32, 32, 24]`
 
 ### Rod / net upgrades (`ROD_TIERS` in `equipment.ts`)
 
@@ -555,16 +555,20 @@ The game picks the starting quality from the CPU logical core count and the devi
 | DPR cap | 1 | 1.5 | 2 |
 | Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
 | Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
-| Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
+| Water surface segments | 44 × 8 | 88 × 16 | 132 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
 | Water micro-ripple layers | 1 | 2 | 3 |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
 | Maximum raindrops | 160 | 420 | 800 |
+| Diver bubbles (limit / burst scale / geometry) | 12 / 0.5 / low | 32 / 0.75 / low | 72 / 1 / high |
+| Bubble physics update cap | 20 Hz | 30 Hz | 60 Hz |
 
 A large screen may use a DPR below 1 to stay within the pixel budget; the HUD still uses the browser's native resolution. After a start-up grace period, two consecutive 3-second windows that average below 45 FPS lower the quality by one level. A drop is followed by a 6-second cooldown, and within one session the quality only goes down, never up. Hidden tabs and isolated long stalls are not counted, but a sustained very low frame rate still triggers a drop.
 
-Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver, fish, breath and lighting; the headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and hidden kelp is removed from the scene to avoid matrix updates.
+Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver body, fish, breath and lighting; bubble particles use the quality-specific physics update cap above. The headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and hidden kelp is removed from the scene to avoid matrix updates.
+
+Diver bubbles spawn from the mask and snorkel anchor, rise with buoyancy and horizontal drag, and fade out before their lifetime ends. Low and medium quality use the low-poly bubble mesh with smaller particle budgets; high quality uses the subdivided mesh and full burst size. Switching quality trims excess live bubbles and rebinds the remaining meshes before releasing the old shared geometry.
 
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.

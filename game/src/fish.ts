@@ -425,7 +425,13 @@ export class Fish {
     const desired = this.desired;
     if (dist < fleeRadius) {
       // Flee, harder the closer the diver gets.
-      desired.copy(toDiver.normalize()).multiplyScalar(speed * (1.6 + (fleeRadius - dist) / fleeRadius));
+      // Avoid normalising a zero vector when the diver overlaps the fish.
+      if (dist < 1e-4) {
+        desired.set(this.facing || 1, 0, 0);
+      } else {
+        desired.copy(toDiver).multiplyScalar(1 / dist);
+      }
+      desired.multiplyScalar(speed * (1.6 + (fleeRadius - dist) / fleeRadius));
     } else {
       const toTarget = this.toTarget.copy(this.target).sub(this.pos);
       if (toTarget.length() < 1.5) {
@@ -444,12 +450,20 @@ export class Fish {
 
     if (Math.abs(this.vel.x) > 0.15) this.facing = this.vel.x > 0 ? 1 : -1;
     const g = this.mesh.group;
-    g.position.copy(this.pos);
+    const bob = Math.sin(time * (1.25 + speed * 0.12) + this.phase) * Math.min(0.11, 0.035 + speed * 0.008);
+    g.position.set(this.pos.x, this.pos.y + bob, this.pos.z);
     const targetYaw = this.facing > 0 ? 0 : Math.PI;
-    g.rotation.y += (targetYaw - g.rotation.y) * Math.min(1, dt * 6);
-    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5) * this.facing;
+    const yawDelta = THREE.MathUtils.euclideanModulo(targetYaw - g.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
+    g.rotation.y += yawDelta * Math.min(1, dt * 6);
+    // Rotation around z is a pitch in this side-on model. It should not flip
+    // when the fish turns around, otherwise upward swims point downward.
+    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5)
+      + Math.sin(time * 1.8 + this.phase) * 0.035;
+    g.rotation.x = THREE.MathUtils.clamp(-this.vel.z * 0.1, -0.24, 0.24);
     const wag = (6 + this.vel.length() * 2.5) * (0.85 + this.profile.swimSpeed * 0.15);
-    this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * 0.5;
+    const wagAmount = THREE.MathUtils.clamp(0.3 + this.vel.length() * 0.045, 0.3, 0.66);
+    this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * wagAmount;
+    this.mesh.tail.rotation.z = Math.sin(time * wag * 0.53 + this.phase + 0.8) * 0.08;
     if (this.spec.rarity === 'mythic') {
       this.mesh.material.emissive.setHSL((time * 0.15 + this.phase) % 1, 1, 0.5);
     }
