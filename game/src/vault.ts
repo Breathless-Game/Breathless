@@ -1,4 +1,5 @@
-import { RARITY, type FishSpec, zoneForDepth } from './fish';
+import { fishValue, zoneForDepth, type FishSpec } from './fish';
+import { MAPS, type MapId } from './maps';
 import { fishCard } from './portrait';
 
 // The collection panel: banked fish as NFT cards, plus the devnet wallet.
@@ -79,9 +80,7 @@ export class Vault {
 
   private render() {
     this.grid.innerHTML = '';
-    const sorted = [...this.bank].sort((a, b) =>
-      (b.value ?? RARITY[b.rarity].value) - (a.value ?? RARITY[a.rarity].value),
-    );
+    const sorted = [...this.bank].sort((a, b) => fishValue(b) - fishValue(a));
     if (!sorted.length) {
       this.grid.textContent = 'Nothing banked yet. Dive!';
       return;
@@ -102,8 +101,8 @@ export class Vault {
   private caption(f: FishSpec, cap: HTMLElement) {
     cap.innerHTML = '';
     const meta = document.createElement('span');
-    const map = zoneForDepth(f.depthM);
-    meta.textContent = `${map.mapNameZh} · ${f.depthM} m · ${f.value ?? RARITY[f.rarity].value} pts · seed ${f.id}`;
+    const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
+    meta.textContent = `${where} · ${f.depthM} m · ${fishValue(f)} pts · seed ${f.id}`;
     cap.appendChild(meta);
     if (f.assetId) {
       const a = document.createElement('a');

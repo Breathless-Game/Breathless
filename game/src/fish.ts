@@ -18,14 +18,11 @@ export const RARITY: Record<
 export const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
 
 // Deeper water = rarer fish, so how long you can really hold your breath is
-// what gates the good catches.
+// what gates the good catches. Deeper fish are also worth more: a fish's catch
+// value is its rarity value times the zone's rewardMultiplier.
 export const ZONES = [
   {
     name: 'Shallows',
-    mapId: 'changbai-glacier-tribe',
-    mapName: 'Changbai Glacier Tribe',
-    mapNameZh: '长白山冰川部落群',
-    difficulty: 1,
     rewardMultiplier: 1,
     top: 0,
     bottom: 18,
@@ -33,10 +30,6 @@ export const ZONES = [
   },
   {
     name: 'Coral Reef',
-    mapId: 'reef',
-    mapName: 'Reef',
-    mapNameZh: '礁石',
-    difficulty: 2,
     rewardMultiplier: 1.6,
     top: 18,
     bottom: 38,
@@ -44,10 +37,6 @@ export const ZONES = [
   },
   {
     name: 'The Abyss',
-    mapId: 'storm',
-    mapName: 'Storm',
-    mapNameZh: '风暴',
-    difficulty: 3,
     rewardMultiplier: 2.5,
     top: 38,
     bottom: 58,
@@ -180,8 +169,10 @@ export interface FishSpec {
   accentHue: number;
   stripes: number;
   scale: number;
-  /** Catch value rises with both rarity and the map's difficulty. */
+  /** Catch value: rarity value × the zone's rewardMultiplier. Fish banked before this field existed have none; read it with fishValue(). */
   value?: number;
+  /** The map the fish was caught on (a MapId from maps.ts). Missing on fish banked before maps. */
+  map?: string;
   /** Metaplex Core asset address once minted on devnet. */
   assetId?: string;
 }
@@ -217,7 +208,12 @@ export function rollFish(seed: number, zone: Zone, depthM: number): FishSpec {
   };
 }
 
-/** Resolve the map band for metadata and UI without duplicating depth cutoffs. */
+/** Catch value of a fish, falling back to the plain rarity value for old saves. */
+export function fishValue(fish: FishSpec): number {
+  return fish.value ?? RARITY[fish.rarity].value;
+}
+
+/** The depth zone a depth falls in, so callers do not repeat the cutoffs. */
 export function zoneForDepth(depthM: number): Zone {
   return ZONES.find((zone) => depthM >= zone.top && depthM < zone.bottom) ?? ZONES[ZONES.length - 1];
 }

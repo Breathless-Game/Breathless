@@ -59,7 +59,7 @@
 | 解锁 | 一开始就开放 | 累计入库鱼价值 150 | 累计入库鱼价值 1000 |
 
 - **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它沿用 Coral Reef 的掉率表，只有外观和深度计上的标签不同。鱼只在地图开放的区域里生成，右侧的深度计也只显示这些区域。
-- **解锁**：按入库鱼的累计价值解锁（第 7 节稀有度表的 `value` 一列：1 / 3 / 10 / 35 / 150 / 800）。游戏会记住达到过的最高累计值，所以之后失去鱼也不会让地图重新上锁。某次下潜入库的鱼够开一张新图时，会有一条提示。
+- **解锁**：按入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。游戏会记住达到过的最高累计值，所以之后失去鱼也不会让地图重新上锁。某次下潜入库的鱼够开一张新图时，会有一条提示。
 - **演示开关**：地图卡片下面有一个勾选框 "Unlock all maps (demo)"，勾上后所有地图一次全部开放。它是给演示和测试用的。
 - **保存的进度**：选中的地图、最高累计价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
 - **仍然只是设计，尚未实现**：夜间小怪（峡湾：野鹿、野熊；天池：野熊、巨人；汪洋：海浪、海怪）、游戏内时钟（峡湾白天 05:00–20:00）、由心率驱动的船上垂钓、船耐久，以及汪洋沉船后全部装备永久丢失。
@@ -368,11 +368,13 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
 
-| 区域 | 深度 | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | – | 10 | 30 | 35 | 19 | 6 |
+| 区域 | 深度 | 奖励倍率 | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Shallows | 0–18 m | ×1.0 | 70 | 25 | 5 | – | – | – |
+| Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
+| The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
+
+**捕获价值** = 稀有度的 `value`（见下表）× 所在区域的奖励倍率（`rewardMultiplier`），四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
 
 ### 稀有度（`RARITY`）
 
@@ -443,7 +445,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 | key | 内容 |
 | --- | --- |
-| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，铸造后带 `assetId`） |
+| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value` 和地图 `map`，铸造后带 `assetId`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
 | `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`showCamera`、`showHelp` |
