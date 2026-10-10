@@ -67,16 +67,24 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Click gear to inspect &amp; pack · click a map to dive · Esc back</div>
-      <label id="wb-demo" class="small"><input type="checkbox" id="wb-demo-box" /> Unlock all maps (demo)</label>
+      <div id="wb-hint" class="small">Click gear to get it ready · drag to throw · click the map to choose where to dive · Esc back</div>
+      <div id="wb-tip" class="hidden"></div>
+      <div id="wb-chart" class="hidden">
+        <div id="wb-paper">
+          <canvas id="wb-chart-canvas"></canvas>
+          <div id="wb-pins"></div>
+        </div>
+        <aside id="wb-place">
+          <div id="wb-place-title"></div>
+          <div id="wb-place-sub" class="small"></div>
+          <p id="wb-place-text"></p>
+          <div id="wb-place-gear" class="small muted"></div>
+          <button id="wb-dive" class="primary">Dive · 下潜</button>
+        </aside>
+        <label id="wb-demo" class="small"><input type="checkbox" id="wb-demo-box" /> Unlock all maps (demo)</label>
+        <div id="wb-chart-hint" class="small">Click outside the chart or press Esc to fold it</div>
+      </div>
       <div id="wb-toast"></div>
-      <div id="wb-inspect" class="hidden"><img id="wb-zoom" alt="" /></div>
-      <aside id="wb-info" class="hidden">
-        <div id="wb-info-title"></div>
-        <div id="wb-info-sub" class="small"></div>
-        <p id="wb-info-text"></p>
-        <div id="wb-info-hint" class="small muted"></div>
-      </aside>
     </div>
 
     <div id="overlay">
