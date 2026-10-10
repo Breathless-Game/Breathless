@@ -1,44 +1,58 @@
 // Turns Presage's chest breathing trace into a real-time HOLD / BREATHE signal.
 //
-// Presage gives us a breathing waveform (upper_trace) plus an apnea flag, but
-// the apnea flag is tuned for clinical pauses, not a game that needs to react
-// within a second. So we run our own detector on the raw trace:
-//   - learn this person's normal breathing amplitude while they breathe
-//   - HOLD when the trace has been flat (peak-to-peak << normal) for a short window
-//   - BREATHE again as soon as the trace moves away from where the hold started
-// Presage's apnea flag and talking flag are folded in as extra evidence.
+// What real recordings showed (sensor/recordings, analyze.mjs):
+//   - Presage's trace starts with a few seconds of huge start-up swings.
+//   - The trace is high-pass filtered: when you hold, it jumps with the last
+//     inhale and then decays back to flat over ~3 s instead of staying put.
+//   - Presage's apnea flag never fired during 15 s holds.
+// So we measure *activity*: how far the trace travels per second (path
+// length), which is high while breathing, falls once the post-inhale decay
+// settles, and jumps the instant you breathe again. Thresholds are ratios of
+// this person's own breathing activity, learned with a robust median that
+// ignores the start-up transient and the seconds leading into a hold.
 //
 // Every threshold is an option so sensor/analyze.mjs can replay a recording
 // with different settings.
 
 export const DEFAULTS = {
-  holdWindowUs: 2_000_000, // flat for this long => holding (longer than a normal pause between breaths)
-  ampWindowUs: 4_000_000, // window used to measure a normal breath's amplitude
-  flatRatio: 0.22, // window peak-to-peak below this * baseline => flat
-  releaseRatio: 0.4, // drift from hold reference above this * baseline => breathing
-  learnRatio: 0.5, // only learn the baseline while the short window shows clear motion
-  minSamples: 8,
-  useApnea: true,
+  activityWindowUs: 2_000_000, // window for the hold test
+  releaseWindowUs: 750_000, // short window for the release test, so breathing again shows fast
+  holdRatio: 0.38, // activity below this * baseline => holding
+  releaseRatio: 0.5, // short-window activity above this * baseline => breathing again
+  releaseHoldUs: 200_000, // ...and it has to stay there this long
+  baselineWindowUs: 30_000_000, // learn "normal breathing" over this much history
+  warmupUs: 8_000_000, // ignore Presage's start-up swings
+  minBaselineUs: 6_000_000, // clean breathing needed before we call any hold
+  talkingHoldUs: 500_000, // talking this long ends a hold
+  useApnea: false, // Presage's apnea flag: never fired in testing, off by default
 };
+
+const SAMPLE_EVERY_US = 100_000;
 
 export class BreathDetector {
   constructor(opts = {}) {
     this.o = { ...DEFAULTS, ...opts };
     this.samples = []; // {ts, v}, ts in microseconds
+    this.firstTs = 0;
     this.lastTs = 0;
-    this.baseline = null; // typical peak-to-peak of one breath
+    this.base = []; // {ts, a}: activity while breathing, for the baseline
+    this.baseline = null; // median breathing activity (trace units per second)
+    this.lastBaseTs = 0;
     this.holding = false;
     this.holdStartTs = 0;
-    this.holdRef = 0;
+    this.releaseSince = null;
+    this.releasedTs = 0;
+    this.talkingSince = null;
     this.apnea = null;
     this.talking = null;
-    this.flatness = 0; // 0 = breathing hard, 1 = perfectly flat
+    this.flatness = 0; // 0 = breathing hard, 1 = perfectly still
   }
 
   pushTrace(points) {
     for (const p of points) {
       const ts = Number(p.timestamp ?? 0);
       if (!Number.isFinite(p.value) || ts <= this.lastTs) continue;
+      if (!this.firstTs) this.firstTs = ts;
       this.samples.push({ ts, v: p.value });
       this.lastTs = ts;
     }
@@ -53,51 +67,67 @@ export class BreathDetector {
 
   setTalking(detected) {
     this.talking = detected;
+    if (!detected) this.talkingSince = null;
+    else this.talkingSince ??= this.lastTs;
   }
 
-  #window(us) {
+  /** Path length per second over the last `us` microseconds. */
+  #activity(us) {
     const from = this.lastTs - us;
-    let lo = Infinity;
-    let hi = -Infinity;
+    let path = 0;
     let n = 0;
-    for (let i = this.samples.length - 1; i >= 0 && this.samples[i].ts >= from; i--) {
-      const v = this.samples[i].v;
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
+    for (let i = this.samples.length - 1; i > 0 && this.samples[i - 1].ts >= from; i--) {
+      path += Math.abs(this.samples[i].v - this.samples[i - 1].v);
       n++;
     }
-    return { p2p: hi - lo, n };
+    return n < 4 ? null : path / (us / 1e6);
+  }
+
+  #learn(a) {
+    const o = this.o;
+    if (this.lastTs - this.lastBaseTs < SAMPLE_EVERY_US) return;
+    this.lastBaseTs = this.lastTs;
+    this.base.push({ ts: this.lastTs, a });
+    while (this.base.length && this.base[0].ts < this.lastTs - o.baselineWindowUs) this.base.shift();
+    if (this.base.length && this.lastTs - this.base[0].ts >= o.minBaselineUs) {
+      const sorted = this.base.map((b) => b.a).sort((x, y) => x - y);
+      this.baseline = sorted[sorted.length >> 1];
+    }
   }
 
   #update() {
     const o = this.o;
-    const amp = this.#window(o.ampWindowUs);
-    const flat = this.#window(o.holdWindowUs);
-    if (amp.n < o.minSamples || flat.n < o.minSamples / 2) return;
-
-    // Learn "normal" only while the short window is clearly moving. Otherwise
-    // the first seconds of a hold (before we call it) would drag it down.
-    if (!this.holding && amp.p2p > 0) {
-      if (this.baseline == null) this.baseline = amp.p2p;
-      else if (flat.p2p > o.learnRatio * this.baseline) this.baseline = this.baseline * 0.9 + amp.p2p * 0.1;
-    }
-    if (!this.baseline) return;
-
-    this.flatness = Math.max(0, Math.min(1, 1 - flat.p2p / (this.baseline * 0.6)));
-    const current = this.samples[this.samples.length - 1].v;
+    if (this.lastTs - this.firstTs < o.warmupUs) return;
+    const a = this.#activity(o.activityWindowUs);
+    if (a == null) return;
+    if (!this.holding) this.#learn(a);
+    const B = this.baseline;
+    if (!B) return;
+    this.flatness = Math.max(0, Math.min(1, 1 - a / (B * 0.8)));
+    const talkingLong = this.talkingSince != null && this.lastTs - this.talkingSince >= o.talkingHoldUs;
 
     if (!this.holding) {
-      const isFlat = flat.p2p < o.flatRatio * this.baseline;
-      if ((isFlat || (o.useApnea && this.apnea === true)) && this.talking !== true) {
+      // Right after a release the long window still contains the flat hold.
+      if (this.lastTs - this.releasedTs < o.activityWindowUs) return;
+      if ((a < o.holdRatio * B || (o.useApnea && this.apnea === true)) && !talkingLong) {
         this.holding = true;
-        this.holdStartTs = this.lastTs - o.holdWindowUs;
-        this.holdRef = current;
+        this.holdStartTs = this.lastTs - o.activityWindowUs;
+        this.releaseSince = null;
+        // The seconds sliding into a hold are not "normal breathing".
+        const cut = this.holdStartTs - 1_000_000;
+        while (this.base.length && this.base.at(-1).ts > cut) this.base.pop();
+      }
+      return;
+    }
+    const r = this.#activity(o.releaseWindowUs);
+    if ((r != null && r > o.releaseRatio * B) || talkingLong) {
+      this.releaseSince ??= this.lastTs;
+      if (this.lastTs - this.releaseSince >= o.releaseHoldUs || talkingLong) {
+        this.holding = false;
+        this.releasedTs = this.lastTs;
       }
     } else {
-      const drift = Math.abs(current - this.holdRef);
-      if (drift > o.releaseRatio * this.baseline || this.talking === true) {
-        this.holding = false;
-      }
+      this.releaseSince = null;
     }
   }
 
