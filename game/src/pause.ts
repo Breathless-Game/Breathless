@@ -3,6 +3,8 @@
 // (through PauseHooks) to change game state.
 
 import type { BreathMode } from './breath';
+import type { TimeOfDay } from './daylight';
+import type { WeatherMode } from './weather';
 import { type Quality, type Settings, saveSettings } from './settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -27,8 +29,8 @@ export interface PauseHooks {
   breathModes(): BreathMode[];
   breathMode(): BreathMode;
   setBreathMode(mode: BreathMode): void;
-  night(): boolean;
-  setNight(on: boolean): void;
+  timeOfDay(): TimeOfDay;
+  setTimeOfDay(mode: TimeOfDay): void;
   applySettings(s: Settings): void;
 }
 
@@ -46,7 +48,9 @@ export class PauseMenu {
   private standalone = false;
 
   private input = $<HTMLSelectElement>('set-input');
-  private night = $<HTMLInputElement>('set-night');
+  private timeOfDay = $<HTMLSelectElement>('set-time');
+  private lighting = $<HTMLInputElement>('set-lighting');
+  private weather = $<HTMLSelectElement>('set-weather');
   private quality = $<HTMLSelectElement>('set-quality');
   private camera = $<HTMLInputElement>('set-camera');
   private help = $<HTMLInputElement>('set-help');
@@ -63,7 +67,9 @@ export class PauseMenu {
     $('confirm-stay').addEventListener('click', () => this.show('main'));
 
     this.input.addEventListener('change', () => hooks.setBreathMode(this.input.value as BreathMode));
-    this.night.addEventListener('change', () => hooks.setNight(this.night.checked));
+    this.timeOfDay.addEventListener('change', () => hooks.setTimeOfDay(this.timeOfDay.value as TimeOfDay));
+    this.lighting.addEventListener('change', () => this.update({ lightingEffects: this.lighting.checked }));
+    this.weather.addEventListener('change', () => this.update({ weather: this.weather.value as WeatherMode }));
     this.quality.addEventListener('change', () => this.update({ quality: this.quality.value as Quality }));
     this.camera.addEventListener('change', () => this.update({ showCamera: this.camera.checked }));
     this.help.addEventListener('change', () => this.update({ showHelp: this.help.checked }));
@@ -135,7 +141,9 @@ export class PauseMenu {
     this.input.replaceChildren(
       ...this.hooks.breathModes().map((m) => new Option(MODE_LABEL[m], m, false, m === this.hooks.breathMode())),
     );
-    this.night.checked = this.hooks.night();
+    this.timeOfDay.value = this.hooks.timeOfDay();
+    this.lighting.checked = this.settings.lightingEffects;
+    this.weather.value = this.settings.weather;
     this.quality.value = this.settings.quality;
     this.camera.checked = this.settings.showCamera;
     this.help.checked = this.settings.showHelp;
