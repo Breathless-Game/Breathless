@@ -5,6 +5,7 @@ import { Rng } from './rng';
 import { RENDER_QUALITY, type RenderQuality } from './render-quality';
 import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
 import { WaterSurfaceMaterial } from './water';
+import { waterGeometry } from './water-geometry';
 import { WeatherCycle, type WeatherMode } from './weather';
 import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
@@ -51,7 +52,6 @@ export class World {
   sun: THREE.DirectionalLight;
   surface: THREE.Mesh;
   boat: THREE.Group;
-  private surfaceBase: Float32Array;
   private kelps: Kelp[] = [];
   readonly shafts = new SunShafts();
   readonly atmosphere = new Atmosphere();
@@ -100,7 +100,6 @@ export class World {
     this.scene.add(this.terrain);
     this.snow = this.buildSnow(rng);
     this.surface = this.buildSurface();
-    this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
     this.boat = this.buildBoat();
     this.setMap(map);
   }
@@ -332,10 +331,7 @@ export class World {
   }
 
   private surfaceGeometry() {
-    const [x, y] = this.quality.surfaceSegments;
-    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 160, 120, x, y);
-    geo.rotateX(-Math.PI / 2);
-    return geo;
+    return waterGeometry(HALF_WIDTH * 2 + 160, 120, this.quality.surfaceSegments);
   }
 
   setQuality(quality: RenderQuality) {
@@ -353,7 +349,6 @@ export class World {
     if (surfaceChanged) {
       const old = this.surface.geometry;
       this.surface.geometry = this.surfaceGeometry();
-      this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
       old.dispose();
     }
   }
@@ -585,7 +580,7 @@ export class World {
     this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
     const waterMaterial = this.surface.material as WaterSurfaceMaterial;
-    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather);
+    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves);
     waterMaterial.color.multiply(this.surfaceTint);
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
   }
@@ -595,17 +590,7 @@ export class World {
     const wind = this.weather.state.wind;
     const waveTime = this.waveTime;
     const swell = 1 + wind * 0.75;
-    const pos = this.surface.geometry.attributes.position;
-    const base = this.surfaceBase;
     const waves = this.map.waves;
-    for (let i = 0; i < pos.count; i++) {
-      const x = base[i * 3];
-      const z = base[i * 3 + 2];
-      pos.setY(i, (Math.sin(x * 0.15 + waveTime * 1.3) * 0.35 + Math.cos(z * 0.2 + waveTime * 0.9) * 0.25) * swell * waves);
-    }
-    pos.needsUpdate = true;
-    this.surface.geometry.computeVertexNormals();
-
     this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
     this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
 
