@@ -3,7 +3,7 @@
 //
 //   node analyze.mjs                         latest recording, default settings
 //   node analyze.mjs rec.jsonl --trace=lo    use the abdominal trace instead of chest
-//   node analyze.mjs --holdWindowUs=2500000 --flatRatio=0.3
+//   node analyze.mjs --activityWindowUs=2500000 --holdRatio=0.45
 //   node analyze.mjs --sweep                 grid-search the main thresholds
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -199,11 +199,11 @@ console.log(`settings          ${JSON.stringify(settings)}`);
 
 if (sweep && holds.length) {
   const rows = [];
-  for (const holdWindowUs of [1_300_000, 2_000_000, 2_500_000, 3_000_000])
-    for (const flatRatio of [0.15, 0.22, 0.3, 0.4])
-      for (const releaseRatio of [0.3, 0.4, 0.6, 0.8])
-        for (const useApnea of [true, false]) {
-          const o = { ...settings, holdWindowUs, flatRatio, releaseRatio, useApnea };
+  for (const activityWindowUs of [1_500_000, 2_000_000, 2_500_000])
+    for (const holdRatio of [0.3, 0.38, 0.45, 0.55])
+      for (const releaseRatio of [0.35, 0.5, 0.7, 1.0])
+        for (const releaseHoldUs of [100_000, 200_000, 400_000]) {
+          const o = { ...settings, activityWindowUs, holdRatio, releaseRatio, releaseHoldUs };
           const s = score(replay(o));
           // Reward agreement, punish flicker beyond what the labels themselves do.
           const objective = s.acc - 0.02 * Math.max(0, s.togglesPerMin - s.labelTogglesPerMin) - 0.1 * s.missed;
@@ -212,6 +212,6 @@ if (sweep && holds.length) {
   rows.sort((a, b) => b.objective - a.objective);
   console.log('\nbest settings:');
   for (const r of rows.slice(0, 5)) {
-    show(`  ${r.o.holdWindowUs / 1e6}s/${r.o.flatRatio}/${r.o.releaseRatio}/${r.o.useApnea ? 'apnea' : 'no-apnea'}`, r.s);
+    show(`  ${r.o.activityWindowUs / 1e6}s/${r.o.holdRatio}/${r.o.releaseRatio}/${r.o.releaseHoldUs / 1e3}ms`, r.s);
   }
 }
