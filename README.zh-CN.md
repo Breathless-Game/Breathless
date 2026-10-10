@@ -43,8 +43,8 @@
 - **憋气就是氧气瓶**：游戏没有氧气条，你的肺就是。
 - **贪心与风险**：深渊（38 m 以下）才有神话级鱼，但离水面越远，换气后越难赶回去。
 - **夜晚模式**（`N`）：每条鱼稀有度掷两次取高的。海怪风险还在待办里。
-- **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。
-- **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。入库鱼换算成 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
+- **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。每条入库的鱼都会在后台自动铸成 NFT；点 **Sell** 把鱼卖成 Pearls（见第 7 节）。
+- **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。卖鱼得到 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
 
 ### 三张地图
 
@@ -60,9 +60,9 @@
 | 解锁 | 一开始就开放 | 累计入库鱼价值 150 | 累计入库鱼价值 1000 |
 
 - **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它沿用 Coral Reef 的掉率表，只有外观和深度计上的标签不同。鱼只在地图开放的区域里生成，右侧的深度计也只显示这些区域。
-- **解锁**：按入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。游戏会记住达到过的最高累计值，所以之后失去鱼也不会让地图重新上锁。某次下潜入库的鱼够开一张新图时，会有一条提示。
+- **解锁**：按历史上所有入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。卖鱼不会让它减少，所以地图不会重新上锁，进度也不会停滞。某次下潜入库的鱼够开一张新图时，会有一条提示。
 - **演示开关**：地图卡片下面有一个勾选框 "Unlock all maps (demo)"，勾上后所有地图一次全部开放。它是给演示和测试用的。
-- **保存的进度**：选中的地图、最高累计价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
+- **保存的进度**：选中的地图、历史累计入库价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
 - **仍然只是设计，尚未实现**：夜间小怪（峡湾：野鹿、野熊；天池：野熊、巨人；汪洋：海浪、海怪）、游戏内时钟（峡湾白天 05:00–20:00）、由心率驱动的船上垂钓、船耐久，以及汪洋沉船后全部装备永久丢失。
 - **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买也还没接上。
 
@@ -339,7 +339,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
     ├── index.html          HUD、标题卡、收藏面板、报告面板的 DOM
     ├── vite.config.ts      端口 5173；Node polyfills（Umi 和 Irys 需要）
     ├── asset-library.html  素材库的预览页，只在开发服务器上有（src/asset-library.ts）
-    ├── tests/              node --test：自动画质的单元测试
+    ├── tests/              node --test：自动画质和鱼经济的单元测试
     └── src/
         ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
         ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
@@ -358,7 +358,10 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
         ├── hud.ts          呼吸面板和波形、深度计、紧急条、网格槽、入库数、toast
-        ├── vault.ts        收藏面板、钱包栏、Mint 按钮（懒加载 chain.ts）
+        ├── vault.ts        收藏面板：NFT 状态、Sell / Mint & sell、钱包栏
+        ├── market.ts       纯经济规则：NFT 状态机、旧存档迁移、卖价、累计解锁价值
+        ├── nft-queue.ts    后台铸造和卖鱼队列（懒加载 chain.ts 和 pearl.ts）
+        ├── pearl.ts        PEARL 客户端：余额、卖鱼、消费（目前是 stub）
         ├── chain.ts        Umi、临时钱包、空投、mintFish、burnFish
         ├── polyfills.ts    Buffer 和 global 全局变量
         ├── health.ts       HealthLog：每次潜水记录憋气时长、心率、恢复时间
@@ -385,7 +388,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
 | The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
 
-**捕获价值** = 稀有度的 `value`（见下表）× 所在区域的奖励倍率（`rewardMultiplier`），四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
+**捕获价值** = 稀有度的 `value`（见下表）× 所在区域的奖励倍率（`rewardMultiplier`），四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计，卖鱼时也按它支付 Pearls。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
 
 ### 稀有度（`RARITY`）
 
@@ -414,7 +417,9 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
 | Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
 
-每条成功入库的鱼按捕获价值奖励 Pearls；黑屏丢网不奖励。升级状态保存在 `deepbreath.equipment`，不会删除或消费收藏鱼。
+**经济**：入库不给钱。每条入库的鱼进入 NFT 队列（`pending → minting → minted`，失败则为 `failed`，自动退避重试，也可以手动 Retry）。Pearls 只来自在收藏里**卖鱼**：一笔交易同时销毁 NFT，并按捕获价值支付 PEARL（一种 SPL token）。还没铸造的鱼显示 **Mint & sell**（市场只收 NFT），正在铸造的鱼暂时不能卖，epic 及以上稀有度要二次确认，"Sell all commons" 会逐条卖掉普通鱼。升级消耗（销毁）PEARL。黑屏丢网不奖励。规则在 `game/src/market.ts`，后台队列在 `game/src/nft-queue.ts`。
+
+**卖鱼功能之前的存档**：旧规则下入库的鱼已经在出水时付过 Pearls，所以标记为 legacy：显示 "Paid out"，不能卖，也不会自动铸造（保留手动 Mint 按钮）。已经赚到的 Pearls 变成本地的 legacy 余额，和 PEARL 合并显示，消费时先扣它。升级状态保存在 `deepbreath.equipment`。
 
 ![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
 
@@ -426,12 +431,13 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 - **钱包**：第一次打开收藏面板时，自动生成一个临时 keypair，存在 `localStorage['deepbreath.wallet']`。这是 devnet 专用的测试钱包，私钥就在浏览器里，**不要往里放任何主网资产**。
 - **充值**：面板上有 "Airdrop 1 SOL" 按钮，但公共 devnet 水龙头经常 429 限流。更可靠的办法是去 <https://faucet.solana.com>（GitHub 登录）给面板上显示的地址领币。
+- **铸造队列**（`nft-queue.ts`）：后台一次铸造一条，刷新页面后继续。钱包 SOL 不够时先试一次空投；水龙头拒绝的话，铸造暂停，收藏面板里提示 "needs devnet SOL"，之后每分钟或打开面板时再查一次余额。
 - **铸造流程**（`mintFish`）：
   1. `fishCard(spec)` 生成 PNG，用 `umi.uploader.upload` 传到 Irys devnet。
   2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Depth / Length / Weight / Seed）。
   3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / seed），方便以后的游戏逻辑直接在链上读稀有度。
   4. 资产地址写回 `FishSpec.assetId`，持久化到 bank。卡片会显示 "✓ On-chain"，链接到 Solana Explorer。
-- **销毁**（NFT 消耗）：`burnFish(assetId)` 已经写好，UI 还没接，会用在装备经济里。
+- **卖鱼**（NFT 消耗）：`pearl.ts` 的 `sellToMarket` 在一笔交易里销毁 NFT 并支付 PEARL。在 PEARL token 和市场合约上线之前，`pearl.ts` 还是一个 stub（localStorage 账本，用 `burnFish` 销毁）。
 - **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
 - **为什么 Vite 要加 polyfill**：Umi 和 Irys 依赖 Node 的 `Buffer`、`stream`、`crypto`，所以 `vite.config.ts` 用了 `vite-plugin-node-polyfills`。
 
@@ -470,12 +476,13 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 | key | 内容 |
 | --- | --- |
-| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value` 和地图 `map`，铸造后带 `assetId`） |
+| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value`、地图 `map`、NFT 状态 `nft`，铸造后带 `assetId`，旧规则下已付过钱的鱼带 `legacy`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
-| `deepbreath.equipment` | 鱼竿等级和 Pearls 余额（`rodLevel`、`pearls`） |
+| `deepbreath.equipment` | 鱼竿等级、缓存的 PEARL 余额和本地 legacy Pearls（`rodLevel`、`pearls`、`legacyPearls`） |
+| `deepbreath.pearl-stub` | stub 版 `pearl.ts` 的 PEARL 余额（临时） |
 | `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`showCamera`、`showHelp` |
-| `deepbreath.maps` | 地图进度：选中的地图、最高累计入库价值、演示开关 |
+| `deepbreath.maps` | 地图进度：选中的地图、历史累计入库价值（`bestValue`）、演示开关 |
 
 重置：在浏览器控制台执行 `localStorage.clear()`。
 
@@ -524,14 +531,15 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - 健康报告（按需生成）
 - 三张地图（峡湾、天池、汪洋）：水面以上的场景、深度上限、开始卡片上的地图选择、按累计入库鱼价值解锁
 - 升级部件的低多边形模型（只有代码，还没有进游戏）
-- 鱼竿 / 渔网升级 MVP：三档容量和收网范围、Pearl 奖励、可见网圈缩放、本地持久化
+- 鱼竿 / 渔网升级 MVP：三档容量和收网范围、可见网圈缩放、本地持久化
+- 鱼经济：入库的鱼自动铸成 NFT，卖鱼时销毁 NFT 换 Pearls，地图进度按历史累计价值
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 
 - [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
 - [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
 - [ ] **完整装备经济**：在鱼竿 / 渔网升级 MVP 之外，用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯；装备有耐久度。低多边形模型已经有了，剩下的是在游戏里显示模型、购买和让效果生效
-- [ ] **NFT 消耗（sink）**：卖给市场换 Pearl、用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换。`burnFish` 已经写好
+- [ ] **更多 NFT 消耗（sink）**：卖鱼已完成；还剩用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换
 - [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
 - [ ] **三张地图的剩余部分**：每张图的夜间小怪、游戏内时钟、汪洋图的船耐久和沉船。设计见策划案第 6 节
 - [ ] **船上垂钓和心率玩法**：平静值决定咬钩速度和水下鱼的警觉距离；鱼竿、鱼饵、船的升级。设计见策划案第 4.2、6.3、7 节

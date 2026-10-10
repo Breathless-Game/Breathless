@@ -1,7 +1,7 @@
 import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
 import { fishIcon } from './portrait';
-import type { EquipmentState, RodTier } from './equipment';
+import { totalPearls, type EquipmentState, type RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -146,7 +146,7 @@ export class Hud {
   }
 
   setEquipment(state: EquipmentState, tier: RodTier) {
-    this.gearSummary.textContent = `ROD Lv${tier.level} · ${tier.capacity} slots · ${state.pearls} ◇`;
+    this.gearSummary.textContent = `ROD Lv${tier.level} · ${tier.capacity} slots · ${totalPearls(state)} ◇`;
   }
 
   toast(spec: FishSpec, title?: string) {
