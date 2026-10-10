@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Rng } from './rng';
+import { RENDER_QUALITY, type RenderQuality } from './render-quality';
 
 export const HALF_WIDTH = 70;
 export const SEABED_Y = -60;
@@ -51,6 +52,7 @@ function jitter(geo: THREE.BufferGeometry, rng: Rng, amount: number) {
 }
 
 interface Kelp {
+  root: THREE.Group;
   segments: THREE.Object3D[];
   phase: number;
 }
@@ -65,9 +67,12 @@ export class World {
   private kelps: Kelp[] = [];
   private rays: THREE.Mesh[] = [];
   private snow: THREE.Points;
+  private quality: RenderQuality;
+  private lastDecorationTime = 0;
   night = false;
 
-  constructor() {
+  constructor(quality: RenderQuality = RENDER_QUALITY.high) {
+    this.quality = quality;
     const rng = new Rng(20261010);
     this.scene.fog = new THREE.Fog(WATER_COLORS[0][1], 8, 70);
     this.scene.background = WATER_COLORS[0][1].clone();
@@ -86,6 +91,7 @@ export class World {
     this.surface = this.buildSurface();
     this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
     this.boat = this.buildBoat();
+    this.setQuality(quality);
   }
 
   private buildSeabed(rng: Rng) {
@@ -196,7 +202,7 @@ export class World {
         segments.push(seg);
         parent = seg;
       }
-      this.kelps.push({ segments, phase: rng.range(0, Math.PI * 2) });
+      this.kelps.push({ root, segments, phase: rng.range(0, Math.PI * 2) });
       this.scene.add(root);
     }
   }
@@ -249,8 +255,7 @@ export class World {
   }
 
   private buildSurface() {
-    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 160, 120, 90, 24);
-    geo.rotateX(-Math.PI / 2);
+    const geo = this.surfaceGeometry();
     const mat = new THREE.MeshStandardMaterial({
       color: '#8fe3f2',
       flatShading: true,
@@ -264,6 +269,34 @@ export class World {
     mesh.position.set(0, 0, -30);
     this.scene.add(mesh);
     return mesh;
+  }
+
+  private surfaceGeometry() {
+    const [x, y] = this.quality.surfaceSegments;
+    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 160, 120, x, y);
+    geo.rotateX(-Math.PI / 2);
+    return geo;
+  }
+
+  setQuality(quality: RenderQuality) {
+    const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
+    this.quality = quality;
+    this.kelps.forEach((kelp, i) => {
+      kelp.root.visible = i < quality.kelpCount;
+      // Hidden objects still receive Three.js matrix updates while in the scene.
+      if (kelp.root.visible) this.scene.add(kelp.root);
+      else this.scene.remove(kelp.root);
+    });
+    this.rays.forEach((ray, i) => {
+      ray.visible = i < quality.rayCount && !this.night && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
+    });
+    this.snow.geometry.setDrawRange(0, quality.snowCount);
+    if (surfaceChanged) {
+      const old = this.surface.geometry;
+      this.surface.geometry = this.surfaceGeometry();
+      this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
+      old.dispose();
+    }
   }
 
   private buildBoat() {
@@ -296,34 +329,11 @@ export class World {
   }
 
   update(time: number, cameraY: number) {
-    // Waves.
-    const pos = this.surface.geometry.attributes.position;
-    const base = this.surfaceBase;
-    for (let i = 0; i < pos.count; i++) {
-      const x = base[i * 3];
-      const z = base[i * 3 + 2];
-      pos.setY(i, Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25);
+    const elapsed = time - this.lastDecorationTime;
+    if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
+      this.updateDecorations(time, Math.min(elapsed, 0.25));
+      this.lastDecorationTime = time;
     }
-    pos.needsUpdate = true;
-    this.surface.geometry.computeVertexNormals();
-
-    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18;
-    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05;
-
-    for (const k of this.kelps) {
-      k.segments.forEach((seg, i) => {
-        seg.rotation.z = Math.sin(time * 0.8 + k.phase + i * 0.35) * 0.06;
-        seg.rotation.x = Math.cos(time * 0.6 + k.phase + i * 0.3) * 0.03;
-      });
-    }
-
-    const snowPos = this.snow.geometry.attributes.position;
-    for (let i = 0; i < snowPos.count; i++) {
-      let y = snowPos.getY(i) - 0.004;
-      if (y < SEABED_Y) y = -0.5;
-      snowPos.setY(i, y);
-    }
-    snowPos.needsUpdate = true;
 
     // Water colour, fog and light fall off with depth.
     const depth = -cameraY;
@@ -344,8 +354,43 @@ export class World {
     const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1) * (this.night ? 0.35 : 1);
     this.hemi.intensity = 1.4 * light;
     this.sun.intensity = 2.2 * light * light;
-    for (const r of this.rays) {
-      (r.material as THREE.MeshBasicMaterial).opacity = this.night ? 0 : 0.35 * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
+    const rayOpacity = this.night ? 0 : 0.35 * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
+    this.rays.forEach((ray, i) => {
+      ray.visible = i < this.quality.rayCount && rayOpacity > 0;
+      (ray.material as THREE.MeshBasicMaterial).opacity = rayOpacity;
+    });
+  }
+
+  private updateDecorations(time: number, dt: number) {
+    // Waves.
+    const pos = this.surface.geometry.attributes.position;
+    const base = this.surfaceBase;
+    for (let i = 0; i < pos.count; i++) {
+      const x = base[i * 3];
+      const z = base[i * 3 + 2];
+      pos.setY(i, Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25);
     }
+    pos.needsUpdate = true;
+    this.surface.geometry.computeVertexNormals();
+
+    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18;
+    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05;
+
+    for (const k of this.kelps) {
+      if (!k.root.visible) continue;
+      k.segments.forEach((seg, i) => {
+        seg.rotation.z = Math.sin(time * 0.8 + k.phase + i * 0.35) * 0.06;
+        seg.rotation.x = Math.cos(time * 0.6 + k.phase + i * 0.3) * 0.03;
+      });
+    }
+
+    const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < this.quality.snowCount; i++) {
+      let y = snowPos.getY(i) - 0.24 * dt;
+      if (y < SEABED_Y) y = -0.5;
+      snowPos.setY(i, y);
+    }
+    snowPos.addUpdateRange(0, this.quality.snowCount * 3);
+    snowPos.needsUpdate = true;
   }
 }

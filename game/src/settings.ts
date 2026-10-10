@@ -1,7 +1,9 @@
 // Player preferences that survive reloads. Live game state (night, breath input)
 // is not stored here: it depends on whether the camera is running this session.
 
-export type Quality = 'high' | 'medium' | 'low';
+import type { QualityMode } from './render-quality';
+
+export type Quality = QualityMode;
 
 export interface Settings {
   quality: Quality;
@@ -9,15 +11,14 @@ export interface Settings {
   showHelp: boolean;
 }
 
-/** Max device pixel ratio per quality level. Low helps slower laptops keep frame rate. */
-export const PIXEL_RATIO: Record<Quality, number> = { high: 2, medium: 1, low: 0.6 };
-
 const KEY = 'deepbreath.settings';
-const DEFAULTS: Settings = { quality: 'high', showCamera: true, showHelp: true };
+const DEFAULTS: Settings = { quality: 'auto', showCamera: true, showHelp: true };
 
 export function loadSettings(): Settings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    const settings: Settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    if (!['auto', 'high', 'medium', 'low'].includes(settings.quality)) settings.quality = 'auto';
+    return settings;
   } catch {
     return { ...DEFAULTS };
   }

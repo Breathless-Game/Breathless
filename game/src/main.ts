@@ -8,8 +8,9 @@ import { HealthLog } from './health';
 import { Report } from './report';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
-import { loadSettings, PIXEL_RATIO, type Settings } from './settings';
+import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, SEABED_Y, World } from './world';
+import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -26,15 +27,21 @@ const MAX_DEPTH = -SEABED_Y;
 
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const settings = loadSettings();
+const renderQuality = new AdaptiveQuality({
+  cores: navigator.hardwareConcurrency,
+  memoryGB: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+}, settings.quality);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const world = new World();
+const world = new World(renderQuality.settings);
 const scene = world.scene;
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
 camera.position.set(0, 1.5, 24);
 
 function resize() {
+  renderer.setPixelRatio(renderPixelRatio(renderQuality.settings, window.innerWidth, window.innerHeight, window.devicePixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -342,13 +349,14 @@ function goToMenu() {
 }
 
 function applySettings(s: Settings) {
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, PIXEL_RATIO[s.quality]));
+  renderQuality.setMode(s.quality);
+  world.setQuality(renderQuality.settings);
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
   document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
 }
 
-const pauseMenu = new PauseMenu(loadSettings(), {
+const pauseMenu = new PauseMenu(settings, {
   resume() {
     paused = false;
     keys.clear();
@@ -453,7 +461,12 @@ function update(dt: number, time: number) {
 
 let time = 0;
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const elapsed = clock.getDelta();
+  if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+    world.setQuality(renderQuality.settings);
+    resize();
+  }
+  const dt = Math.min(elapsed, 0.05);
   if (!paused) {
     time += dt;
     update(dt, time);
@@ -470,6 +483,7 @@ Object.assign(window, {
   diver,
   fishes,
   keys,
+  renderQuality,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;
