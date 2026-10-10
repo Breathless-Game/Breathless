@@ -8,6 +8,7 @@ import { HealthLog } from './health';
 import { Report } from './report';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
+import { TitleScreen } from './title';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, SEABED_Y, World } from './world';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
@@ -119,6 +120,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
+  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) openStartCard();
   keys.add(e.key.toLowerCase());
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
   if (phase !== 'play') return;
@@ -321,6 +323,7 @@ function onEscape() {
   else if (breathTest.open) breathTest.stop();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
+  else if (!overlay.classList.contains('hidden')) backFromStartCard();
 }
 
 function goToMenu() {
@@ -345,7 +348,7 @@ function goToMenu() {
   calib.classList.add('hidden');
   camWrap.style.visibility = 'hidden';
   hud.hide();
-  overlay.classList.remove('hidden');
+  showTitle(true);
 }
 
 function applySettings(s: Settings) {
@@ -373,6 +376,34 @@ const pauseMenu = new PauseMenu(settings, {
   setNight,
   applySettings,
 });
+
+// ---- Title screen -------------------------------------------------------
+// Start opens the existing start card (camera / keyboard / breath test).
+const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
+  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, at: 0.27, label: 'START', onClick: openStartCard },
+  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.5 },
+  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, at: 0.73, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
+]);
+
+function showTitle(intro: boolean) {
+  overlay.classList.add('hidden');
+  titleScreen.show(intro);
+}
+
+function openStartCard() {
+  titleScreen.hide();
+  overlay.classList.remove('hidden');
+}
+
+function backFromStartCard() {
+  if (breathTest.open) breathTest.stop();
+  // The camera may already be on (calibration or breath test): release it on the way out.
+  if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
+  else showTitle(false);
+}
+
+document.getElementById('card-back')!.addEventListener('click', backFromStartCard);
+showTitle(true);
 
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
 document.addEventListener('visibilitychange', () => {
@@ -480,6 +511,7 @@ frame();
 Object.assign(window, {
   breath,
   breathTest,
+  titleScreen,
   diver,
   fishes,
   keys,

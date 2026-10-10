@@ -57,6 +57,15 @@
       <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
     </div>
 
+    <div id="title-screen" class="hidden">
+      <canvas id="title-canvas"></canvas>
+      <div id="title-name">
+        <div class="zh">屏息</div>
+        <div class="en">BREATHLESS</div>
+        <div class="title-hint">Grab the fish · click <b>START</b> or press Enter</div>
+      </div>
+    </div>
+
     <div id="overlay">
       <div class="card">
         <h1>BREATH<span>LESS</span></h1>
@@ -73,6 +82,7 @@
         </div>
         <button id="start-test" class="link">Breath test (2.5 min) · 憋气测试</button>
         <button id="open-report" class="link">View my health report</button>
+        <button id="card-back" class="link">← Back</button>
         <p class="small muted">Breath detection by Presage SmartSpectra · face and chest visible, good light</p>
         <div id="test" class="hidden">
           <div class="row"><div id="test-title"></div><div id="test-count"></div></div>
@@ -110,7 +120,7 @@
 
         <div id="settings" class="hidden">
           <h2>Settings</h2>
-          <label class="setting"><span>Breath input</span><select id="set-input"></select></label>
+          <label class="setting" id="set-input-row"><span>Breath input</span><select id="set-input"></select></label>
           <label class="setting"><span>Night mode</span><input type="checkbox" id="set-night" /></label>
           <label class="setting">
             <span>Render quality</span>
