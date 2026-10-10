@@ -28,9 +28,6 @@
       <div id="cam-wrap"><video id="cam" playsinline muted></video></div>
 
       <section id="depth">
-        <div class="zone" style="--top: 0%; --h: 30%">Shallows</div>
-        <div class="zone reef" style="--top: 30%; --h: 33.3%">Reef</div>
-        <div class="zone abyss" style="--top: 63.3%; --h: 36.7%">Abyss</div>
         <div id="depth-marker"><span id="depth-label">0 m</span></div>
       </section>
 
@@ -76,6 +73,8 @@
           <li><b>Breathe underwater</b> and you are out of air: race to the surface or lose your net.</li>
           <li>Surface to bank your catch.</li>
         </ol>
+        <div id="map-picker"></div>
+        <label id="maps-demo-row" class="small muted"><input type="checkbox" id="maps-demo" /> Unlock all maps (demo)</label>
         <div class="buttons">
           <button id="start-live" class="primary">Start with camera</button>
           <button id="start-keys">Play with keyboard</button>

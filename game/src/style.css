@@ -926,3 +926,81 @@ button:disabled {
 #test-done {
   margin-top: 14px;
 }
+
+/* ---- map picker (start card) ---- */
+#map-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.map-card {
+  display: block;
+  text-align: left;
+  padding: 0 0 10px;
+  overflow: hidden;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.map-card > :not(.map-swatch) {
+  padding: 0 10px;
+}
+
+.map-swatch {
+  height: 46px;
+  margin-bottom: 8px;
+  background: linear-gradient(var(--sky) 0 42%, var(--water) 42%, var(--deep));
+}
+
+.map-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.map-meta {
+  margin-top: 4px;
+}
+
+.map-lock {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.map-card.selected {
+  border-color: var(--hold);
+  box-shadow: 0 0 0 1px var(--hold) inset;
+}
+
+.map-card.locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.map-card.locked .map-lock {
+  color: var(--gold);
+}
+
+#maps-demo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
+@media (max-width: 560px) {
+  #map-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The start card is taller with the map picker: short screens scroll it instead of clipping it. */
+#overlay {
+  overflow-y: auto;
+}
+
+#overlay .card {
+  margin: auto;
+}
