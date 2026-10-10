@@ -131,3 +131,55 @@ test('recovery does not automatically upgrade quality and restart a degradation 
   assert.deepEqual(runFrames(controller, 60, 64), []);
   assert.equal(controller.level, 'medium');
 });
+
+test('manual quality overrides hardware hints and never degrades during slow rendering', () => {
+  for (const level of ['high', 'medium', 'low']) {
+    for (const hints of [{ cores: 2, memoryGB: 2 }, { cores: 16, memoryGB: 16 }]) {
+      const controller = new AdaptiveQuality(hints, level);
+      assert.equal(controller.mode, level);
+      assert.equal(controller.level, level);
+      assert.equal(controller.settings, RENDER_QUALITY[level]);
+      assert.deepEqual(runFrames(controller, 120), []);
+      assert.equal(controller.level, level);
+    }
+  }
+});
+
+test('switching between manual and auto quality restores hardware selection and fresh sampling', () => {
+  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
+  assert.equal(controller.mode, 'auto');
+  runFrames(controller, 6);
+
+  for (const level of ['low', 'medium', 'high']) {
+    controller.setMode(level);
+    assert.equal(controller.mode, level);
+    assert.equal(controller.level, level);
+    assert.equal(controller.settings, RENDER_QUALITY[level]);
+    assert.deepEqual(runFrames(controller, 30), []);
+  }
+
+  controller.setMode('auto');
+  assert.equal(controller.mode, 'auto');
+  assert.equal(controller.level, 'high');
+  assert.deepEqual(runFrames(controller, 8), []);
+  assert.deepEqual(runFrames(controller, 1), ['medium']);
+
+  const weakController = new AdaptiveQuality({ cores: 2, memoryGB: 2 }, 'high');
+  weakController.setMode('auto');
+  assert.equal(weakController.level, 'low');
+  assert.equal(weakController.settings, RENDER_QUALITY.low);
+});
+
+test('selecting auto again preserves its degraded quality and remaining sampling state', () => {
+  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(controller, 9), ['medium']);
+  controller.setMode('auto');
+  assert.equal(controller.mode, 'auto');
+  assert.equal(controller.level, 'medium');
+  assert.deepEqual(runFrames(controller, 11.5), []);
+
+  controller.setMode('auto');
+  assert.equal(controller.level, 'medium');
+  assert.deepEqual(runFrames(controller, 0.5), ['low']);
+  assert.equal(controller.level, 'low');
+});

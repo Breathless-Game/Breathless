@@ -1,4 +1,5 @@
 export type QualityLevel = 'low' | 'medium' | 'high';
+export type QualityMode = 'auto' | QualityLevel;
 
 export interface DeviceHints {
   cores?: number;
@@ -53,8 +54,22 @@ export class AdaptiveQuality {
   private slowWindows = 0;
   private longFrames = 0;
 
-  constructor(hints: DeviceHints) {
-    this.level = initialQuality(hints);
+  constructor(private hints: DeviceHints, private selectedMode: QualityMode = 'auto') {
+    this.level = selectedMode === 'auto' ? initialQuality(hints) : selectedMode;
+  }
+
+  get mode(): QualityMode {
+    return this.selectedMode;
+  }
+
+  setMode(mode: QualityMode) {
+    // Other preferences also call applySettings; keep any automatic downgrade.
+    if (mode === this.selectedMode) return;
+    this.selectedMode = mode;
+    this.level = mode === 'auto' ? initialQuality(this.hints) : mode;
+    this.resetSamples();
+    this.longFrames = 0;
+    this.graceSeconds = 3;
   }
 
   get settings(): RenderQuality {
@@ -62,6 +77,7 @@ export class AdaptiveQuality {
   }
 
   observeFrame(seconds: number, visible = true): QualityLevel | null {
+    if (this.selectedMode !== 'auto') return null;
     if (!visible || !Number.isFinite(seconds) || seconds <= 0) {
       this.resetSamples();
       this.longFrames = 0;

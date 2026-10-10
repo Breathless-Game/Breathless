@@ -287,6 +287,9 @@ export class World {
       if (kelp.root.visible) this.scene.add(kelp.root);
       else this.scene.remove(kelp.root);
     });
+    this.rays.forEach((ray, i) => {
+      ray.visible = i < quality.rayCount && !this.night && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
+    });
     this.snow.geometry.setDrawRange(0, quality.snowCount);
     if (surfaceChanged) {
       const old = this.surface.geometry;
