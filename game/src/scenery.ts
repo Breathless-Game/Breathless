@@ -5,6 +5,7 @@ import type { MapDef, MapId } from './maps';
 import type { SceneryDetail } from './render-quality';
 import type { WeatherState } from './weather';
 import { Rng } from './rng';
+import { waterHeight, waterSlope, type WaterDetail } from './water-waves';
 
 // What you see above the water on each map: the fjord's snow peaks and cabins,
 // Heaven Lake's stone pillars and mist, the ocean's lighthouse and freighter.
@@ -33,6 +34,7 @@ export interface SceneryEnv {
   /** World's wave clock and swell height, so floating things ride the surface. Default `time` and 1. */
   waveTime?: number;
   swell?: number;
+  waterDetail?: WaterDetail;
 }
 
 type Builder = (map: MapDef, detail: SceneryDetail) => Scenery;
@@ -168,14 +170,6 @@ const additive = () =>
     fog: false,
     side: THREE.DoubleSide,
   });
-
-/**
- * Height of the water at (x, z). Mirrors the wave field in World.updateDecorations
- * (surface centred at z = -30): `t` is the world's wave clock, `waves` the map's swell times the weather's.
- */
-function waterY(x: number, z: number, t: number, waves: number) {
-  return (Math.sin(x * 0.15 + t * 1.3) * 0.35 + Math.cos((z + 30) * 0.2 + t * 0.9) * 0.25) * waves;
-}
 
 // ---- Lamps ---------------------------------------------------------------
 
@@ -330,17 +324,18 @@ class Floats {
     // Ride the world's wave clock and the weather's swell, so bodies stay on the surface.
     const waveTime = env?.waveTime ?? time;
     const waves = this.waves * (env?.swell ?? 1);
+    const detail = env?.waterDetail ?? 1;
     for (let i = 0; i < this.specs.length; i++) {
       const s = this.specs[i];
       const x = s.x + (s.wander ?? 0) * Math.sin(time * (s.pace ?? 0) + this.phase[i]);
       // Lean with the local wave slope (exaggerated: a real buoy also rolls), plus a little wobble.
       const lean = (s.lean ?? 1) * waves * 4;
       const wob = Math.sin(time * 1.7 + this.phase[i]) * 0.02 * lean;
-      const slopeX = 0.0525 * Math.cos(x * 0.15 + waveTime * 1.3);
-      const slopeZ = -0.05 * Math.sin((s.z + 30) * 0.2 + waveTime * 0.9);
+      const slopeX = waterSlope(x, s.z + 30, waveTime, detail, 'x');
+      const slopeZ = waterSlope(x, s.z + 30, waveTime, detail, 'z');
       _q.setFromEuler(_e.set(-Math.atan(slopeZ * lean) + wob, this.yaw[i] + time * 0.03, Math.atan(slopeX * lean) + wob * 0.7, 'ZXY'));
       const st = s.stretch ?? UNIT;
-      _m.compose(_p.set(x, waterY(x, s.z, waveTime, waves) - (s.sink ?? 0), s.z), _q, _s.set(s.size * st[0], s.size * st[1], s.size * st[2]));
+      _m.compose(_p.set(x, waterHeight(x, s.z + 30, waveTime, detail) * waves - (s.sink ?? 0), s.z), _q, _s.set(s.size * st[0], s.size * st[1], s.size * st[2]));
       this.mesh.setMatrixAt(i, _m);
       if (s.lamp && this.lights) {
         const l = s.lamp;
