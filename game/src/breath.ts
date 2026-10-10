@@ -48,6 +48,8 @@ export class BreathSource {
   private keyHeld = false;
   private keyHoldStart = 0;
   private listeners: ((s: BreathState) => void)[] = [];
+  // Bumped on start/stop so a stale requestVideoFrameCallback loop exits instead of doubling up.
+  private pumpGen = 0;
 
   constructor(video: HTMLVideoElement) {
     this.video = video;
@@ -89,6 +91,16 @@ export class BreathSource {
     this.state.mode = 'presage';
     this.connect();
     this.pumpFrames();
+  }
+
+  /** Releases the camera and the sensor's Presage session; back to keyboard mode. */
+  stopLive() {
+    this.pumpGen++;
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.video.srcObject = null;
+    this.setMode('keyboard');
+    this.ws?.close();
   }
 
   setMode(mode: BreathMode) {
@@ -149,7 +161,9 @@ export class BreathSource {
   }
 
   private pumpFrames() {
+    const gen = ++this.pumpGen;
     const push = () => {
+      if (gen !== this.pumpGen) return;
       const ws = this.ws;
       if (
         this.state.mode === 'presage' &&
