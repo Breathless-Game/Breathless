@@ -18,8 +18,11 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 export interface WorkbenchHooks {
   progress(): MapProgress;
-  /** One frame of the place from where its dive starts; diving grows it over the screen. */
-  preview(map: MapId): HTMLCanvasElement;
+  /**
+   * A live view of the place from where its dive starts (it also turns the world
+   * to that place); diving grows it over the screen. null stops it.
+   */
+  preview(map: MapId | null): HTMLCanvasElement | null;
   /** The camera pan between the title (0) and the table (1); tableY: screen y of the table's back, for shadows. */
   pan(u: number, tableY: number): void;
   /** Called once the place's preview fills the screen; the live scene must then show that same view. */
@@ -1000,6 +1003,7 @@ export class Workbench {
   /** Put down again: the backdrop clears while the chart is carried back and set on the table. */
   private closeChart() {
     this.state = 'closing';
+    this.hooks.preview(null); // no point rendering the place twice while nobody looks at it
     this.chartEl.classList.remove('ready', 'open');
     const s = this.sheet;
     const p0 = this.map.position.clone();
@@ -1068,13 +1072,14 @@ export class Workbench {
     this.placeEl.classList.toggle('empty', !id);
     if (!id) {
       this.previewBox.replaceChildren();
+      this.hooks.preview(null);
       $('wb-place-title').textContent = 'Where to? · 去哪儿？';
       $('wb-place-sub').textContent = 'Pick a place on the chart';
       $('wb-place-text').textContent = '';
     } else {
       const map = MAPS[id];
-      // Rendering it also turns the world behind the table to that place, ready for the dive.
-      this.previewBox.replaceChildren(this.hooks.preview(id));
+      // A live view; turning it on also turns the world behind the table to that place, ready for the dive.
+      this.previewBox.replaceChildren(this.hooks.preview(id)!);
       $('wb-place-title').textContent = `${map.name} · ${map.nameZh}`;
       $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · Shelf ${mapDepth(map)} m · Trench ∞ · ${map.place}`;
       $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
@@ -1111,7 +1116,11 @@ export class Workbench {
     grow.onfinish = () => {
       this.hooks.dive(id, this.packed);
       this.hide();
-      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 450, easing: 'ease-out', fill: 'forwards' }).onfinish = () => cover.remove();
+      // Still live while it fades, so it shows exactly what is underneath: no seam.
+      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 450, easing: 'ease-out', fill: 'forwards' }).onfinish = () => {
+        cover.remove();
+        this.hooks.preview(null);
+      };
     };
   }
   /** Esc from the table: the camera pans back up to the title. */
