@@ -151,7 +151,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 ### Self-hosting / 自托管
 
-`npm start` is the production server: one Node process on one port serves the built game and the breath sensor (WebSocket at `/sensor`) together, so a single tunnel or reverse proxy can front it.
+`npm start` is the production server: one Node process on one port serves the built game, the breath sensor (WebSocket at `/sensor`) and the PEARL market (`/api/market`, section 8) together, so a single tunnel or reverse proxy can front it.
 
 ```bash
 npm run setup      # once: installs sensor/ and game/ dependencies
@@ -167,6 +167,9 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `MAX_LIVE_SESSIONS` | `1` | Players using live Presage at the same time. The SDK's native state is process-global, so it can't run two sessions in one process; `0` turns live sensing off. Anyone over the cap sees "Server busy" and plays with the keyboard. |
 | `MAX_CONN_PER_IP` | `8` | Open sensor connections per player IP (read from `CF-Connecting-IP` / `X-Forwarded-For` when the proxy is local). |
 | `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
+| `FISH_MARKET_PROGRAM_ID` | empty | PEARL market mode: empty = server mode, a program id = program mode (section 8). |
+| `MARKET_DIR` | `sensor` | Where the market keeps its keypairs and state (`.market-*`), relative to the repo root. `deploy/deploy.sh` never overwrites or deletes them; back them up. If the market can't start, the game and sensor still serve and `/api/market` answers 503. |
+| `SOLANA_RPC` | devnet | RPC the market uses (falls back to `VITE_SOLANA_RPC`). |
 
 - **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
 - **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
@@ -400,7 +403,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── vault.ts        collection panel: NFT status, Sell / Mint & sell, wallet bar
         ├── market.ts       pure economy rules: NFT status machine, legacy migration, sell value, lifetime unlock value
         ├── nft-queue.ts    background mint and sell queue (lazy-loads chain.ts and pearl.ts)
-        ├── pearl.ts        PEARL client: balance, sell, spend (a stub for now)
+        ├── pearl.ts        PEARL client: balance, sell, spend (server side: sensor/market.mjs)
         ├── chain.ts        Umi, throwaway wallet, airdrop, mintFish, burnFish
         ├── polyfills.ts    Buffer and global
         ├── health.ts       HealthLog: hold time, heart rate and recovery time for every dive
@@ -458,7 +461,7 @@ The fishing rod is the diver's hand net. Upgrades change only the gear; they nev
 | Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
 | Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
 
-**Economy**: banking pays nothing. Each banked fish is queued as an NFT (`pending → minting → minted`, or `failed` with automatic backoff and a Retry button). Pearls come only from **selling** a minted fish in the collection: one transaction burns the NFT and pays its catch value in PEARL, an SPL token. An unminted fish shows **Mint & sell** (the market only buys NFTs), a fish that is minting cannot be sold yet, epic and rarer fish ask to confirm, and "Sell all commons" sells the commons one by one. Upgrades burn PEARL. Fish lost in a blackout earn nothing. Rules: `game/src/market.ts`; background queue: `game/src/nft-queue.ts`.
+**Economy**: banking pays nothing. Each banked fish is queued as an NFT (`pending → minting → minted`, or `failed` with automatic backoff and a Retry button). Pearls come only from **selling** a minted fish in the collection: the NFT is burned and its catch value is paid in PEARL, an SPL token (see "PEARL coin" below). An unminted fish shows **Mint & sell** (the market only buys NFTs), a fish that is minting cannot be sold yet, epic and rarer fish ask to confirm, and "Sell all commons" sells the commons one by one. Upgrades burn PEARL. Fish lost in a blackout earn nothing. Rules: `game/src/market.ts`; background queue: `game/src/nft-queue.ts`.
 
 **Saves from before selling**: fish banked under the old rule already paid their Pearls, so they are marked legacy: shown as "Paid out", not sellable, not auto-minted (the manual Mint button stays). Pearls already earned become a local legacy balance, shown together with PEARL and spent first. The upgrade state is saved in `deepbreath.equipment`.
 
@@ -478,9 +481,23 @@ The fishing rod is the diver's hand net. Upgrades change only the gear; they nev
   2. `uploadJson` uploads the metadata: name, symbol `DIVE`, description, image, attributes (Rarity / Species / Zone / Depth / Length / Weight / Seed).
   3. mpl-core's `create` mints a Core asset with an on-chain **Attributes plugin** (rarity / species / depth / seed), so later game logic can read the rarity straight from the chain.
   4. The asset address is written back to `FishSpec.assetId` and saved in the bank. The card shows "✓ On-chain" and links to Solana Explorer.
-- **Sell** (NFT sink): `sellToMarket` in `pearl.ts` burns the NFT and pays PEARL in one transaction. `pearl.ts` is still a stub (a localStorage ledger that burns with `burnFish`) until the PEARL token and market program land.
+- **Sell** (NFT sink): `sellToMarket` in `pearl.ts` sells the NFT to the PEARL market, which burns it and pays its catch value in PEARL (see "PEARL coin" below).
 - **Optional environment variable**: `VITE_SOLANA_RPC` (defaults to `https://api.devnet.solana.com`). Every `VITE_*` variable is bundled into the front end, so **never put a secret in one**.
 - **Why Vite needs polyfills**: Umi and Irys depend on Node's `Buffer`, `stream` and `crypto`, so `vite.config.ts` uses `vite-plugin-node-polyfills`.
+
+### PEARL coin / 珍珠币
+
+Pearls, the in-game currency, are a real SPL token, **PEARL** (decimals 0), on devnet. Client: `game/src/pearl.ts` (`pearlBalance`, `sellToMarket`, `spendPearls`), signed by the owner wallet from `wallet.ts` (the burner today, Phantom later). Server: `sensor/market.mjs`, same-origin at `/api/market/{info,quote,sell}`. The market picks a mode at start-up:
+
+- **Program mode** (`FISH_MARKET_PROGRAM_ID` set): the `fish_market` Anchor program owns the PEARL mint (PDA `pearl`). One `sell_fish` instruction burns the fish and mints its value to the seller, atomically, and enforces `config.max_value`. The server is only the **oracle**: `POST /api/market/quote` checks that the seller owns the fish and that its value is sane, then returns a `sell_fish` tx it has partially signed. The player signs it, sends it and pays the fees.
+- **Server mode** (the fallback): the market wallet creates the PEARL mint and holds its authority. The player transfers the fish to the market wallet, and `POST /api/market/sell` verifies that transfer on-chain, mints the PEARL and burns the fish. A sold set in `sensor/.market-state.json` makes retries safe (no double pay).
+- **Spend**: `spendPearls` burns PEARL from the player's token account, in both modes.
+- **Price**: the catch value comes from the fish's on-chain Attributes, or is recomputed as rarity value × zone multiplier. Anything above rarity value × 6 is rejected.
+- **Trust model**: this is a devnet hackathon build. Client wallets mint the fish, so anyone can mint a "mythic" and sell it. The rarity cap, plus `max_value` in program mode, only bounds each sale, and PEARL has no real value. The server keys (`sensor/.market-oracle.json` or `MARKET_ORACLE_KEYPAIR`, and `sensor/.market-keypair.json`) are mode 600 and gitignored. They are never logged and never go in `VITE_*`.
+- **Dev**:
+  - Run `npm run market` (port 8795, `MARKET_PORT` overrides) next to `npm run dev`. Vite proxies `/api` to it. `npm start` serves the market itself (section 2, Self-hosting).
+  - On start the market prints its public key. In server mode, fund that key at <https://faucet.solana.com> if the airdrop is rate-limited.
+  - Tests: `npm --prefix sensor test`. Devnet sell and spend check against the running market: `npm --prefix sensor run market:e2e`.
 
 ---
 
@@ -521,7 +538,7 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
 | `deepbreath.equipment` | Rod level, cached PEARL balance and legacy local Pearls (`rodLevel`, `pearls`, `legacyPearls`) |
-| `deepbreath.pearl-stub` | PEARL balance of the stub `pearl.ts` (temporary) |
+| `deepbreath.pearl.pending` | PEARL sales already sent, so a retry after a timeout resumes instead of starting over |
 | `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `lightingEffects`, `weather` (auto / clear / cloudy / rain / storm), `showCamera`, `showHelp` |
 | `deepbreath.maps` | Map progress: the selected map, the lifetime banked value (`bestValue`), the demo switch |
 
