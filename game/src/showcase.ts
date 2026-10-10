@@ -5,7 +5,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { Diver } from './diver';
-import { buildFishMesh, RARITY, rollFish, ZONES, type FishSpec, type Rarity } from './fish';
+import { buildFishMesh, RARITY, rollFish, type FishSpec, type Rarity } from './fish';
 import { Rng } from './rng';
 
 // The README hero loop (scripts/capture-showcase.mjs records it): the fjord map at night, cut
@@ -736,12 +736,21 @@ function buildDiver(scene: THREE.Scene, ticks: Tick[]) {
   });
 }
 
+// The per-zone rarity odds the game used when the GIF was recorded, deepest zone
+// first. Rarity now comes from depth (depth-odds.ts), but rolling with these
+// tables finds the same seeds, so the showcase keeps the same fish.
+const RECORDED_ODDS: [Rarity, number][][] = [
+  [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]],
+  [['common', 20], ['uncommon', 35], ['rare', 30], ['epic', 13], ['legendary', 2]],
+  [['common', 70], ['uncommon', 25], ['rare', 5]],
+];
+
 function buildFish(scene: THREE.Scene, ticks: Tick[]) {
   /** The nth fish of a species, found the way the game finds any fish: by rolling seeds. */
   const find = (rarity: Rarity, species: string, nth = 0): FishSpec => {
-    const zone = [...ZONES].reverse().find((z) => z.odds.some(([r]) => r === rarity))!;
+    const odds = RECORDED_ODDS.find((table) => table.some(([r]) => r === rarity))!;
     for (let seed = 1; ; seed++) {
-      const spec = rollFish(seed, zone, 12);
+      const spec = rollFish(seed, 12, odds);
       if (spec.rarity === rarity && spec.species === species && nth-- === 0) return spec;
     }
   };

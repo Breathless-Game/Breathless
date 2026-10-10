@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  MAX_DEPTH_M,
   MAX_MULTIPLIER,
   MPL_CORE_PROGRAM,
   RARITY_VALUE,
   RateLimiter,
   SoldLedger,
+  TRENCH_STEP_M,
   ZONES,
   appraise,
   catchValue,
@@ -14,6 +16,7 @@ import {
   maxPearls,
   parseQuoteBody,
   parseSellBody,
+  rewardMultiplierAt,
   singleFlight,
 } from './market-rules.mjs';
 
@@ -28,17 +31,36 @@ test('the mirrored rarity values and zones match game/src/fish.ts', async () => 
   }
   const multipliers = [...src.matchAll(/rewardMultiplier: ([\d.]+),\s*top: (\d+),\s*bottom: (\d+)/g)].map((m) => m.slice(1).map(Number));
   assert.deepEqual(multipliers, ZONES.map((z) => [z.rewardMultiplier, z.top, z.bottom]));
+  // The trench part of rewardMultiplierAt() and the recorded-depth cap.
+  const constant = (name) => Number(src.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
+  assert.equal(constant('MAX_REWARD_MULTIPLIER'), MAX_MULTIPLIER);
+  assert.equal(constant('TRENCH_STEP_M'), TRENCH_STEP_M);
+  assert.equal(constant('MAX_RECORDED_DEPTH_M'), MAX_DEPTH_M);
 });
 
-test('catch value is rarity value x zone multiplier, like rollFish', () => {
+test('catch value is rarity value x the depth multiplier, like rollFish', () => {
   assert.equal(catchValue('common', 5), 1);
   assert.equal(catchValue('rare', 25), 16);
   assert.equal(catchValue('mythic', 50), 2000);
-  assert.equal(catchValue('legendary', 400), 375); // below the last zone counts as the last zone
+  // The Trench: +1 every 50 m below 60 m, capped at x6 from 235 m.
+  assert.equal(rewardMultiplierAt(60), 2.5);
+  assert.equal(catchValue('rare', 110), 35);
+  assert.equal(catchValue('epic', 139), 143);
+  assert.equal(rewardMultiplierAt(235), MAX_MULTIPLIER);
+  assert.equal(catchValue('rare', 235), 60);
+  assert.equal(catchValue('legendary', 400), 900);
+  assert.equal(catchValue('rare', MAX_DEPTH_M), 60);
   assert.equal(maxPearls('mythic'), 800 * MAX_MULTIPLIER);
 });
 
-test('appraise recomputes the value from on-chain rarity and depth (chain.ts shape)', () => {
+test('appraise pays the catch value chain.ts writes on-chain, i.e. what the collection showed', () => {
+  // Rolled at 139 m (value 143), caught and recorded at 141 m: recomputing would give 144.
+  const r = appraise(attrs({ rarity: 'epic', species: 'Violet Lionfish', depth: 141, value: 143, seed: 'baf2b4b9' }));
+  assert.equal(r.pearls, 143);
+  assert.equal(catchValue('epic', 141), 144);
+});
+
+test('appraise recomputes the value from on-chain rarity and depth (fish minted without a value)', () => {
   const r = appraise(attrs({ rarity: 'epic', species: 'Ghost Angelfish', depth: 40, seed: 'deadbeef' }));
   assert.deepEqual(r, { ok: true, pearls: 88, rarity: 'epic', depth: 40, cap: 210 });
 });
@@ -60,6 +82,9 @@ test('appraise rejects unknown rarities and missing or silly depths', () => {
   assert.equal(appraise(attrs({ rarity: 'rare' })).ok, false);
   assert.equal(appraise(attrs({ rarity: 'rare', depth: -1 })).ok, false);
   assert.equal(appraise(attrs({ rarity: 'rare', depth: 'NaN' })).ok, false);
+  // The game clamps recorded depth to MAX_DEPTH_M, so the deepest record still sells.
+  assert.deepEqual(appraise(attrs({ rarity: 'rare', depth: MAX_DEPTH_M })), { ok: true, pearls: 60, rarity: 'rare', depth: MAX_DEPTH_M, cap: 60 });
+  assert.equal(appraise(attrs({ rarity: 'rare', depth: MAX_DEPTH_M + 1 })).ok, false);
   assert.equal(appraise(undefined).ok, false);
 });
 
