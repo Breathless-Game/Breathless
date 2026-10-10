@@ -1,4 +1,4 @@
-import { RARITY, ZONES, type FishSpec, type Zone } from './fish';
+import { ZONES, fishValue, type FishSpec, type Zone } from './fish';
 
 // The three waters from the design doc (design/game-design-document.md, section 6).
 // A map is pure data: how deep you may dive, when it unlocks, and its palette.
@@ -160,7 +160,7 @@ export function saveMapProgress(progress: MapProgress) {
 }
 
 export function bankValue(bank: readonly FishSpec[]): number {
-  return bank.reduce((sum, fish) => sum + RARITY[fish.rarity].value, 0);
+  return bank.reduce((sum, fish) => sum + fishValue(fish), 0);
 }
 
 export function isUnlocked(map: MapDef, progress: MapProgress): boolean {

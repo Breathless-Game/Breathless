@@ -59,7 +59,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
 - **Depth zones**: "Sunken Forest" is the second depth zone on Heaven Lake. It uses the Coral Reef drop table; only the look and the gauge label differ. Fish only spawn in the zones a map opens, and the depth gauge on the right shows only those zones.
-- **Unlocking**: a map opens by the total value of banked fish (the `value` column of the rarity table in section 7: 1 / 3 / 10 / 35 / 150 / 800). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
+- **Unlocking**: a map opens by the total catch value of banked fish (see "Catch value" in section 7). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
 - **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
 - **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), the in-game clock (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
@@ -368,11 +368,13 @@ Pictures and per-species numbers for all 17 fish species and the fishing rod are
 
 ### Depth zones and drop rates (`ZONES` in `fish.ts`)
 
-| Zone | Depth | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | – | 10 | 30 | 35 | 19 | 6 |
+| Zone | Depth | Reward | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Shallows | 0–18 m | ×1.0 | 70 | 25 | 5 | – | – | – |
+| Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
+| The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
+
+**Catch value** = the rarity `value` (table below) × the zone's reward multiplier (`rewardMultiplier`), rounded. A rare fish is worth 10 in the Shallows, 16 on the Reef and 25 in the Abyss. It is shown as "pts" on the toast, the HUD and the collection cards, sorts the collection, is written to the NFT metadata as `Catch value`, and counts toward map unlocks. Fish banked before this change have no stored value and count at their plain rarity value.
 
 ### Rarity (`RARITY`)
 
@@ -443,7 +445,7 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 
 | key | Contents |
 | --- | --- |
-| `deepbreath.bank` | Banked fish (`FishSpec[]`, with an `assetId` once minted) |
+| `deepbreath.bank` | Banked fish (`FishSpec[]`, with the catch `value` and `map`, and an `assetId` once minted) |
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
 | `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `showCamera`, `showHelp` |
