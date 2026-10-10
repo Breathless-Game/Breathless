@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
-import { type Band, Fish, FishSpec, RARITY, RARITY_ORDER, rollFish, ZONES } from './fish';
+import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
@@ -10,7 +10,9 @@ import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
 import { TitleScreen } from './title';
 import { loadSettings, type Settings } from './settings';
-import { HALF_WIDTH, SEABED_Y, TRENCH_HALF_WIDTH, World } from './world';
+import { HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
+import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
+import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 
 // ---- Tuning -------------------------------------------------------------
@@ -24,15 +26,13 @@ const NET_CAPACITY = 6;
 const CATCH_RADIUS = 2.4;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 const FISH_PER_ZONE = [16, 16, 12];
-// Below the shelf the trench has no bottom. A map config can cap this later
-// (design doc §6 gives each map its own dive depth).
+// Every map's seabed is a shelf; under the boat a trench drops away with no
+// bottom. The map only sets how deep the shelf is (world.seabedY).
 const DEPTH_LIMIT = Infinity;
-const SHELF_Y = SEABED_Y + 1.2; // lowest the diver can go outside the trench
 const TRENCH_X = TRENCH_HALF_WIDTH - 1.2; // how far left/right the diver can go inside it
 // The trench is too deep to stock up front: a school of fish follows the
 // diver down, each one rolled for the depth it's spawned at.
 const TRENCH_FISH = 12;
-const TRENCH_TOP = -SEABED_Y + 2;
 
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -44,7 +44,10 @@ const renderQuality = new AdaptiveQuality({
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const world = new World(renderQuality.settings);
+// The map you last played, unless it is no longer open (e.g. the demo switch was turned off).
+const mapProgress = loadMapProgress();
+if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
+const world = new World(renderQuality.settings, MAPS[mapProgress.selected]);
 const scene = world.scene;
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
 camera.position.set(0, 1.5, 24);
@@ -94,17 +97,18 @@ function spawnFish(band: Band) {
   addFish(band, THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5), HALF_WIDTH);
 }
 
-ZONES.forEach((zone, i) => {
-  for (let k = 0; k < FISH_PER_ZONE[i]; k++) spawnFish(zone);
-});
-
 // Trench fish live in a window around the diver's depth. New ones appear
 // out of view (not within VIEW_M of the diver) so they never pop in on screen.
 const trenchFish = new Set<Fish>();
 const VIEW_M = 14;
 
+/** Shallowest depth a trench fish may spawn at: the current map's shelf. */
+function trenchTop(): number {
+  return mapDepth(world.map);
+}
+
 function trenchWindow(diverDepth: number): [number, number] {
-  const top = Math.max(TRENCH_TOP, diverDepth - 25);
+  const top = Math.max(trenchTop(), diverDepth - 25);
   return [top, Math.max(top + 45, diverDepth + 45)];
 }
 
@@ -115,11 +119,9 @@ function spawnTrenchFish(diverDepth: number) {
     depth = THREE.MathUtils.randFloat(top, bottom);
   }
   // Each fish keeps to a few metres around where it was rolled, so its rarity matches its depth.
-  const band = { top: Math.max(TRENCH_TOP - 1, depth - 4), bottom: depth + 4 };
+  const band = { top: Math.max(trenchTop() - 1, depth - 4), bottom: depth + 4 };
   trenchFish.add(addFish(band, depth, TRENCH_X - 0.8));
 }
-
-for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
 
 function tendTrench(diverDepth: number) {
   const [top, bottom] = trenchWindow(diverDepth);
@@ -129,6 +131,22 @@ function tendTrench(diverDepth: number) {
   }
   while (trenchFish.size < TRENCH_FISH) spawnTrenchFish(diverDepth);
 }
+
+/**
+ * Stock the current map: the zones it opens across the whole width, and a fresh
+ * trench school under its shelf. Deeper zones are only reachable down the
+ * trench, where that school covers them.
+ */
+function populate() {
+  for (const f of [...trenchFish]) removeFish(f);
+  for (const f of fishes) scene.remove(f.mesh.group);
+  fishes.length = 0;
+  mapZones(world.map).forEach((zone) => {
+    for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
+  });
+  for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
+}
+populate();
 
 // ---- Game state ---------------------------------------------------------
 type Phase = 'menu' | 'calibrating' | 'play' | 'blackout';
@@ -169,7 +187,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) openStartCard();
+  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
+    // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
+    e.preventDefault();
+    openStartCard();
+  }
   keys.add(e.key.toLowerCase());
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
   if (phase !== 'play') return;
@@ -229,14 +251,16 @@ function tryCatch() {
   if (!best) return;
   const inTrench = trenchFish.has(best);
   removeFish(best);
-  const caught = { ...best.spec, depthM: Math.round(-best.pos.y) };
+  const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
   net.push(caught);
   hud.setNet(net, NET_CAPACITY);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
   if (!inTrench) {
     const band = best.band;
-    setTimeout(() => spawnFish(band), 4000);
+    const map = world.map;
+    // Skip the respawn if the player has moved to another map in the meantime.
+    setTimeout(() => world.map === map && spawnFish(band), 4000);
   }
 }
 
@@ -244,13 +268,58 @@ function bankNet() {
   if (!net.length) return;
   bank.push(...net);
   saveBank();
-  const rarest = net.reduce((a, f) => (RARITY[f.rarity].value > RARITY[a.rarity].value ? f : a));
+  const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(`Banked ${net.length} fish!`);
   hud.toast(rarest, 'BANKED');
   net = [];
   hud.setNet(net, NET_CAPACITY);
   hud.setBank(bank);
+  noteBankValue(true);
 }
+
+// ---- Maps ---------------------------------------------------------------
+/** Record progress toward the next map, and say so when a dive opens one. */
+function noteBankValue(announce: boolean) {
+  const value = bankValue(bank);
+  if (value <= mapProgress.bestValue) return;
+  const opened = MAP_ORDER.map((id) => MAPS[id]).filter(
+    (m) => !mapProgress.unlockAll && mapProgress.bestValue < m.unlockValue && value >= m.unlockValue,
+  );
+  mapProgress.bestValue = value;
+  saveMapProgress(mapProgress);
+  mapPicker.render();
+  const last = opened.at(-1);
+  if (announce && last) setTimeout(() => hud.message(`New waters open: ${last.name} · ${last.nameZh}`, 3200), 2000);
+}
+
+function showMapOnHud() {
+  const map = world.map;
+  hud.setZones(
+    mapZones(map).map((z, i) => ({ label: map.zoneLabels[i], top: z.top, bottom: z.bottom })),
+    mapDepth(map),
+    map.water,
+  );
+}
+
+function selectMap(id: MapId) {
+  if (phase !== 'menu' || id === world.map.id || !isUnlocked(MAPS[id], mapProgress)) return;
+  mapProgress.selected = id;
+  saveMapProgress(mapProgress);
+  world.setMap(MAPS[id]);
+  populate(); // also swaps the old trench school for one under the new shelf
+  showMapOnHud();
+  mapPicker.render();
+}
+
+const mapPicker = new MapPicker(mapProgress, selectMap, (on) => {
+  mapProgress.unlockAll = on;
+  // Turning the demo switch off while standing on a locked map sends you back to the first one.
+  if (!isUnlocked(world.map, mapProgress)) selectMap('fjord');
+  saveMapProgress(mapProgress);
+  mapPicker.render();
+});
+showMapOnHud();
+noteBankValue(false);
 
 function blackout() {
   phase = 'blackout';
@@ -432,9 +501,9 @@ const pauseMenu = new PauseMenu(settings, {
 // ---- Title screen -------------------------------------------------------
 // Start opens the existing start card (camera / keyboard / breath test).
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, at: 0.27, label: 'START', onClick: openStartCard },
-  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.5 },
-  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, at: 0.73, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
+  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openStartCard },
+  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
+  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
 function showTitle(intro: boolean) {
@@ -510,12 +579,15 @@ function update(dt: number, time: number) {
   const cap = outOfAir ? 10 : MAX_SPEED;
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
-  diver.pos.addScaledVector(diver.vel, dt);
   // Below the shelf you're inside the trench; above it, the shelf is the floor
-  // everywhere except over the trench mouth.
-  const wall = diver.pos.y < SHELF_Y ? TRENCH_X : HALF_WIDTH;
+  // everywhere except over the trench mouth. The shelf depth is per map.
+  const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench
+  // The trench walls follow where the diver was before this step: otherwise
+  // pressing down on the shelf would pull the diver sideways into the trench.
+  const wall = diver.pos.y < shelfY ? TRENCH_X : HALF_WIDTH;
+  diver.pos.addScaledVector(diver.vel, dt);
   diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -wall, wall);
-  const floor = Math.abs(diver.pos.x) > TRENCH_X ? SHELF_Y : -DEPTH_LIMIT;
+  const floor = Math.abs(diver.pos.x) > TRENCH_X ? shelfY : -DEPTH_LIMIT;
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
@@ -537,8 +609,9 @@ function update(dt: number, time: number) {
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  // Over the shelf the camera stays above the seabed; over the trench it follows you down.
-  const camFloor = Math.abs(diver.pos.x) > TRENCH_X ? SEABED_Y + 9 : -Infinity;
+  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
+  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
+  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
   camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor), 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
@@ -571,6 +644,8 @@ Object.assign(window, {
   breath,
   breathTest,
   titleScreen,
+  world,
+  selectMap,
   diver,
   fishes,
   keys,

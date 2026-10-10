@@ -41,26 +41,31 @@ Surface = fish banked ◀── reach the surface within 3.2 s ────┤
 ```
 
 - **Your breath is the air tank**: the game has no oxygen bar. Your lungs are the bar.
-- **Greed against risk**: mythic fish only live in the Abyss (below 38 m), but the farther you are from the surface, the harder it is to get back after you breathe.
+- **Greed against risk**: the deeper you dive, the rarer the fish and the more they are worth (mythic only below 50 m, and the trench has no bottom), but the farther you are from the surface, the harder it is to get back after you breathe.
 - **Night mode** (`N`): every fish rolls its rarity twice and keeps the higher result. The sea-monster risk is still on the to-do list.
 - **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it.
 
-### Three maps (designed, not built yet)
+### Three maps
 
-The game currently has one sea, which is the base for Map 3. Maps 1 and 2 and the map picker are still on the to-do list. The full design is in [section 6 of the design doc](design/game-design-document.md#6-地图) (in Chinese). Summary:
+All three maps are in the game. You choose one on the start card before a dive: a row of three map cards sits above the "Start with camera / Play with keyboard" buttons. The chosen map is also what you see behind the title screen. The full design is in [section 6 of the design doc](design/game-design-document.md#6-地图) (in Chinese). What is built:
 
-| | Map 1 · Norway / Iceland fjord | Map 2 · Zhangjiajie / Changbai Mountain Heaven Lake | Map 3 · Open ocean |
+| | Fjord 峡湾 (Norway / Iceland) | Heaven Lake 天池 (Zhangjiajie / Changbai) | Open Ocean 汪洋 |
 | --- | --- | --- | --- |
 | Difficulty | Casual | Normal | Hard |
-| Setting | A fjord between snowy mountains, with cabins and pine forest on the shore and aurora at night | A mountain lake ringed by stone pillars, with fog at dawn and at night | Open sea, with storm clouds in the distance |
-| Time | Daytime 05:00–20:00; creatures appear after dark | Full day-night cycle | Full day-night cycle |
-| Diving depth | 0–18 m, shallows only | 0–38 m, adds the second zone | No limit: the only map with the Abyss and the bottomless trench below it |
-| Night creatures | Deer (only startles you), bear (if your heart is racing when you surface, it steals your most valuable fish) | Bear, giant (its stomp scatters the fish and pushes the diver toward the surface) | Waves, sea monster (patrols the Abyss; if it catches you, you lose your net) |
-| Cost of failure | The fish in your net | The fish in your net, plus boat durability | When boat durability reaches zero the boat sinks and all gear is lost for good |
-| Unlock | From the start | 150 total banked value | 1000 total banked value |
+| Zones on the shelf | 0–18 m, Shallows only | 0–38 m, Shallows + Sunken Forest | 0–60 m, Shallows + Coral Reef + The Abyss |
+| Shelf (seabed) | 20 m, then the bottomless trench | 40 m, then the bottomless trench | 62 m, then the bottomless trench |
+| Above the water | Snow peaks, a pine shore, two fishing cabins and a pier, ice floes; aurora and lit windows at night | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
+| Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
+| Waves | Half the ocean's height | Calmest | Full |
+| Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
-- **Fishing from the boat** (all three maps): while you are on the boat and not holding your breath, the rod casts by itself. The steadier your heart rate, the faster the bite. No breath-holding needed. It fills the rest time between two dives.
-- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese).
+- **The trench**: on every map the seabed is a shelf, and under the boat a trench drops away with no bottom. There is no depth limit on any map; the deeper you go, the rarer the fish and the higher their catch value (section 7). The zones a map does not open on its shelf (e.g. below 18 m on the Fjord) are only reachable down the trench.
+- **Depth zones**: "Sunken Forest" is the second depth zone on Heaven Lake. It is the Coral Reef depth range with a different look and gauge label; drop rates depend on depth alone. Fish are stocked across the shelf only in the zones a map opens, and a school of trench fish follows the diver down below the shelf. The depth gauge on the right shows the map's open zones and then a Trench band from the shelf down.
+- **Unlocking**: a map opens by the total catch value of banked fish (see "Catch value" in section 7). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
+- **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
+- **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
+- **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), the in-game clock (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
+- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying with Pearl is not wired up.
 
 ### Hackathon positioning
 
@@ -157,7 +162,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
-**Main menu**: when it opens, a rope swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The golden **START** fish opens the start card (camera / keyboard / breath test), and the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. The golden **START** fish opens the start card (camera / keyboard / breath test), and the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
 
 **Pause details**: the game freezes completely while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
 
@@ -318,6 +323,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
+├── assets/                 asset library: a picture and the parameters of every fish species and the fishing rod
 ├── sensor/                 Node breath sensor service
 │   ├── index.mjs           WS server, one Session per connection, Presage SDK, simulator (with fake heart rate)
 │   ├── breath-detector.mjs breath-hold detection (section 5)
@@ -326,15 +332,21 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 └── game/                   Vite + TypeScript + Three.js
     ├── index.html          DOM for the HUD, title card, collection panel and report panel
     ├── vite.config.ts      port 5173; Node polyfills (needed by Umi and Irys)
+    ├── asset-library.html  dev-only preview page for the asset library (src/asset-library.ts)
     ├── tests/              node --test: unit tests for automatic render quality
     └── src/
         ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
         ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
         ├── breathtest.ts   the 2.5-minute breath test on the title screen: prompts holds and breathing, labels them automatically
-        ├── world.ts        seabed shelf with the trench gap, endless trench walls, rocks, coral, kelp, light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── world.ts        underwater terrain built from the selected map (seabed shelf with the trench gap under the boat, endless trench walls, rocks, coral, kelp), light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── maps.ts         the three map definitions (open zones and shelf depth, unlock value, palette) and the saved map progress
+        ├── scenery.ts      the above-water scenery for each map
+        ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
+        ├── mappicker.ts    the map cards on the start card
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
-        ├── fish.ts         rarity table, zone names, species names, rollFish(seed, depth), fish meshes, swim and flee AI
+        ├── upgrades.ts     the upgrade table and low-poly models for each upgrade level (not shown in the game yet)
+        ├── fish.ts         rarity table, zone names, species names, rollFish(seed, depth), catch value by depth, fish meshes, swim and flee AI
         ├── depth-odds.ts   drop rates by depth (RARITY_BY_DEPTH), zoneName(depth); no imports, tested in tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 seeded random numbers
         ├── portrait.ts     offscreen rendering: fishIcon (192 px) and fishCard (512 px, the NFT card)
@@ -355,9 +367,11 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 
 ## 7. Game design parameters
 
+Pictures and per-species numbers for all 17 fish species and the fishing rod are in the [asset library](assets/README.md).
+
 ### Depth zones and drop rates (`RARITY_BY_DEPTH` in `depth-odds.ts`)
 
-The sea has no bottom. Zones are names only and no longer set the odds: Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m+ (no bottom; a gap in the seabed under the boat)**.
+The sea has no bottom. On every map the seabed is a shelf (20 m on the Fjord, 40 m on Heaven Lake, 62 m on the Open Ocean), and under the boat a trench goes down forever. Zones are names only and do not set the odds: Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m+**. On a map, the depth gauge and the NFT `Zone` attribute use that map's own zone labels, and everything below its shelf is The Trench. Drop rates and catch value depend only on absolute depth: 30 m in the Fjord's trench rolls exactly like 30 m on the Open Ocean's reef.
 
 Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Epic only appears below 15 m, legendary below 30 m, mythic below 50 m. The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
 
@@ -376,6 +390,14 @@ At night every fish rolls twice and keeps the rarer result (`rollFor` in `main.t
 
 Per net of 6 fish (day, expected count = 6 × P(legendary or mythic)): at 80 m that is 6 × 1.5% = 0.09, about 1 legendary-or-better per ~11 nets; at 120 m 6 × 3.0% = 0.18, about 1 per ~5.6 nets.
 
+### Catch value (`rewardMultiplierAt` in `fish.ts`)
+
+| Depth | 0–18 m | 18–38 m | 38–60 m | 60 m+ (The Trench) |
+| --- | --- | --- | --- | --- |
+| Reward multiplier | ×1.0 | ×1.6 | ×2.5 | ×2.5, plus 1 for every 50 m below 60 m, up to ×6 (reached at 235 m) |
+
+**Catch value** = the rarity `value` (table below) × the reward multiplier at the depth the fish was rolled at (where it spawned), rounded. A rare fish is worth 10 in the Shallows, 16 on the Reef, 25 in the Abyss, 35 at 110 m and 60 from 235 m down. It is shown as "pts" on the toast, the HUD and the collection cards, sorts the collection, is written to the NFT metadata as `Catch value`, and counts toward map unlocks. Fish banked before this change have no stored value and count at their plain rarity value.
+
 ### Rarity (`RARITY`)
 
 | Rarity | Color | value |
@@ -391,7 +413,7 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 ### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]` (the three shallow zones, stocked at start) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (a map config can cap it)
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (the trench is bottomless on every map)
 
 ---
 
@@ -445,10 +467,11 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 
 | key | Contents |
 | --- | --- |
-| `deepbreath.bank` | Banked fish (`FishSpec[]`, with an `assetId` once minted) |
+| `deepbreath.bank` | Banked fish (`FishSpec[]`, with the catch `value` and `map`, and an `assetId` once minted) |
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
 | `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `showCamera`, `showHelp` |
+| `deepbreath.maps` | Map progress: the selected map, the best total banked value, the demo switch |
 
 To reset, run `localStorage.clear()` in the browser console.
 
@@ -495,15 +518,17 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - NFT card art (determined by the seed, reproducible), collection panel
 - Solana minting: verified end to end on devnet (throwaway wallet → Irys upload of image and metadata → Metaplex Core + on-chain Attributes). Solana Explorer shows the card correctly. [Example asset](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - Health report (built on demand)
+- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, depth limits, map picker on the start card, unlock by total banked fish value
+- Low-poly models for the upgrade parts (code only, not in the game yet)
 
 ### 🔜 To do (say so in a PR or the group chat when you pick one up)
 
 - [ ] **Test Presage breath detection on real cameras** and tune the thresholds (section 5)
 - [ ] **Official game Collection**: every fish is a standalone asset right now, so Explorer shows Verified Collection as None. We need a Collection whose authority is held by a server, and to mint fish into it, so marketplaces can filter by Collection and fakes are prevented
-- [ ] **Gear economy**: buy air tanks, fins, a headlamp and a bigger net with SOL or Pearl (an SPL token); gear has durability
+- [ ] **Gear economy**: buy air tanks, fins, a headlamp and a bigger net with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
 - [ ] **NFT sinks**: sell to the market for Pearl, craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets. `burnFish` is already written
 - [ ] **Night sea monster**: high-value fish appear at night, together with the sea-monster risk
-- [ ] **Three maps**: one config per map (sky and water colors, shoreline models, maximum depth, creature table), and a map picker on the main screen. The design is in section 6 of the design doc
+- [ ] **Three maps, what remains**: night creatures per map, the in-game clock, boat durability and sinking on the ocean map. The design is in section 6 of the design doc
 - [ ] **Boat fishing and heart-rate gameplay**: the calm value sets the bite speed and how far away underwater fish notice you; rod, bait and boat upgrades. The design is in sections 4.2, 6.3 and 7 of the design doc
 - [ ] **Marketplace (the core of multiplayer)**: listings, purchases, a live feed of sales; players stay in separate worlds and interact only through trading
 - [ ] **Backend**: a service for listings and sales, plus a dashboard for economy and fairness data (Tiger Data / Timescale)
@@ -519,7 +544,7 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - **Before a PR**: `npm --prefix game run build` must pass (strict TS, with `noUnused` on).
 - **Secrets**: `.env`, private keys and API keys never go into the repo. Add new environment variables to `.env.example` as well (names only, no values).
 - **Style**: TypeScript strict; low-poly + flat shading; color variables live in `:root` in `style.css`; comments explain only the "why".
-- **Changing parameters**: gameplay constants live at the top of `main.ts` in `RARITY` / `ZONES` in `fish.ts`, and in `RARITY_BY_DEPTH` in `depth-odds.ts`. Mention any change in the PR.
+- **Changing parameters**: gameplay constants live at the top of `main.ts`, in `RARITY` / `ZONES` in `fish.ts`, in `RARITY_BY_DEPTH` in `depth-odds.ts`, and in `MAPS` in `maps.ts`. Mention any change in the PR.
 - **Two READMEs**: `README.md` (English) and `README.zh-CN.md` (中文). When you change one, change the other in the same PR.
 
 ---
