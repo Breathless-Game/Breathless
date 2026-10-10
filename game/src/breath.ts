@@ -133,7 +133,9 @@ export class BreathSource {
     this.ws = ws;
   }
 
-  private sendLabel(holding: boolean) {
+  /** Marks a real breath hold (ground truth) in the sensor's recording. */
+  sendLabel(holding: boolean) {
+    if (this.state.label === holding) return;
     this.state.label = holding;
     this.send({ t: 'label', holding, ts: performance.timeOrigin + performance.now() });
     this.emit();

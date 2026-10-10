@@ -71,8 +71,23 @@
           <button id="start-live" class="primary">Start with camera</button>
           <button id="start-keys">Play with keyboard</button>
         </div>
+        <button id="start-test" class="link">Breath test (2.5 min) · 憋气测试</button>
         <button id="open-report" class="link">View my health report</button>
         <p class="small muted">Breath detection by Presage SmartSpectra · face and chest visible, good light</p>
+        <div id="test" class="hidden">
+          <div class="row"><div id="test-title"></div><div id="test-count"></div></div>
+          <div id="test-sub" class="small"></div>
+          <div class="test-track"><div id="test-bar"></div></div>
+          <div class="row small">
+            <span id="test-seen" class="test-seen"></span>
+            <button id="test-stop" class="mini">Stop</button>
+          </div>
+          <div id="test-result" class="hidden"></div>
+          <div id="test-done" class="buttons">
+            <button id="test-play" class="primary">Play with camera</button>
+            <button id="test-again">Run again</button>
+          </div>
+        </div>
         <div id="calib" class="hidden">
           <div id="calib-step">Connecting to breath sensor…</div>
           <div id="calib-sub" class="small muted"></div>
