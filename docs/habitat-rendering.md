@@ -1,10 +1,12 @@
 # Low-poly underwater habitats
 
-Rocks, plants and their substrate share a seeded layout. Large outcrops anchor smaller talus; exclusion distances leave open sand channels. Vegetation grows beside these groups with separated roots and varied heights. The darker deep shelf stays sparse while the rising rear reef supports shallower vegetation. A reduced quality tier keeps the same main rocks and plant identities.
+Rocks, plants and their substrate share a seeded layout. Large outcrops anchor smaller talus; exclusion distances leave open sand channels. Vegetation grows beside these groups with separated roots and varied heights. The darker deep shelf stays sparse while the rising rear reef supports shallower vegetation. A reduced quality tier keeps the same main rocks and plant identities. A separate seed adds 35 small stones per map without moving the earlier rocks or roots; the added stones avoid the full plant pool.
 
 Terrain vertices and rooted objects share a height model. Roots sample the **rendered triangle** with barycentric interpolation, rather than only the smooth height function, so a coarse sloping mesh cannot leave a root hovering above it. Boulders are partly buried. Coral and drowned trunks also sit on the substrate. Connected bedrock supports streamed trench blocks, with overlapping corners and a shared world-coordinate profile at chunk boundaries; the diving lane remains clear.
 
-Rock shapes use coherent fracture planes, asymmetric shoulders and small clipped corners. Flat faces stay intact, with restrained mineral colors and darker undersides. Kelp uses tapered, curved ribbons with a raised midrib and attached side leaves. The current bends the whole plant continuously, fixes its root and delays the tip response. Branch joints sample the same displacement as their attachment points. Flat normals come from the displaced triangles, so light changes with the moving facets.
+Rock shapes use coherent fracture planes, asymmetric shoulders and small clipped corners. Fixed per-triangle pigments restore the multicolor polygon artwork on the seabed, rocks and walls, including coplanar triangles. Map palettes distinguish cold teal/slate Fjord, ochre/jade Heaven Lake, and cyan/blue Open Ocean. Colors are written at generation time and cannot flicker during animation.
+
+Water plants have three seeded forms: long narrow ribbons (55% selection weight), the original strap with triangular side leaves (30%), and broader curved fronds (15%). The seed also varies width, curl, orientation, phase and pigment. Existing height/root identities survive rebuilds and quality changes. All three forms appear at every quality tier on all three maps. The current bends each plant continuously, fixes its root and delays the tip response. Branch joints sample the same displacement as their attachment points. Flat normals come from the displaced triangles, so light changes with the moving facets.
 
 ## Source study
 
@@ -18,13 +20,14 @@ The following GitHub sources were read for this work. The project code was writt
 
 | | Low | Medium | High |
 | --- | ---: | ---: | ---: |
-| Maximum plants | 12 | 30 | 55 |
-| Vertices per plant | 73 | 117 | 231 |
-| Triangles per plant | 84 | 140 | 284 |
+| Maximum plants | 16 | 40 | 72 |
+| Ribbon vertices per plant | 54 | 81 | 108 |
+| Legacy strap vertices per plant | 77 | 89 | 101 |
+| Broad frond vertices per plant | 102 | 123 | 204 |
 | Water plant draw calls | 1 | 1 | 1 |
 | Rock detail | Main outcrops | + companions | + small talus |
 
-Heaven Lake has at most 26 plants. Rock bodies use 44 triangles at low detail and about 88–92 with chipped corners. Static outcrops are batched into one material draw. Kelp updates shader uniforms each frame; it does not upload vertices, rebuild normals or update hundreds of hierarchical segment transforms. A frozen game clock holds its pose while paused. Quality or map changes dispose the old buffers and materials. These budgets do not claim measured frame rates on specific weak hardware.
+Heaven Lake has at most 38 plants. The high-tier fields have 9,083 / 4,802 / 8,877 vertices for Fjord / Heaven Lake / Open Ocean. Thin forms allow denser growth with fewer vertices than the former all-broad-frond field. Trench density is independent of plant count, so increasing vegetation does not change the existing wall layout. Rock bodies use 44 triangles at low detail and about 88–92 with chipped corners. Static outcrops are batched into one material draw. Kelp updates shader uniforms each frame; it does not upload vertices, rebuild normals or update hundreds of hierarchical segment transforms. A frozen game clock holds its pose while paused. Quality or map changes dispose the old buffers and materials. These budgets do not claim measured frame rates on specific weak hardware.
 
 ## Validation
 

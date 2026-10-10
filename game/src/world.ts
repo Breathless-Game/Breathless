@@ -10,6 +10,7 @@ import { waterHeight, waterSlope } from './water-waves';
 import { rockGeometry } from './rock-geometry';
 import { createHabitat, habitatHeight, habitatGroundHeight, type HabitatLayout } from './seabed-layout';
 import { KelpField } from './kelp';
+import { paintBiomeFaces } from './biome-colors';
 import { WeatherCycle, type WeatherMode } from './weather';
 import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
@@ -79,17 +80,10 @@ function clearLane(x: number, z: number, box: THREE.Box3, side: -1 | 1, reach = 
   return side < 0 ? Math.min(x, -limit - box.max.x) : Math.max(x, limit - box.min.x);
 }
 
-const ABYSS_TINT = new THREE.Color('#1a2c44');
-
-/** The map's rock colour, darker and cooler the deeper it sits. */
-function wallTint(base: THREE.Color, depth: number, out: THREE.Color) {
-  const t = 1 - Math.exp(-Math.max(0, depth - 20) / 140);
-  return out.copy(base).lerp(ABYSS_TINT, 0.5 * t).multiplyScalar(1 - 0.55 * t);
-}
-
 /** Share of trench-wall rocks to build: all on high, fewer but larger ones on lower settings. */
 function wallDensity(quality: RenderQuality) {
-  return 0.45 + 0.55 * Math.min(1, quality.kelpCount / RENDER_QUALITY.high.kelpCount);
+  // Independent of vegetation budgets so denser grass does not move the walls.
+  return [0.57, 0.75, 1][quality.detail - 1];
 }
 
 /** Underwater fog reach (m) once the camera is inside the trench: far enough that the side and back walls read as a slot in the rock. */
@@ -246,7 +240,6 @@ export class World {
   /** The shelf: two halves of sand with the trench open between them, and a broken lip on each edge. */
   private buildSeabed(rng: Rng) {
     const width = SEABED_WIDTH / 2 - TRENCH_HALF_WIDTH;
-    const sand = new THREE.Color(this.map.sand);
     const tile = (w: number, depth: number, cx: number, cz: number) => {
       const geo = new THREE.PlaneGeometry(w, depth, Math.ceil(w / 3), Math.ceil(depth / 3));
       geo.rotateX(-Math.PI / 2);
@@ -257,15 +250,8 @@ export class World {
       const g = geo.toNonIndexed();
       geo.dispose();
       g.computeVertexNormals();
-      const shade = new THREE.Color();
-      let face = 0;
-      // Broad mineral bands and face orientation, without random checkerboard tint.
-      paintFaces(g, () => {
-        const x = g.attributes.position.getX(face) + cx;
-        const z = g.attributes.position.getZ(face) + cz;
-        const up = Math.max(0, g.attributes.normal.getY(face));
-        face += 3;
-        return shade.copy(sand).multiplyScalar(0.86 + up * 0.09 + Math.sin(x * 0.1 + z * 0.09) * 0.04);
+      paintBiomeFaces(g, this.map.sediment, {
+        seed: hashString(`${this.map.id}:sand:${cx}`), contrast: 0.9, depth: -this.seabedY,
       });
       const mesh = new THREE.Mesh(g, flatMat('#ffffff', { vertexColors: true }));
       mesh.position.set(cx, this.seabedY, cz);
@@ -281,7 +267,7 @@ export class World {
 
   /** Half-sunk rocks along both edges of the trench mouth so the cut in the sand reads as broken rock. */
   private buildLip(rng: Rng) {
-    const mats = this.map.rocks.map((c) => flatMat(c));
+    const material = flatMat('#ffffff', { vertexColors: true });
     const batch = new Batch();
     const span = 30;
     const perSide = 7;
@@ -292,7 +278,9 @@ export class World {
         const geo = rockGeometry(rng, r, 0, rng.range(0.55, 0.9));
         const x = clearLane(side * (TRENCH_HALF_WIDTH + 0.5 + r * rng.range(0, 0.5)), z, geo.boundingBox!, side, 12.5);
         const y = habitatGroundHeight(side * TRENCH_HALF_WIDTH, z, this.seabedY) - r * rng.range(0.1, 0.4);
-        batch.add(geo, rng.pick(mats), x, y, z);
+        const mineral = rng.pick(this.map.rocks);
+        paintBiomeFaces(geo, [mineral, ...this.map.rocks], { seed: TERRAIN_SEED[this.map.id] + i + side * 17, depth: -y });
+        batch.add(geo, material, x, y, z);
       }
     }
     this.terrain.add(batch.build());
@@ -305,8 +293,6 @@ export class World {
     }
     const batch = new Batch();
     const material = flatMat('#ffffff', { vertexColors: true });
-    const palette = this.map.rocks.map(c => new THREE.Color(c));
-    const shade = new THREE.Color();
     for (const slot of this.habitat.rocks) {
       if (slot.detail > this.quality.detail) continue;
       const rng = new Rng(slot.seed);
@@ -316,8 +302,7 @@ export class World {
       if (z + box.max.z > LANE_BACK) x = clearLane(x, z, box, x < 0 ? -1 : 1, TRENCH_HALF_WIDTH);
       // Bury the base in its actual sloping substrate. No free-floating rock centres.
       const y = habitatGroundHeight(x, z, this.seabedY) - box.min.y - (box.max.y - box.min.y) * 0.30;
-      const color = palette[slot.patch % palette.length];
-      paintFaces(geo, h => shade.copy(color).multiplyScalar(0.78 + h * 0.22));
+      paintBiomeFaces(geo, this.map.rocks, { seed: slot.seed, depth: -y });
       batch.add(geo, material, x, y, z);
     }
     this.seabedRocks = batch.build();
@@ -404,6 +389,7 @@ export class World {
     this.kelp = new KelpField({
       plants: this.habitat.plants.slice(0, this.quality.kelpCount),
       hue: this.map.kelp.hue,
+      palette: this.map.kelp.palette,
       detail: this.quality.detail,
     });
     this.terrain.add(this.kelp.group);
@@ -453,7 +439,7 @@ export class World {
     const top = this.seabedY - k * CHUNK_HEIGHT;
     const keep = this.wallDensity;
     const grow = 1 / Math.sqrt(keep);
-    const palette = this.map.rocks.map((c) => new THREE.Color(c));
+    const palette = this.map.rocks;
 
     // Roll every slot so the random sequence is the same at every quality, then keep an even share.
     const slots: (WallSlot & { seed: number })[] = [];
@@ -482,7 +468,6 @@ export class World {
     }));
 
     const batch = new Batch();
-    const tint = new THREE.Color();
     const shade = new THREE.Color();
     // Continuous fractured bedrock supports the loose blocks. The same world-y
     // function at chunk boundaries joins adjacent slices without a visible seam.
@@ -502,13 +487,7 @@ export class World {
       const g = geo.toNonIndexed();
       geo.dispose();
       g.computeVertexNormals();
-      let face = 0;
-      paintFaces(g, () => {
-        const y = g.attributes.position.getY(face);
-        face += 3;
-        wallTint(palette[side === 0 ? 1 : 0], -y, tint);
-        return shade.copy(tint).multiplyScalar(0.86 + 0.06 * Math.sin(y * 0.18));
-      });
+      paintBiomeFaces(g, palette, { seed: hashString(`${this.map.id}:wall:${side}`), contrast: 0.8 });
       batch.add(g, this.wallMat, 0, 0, 0);
     }
     for (const s of slots) {
@@ -526,9 +505,8 @@ export class World {
         x = s.side < 0 ? Math.min(x, -backing - 2 - box.min.x) : Math.max(x, backing + 2 - box.max.x);
         x = clearLane(x, z, box, s.side);
       }
-      wallTint(sub.pick(palette), -y, tint);
-      // Faces darken toward the rock's underside.
-      paintFaces(geo, (h) => shade.copy(tint).multiplyScalar(0.78 + 0.22 * h));
+      const mineral = sub.pick(palette);
+      paintBiomeFaces(geo, [mineral, ...palette], { seed: s.seed, contrast: 0.9, depth: -y });
 
       // Bioluminescence: a few specks on the faces that look into the trench.
       const depth = -y;
