@@ -17,6 +17,8 @@ export interface BreathState {
   flatness: number;
   rate: number | null;
   pulse: number | null;
+  /** Presage mode: player is holding Shift to mark a real breath hold (ground truth for tuning). */
+  label: boolean;
 }
 
 const FRAME_W = 640;
@@ -36,6 +38,7 @@ export class BreathSource {
     flatness: 0,
     rate: null,
     pulse: null,
+    label: false,
   };
   video: HTMLVideoElement;
   private ws: WebSocket | null = null;
@@ -45,6 +48,8 @@ export class BreathSource {
   private keyHeld = false;
   private keyHoldStart = 0;
   private listeners: ((s: BreathState) => void)[] = [];
+  // Bumped on start/stop so a stale requestVideoFrameCallback loop exits instead of doubling up.
+  private pumpGen = 0;
 
   constructor(video: HTMLVideoElement) {
     this.video = video;
@@ -55,12 +60,14 @@ export class BreathSource {
         this.keyHeld = true;
         this.keyHoldStart = performance.now();
         if (this.state.mode === 'sim') this.send({ t: 'simHold', holding: true });
+        if (this.state.mode === 'presage') this.sendLabel(true);
       }
     });
     window.addEventListener('keyup', (e) => {
       if (e.key === 'Shift') {
         this.keyHeld = false;
         if (this.state.mode === 'sim') this.send({ t: 'simHold', holding: false });
+        if (this.state.mode === 'presage') this.sendLabel(false);
       }
     });
     setInterval(() => this.tickKeyboard(), 50);
@@ -84,6 +91,16 @@ export class BreathSource {
     this.state.mode = 'presage';
     this.connect();
     this.pumpFrames();
+  }
+
+  /** Releases the camera and the sensor's Presage session; back to keyboard mode. */
+  stopLive() {
+    this.pumpGen++;
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.video.srcObject = null;
+    this.setMode('keyboard');
+    this.ws?.close();
   }
 
   setMode(mode: BreathMode) {
@@ -128,12 +145,27 @@ export class BreathSource {
     this.ws = ws;
   }
 
+  /** Marks a real breath hold (ground truth) in the sensor's recording. */
+  sendLabel(holding: boolean) {
+    if (this.state.label === holding) return;
+    this.state.label = holding;
+    this.send({ t: 'label', holding, ts: performance.timeOrigin + performance.now() });
+    this.emit();
+  }
+
+  /** Marks guided-calibration phases in the sensor's recording. */
+  sendCalib(phase: string) {
+    this.send({ t: 'calib', phase, ts: performance.timeOrigin + performance.now() });
+  }
+
   private send(obj: unknown) {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
   }
 
   private pumpFrames() {
+    const gen = ++this.pumpGen;
     const push = () => {
+      if (gen !== this.pumpGen) return;
       const ws = this.ws;
       if (
         this.state.mode === 'presage' &&

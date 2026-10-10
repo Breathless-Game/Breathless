@@ -1,12 +1,19 @@
 import * as THREE from 'three';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
-import { Fish, FishSpec, RARITY, RARITY_ORDER, rollFish, ZONES, type Zone } from './fish';
+import { Fish, FishSpec, RARITY_ORDER, fishValue, rollFish, ZONES, type Zone } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
 import { Report } from './report';
-import { HALF_WIDTH, SEABED_Y, World } from './world';
+import { BreathTest } from './breathtest';
+import { PauseMenu } from './pause';
+import { TitleScreen } from './title';
+import { loadSettings, type Settings } from './settings';
+import { HALF_WIDTH, World } from './world';
+import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
+import { MapPicker } from './mappicker';
+import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import { GearPanel } from './gear-panel';
 import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
 
@@ -17,21 +24,30 @@ const MAX_SPEED = 7.5;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
 const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
+const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 const FISH_PER_ZONE = [16, 16, 12];
-const MAX_DEPTH = -SEABED_Y;
 
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const settings = loadSettings();
+const renderQuality = new AdaptiveQuality({
+  cores: navigator.hardwareConcurrency,
+  memoryGB: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+}, settings.quality);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const world = new World();
+// The map you last played, unless it is no longer open (e.g. the demo switch was turned off).
+const mapProgress = loadMapProgress();
+if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
+const world = new World(renderQuality.settings, MAPS[mapProgress.selected]);
+let maxDepth = mapDepth(world.map);
 const scene = world.scene;
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
 camera.position.set(0, 1.5, 24);
 
 function resize() {
+  renderer.setPixelRatio(renderPixelRatio(renderQuality.settings, window.innerWidth, window.innerHeight, window.devicePixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -66,9 +82,15 @@ function spawnFish(zone: Zone) {
   scene.add(fish.mesh.group);
 }
 
-ZONES.forEach((zone, i) => {
-  for (let k = 0; k < FISH_PER_ZONE[i]; k++) spawnFish(zone);
-});
+/** Fill the zones the current map opens. Deeper zones stay empty: you cannot reach them here. */
+function populate() {
+  for (const f of fishes) scene.remove(f.mesh.group);
+  fishes.length = 0;
+  mapZones(world.map).forEach((zone) => {
+    for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
+  });
+}
+populate();
 
 // ---- Game state ---------------------------------------------------------
 type Phase = 'menu' | 'calibrating' | 'play' | 'blackout';
@@ -79,6 +101,7 @@ let net: FishSpec[] = [];
 const bank: FishSpec[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
 let lastHolding = false;
+let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 function loadBank(): FishSpec[] {
   try {
@@ -136,6 +159,16 @@ function buyNextRod() {
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    onEscape();
+    return;
+  }
+  if (paused) return;
+  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
+    // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
+    e.preventDefault();
+    openStartCard();
+  }
   keys.add(e.key.toLowerCase());
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
   if (phase !== 'play') return;
@@ -147,16 +180,27 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
   } else if (e.key.toLowerCase() === 'n') {
-    night = !night;
-    world.setNight(night);
-    hud.message(night ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+    setNight(!night);
   } else if (e.key.toLowerCase() === 'k') {
-    const order: BreathMode[] = breath.video.srcObject ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
-    const next = order[(order.indexOf(breath.state.mode) + 1) % order.length];
-    breath.setMode(next);
-    hud.message(`Breath input: ${next}`);
+    const order = breathModes();
+    setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
   }
 });
+
+function breathModes(): BreathMode[] {
+  return breath.video.srcObject ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
+}
+
+function setBreathMode(mode: BreathMode) {
+  breath.setMode(mode);
+  hud.message(`Breath input: ${mode}`);
+}
+
+function setNight(on: boolean) {
+  night = on;
+  world.setNight(on);
+  hud.message(on ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+}
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 document.getElementById('gear-open')!.addEventListener('click', () => gear.toggle(true));
@@ -188,28 +232,76 @@ function tryCatch() {
   if (!best) return;
   fishes.splice(fishes.indexOf(best), 1);
   scene.remove(best.mesh.group);
-  const caught = { ...best.spec, depthM: Math.round(-best.pos.y) };
+  const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
   net.push(caught);
   hud.setNet(net, tier.capacity);
   hud.toast(caught);
   const zone = best.zone;
-  setTimeout(() => spawnFish(zone), 4000);
+  const map = world.map;
+  // Skip the respawn if the player has moved to another map in the meantime.
+  setTimeout(() => world.map === map && spawnFish(zone), 4000);
 }
 
 function bankNet() {
   if (!net.length) return;
-  const reward = net.reduce((sum, f) => sum + RARITY[f.rarity].value, 0);
+  const reward = net.reduce((sum, f) => sum + fishValue(f), 0);
   bank.push(...net);
   saveBank();
   equipment.pearls += reward;
   refreshEquipment();
-  const rarest = net.reduce((a, f) => (RARITY[f.rarity].value > RARITY[a.rarity].value ? f : a));
+  const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(`Banked ${net.length} fish · +${reward} Pearls`);
   hud.toast(rarest, 'BANKED');
   net = [];
   hud.setNet(net, currentTier().capacity);
   hud.setBank(bank);
+  noteBankValue(true);
 }
+
+// ---- Maps ---------------------------------------------------------------
+/** Record progress toward the next map, and say so when a dive opens one. */
+function noteBankValue(announce: boolean) {
+  const value = bankValue(bank);
+  if (value <= mapProgress.bestValue) return;
+  const opened = MAP_ORDER.map((id) => MAPS[id]).filter(
+    (m) => !mapProgress.unlockAll && mapProgress.bestValue < m.unlockValue && value >= m.unlockValue,
+  );
+  mapProgress.bestValue = value;
+  saveMapProgress(mapProgress);
+  mapPicker.render();
+  const last = opened.at(-1);
+  if (announce && last) setTimeout(() => hud.message(`New waters open: ${last.name} · ${last.nameZh}`, 3200), 2000);
+}
+
+function showMapOnHud() {
+  const map = world.map;
+  hud.setZones(
+    mapZones(map).map((z, i) => ({ label: map.zoneLabels[i], top: z.top, bottom: z.bottom })),
+    maxDepth,
+    map.water.filter(([d]) => d <= maxDepth).map(([, c]) => c),
+  );
+}
+
+function selectMap(id: MapId) {
+  if (phase !== 'menu' || id === world.map.id || !isUnlocked(MAPS[id], mapProgress)) return;
+  mapProgress.selected = id;
+  saveMapProgress(mapProgress);
+  world.setMap(MAPS[id]);
+  maxDepth = mapDepth(world.map);
+  populate();
+  showMapOnHud();
+  mapPicker.render();
+}
+
+const mapPicker = new MapPicker(mapProgress, selectMap, (on) => {
+  mapProgress.unlockAll = on;
+  // Turning the demo switch off while standing on a locked map sends you back to the first one.
+  if (!isUnlocked(world.map, mapProgress)) selectMap('fjord');
+  saveMapProgress(mapProgress);
+  mapPicker.render();
+});
+showMapOnHud();
+noteBankValue(false);
 
 function blackout() {
   phase = 'blackout';
@@ -233,6 +325,13 @@ const calib = document.getElementById('calib')!;
 const calibStep = document.getElementById('calib-step')!;
 const calibSub = document.getElementById('calib-sub')!;
 let sawHold = false;
+let calibPhase = '';
+
+function markCalib(phase: string) {
+  if (phase === calibPhase) return;
+  calibPhase = phase;
+  breath.sendCalib(phase);
+}
 
 function startGame() {
   phase = 'play';
@@ -261,6 +360,27 @@ document.getElementById('start-keys')!.addEventListener('click', () => {
 });
 document.getElementById('calib-skip')!.addEventListener('click', startGame);
 
+// Guided breath test: labeled data for tuning the detector (see sensor/analyze.mjs).
+const breathTest = new BreathTest(breath);
+async function startBreathTest() {
+  try {
+    if (!breath.video.srcObject) await breath.startLive();
+    document.getElementById('cam-wrap')!.style.visibility = 'visible';
+    hud.show();
+    breathTest.start();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('start-test')!.textContent = 'Camera blocked: allow camera access, then retry · 请允许摄像头';
+  }
+}
+document.getElementById('start-test')!.addEventListener('click', startBreathTest);
+document.getElementById('test-again')!.addEventListener('click', () => breathTest.start());
+document.getElementById('test-stop')!.addEventListener('click', () => breathTest.stop());
+document.getElementById('test-play')!.addEventListener('click', () => {
+  breathTest.stop();
+  startGame();
+});
+
 function updateCalibration() {
   const s = breath.state;
   if (!s.connected) {
@@ -271,17 +391,130 @@ function updateCalibration() {
     calibSub.textContent = s.hint || 'Sit still, face and chest in view';
   } else if (!s.calibrated) {
     calibStep.textContent = 'Breathe normally…';
+    markCalib('breathe');
     calibSub.textContent = s.hint || 'Learning your breathing rhythm';
   } else if (!sawHold) {
     calibStep.textContent = 'Now hold your breath!';
+    markCalib('hold');
     calibSub.textContent = 'We will dive the moment we see it';
     if (s.holding) {
       sawHold = true;
+      markCalib('done');
       calibStep.textContent = 'Got it. Dive!';
-      setTimeout(startGame, 900);
+      setTimeout(() => phase === 'calibrating' && startGame(), 900);
     }
   }
 }
+
+// ---- Pause menu ---------------------------------------------------------
+const camWrap = document.getElementById('cam-wrap')!;
+let paused = false;
+
+function pause() {
+  if (phase !== 'play' || paused) return;
+  paused = true;
+  keys.clear();
+  vault.toggle(false);
+  gear.toggle(false);
+  report.toggle(false);
+  pauseMenu.show();
+}
+
+function onEscape() {
+  if (pauseMenu.open) pauseMenu.back();
+  else if (report.open) report.toggle(false);
+  else if (vault.open) vault.toggle(false);
+  else if (gear.open) gear.toggle(false);
+  else if (breathTest.open) breathTest.stop();
+  else if (phase === 'play') pause();
+  else if (phase === 'calibrating') goToMenu();
+  else if (!overlay.classList.contains('hidden')) backFromStartCard();
+}
+
+function goToMenu() {
+  // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
+  health.end(nowMs, 'surfaced', 0);
+  net = [];
+  hud.setNet(net, currentTier().capacity);
+  hud.setEmergency(null);
+  outOfAir = false;
+  breathSince = null;
+  lastHolding = false;
+  diver.pos.set(0, -0.4, 0);
+  diver.vel.set(0, 0, 0);
+  paused = false;
+  phase = 'menu';
+  pauseMenu.close();
+  vault.toggle(false);
+  gear.toggle(false);
+  report.toggle(false);
+  breath.stopLive();
+  sawHold = false;
+  calibPhase = '';
+  calib.classList.add('hidden');
+  camWrap.style.visibility = 'hidden';
+  hud.hide();
+  showTitle(true);
+}
+
+function applySettings(s: Settings) {
+  renderQuality.setMode(s.quality);
+  world.setQuality(renderQuality.settings);
+  resize();
+  camWrap.classList.toggle('off', !s.showCamera);
+  document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
+}
+
+const pauseMenu = new PauseMenu(settings, {
+  resume() {
+    paused = false;
+    keys.clear();
+    // Whatever the player did while paused doesn't count toward "breathed underwater".
+    breathSince = null;
+  },
+  quitToMenu: goToMenu,
+  needsCountdown: () => -diver.pos.y > SURFACE_DEPTH,
+  quitWarning: () => (net.length ? `Your net (${net.length} fish) will be lost.` : null),
+  breathModes,
+  breathMode: () => breath.state.mode,
+  setBreathMode,
+  night: () => night,
+  setNight,
+  applySettings,
+});
+
+// ---- Title screen -------------------------------------------------------
+// Start opens the existing start card (camera / keyboard / breath test).
+const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
+  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openStartCard },
+  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
+  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
+]);
+
+function showTitle(intro: boolean) {
+  overlay.classList.add('hidden');
+  titleScreen.show(intro);
+}
+
+function openStartCard() {
+  titleScreen.hide();
+  overlay.classList.remove('hidden');
+}
+
+function backFromStartCard() {
+  if (breathTest.open) breathTest.stop();
+  // The camera may already be on (calibration or breath test): release it on the way out.
+  if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
+  else showTitle(false);
+}
+
+document.getElementById('card-back')!.addEventListener('click', backFromStartCard);
+showTitle(true);
+
+// A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pause();
+});
 
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
@@ -297,7 +530,9 @@ function update(dt: number, time: number) {
 
   if (playing) {
     // Breathing underwater = out of air. You must make it up before it runs out.
-    if (underwater && !s.holding && !outOfAir) {
+    // A single noisy "breathing" frame shouldn't cost the net: it must persist.
+    breathSince = underwater && !s.holding ? (breathSince ?? nowMs) : null;
+    if (breathSince != null && nowMs - breathSince >= RELEASE_DEBOUNCE_MS && !outOfAir) {
       outOfAir = true;
       emergency = 1;
       diver.exhale(22);
@@ -331,7 +566,7 @@ function update(dt: number, time: number) {
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   diver.pos.addScaledVector(diver.vel, dt);
   diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -HALF_WIDTH, HALF_WIDTH);
-  diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, SEABED_Y + 1.2, -0.05);
+  diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, world.seabedY + 1.2, -0.05);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
     if (outOfAir) {
@@ -351,21 +586,28 @@ function update(dt: number, time: number) {
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, SEABED_Y + 9), 22);
+  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9), 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 
   hud.setBreath(s, outOfAir);
-  hud.setDepth(-diver.pos.y, MAX_DEPTH);
+  hud.setDepth(-diver.pos.y, maxDepth);
   hud.setEmergency(outOfAir ? emergency : null);
   if (phase === 'calibrating') updateCalibration();
 }
 
 let time = 0;
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05);
-  time += dt;
-  update(dt, time);
+  const elapsed = clock.getDelta();
+  if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+    world.setQuality(renderQuality.settings);
+    resize();
+  }
+  const dt = Math.min(elapsed, 0.05);
+  if (!paused) {
+    time += dt;
+    update(dt, time);
+  }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -374,9 +616,14 @@ frame();
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
   breath,
+  breathTest,
+  titleScreen,
+  world,
+  selectMap,
   diver,
   fishes,
   keys,
+  renderQuality,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;

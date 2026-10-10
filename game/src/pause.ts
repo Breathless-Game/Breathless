@@ -1,0 +1,151 @@
+// Esc menu: resume, settings, back to the title screen.
+// The game loop owns the actual pause; this only drives the DOM and asks main.ts
+// (through PauseHooks) to change game state.
+
+import type { BreathMode } from './breath';
+import { type Quality, type Settings, saveSettings } from './settings';
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+const RESUME_COUNTDOWN = 3;
+
+const MODE_LABEL: Record<BreathMode, string> = {
+  presage: 'Camera (Presage)',
+  sim: 'Simulator (hold Shift)',
+  keyboard: 'Keyboard (hold Shift)',
+};
+
+type View = 'main' | 'settings' | 'confirm' | 'countdown';
+
+export interface PauseHooks {
+  resume(): void;
+  quitToMenu(): void;
+  /** Underwater: the player surely breathed while paused, so give them time to hold again. */
+  needsCountdown(): boolean;
+  /** What leaving right now would cost, or null if nothing. */
+  quitWarning(): string | null;
+  breathModes(): BreathMode[];
+  breathMode(): BreathMode;
+  setBreathMode(mode: BreathMode): void;
+  night(): boolean;
+  setNight(on: boolean): void;
+  applySettings(s: Settings): void;
+}
+
+export class PauseMenu {
+  private root = $('pause');
+  private views: Record<View, HTMLElement> = {
+    main: $('pause-main'),
+    settings: $('settings'),
+    confirm: $('pause-confirm'),
+    countdown: $('pause-countdown'),
+  };
+  private view: View = 'main';
+  private countTimer: number | undefined;
+  // Settings opened from the title screen: Back closes the menu instead of showing "Paused".
+  private standalone = false;
+
+  private input = $<HTMLSelectElement>('set-input');
+  private night = $<HTMLInputElement>('set-night');
+  private quality = $<HTMLSelectElement>('set-quality');
+  private camera = $<HTMLInputElement>('set-camera');
+  private help = $<HTMLInputElement>('set-help');
+
+  constructor(
+    private settings: Settings,
+    private hooks: PauseHooks,
+  ) {
+    $('pause-resume').addEventListener('click', () => this.requestResume());
+    $('pause-settings').addEventListener('click', () => this.showSettings());
+    $('pause-menu').addEventListener('click', () => this.requestQuit());
+    $('settings-back').addEventListener('click', () => this.back());
+    $('confirm-leave').addEventListener('click', () => this.quit());
+    $('confirm-stay').addEventListener('click', () => this.show('main'));
+
+    this.input.addEventListener('change', () => hooks.setBreathMode(this.input.value as BreathMode));
+    this.night.addEventListener('change', () => hooks.setNight(this.night.checked));
+    this.quality.addEventListener('change', () => this.update({ quality: this.quality.value as Quality }));
+    this.camera.addEventListener('change', () => this.update({ showCamera: this.camera.checked }));
+    this.help.addEventListener('change', () => this.update({ showHelp: this.help.checked }));
+    hooks.applySettings(settings);
+  }
+
+  get open() {
+    return !this.root.classList.contains('hidden');
+  }
+
+  show(view: View = 'main') {
+    clearInterval(this.countTimer);
+    if (view !== 'settings') this.standalone = false;
+    this.view = view;
+    this.root.classList.remove('hidden');
+    for (const [name, el] of Object.entries(this.views)) el.classList.toggle('hidden', name !== view);
+  }
+
+  /** Esc inside the menu: step back one level, or resume from the top. */
+  back() {
+    if (this.standalone) this.close();
+    else if (this.view === 'main') this.requestResume();
+    else this.show('main');
+  }
+
+  /** Settings on their own, from the title screen. Breath input is picked when starting, so it's hidden. */
+  openSettings() {
+    this.showSettings();
+    this.standalone = true;
+    $('set-input-row').classList.add('hidden');
+  }
+
+  close() {
+    clearInterval(this.countTimer);
+    this.root.classList.add('hidden');
+  }
+
+  private requestResume() {
+    if (!this.hooks.needsCountdown()) return this.finishResume();
+    this.show('countdown');
+    let left = RESUME_COUNTDOWN;
+    const num = $('countdown-num');
+    num.textContent = String(left);
+    this.countTimer = window.setInterval(() => {
+      left--;
+      if (left <= 0) this.finishResume();
+      else num.textContent = String(left);
+    }, 1000);
+  }
+
+  private finishResume() {
+    this.close();
+    this.hooks.resume();
+  }
+
+  private requestQuit() {
+    const warning = this.hooks.quitWarning();
+    if (!warning) return this.quit();
+    $('confirm-text').textContent = warning;
+    this.show('confirm');
+  }
+
+  private quit() {
+    this.close();
+    this.hooks.quitToMenu();
+  }
+
+  private showSettings() {
+    this.input.replaceChildren(
+      ...this.hooks.breathModes().map((m) => new Option(MODE_LABEL[m], m, false, m === this.hooks.breathMode())),
+    );
+    this.night.checked = this.hooks.night();
+    this.quality.value = this.settings.quality;
+    this.camera.checked = this.settings.showCamera;
+    this.help.checked = this.settings.showHelp;
+    $('set-input-row').classList.remove('hidden');
+    this.show('settings');
+  }
+
+  private update(patch: Partial<Settings>) {
+    Object.assign(this.settings, patch);
+    saveSettings(this.settings);
+    this.hooks.applySettings(this.settings);
+  }
+}
