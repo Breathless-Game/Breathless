@@ -47,6 +47,34 @@ function renderFish(spec: FishSpec, size: number): HTMLCanvasElement {
   return r.domElement;
 }
 
+/** Transparent render of any model (gear, parts) from a 3/4 angle, for UI sprites. */
+export function objectSprite(object: THREE.Object3D, size: number, yaw = -0.6, pitch = 0.35): HTMLCanvasElement {
+  const r = getRenderer(size);
+  const pivot = new THREE.Group();
+  pivot.add(object);
+  pivot.rotation.set(pitch, yaw, 0);
+  scene.add(pivot);
+  const box = new THREE.Box3().setFromObject(pivot);
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = box.getSize(new THREE.Vector3()).length() / 2;
+  const dist = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2))) * 0.92;
+  camera.position.set(center.x, center.y, center.z + dist);
+  camera.lookAt(center);
+  r.setClearColor(0x000000, 0);
+  r.render(scene, camera);
+  scene.remove(pivot);
+  // The renderer's canvas is reused for the next sprite, so copy it out.
+  const out = document.createElement('canvas');
+  out.width = out.height = size;
+  out.getContext('2d')!.drawImage(r.domElement, 0, 0);
+  return out;
+}
+
+/** Transparent render at any size, for UI sprites. Not cached: call once and keep the result. */
+export function fishSprite(spec: FishSpec, size: number): string {
+  return renderFish(spec, size).toDataURL('image/png');
+}
+
 const iconCache = new Map<string, string>();
 
 export function fishIcon(spec: FishSpec): string {

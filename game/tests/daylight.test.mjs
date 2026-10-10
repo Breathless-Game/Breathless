@@ -21,7 +21,8 @@ function hourDistance(a, b) {
 
 function lightingNumbers(state) {
   return [state.daylight, state.nightMix, ...state.skyColor, ...state.horizonColor,
-    ...state.lightColor, state.sunIntensity, state.ambientIntensity, ...state.direction];
+    ...state.lightColor, state.sunIntensity, state.ambientIntensity, ...state.direction,
+    ...state.sunDirection, ...state.moonDirection];
 }
 
 test('lighting is periodic and continuous across midnight and every color key', () => {
@@ -46,9 +47,29 @@ test('the full cycle keeps colors bounded, illumination playable, and directions
     assert.ok(state.sunIntensity >= 0.3 && state.sunIntensity <= 2.4);
     assert.ok(state.ambientIntensity >= 0.5 && state.ambientIntensity <= 1.5);
     close(Math.hypot(...state.direction), 1);
+    close(Math.hypot(...state.sunDirection), 1);
+    close(Math.hypot(...state.moonDirection), 1);
     assert.ok(state.direction[1] > 0, 'the main light always stays above the horizon');
     close(state.daylight + state.nightMix, 1);
   }
+});
+
+test('celestial discs rise and set, follow time presets, and share the reflected light direction', () => {
+  const morning = sampleLighting(9);
+  const afternoon = sampleLighting(15);
+  const night = sampleLighting(22);
+  assert.ok(morning.sunDirection[0] > 0 && afternoon.sunDirection[0] < 0);
+  for (const state of [morning, afternoon]) {
+    assert.ok(state.sunDirection[1] > 0);
+    assert.ok(state.moonDirection[1] < 0);
+    state.direction.forEach((value, i) => close(value, state.sunDirection[i]));
+  }
+  assert.ok(night.sunDirection[1] < 0 && night.moonDirection[1] > 0);
+  night.direction.forEach((value, i) => close(value, night.moonDirection[i]));
+  close(sampleLighting(6).sunDirection[1], 0);
+  close(sampleLighting(18).sunDirection[1], 0);
+  assert.ok(sampleLighting(5).sunDirection[1] < 0 && sampleLighting(7).sunDirection[1] > 0);
+  assert.ok(sampleLighting(17).sunDirection[1] > 0 && sampleLighting(19).sunDirection[1] < 0);
 });
 
 test('morning is clear, afternoon is warmer, and night is blue with reduced illumination', () => {

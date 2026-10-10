@@ -1,164 +1,180 @@
-# HackRU26 · 屏息 Breathless 🫁
+# HackRU26 · 屏息 Breathless
 
-> **用你真实的憋气来潜水抓鱼。** 摄像头通过 Presage 识别你是否在憋气，憋住气潜水员才能下潜；越深鱼越稀有；在水下一换气就必须马上浮上去，否则网里的鱼全丢。抓到的鱼可以铸造成 Solana NFT，玩家之间交易。游戏还会安静地记录每次憋气的时长和心率，你想看的时候一键生成健康报告。
+**English** · [简体中文](README.zh-CN.md)
 
-低多边形（low-poly）2.5D 风格，Three.js + TypeScript，前端为主，加一个本地 Node 传感器服务。
+> **Hold your real breath to dive and catch fish.** Your webcam, through Presage, detects whether you are holding your breath. The diver can only descend while you hold. The deeper you go, the rarer the fish. The moment you breathe underwater you have to race back to the surface, or you lose everything in your net. Fish you bring up can be minted as Solana NFTs and traded between players. The game also quietly records how long each hold lasted and your heart rate, and builds a health report whenever you ask for one.
+
+Low-poly 2.5D, built with Three.js + TypeScript. Mostly front end, plus a local Node sensor service.
 
 ---
 
-## 目录
+## Contents
 
-1. [项目概览](#1-项目概览)
-2. [快速开始](#2-快速开始)
-3. [操作方式](#3-操作方式)
-4. [架构](#4-架构)
-5. [憋气检测算法](#5-憋气检测算法)
-6. [代码导读](#6-代码导读)
-7. [游戏设计参数](#7-游戏设计参数)
+1. [Overview](#1-overview)
+2. [Quick start](#2-quick-start)
+3. [Controls](#3-controls)
+4. [Architecture](#4-architecture)
+5. [Breath-hold detection](#5-breath-hold-detection)
+6. [Code tour](#6-code-tour)
+7. [Game design parameters](#7-game-design-parameters)
 8. [Solana NFT](#8-solana-nft)
-9. [健康报告](#9-健康报告)
-10. [本地存储](#10-本地存储)
-11. [调试技巧](#11-调试技巧)
-12. [当前状态与待办](#12-当前状态与待办)
-13. [协作约定](#13-协作约定)
-14. [比赛时间线](#14-比赛时间线)
+9. [Health report](#9-health-report)
+10. [Local storage](#10-local-storage)
+11. [Debugging tips](#11-debugging-tips)
+12. [Status and to-do](#12-status-and-to-do)
+13. [Working together](#13-working-together)
+14. [Hackathon timeline](#14-hackathon-timeline)
 
 ---
 
-## 1. 项目概览
+## 1. Overview
 
-### 核心循环
+### Core loop
 
 ```
-在水面 ──憋气──▶ 下潜 ──Space 抓鱼──▶ 越深越稀有
-   ▲                                      │
-   │                       水下换气 = OUT OF AIR
-   │                                      ▼
- 浮出水面 = 鱼入库 ◀── 3.2 秒内冲上水面 ──┤
-                                          └─ 来不及 = BLACKOUT，网里的鱼全部丢失
+On the surface ──hold breath──▶ dive ──Space: net fish──▶ deeper = rarer
+   ▲                                                         │
+   │                                          breathe underwater = OUT OF AIR
+   │                                                         ▼
+Surface = fish banked ◀── reach the surface within 3.2 s ────┤
+                                                             └─ too late = BLACKOUT, every fish in the net is lost
 ```
 
-- **憋气就是氧气瓶**：游戏没有氧气条，你的肺就是。
-- **贪心与风险**：深渊（38 m 以下）才有神话级鱼，但离水面越远，换气后越难赶回去。
-- **夜晚**：自然循环入夜后，每条新生成的鱼稀有度掷两次取高的。`N` 可以渐变切换晨光 / 夜色。海怪风险还在待办里。
-- **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。
+- **Your breath is the air tank**: the game has no oxygen bar. Your lungs are the bar.
+- **Greed against risk**: mythic fish only live in the Abyss (below 38 m), but the farther you are from the surface, the harder it is to get back after you breathe.
+- **Night**: when the natural cycle becomes dark, newly spawned fish roll their rarity twice and keep the higher result. `N` gradually switches between morning and night. The sea-monster risk is still on the to-do list.
+- **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it.
+- **Rod upgrades** (`G`): in this game the fishing rod is the diver's hand net. Banked fish earn Pearls; Pearls buy a bigger net with more capacity and a longer catch reach.
 
-### 三张地图（已设计，尚未实现）
+### Three maps
 
-现在游戏里只有一片海，它是图 3 的底子；图 1、图 2 和地图选择还在待办里。完整设计见 [策划案第 6 节](design/game-design-document.md#6-地图)，摘要如下：
+All three maps are in the game. You choose one on the start card before a dive: a row of three map cards sits above the "Start with camera / Play with keyboard" buttons. The chosen map is also what you see behind the title screen. The full design is in [section 6 of the design doc](design/game-design-document.md#6-地图) (in Chinese). What is built:
 
-| | 图 1 · 挪威 / 冰岛峡湾 | 图 2 · 张家界 / 长白山天池 | 图 3 · 汪洋 |
+| | Fjord 峡湾 (Norway / Iceland) | Heaven Lake 天池 (Zhangjiajie / Changbai) | Open Ocean 汪洋 |
 | --- | --- | --- | --- |
-| 难度 | 休闲 | 普通 | 困难 |
-| 场景 | 雪山夹着的峡湾，岸边有木屋和松林，夜里有极光 | 石柱峰林环绕的高山湖，清晨和夜里起雾 | 开阔海面，远处有风暴云 |
-| 时间 | 白天 05:00–20:00，天黑后小怪出现 | 全天循环 | 全天循环 |
-| 可下潜深度 | 0–18 m，只有浅水区 | 0–38 m，加上第二层 | 0–58 m，唯一能下深渊的图 |
-| 夜间小怪 | 野鹿（只吓人）、野熊（出水时心跳太快会被它抢走最贵的一条鱼） | 野熊、巨人（踏地时惊散鱼群，把潜水员推向水面） | 海浪、海怪（在深渊巡游，被追上则丢网） |
-| 失败代价 | 丢网里的鱼 | 丢网里的鱼，加上船耐久损失 | 船耐久归零即沉船，全部装备永久丢失 |
-| 解锁 | 初始 | 累计入库价值 150 | 累计入库价值 1000 |
+| Difficulty | Casual | Normal | Hard |
+| Open depth | 0–18 m, Shallows only (seabed at 20 m) | 0–38 m, Shallows + Sunken Forest (seabed at 40 m) | 0–58 m, Shallows + Coral Reef + The Abyss (seabed at 60 m) |
+| Above the water | Snow peaks, a pine shore, two fishing cabins and a pier, ice floes; aurora and lit windows at night | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
+| Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
+| Waves | Half the ocean's height | Calmest | Full |
+| Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
-- **船上垂钓**（三张图通用）：人在船上、没在憋气时鱼竿自动下钩，心率越平稳咬钩越快，不需要憋气。它用来填满两次下潜之间的休息时间。
-- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。
+- **Depth zones**: "Sunken Forest" is the second depth zone on Heaven Lake. It uses the Coral Reef drop table; only the look and the gauge label differ. Fish only spawn in the zones a map opens, and the depth gauge on the right shows only those zones.
+- **Unlocking**: a map opens by the total catch value of banked fish (see "Catch value" in section 7). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
+- **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
+- **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
+- **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), map-specific daylight hours (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
+- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying with Pearl is not wired up.
 
-### 比赛定位
+### Hackathon positioning
 
-| 项 | 内容 |
+| Item | Details |
 | --- | --- |
-| 赛道 | Social Good（呼吸训练 / 肺部健康意识），最终以提交时为准 |
-| MLH 奖项目标 | **Best Use of Presage**（憋气检测、心率）· **Best Use of Solana**（鱼 NFT、交易）· 后续可加 ElevenLabs（音效/旁白）、Tiger Data（市场与经济数据）、.Tech 域名 |
+| Track | Social Good (breath training / lung-health awareness); the final choice is made at submission |
+| MLH prize targets | **Best Use of Presage** (breath-hold detection, heart rate) · **Best Use of Solana** (fish NFTs, trading) · possible later: ElevenLabs (sound effects / narration), Tiger Data (market and economy data), a .Tech domain |
 
-### 多人范围（重要）
+### Multiplayer scope (important)
 
-**多人同时在线，但每个人在自己独立的世界里潜水，玩家之间只通过交易互动。** 不做共享世界，也不做实时同步联机。所有"多人"功能都在交易层：钱包身份、挂单、购买、成交动态。
+**Many players are online at once, but each one dives in their own separate world. Players only interact through trading.** There is no shared world and no real-time sync. Every "multiplayer" feature lives in the trading layer: wallet identity, listings, purchases, and a live feed of sales.
 
 ---
 
-## 2. 快速开始
+## 2. Quick start
 
-### 环境要求
+### Requirements
 
-- **Node.js 20+**（开发机是 v20.19.5）
-- **macOS（Apple Silicon）** 或 **Windows**：Presage Node SDK 提供 `darwin-arm64`、`win32-x64`、`linux-x64/arm64` 的运行时。Windows 的注意事项见下方 [Windows](#windows)
-- **Chrome**，以及一个摄像头（用键盘或模拟模式的话不需要）
+- **Node.js 20+** (the dev machine runs v20.19.5)
+- **macOS (Apple Silicon)** or **Windows**: the Presage Node SDK ships runtimes for `darwin-arm64`, `win32-x64` and `linux-x64/arm64`. Windows notes are under [Windows](#windows) below
+- **Chrome** and a webcam (not needed for keyboard or simulation mode)
 
-### 安装与运行
+### Install and run
 
 ```bash
 git clone https://github.com/LucasYanzy/HackRU26.git
 cd HackRU26
-npm run setup                 # 分别安装 sensor/ 和 game/ 的依赖
-cp .env.example .env          # 然后填入 PRESAGE_API_KEY（见下）
+npm run setup                 # installs dependencies for sensor/ and game/
+cp .env.example .env          # then fill in PRESAGE_API_KEY (see below)
 ```
 
-开两个终端：
+Open two terminals:
 
 ```bash
-npm run sensor     # 憋气传感器服务，ws://localhost:8787
+npm run sensor     # breath sensor service, ws://localhost:8787
 ```
 
 ```bash
-npm run game       # 游戏，http://localhost:5173
+npm run game       # the game, http://localhost:5173
 ```
 
-（也可以用 `npm run dev` 同时启动两个，macOS 和 Windows 都可以用，Ctrl+C 会一起停掉。）
+(Or run `npm run dev` to start both at once. It works on macOS and Windows, and Ctrl+C stops both.)
 
 ### Windows
 
-- **x64 电脑**：直接按上面的步骤操作即可。
-- **ARM 电脑（骁龙 Snapdragon X 等）**：Presage SDK 没有 `win32-arm64` 版本，ARM 版 Node 加载不了它。需要用 **x64 版 Node**，Windows 11 会在模拟模式下运行它：
-  1. 下载 x64 的 Node 压缩包（例如 `node-v24.x.x-win-x64.zip`），解压到任意目录。
-  2. 每个终端先把它放到 PATH 最前面，再执行 `npm run setup`、`npm run sensor`、`npm run game`：
+- **x64 machines**: follow the steps above as they are.
+- **ARM machines (Snapdragon X and similar)**: the Presage SDK has no `win32-arm64` build, so ARM Node cannot load it. Use **x64 Node** instead; Windows 11 runs it under emulation:
+  1. Download the x64 Node zip (for example `node-v24.x.x-win-x64.zip`) and unzip it anywhere.
+  2. In every terminal, put it at the front of PATH before you run `npm run setup`, `npm run sensor` or `npm run game`:
      ```powershell
      $env:Path = "C:\path\to\node-v24.x.x-win-x64;$env:Path"
-     node -p process.arch   # 应该输出 x64
+     node -p process.arch   # should print x64
      ```
-  3. **安装和运行都要用同一个 Node**：`game/` 里的 esbuild 和 rollup 也是按架构安装的。如果之前用 ARM 版 Node 装过依赖，要先删掉 `sensor/node_modules` 和 `game/node_modules` 再重新安装。
+  3. **Install and run with the same Node**: esbuild and rollup in `game/` are also installed per architecture. If you installed dependencies with ARM Node before, delete `sensor/node_modules` and `game/node_modules` and install again.
 
-打开 <http://localhost:5173>：
+Open <http://localhost:5173>:
 
-| 入口 | 说明 | 需要 |
+| Entry | What it does | Needs |
 | --- | --- | --- |
-| **Start with camera** | 真实模式：摄像头 → Presage → 憋气检测 | sensor 正在运行，并且有 Presage key |
-| **Play with keyboard** | 按住 `Shift` 代表憋气 | 什么都不需要 |
-| 模拟模式（游戏里按 `K` 切换） | 由 sensor 生成假的呼吸波形和心率，按 `Shift` 代表憋气 | sensor 正在运行，不需要 key |
+| **Start with camera** | Real mode: webcam → Presage → breath-hold detection | The sensor running, and a Presage key |
+| **Play with keyboard** | Hold `Shift` to hold your breath | Nothing |
+| Simulation mode (press `K` in the game to switch) | The sensor generates a fake breathing waveform and heart rate; hold `Shift` to hold your breath | The sensor running; no key needed |
 
 ### Presage API key
 
-- 在 <https://physiology.presagetech.com/portal/dashboard> 申请。
-- 填到根目录的 `.env`：`PRESAGE_API_KEY=...`
-- **`.env` 已经加进 `.gitignore`，绝对不要提交。** 队友之间请私下传 key，不要贴进代码、issue 或 PR。
-- 没有 key 时 sensor 会自动进入模拟模式（`npm run sensor:sim` 是强制模拟）。
+- Get one at <https://physiology.presagetech.com/portal/dashboard>.
+- Put it in `.env` at the repo root: `PRESAGE_API_KEY=...`
+- **`.env` is in `.gitignore`. Never commit it.** Share the key with teammates privately; do not paste it into code, issues or PRs.
+- With no key, the sensor switches to simulation mode by itself (`npm run sensor:sim` forces simulation).
 
-### 真机测试憋气
+### Testing breath detection on a real camera
 
-点 **Start with camera**，脸和胸口都要在画面里，光线要亮。
+Click **Start with camera**. Keep your face and chest in frame, in bright light.
 
-1. 先正常呼吸约 10 秒，让检测器学会你的呼吸幅度。
-2. 然后憋气。左上角的标签应该变成绿色 **HOLDING**，波形会变平。
-3. 一换气就会变回 **BREATHING**。
+1. Breathe normally for about 10 seconds so the detector learns how you breathe.
+2. Then hold your breath. The label at the top left should turn green and read **HOLDING**, and the waveform goes flat.
+3. As soon as you breathe, it switches back to **BREATHING**.
 
-如果误判多，去调 `sensor/breath-detector.mjs` 里的常数（见第 5 节）。
+If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` (see section 5).
 
 ---
 
-## 3. 操作方式
+## 3. Controls
 
-| 键 | 作用 |
+| Key | Action |
 | --- | --- |
-| `←` `→` `↑` `↓` / `WASD` | 游泳（在水面不憋气时不能下潜） |
-| `Space` | 挥网抓鱼 |
-| `Shift`（按住） | 憋气（键盘模式和模拟模式） |
-| `C` | 收藏和 NFT 面板 |
-| `H` | 健康报告（只在你按的时候生成） |
-| `N` | 渐变切换上午 / 夜晚；自然循环与下午可在暂停设置中选择 |
-| `K` | 切换呼吸输入：presage → sim → keyboard |
-| `Esc` | 暂停菜单：继续、设置、回到主页面。先关闭打开的面板；在设置里按是返回上一层；校准时按直接回主页面 |
+| `←` `→` `↑` `↓` / `WASD` | Swim (you cannot dive from the surface unless you are holding your breath) |
+| `Space` | Swing the net to catch fish |
+| `Shift` (hold) | Hold your breath (keyboard and simulation modes) |
+| `C` | Collection and NFT panel |
+| `G` | Rod / net upgrade panel |
+| `H` | Health report (built only when you press it) |
+| `N` | Gradually switch morning / night; natural cycle and afternoon are available in pause settings |
+| `K` | Cycle the breath input: presage → sim → keyboard |
+| `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
+| `Enter` (main menu) | Same as clicking the START fish |
 
-**暂停的细节**：暂停时游戏完全冻结，切走标签页也会自动暂停。在水下点"继续"会先倒数 3 秒，让玩家吸一口气再憋住，否则暂停时的换气会被直接判成"水下呼吸"。回到主页面会释放摄像头和 sensor 连接；网里有鱼时会先弹确认，鱼会丢失，但这次憋气仍然记进健康数据。
+**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) cuts its lines, drops it, and opens the workbench; the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+
+**Workbench** (`workbench.ts`): a top-down wooden table. Everything drops onto it from above and collides (matter-js, table-plane physics with no gravity). The START fish is top left, the three map cards top right (chapters I / II / III, face down; a map's difficulty is the game difficulty), accessories bottom left (fins, emergency tank, headlamp), and catching gear bottom right (rod, net, bait).
+- Everything can be dragged and flung. Click a piece of gear: it zooms to the centre, the background blurs, and its description shows on the left (placeholder text for now). Click again or press any key to set it in the PACK ring in the middle (green glow = packed); do it again on packed gear to put it back in its corner. Esc cancels.
+- Click a map: the card drops into the middle, sucks in the packed gear and flips face up. Click the map itself to suck in everything on the table; the card grows to cover the screen and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the map to spit the gear back out; the card flips back and returns to the top right.
+- A locked map rattles and says what it needs; the "Unlock all maps (demo)" switch is at the bottom left.
+- The packed gear is passed to the game (`loadout`), but the upgrade effects aren't wired into the dive yet.
+
+**Pause details**: gameplay freezes while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
 
 ---
 
-## 4. 架构
+## 4. Architecture
 
 ```
 ┌──────────────────────── Browser (game/, Vite + Three.js) ────────────────────────┐
@@ -182,166 +198,205 @@ npm run game       # 游戏，http://localhost:5173
                          └────────────────────────────────────────────┘
 ```
 
-**为什么摄像头由浏览器打开，而不是 Node？** macOS 不会给从 IDE 或 Claude 启动的 node 进程摄像头权限，SDK 的 `useCamera` 一直收不到帧。所以浏览器抓帧，经 WebSocket 推给 sensor，sensor 再用 `useCustomInput` + `sendFrame` 交给 SDK。
+**Why does the browser open the camera, and not Node?** macOS does not grant camera permission to a node process started from an IDE or from Claude, so the SDK's `useCamera` never receives a frame. Instead the browser captures frames and pushes them to the sensor over WebSocket, and the sensor hands them to the SDK with `useCustomInput` + `sendFrame`.
 
-### WebSocket 协议（`ws://<host>:8787`）
+### WebSocket protocol (`ws://<host>:8787`)
 
-**浏览器 → sensor**
+**Browser → sensor**
 
-- **二进制帧**：12 字节头 + RGBA 像素，全部小端序。
-  | 偏移 | 类型 | 含义 |
+- **Binary frames**: a 12-byte header followed by RGBA pixels, all little-endian.
+  | Offset | Type | Meaning |
   | --- | --- | --- |
-  | 0 | f64 | 时间戳（ms，必须单调递增；间隔超过 2 s 时 SDK 会重启） |
-  | 8 | u16 | 宽（640） |
-  | 10 | u16 | 高（480） |
-  | 12… | u8[] | RGBA，宽 × 高 × 4 |
-  - 背压：浏览器在 `ws.bufferedAmount` 过大时跳过帧。
-- **JSON 命令**：`{ "t": "sim", "on": true }` 开关模拟；`{ "t": "simHold", "holding": true }` 设置模拟憋气。
+  | 0 | f64 | Timestamp (ms, must keep increasing; the SDK restarts if the gap is over 2 s) |
+  | 8 | u16 | Width (640) |
+  | 10 | u16 | Height (480) |
+  | 12… | u8[] | RGBA, width × height × 4 |
+  - Backpressure: the browser skips frames when `ws.bufferedAmount` gets too large.
+- **JSON commands**: `{ "t": "sim", "on": true }` turns simulation on or off; `{ "t": "simHold", "holding": true }` sets the simulated hold.
 
-**sensor → 浏览器**（每 80 ms 一次）
+**Sensor → browser** (every 80 ms)
 
 ```jsonc
 {
   "t": "state",
   "source": "presage" | "sim",
-  "status": "running", "hint": "Move closer…",   // ValidationCode 翻译后的提示
-  "rate":  { "value": 15, "confidence": 90 },     // 呼吸频率（需要约 30 s 窗口）
-  "pulse": { "value": 72, "confidence": 90 },     // 心率
+  "status": "running", "hint": "Move closer…",   // hint translated from the ValidationCode
+  "rate":  { "value": 15, "confidence": 90 },     // breathing rate (needs a ~30 s window)
+  "pulse": { "value": 72, "confidence": 90 },     // heart rate
   "frames": 1234,
   "holding": true, "holdMs": 8200, "calibrated": true,
   "flatness": 0.93, "apnea": false, "talking": false,
-  "trace": [ /* 最近 90 个胸部起伏采样 */ ]
+  "trace": [ /* the last 90 chest-movement samples */ ]
 }
 ```
 
 ---
 
-## 5. 憋气检测算法
+## 5. Breath-hold detection
 
-文件：`sensor/breath-detector.mjs`。数据来自 Presage 的胸部起伏曲线 `breathing.upperTrace`。
+File: `sensor/breath-detector.mjs`. The input is Presage's chest-movement trace, `breathing.upperTrace`.
 
-**真实录制数据告诉我们的事**（2026-10-10，一次 2.5 分钟的憋气测试，4 次憋气）：
+**What real recordings told us** (2026-10-10, two 2.5-minute breath tests by the same person, 8 holds in total):
 
-- Presage 刚启动的几秒，曲线会剧烈乱跳（幅度是正常呼吸的 10 倍）。旧检测器用这几秒学“正常呼吸幅度”，结果一开场就判成憋气，再也不退出：准确率 44%，正常呼吸有 86% 的时间被误判成憋气。
-- 曲线做过高通滤波：憋气时它先随最后一口吸气往上跳，再用约 3 秒慢慢回落到平，不会一直停在高处。
-- 憋气 15 秒，Presage 自带的 apnea 标志一次都没触发，所以默认不用它。
-- 信号本身很好分：正常呼吸时 2 秒内的起伏大约是憋气时的 20 倍。
+- For the first few seconds after Presage starts, the trace swings wildly (about 10 times the amplitude of normal breathing). The old detector used those seconds to learn the "normal breathing amplitude", so it called a hold right at the start and never left it: 44% accuracy, with normal breathing misread as a hold 86% of the time.
+- The trace is high-pass filtered. During a hold it first jumps up with the last inhale, then takes about 3 seconds to settle back to flat. It does not stay high.
+- Over 15-second holds, Presage's own apnea flag never fired once, so it is off by default.
+- The signal itself separates well: the movement within 2 seconds of normal breathing is about 5–20 times the movement during a hold.
+- **The trace glitches mid-hold.** In the second test the player stayed completely still and did not breathe, yet the trace jumped twice in the middle of a hold. Once it jumped up by about one breath's size, once it dipped a little. Activity alone can't tell these apart from breathing again, so the activity-only detector (v3) told the diver "you breathed" twice.
+- **A real release always starts with an exhale.** All 8 releases begin with the trace dropping 1.55–3.5 × the baseline. The two glitches dropped about 1 × at most. Up is inhale, down is exhale.
 
-**现在的做法：看“活动量”**，也就是曲线每秒走过的路程（path length）。
+**What the detector does now: holds are found by "activity"**, which is the distance the trace travels per second (path length). **Releases are found by the exhale.**
 
-1. **学习基线**：取最近 30 秒正常呼吸的活动量，用**中位数**当基线 B，不受偶尔乱跳的影响。启动后前 8 秒不学；刚开始憋气的那几秒也会被剔除，免得把基线拉低。
-2. **判定憋气**：最近 2 秒的活动量小于 `0.38 × B`。
-3. **判定换气**：最近 0.75 秒的活动量大于 `0.5 × B`，并且持续 0.2 秒。说话超过 0.5 秒也算换气。
-4. **刚换完气**：2 秒内不会马上又判成憋气。
-5. **游戏侧防抖**（`main.ts` 的 `RELEASE_DEBOUNCE_MS`）：水下“换气”必须持续 0.5 秒才算。
+1. **Learn a baseline**: take the activity over the last 30 seconds of normal breathing and use the **median** as the baseline B, so an occasional spike does not affect it. Nothing is learned in the first 8 seconds after start. The first few seconds of a hold are dropped too, so they do not pull the baseline down.
+2. **Call a hold**: the activity over the last 2 seconds is below `0.38 × B`.
+3. **Call a release, mainly on the exhale**: the detector tracks a "hold level". It follows the slow settling after the inhale, but freezes while the trace jumps around, so a glitch can't drag it along. The hold ends when the trace drops more than `1.1 × B` below that level, and also below the highest point of the last 1.5 seconds, for 0.1 seconds. A jump up of more than `2 × B` also counts; that covers someone who held with empty lungs and breathes in first.
+4. **In the first 2 seconds of a hold**, which may just be a pause between breaths, activity alone still ends it: the activity over 0.75 seconds is above `0.5 × B` for 0.2 seconds.
+5. **Fallback**: activity over 2 seconds above `0.8 × B` for 4 seconds in a row always ends a hold, so it can never get stuck. Talking for more than 0.5 seconds also counts as a release.
+6. **Right after a release**: no new hold is called for 2 seconds.
+7. **Debounce on the game side** (`RELEASE_DEBOUNCE_MS` in `main.ts`): "breathing" underwater has to last 0.5 seconds before it counts.
 
-用那次录制重放的结果：**准确率 44% → 90%**，正常呼吸被误判成憋气 86% → 4%（剩下的基本是松开后的反应时间）。从提示“憋气”算起，约 2.4–4.3 秒识别出来，其中包含人的反应和吸气；换气约 1 秒内识别。
+Replaying both recordings:
 
-| 选项 | 默认值 | 作用 |
+| | v3 (activity only) | now (exhale) |
 | --- | --- | --- |
-| `activityWindowUs` | 2 s | 判定憋气用的窗口 |
-| `releaseWindowUs` | 0.75 s | 判定换气用的短窗口，越短反应越快 |
-| `holdRatio` | 0.38 | 越大越容易、越早判成憋气，误判也会变多 |
-| `releaseRatio` | 0.5 | 越小越灵敏，稍微一动就判定为换气 |
-| `releaseHoldUs` | 0.2 s | 换气信号要持续多久才算 |
-| `warmupUs` | 8 s | 忽略 Presage 启动时乱跳的那几秒 |
-| `minBaselineUs` | 6 s | 至少学到这么久的正常呼吸，才开始判定憋气 |
-| `useApnea` | false | 是否参考 Presage 的 apnea 标志 |
+| "You breathed" while still holding | 2 | **0** |
+| Hold recognized (from the prompt) | median 2.9 s | median 2.8 s |
+| Release recognized | about 1.0 s | median 1.6 s, worst 2.0 s |
+| Normal breathing misread as a hold | 1.2% | 1.2% |
 
-注意：阈值目前只用一个人、一次录制验证过。多录几个人的数据再确认。
+Releases are about 0.6 seconds slower. In return, a diver is never wrongly told they breathed. Any exhale threshold from 1.0 to 1.3 gives zero mid-hold releases; at 0.9 errors start, so 1.1 leaves margin on both sides. `--sweep` prefers 0.9 because it only sees these two recordings, and we don't trust it.
 
-### 用真实数据调参（录制 → 分析）
+| Option | Default | Effect |
+| --- | --- | --- |
+| `activityWindowUs` | 2 s | Window for the hold test |
+| `holdRatio` | 0.38 | Higher calls a hold more easily and earlier, with more false positives |
+| `exhaleRatio` | 1.1 | How far (× B) the trace has to drop to count as an exhale. Lower releases faster, but small glitches mid-hold may count |
+| `inhaleRatio` | 2.0 | How far (× B) a jump up has to go to count as breathing in first |
+| `exhaleWindowUs` | 1.5 s | The drop has to happen within this window, which rules out the slow settling after a hold starts |
+| `exhaleHoldUs` | 0.1 s | How long the exhale has to last |
+| `quietRatio` / `levelTauUs` | 0.5 / 1 s | The hold level only follows the trace while it is quiet, and this fast |
+| `trustAfterUs` | 2 s | For this long into a hold, activity alone ends it |
+| `releaseWindowUs` / `releaseRatio` / `releaseHoldUs` | 0.75 s / 0.5 / 0.2 s | What "activity" means in the line above |
+| `sustainedRatio` / `sustainedUs` | 0.8 / 4 s | Fallback: this much breathing for this long always ends a hold |
+| `warmupUs` | 8 s | Ignores the seconds when Presage swings wildly at start-up |
+| `minBaselineUs` | 6 s | How much normal breathing has to be learned before any hold is called |
+| `useApnea` | false | Whether to use Presage's apnea flag |
 
-不要凭感觉改阈值，先录数据：
+Note: the thresholds have been checked against one person and two recordings only. **On a new person, run the breath test once to confirm them**, and check especially that "down is exhale" holds on their camera too. `analyze.mjs` prints `release reasons`; normally most should be `exhale`.
 
-1. **最简单：标题页点 "Breath test (2.5 min) · 憋气测试"**。屏幕会按节奏提示：先正常呼吸 30 秒，然后"准备 → 憋气 15 秒 → 呼吸 15 秒"，重复 4 轮。每一秒都会自动打上标注，不用按任何键。结束后显示这次检测到了几次憋气、平均延迟多久、正常呼吸时误判的比例。
-   也可以直接用摄像头模式玩：**每次真的憋气时同时按住 `Shift`**，换气时松开。HUD 左上会显示 "⏺ marking your hold"，这就是标准答案。
-2. sensor 会把整个会话写进 `sensor/recordings/<时间>.jsonl`，内容包括原始胸部和腹部曲线、apnea、说话、心率、帧率、你的 Shift 标注、校准阶段。**这是生理数据，已经 gitignore，不要提交。**
-3. 分析：
+### Tuning with real data (record → analyze)
+
+Do not change thresholds by feel. Record data first:
+
+1. **Easiest: click "Breath test (2.5 min) · 憋气测试" on the title screen.** The screen prompts you on a fixed schedule: breathe normally for 30 seconds, then "get ready → hold for 15 seconds → breathe for 15 seconds", 4 rounds. Every second is labeled automatically, with no key to press. At the end it shows how many holds were detected, the average delay, and the share of normal breathing that was misread.
+   You can also simply play in camera mode: **hold `Shift` every time you really hold your breath**, and let go when you breathe. The top left of the HUD shows "⏺ marking your hold". That is the ground truth.
+2. The sensor writes the whole session to `sensor/recordings/<time>.jsonl`: the raw chest and abdomen traces, apnea, talking, heart rate, frame rate, your Shift labels, and the calibration phase. **This is physiological data. It is gitignored; do not commit it.**
+3. Analyze:
 
 ```bash
 node sensor/analyze.mjs
 ```
 
-它会输出：
+It prints:
 
-- 摄像头帧率、Presage 数据批次间隔和延迟；
-- 胸部和腹部曲线在"憋气"和"呼吸"时的幅度比（比值越大越好分）；
-- 憋气期间曲线有没有漂移；
-- 当前检测器和你标注的一致率、误判率、每分钟跳变次数、检测延迟。
+- the webcam frame rate, and the interval and latency of the Presage data batches;
+- the amplitude ratio between "breathing" and "holding" for the chest and abdomen traces (a larger ratio is easier to separate);
+- whether the trace drifts during a hold;
+- how the current detector compares with your labels: agreement, false-positive rate, flips per minute, detection delay.
 
 ```bash
 node sensor/analyze.mjs --sweep
 ```
 
-网格搜索 `holdWindowUs` / `flatRatio` / `releaseRatio` / `useApnea`，给出最好的几组。
+Grid-searches `holdRatio` / `exhaleRatio` / `exhaleWindowUs` / `trustAfterUs` and lists the best few combinations. Telling a diver they breathed while still holding costs the most.
 
 ```bash
-node sensor/analyze.mjs --trace=lo --flatRatio=0.3
+node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 ```
 
-改用腹部曲线、或者指定某组参数重放。
+Replays with the abdomen trace, or with a specific set of parameters.
 
-注意：Presage 的呼吸频率需要约 30 s 窗口，说话时不可用；所有指标都只用于健康参考（wellness），不是医疗用途。
+Note: Presage's breathing rate needs a window of about 30 s and is not available while you talk. All metrics are for wellness reference only, not for medical use.
 
 ---
 
-## 6. 代码导读
+## 6. Code tour
 
 ```
 .
-├── package.json            根目录脚本：setup / sensor / game / dev
-├── scripts/dev.mjs         npm run dev：同时启动 sensor 和 game（跨平台）
-├── .env.example            PRESAGE_API_KEY、SENSOR_PORT
-├── intro/HackRU26.md       比赛介绍和时间线（中英双语）
-├── design/game-design-document.md  策划案：三张地图、小怪、升级、改进点
-├── sensor/                 Node 憋气传感器服务
-│   ├── index.mjs           WS 服务、每个连接一个 Session、Presage SDK、模拟器（含模拟心率）
-│   ├── breath-detector.mjs 憋气检测（第 5 节）
-│   ├── recorder.mjs        把摄像头会话录成 JSONL（sensor/recordings/，已 gitignore）
-│   └── analyze.mjs         重放录制数据、对比 Shift 标注、网格搜索阈值
+├── package.json            root scripts: setup / sensor / game / dev
+├── scripts/dev.mjs         npm run dev: starts sensor and game together (cross-platform)
+├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
+├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
+├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
+├── assets/                 asset library: a picture and the parameters of every fish species and the fishing rod
+├── sensor/                 Node breath sensor service
+│   ├── index.mjs           WS server, one Session per connection, Presage SDK, simulator (with fake heart rate)
+│   ├── breath-detector.mjs breath-hold detection (section 5)
+│   ├── recorder.mjs        records camera sessions as JSONL (sensor/recordings/, gitignored)
+│   └── analyze.mjs         replays recordings, compares with the Shift labels, grid-searches thresholds
 └── game/                   Vite + TypeScript + Three.js
-    ├── index.html          HUD、标题卡、收藏面板、报告面板的 DOM
-    ├── vite.config.ts      端口 5173；Node polyfills（Umi 和 Irys 需要）
+    ├── index.html          DOM for the HUD, title card, collection panel and report panel
+    ├── vite.config.ts      port 5173; Node polyfills (needed by Umi and Irys)
+    ├── asset-library.html  dev-only preview page for the asset library (src/asset-library.ts)
+    ├── tests/              node --test: render quality, daylight and weather tests
     └── src/
-        ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
-        ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
-        ├── world.ts        海底、礁石、珊瑚、海带、光束、雪、水面、船；按深度变化雾和颜色；昼夜
-        ├── daylight.ts     连续 24 小时光照模型、12 分钟自然循环、上午/下午/夜晚的平滑预览
-        ├── water.ts        单次绘制的水面天空反光、随波纹变化的日光/月光高光
-        ├── weather.ts      自然天气轮换、晴/云/雨/风暴的平滑过渡
-        ├── rain.ts         单次绘制的 GPU 雨丝，按画质限制雨量
-        ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
-        ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
-        ├── fish.ts         稀有度表、区域掉率、物种名、rollFish(seed)、鱼的网格、游动和逃跑 AI
-        ├── rng.ts          mulberry32 种子随机数
-        ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
-        ├── hud.ts          呼吸面板和波形、深度计、紧急条、网格槽、入库数、toast
-        ├── vault.ts        收藏面板、钱包栏、Mint 按钮（懒加载 chain.ts）
-        ├── chain.ts        Umi、临时钱包、空投、mintFish、burnFish
-        ├── polyfills.ts    Buffer 和 global 全局变量
-        ├── health.ts       HealthLog：每次潜水记录憋气时长、心率、恢复时间
-        ├── report.ts       健康报告：指标卡、两张图、解读文字、存 PDF、删除数据
-        ├── pause.ts        Esc 暂停菜单：继续（水下 3 秒倒数）、设置、回到主页面
-        ├── settings.ts     玩家设置（画质、摄像头小窗、操作提示），存 localStorage
-        └── style.css       深色玻璃风 HUD
+        ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
+        ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
+        ├── breathtest.ts   the 2.5-minute breath test on the title screen: prompts holds and breathing, labels them automatically
+        ├── world.ts        underwater terrain built from the selected map (seabed, rocks, coral, kelp), light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── daylight.ts     continuous 24-hour lighting, 12-minute natural cycle, smooth morning / afternoon / night previews
+        ├── sky.ts          atmospheric sky, time-driven sun / moon and layered clouds
+        ├── color-grade.ts  shared morning / afternoon / night color balance in scene materials
+        ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
+        ├── water.ts        sky reflection and moving sun / moon highlights in one water draw call
+        ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
+        ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
+        ├── maps.ts         the three map definitions (depth, unlock value, palette) and the saved map progress
+        ├── scenery.ts      the above-water scenery for each map
+        ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
+        ├── mappicker.ts    the map cards on the start card
+        ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
+        ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
+        ├── equipment.ts    rod level, Pearl balance, saved state and the upgrade rule
+        ├── gear-panel.ts   the rod / net upgrade panel
+        ├── upgrades.ts     the upgrade table and low-poly models for each upgrade level (not shown in the game yet)
+        ├── fish.ts         rarity table, drop rates per zone, species names, rollFish(seed), fish meshes, swim and flee AI
+        ├── rng.ts          mulberry32 seeded random numbers
+        ├── portrait.ts     offscreen rendering: fishIcon (192 px) and fishCard (512 px, the NFT card)
+        ├── hud.ts          breath panel and waveform, depth gauge, emergency bar, net slots, banked count, toasts
+        ├── vault.ts        collection panel, wallet bar, Mint button (lazy-loads chain.ts)
+        ├── chain.ts        Umi, throwaway wallet, airdrop, mintFish, burnFish
+        ├── polyfills.ts    Buffer and global
+        ├── health.ts       HealthLog: hold time, heart rate and recovery time for every dive
+        ├── report.ts       health report: metric tiles, two charts, interpretation text, save as PDF, delete data
+        ├── pause.ts        Esc pause menu: resume (3-second countdown underwater), settings, back to the main menu
+        ├── title.ts        main menu: a Verlet rope with fish hanging on fishing lines, mouse dragging and pushing; the START / SETTINGS fish are the buttons
+        ├── workbench.ts    workbench: table physics (matter-js), inspect / pack gear, map cards that suck in, spit out, flip and transition
+        ├── settings.ts     player settings (render quality, lighting effects, weather, camera preview, control hints), stored in localStorage
+        ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
+        └── style.css       dark glass-style HUD
 ```
 
 ---
 
-## 7. 游戏设计参数
+## 7. Game design parameters
 
-### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
+Pictures and per-species numbers for all 17 fish species and the fishing rod are in the [asset library](assets/README.md).
 
-| 区域 | 深度 | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | – | 10 | 30 | 35 | 19 | 6 |
+### Depth zones and drop rates (`ZONES` in `fish.ts`)
 
-### 稀有度（`RARITY`）
+| Zone | Depth | Reward | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Shallows | 0–18 m | ×1.0 | 70 | 25 | 5 | – | – | – |
+| Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
+| The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
 
-| 稀有度 | 颜色 | value |
+**Catch value** = the rarity `value` (table below) × the zone's reward multiplier (`rewardMultiplier`), rounded. A rare fish is worth 10 in the Shallows, 16 on the Reef and 25 in the Abyss. It is shown as "pts" on the toast, the HUD and the collection cards, sorts the collection, is written to the NFT metadata as `Catch value`, and counts toward map unlocks. Fish banked before this change have no stored value and count at their plain rarity value.
+
+### Rarity (`RARITY`)
+
+| Rarity | Color | value |
 | --- | --- | --- |
 | common | `#b8c4cc` | 1 |
 | uncommon | `#5fd38d` | 3 |
@@ -350,174 +405,198 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 | legendary | `#ffb340` | 150 |
 | mythic | `#ff5fd2` | 800 |
 
-稀有度越高，鱼游得越快、越容易逃跑、发光越强。神话鱼会循环变色。
+The rarer the fish, the faster it swims, the more easily it flees, and the brighter it glows. Mythic fish cycle through colors.
 
-### 主循环常数（`main.ts`）
+### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [16, 16, 12]`
+
+### Rod / net upgrades (`ROD_TIERS` in `equipment.ts`)
+
+The fishing rod is the diver's hand net. Upgrades change only the gear; they never extend breath time.
+
+| Level | Name | Capacity | Catch radius | Upgrade cost |
+| --- | --- | ---: | ---: | ---: |
+| Lv1 | Basic Net | 6 | 2.4 m | starting gear |
+| Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
+| Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
+
+Every fish that is banked earns its catch value in Pearls; fish lost in a blackout earn nothing. The upgrade state is saved in `deepbreath.equipment` and never deletes or spends collected fish.
+
+![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
 
 ---
 
 ## 8. Solana NFT
 
-**全部跑在 devnet，代码都在浏览器里（`game/src/chain.ts`）。**
+**Everything runs on devnet, and all of the code is in the browser (`game/src/chain.ts`).**
 
-- **钱包**：第一次打开收藏面板时，自动生成一个临时 keypair，存在 `localStorage['deepbreath.wallet']`。这是 devnet 专用的测试钱包，私钥就在浏览器里，**不要往里放任何主网资产**。
-- **充值**：面板上有 "Airdrop 1 SOL" 按钮，但公共 devnet 水龙头经常 429 限流。更可靠的办法是去 <https://faucet.solana.com>（GitHub 登录）给面板上显示的地址领币。
-- **铸造流程**（`mintFish`）：
-  1. `fishCard(spec)` 生成 PNG，用 `umi.uploader.upload` 传到 Irys devnet。
-  2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Depth / Length / Weight / Seed）。
-  3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / seed），方便以后的游戏逻辑直接在链上读稀有度。
-  4. 资产地址写回 `FishSpec.assetId`，持久化到 bank。卡片会显示 "✓ On-chain"，链接到 Solana Explorer。
-- **销毁**（NFT 消耗）：`burnFish(assetId)` 已经写好，UI 还没接，会用在装备经济里。
-- **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
-- **为什么 Vite 要加 polyfill**：Umi 和 Irys 依赖 Node 的 `Buffer`、`stream`、`crypto`，所以 `vite.config.ts` 用了 `vite-plugin-node-polyfills`。
+- **Wallet**: the first time you open the collection panel, a throwaway keypair is generated and stored in `localStorage['deepbreath.wallet']`. It is a devnet-only test wallet and its private key sits in the browser, so **never put mainnet assets in it**.
+- **Funding**: the panel has an "Airdrop 1 SOL" button, but the public devnet faucet often answers with a 429 rate limit. It is more reliable to go to <https://faucet.solana.com> (GitHub login) and request SOL for the address shown in the panel.
+- **Mint flow** (`mintFish`):
+  1. `fishCard(spec)` renders a PNG, which `umi.uploader.upload` uploads to Irys devnet.
+  2. `uploadJson` uploads the metadata: name, symbol `DIVE`, description, image, attributes (Rarity / Species / Zone / Depth / Length / Weight / Seed).
+  3. mpl-core's `create` mints a Core asset with an on-chain **Attributes plugin** (rarity / species / depth / seed), so later game logic can read the rarity straight from the chain.
+  4. The asset address is written back to `FishSpec.assetId` and saved in the bank. The card shows "✓ On-chain" and links to Solana Explorer.
+- **Burn** (NFT sink): `burnFish(assetId)` is written but not connected to the UI yet. It is meant for the gear economy.
+- **Optional environment variable**: `VITE_SOLANA_RPC` (defaults to `https://api.devnet.solana.com`). Every `VITE_*` variable is bundled into the front end, so **never put a secret in one**.
+- **Why Vite needs polyfills**: Umi and Irys depend on Node's `Buffer`, `stream` and `crypto`, so `vite.config.ts` uses `vite-plugin-node-polyfills`.
 
 ---
 
-## 9. 健康报告
+## 9. Health report
 
-**数据在后台安静地记录，只有用户按 `H` 或点 "♥ Health report" 时才生成报告，不会自动弹出。**
+**Data is recorded quietly in the background. The report is built only when the player presses `H` or clicks "♥ Health report". It never opens by itself.**
 
-`HealthLog`（`health.ts`）每次潜水记一条 `DiveRecord`：
+`HealthLog` (`health.ts`) stores one `DiveRecord` per dive:
 
-| 字段 | 含义 |
+| Field | Meaning |
 | --- | --- |
-| `holdMs` | 这次潜水中最长的一段连续憋气 |
-| `durationMs` / `maxDepth` | 水下时长、最大深度 |
-| `outcome` / `fish` | `banked` / `surfaced` / `blackout`，以及鱼的数量 |
-| `restPulse` / `restRate` | 下潜前 30 s 的心率中位数，以及呼吸频率 |
-| `pulse` | 水下心率曲线，`[秒, bpm]`，约 1 Hz |
-| `minPulse` / `peakPulse` | 水下心率的最低值和最高值 |
-| `recoveryS` | 出水后心率回到静息值 ±6 bpm 以内、并稳定 5 s 所用的时间 |
+| `holdMs` | The longest continuous hold in this dive |
+| `durationMs` / `maxDepth` | Time underwater, maximum depth |
+| `outcome` / `fish` | `banked` / `surfaced` / `blackout`, and the number of fish |
+| `restPulse` / `restRate` | Median heart rate over the 30 s before the dive, and breathing rate |
+| `pulse` | Heart-rate curve underwater, `[seconds, bpm]`, about 1 Hz |
+| `minPulse` / `peakPulse` | Lowest and highest heart rate underwater |
+| `recoveryS` | Time after surfacing until heart rate is back within ±6 bpm of resting and stays there for 5 s |
 
-报告（`report.ts`）包括：
+The report (`report.ts`) contains:
 
-- 8 个指标卡：最长憋气、平均憋气及趋势、静息心率、潜水反射（憋气时心率下降多少）、恢复时间、呼吸频率、总水下时间、最深深度。
-- 两张图：每次潜水的憋气时长柱状图；最长那次潜水的心率曲线，带静息基线，能直接看出潜水反射。
-- 自动生成的解读文字、免责声明。
-- "Save PDF"（打印样式只输出报告）和 "Delete my health data"。
+- 8 metric tiles: longest hold, average hold with its trend, resting heart rate, dive reflex (how far heart rate drops during a hold), recovery time, breathing rate, total time underwater, deepest dive.
+- Two charts: a bar chart of the hold time of every dive, and the heart-rate curve of the longest dive with the resting baseline, which shows the dive reflex directly.
+- Automatically written interpretation text, and a disclaimer.
+- "Save PDF" (the print stylesheet outputs the report only) and "Delete my health data".
 
-隐私：数据只存在本机浏览器里。免责声明：只供健康参考，不是医疗建议；不要在水中或水边练习憋气。
+Privacy: the data stays in the browser on this machine. Disclaimer: for wellness reference only, not medical advice. Do not practice breath-holding in or near water.
 
-> 模拟模式下的心率是假的：静息约 72 bpm，憋气时降到约 58，换气后先冲到约 86 再回落。用来在没有摄像头时演示报告。
+> In simulation mode the heart rate is fake: about 72 bpm at rest, dropping to about 58 during a hold, then jumping to about 86 after a release before it settles. It is there to demo the report without a camera.
 
 ---
 
-## 10. 本地存储
+## 10. Local storage
 
-| key | 内容 |
+| key | Contents |
 | --- | --- |
-| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，铸造后带 `assetId`） |
-| `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
-| `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
-| `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`showCamera`、`showHelp` |
+| `deepbreath.bank` | Banked fish (`FishSpec[]`, with the catch `value` and `map`, and an `assetId` once minted) |
+| `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
+| `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
+| `deepbreath.equipment` | Rod level and Pearl balance (`rodLevel`, `pearls`) |
+| `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `lightingEffects`, `weather` (auto / clear / cloudy / rain / storm), `showCamera`, `showHelp` |
+| `deepbreath.maps` | Map progress: the selected map, the best total banked value, the demo switch |
 
-重置：在浏览器控制台执行 `localStorage.clear()`。
-
----
-
-## 11. 调试技巧
-
-- 开发服务器**不做类型检查**。提 PR 前请跑：`npm --prefix game run build`（会先执行 `tsc --noEmit`）。
-- 控制台能直接用这些全局对象：`breath`、`diver`、`fishes`、`keys`、`debugStep(seconds)`。
-- 标签页在后台时 `requestAnimationFrame` 会降到约 2 fps，可以用 `debugStep(2)` 直接模拟 2 秒。
-- sensor 的日志直接看运行 `npm run sensor` 的那个终端。Presage 的状态码和 ValidationCode 提示会翻译成 HUD 左上角的黄色 hint。
-- Presage 一直卡在 `starting`：检查 `.env` 里的 key，看浏览器是否真的在发帧（HUD 的 frames 计数），以及光线够不够。
+To reset, run `localStorage.clear()` in the browser console.
 
 ---
 
-### 自动画质
+## 11. Debugging tips
 
-暂停菜单的 Settings → Render quality 默认选 Auto；也可以手动选择高、中、低档并保存，手动档位不会自动降级。已有手动设置继续生效。暂停时不参与帧率采样，切换摄像头预览或操作提示不会重置 Auto 已降到的档位。
+- The dev server **does not type-check**. Before opening a PR, run `npm --prefix game run build` (it runs `tsc --noEmit` first).
+- These globals are available in the console: `breath`, `diver`, `fishes`, `keys`, `debugStep(seconds)`.
+- When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.
+- The sensor logs are in the terminal that runs `npm run sensor`. Presage status codes and ValidationCode hints are translated into the yellow hint at the top left of the HUD.
+- Presage stuck on `starting`: check the key in `.env`, check that the browser is really sending frames (the frames counter in the HUD), and check that there is enough light.
 
-游戏根据浏览器提供的 CPU 逻辑核心数和设备内存提示选择初始画质：不超过 4 核或 4 GB 时用低档；至少 8 核且内存提示不低于 8 GB（或浏览器不提供内存提示）时用高档；其他情况用中档。这些提示不能准确代表 GPU 性能，因此运行中还会检查实际帧间隔。
+### Automatic render quality
 
-| 参数 | 低 | 中 | 高 |
+Settings → Render quality in the pause menu defaults to Auto. You can also pick high, medium or low yourself, and the choice is saved; a level you picked is never lowered automatically. Existing manual settings keep working. Frame rate is not sampled while the game is paused, and toggling the camera preview or the control hints does not reset the level Auto has already dropped to.
+
+The game picks the starting quality from the CPU logical core count and the device-memory hint the browser provides: low at 4 cores or fewer, or 4 GB or less; high with at least 8 cores and a memory hint of 8 GB or more (or no memory hint from the browser); medium otherwise. These hints do not describe GPU performance accurately, so the game also checks the real frame intervals while it runs.
+
+| Setting | Low | Medium | High |
 | --- | --- | --- | --- |
-| DPR 上限 | 1 | 1.5 | 2 |
-| 渲染像素预算 | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
-| 海带 / 光束 / 粒子 | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
-| 水面分段 | 30 × 8 | 60 × 16 | 90 × 24 |
-| 装饰动画更新上限 | 20 Hz | 30 Hz | 60 Hz |
-| 水面微波纹层数 | 1 | 2 | 3 |
-| 天空渐变纹理刷新 | 5 Hz | 10 Hz | 15 Hz |
-| 天空云层纹理 | 128 × 128 | 192 × 128 | 256 × 128 |
-| 雨滴数量上限 | 160 | 420 | 800 |
+| DPR cap | 1 | 1.5 | 2 |
+| Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
+| Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
+| Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
+| Water micro-ripple layers | 1 | 2 | 3 |
+| Cloud texture samples per sky pixel | 2 | 3 | 4 |
+| Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
+| Maximum raindrops | 160 | 420 | 800 |
 
-大屏幕可能使用低于 1 的 DPR 以保持像素预算；HUD 仍使用浏览器原生分辨率。启动宽限期后，连续两个 3 秒窗口平均低于 45 FPS 时降一级；降档后有 6 秒冷却，同一会话只降不升。隐藏标签页和孤立长停顿不参与判断，持续极低帧率仍会触发降档。
+A large screen may use a DPR below 1 to stay within the pixel budget; the HUD still uses the browser's native resolution. After a start-up grace period, two consecutive 3-second windows that average below 45 FPS lower the quality by one level. A drop is followed by a 6-second cooldown, and within one session the quality only goes down, never up. Hidden tabs and isolated long stalls are not counted, but a sustained very low frame rate still triggers a drop.
 
-低档启动时关闭抗锯齿；运行中降档保留创建 WebGL 上下文时的抗锯齿设置，以免重建上下文中断游戏。装饰节流不改变潜水员、鱼、呼吸和光照的逐帧更新；头灯、昼夜、雾色和 NFT 卡图分辨率保留。夜间与深水里不可见的光束直接停止渲染，隐藏海带移出场景以避免矩阵更新。
+Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver, fish, breath and lighting; the headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and hidden kelp is removed from the scene to avoid matrix updates.
 
-- `npm --prefix game test`：画质分级、像素预算、持续卡顿、后台恢复和降档冷却测试。
-- 控制台查看 `renderQuality.level` 和 `renderQuality.settings`，确认当前档位与预算。
+- `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
+- In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
 
-### 自然昼夜与水面反光
+### Natural daylight and water reflections
 
-默认从游戏时间 09:00 开始，每 12 分钟完成一轮 24 小时循环。天光、地平线色、主光方向与强度、水下雾色和光束连续变化：上午清爽微暖，下午偏金，傍晚逐渐转暗，夜间为冷蓝月光。HUD 顶部显示当前游戏时间；暂停时自动时间停止，后台恢复后的长帧不补算。
+The game starts at 09:00 and completes a 24-hour cycle every 12 minutes. Sky and horizon colors, the main light's direction and intensity, underwater fog and light rays change continuously: morning is clear and slightly warm, afternoon is golden, dusk fades gradually, and night uses cool blue moonlight. The visible sun and moon follow the same continuous celestial directions as the reflected light, rising and setting at the horizon. Their halos and cloud occlusion change with time and weather. The HUD shows game time. Automatic time stops while paused or in the background, and returning to the tab does not catch up the missed time.
 
-Esc → Settings → Time of day 可选择 Natural cycle、Morning、Afternoon、Night；手动切换约 2 秒渐变，不会瞬间跳灯。暂停时可预览这些光色，恢复 Natural cycle 也会平滑衔接。夜间稀有鱼加成由实际夜色状态决定，随自然入夜自动生效。
+Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Night. Manual changes blend over about 2 seconds, including a return to Natural cycle. You can preview them while paused. The rarity bonus for newly spawned fish follows the actual night lighting state, so it activates automatically as night falls.
 
-Esc → Settings → Lighting effects 可开关太阳/月光、光束和水面反光，默认开启，选择会自动保存。关闭时保留昼夜时间、天空与雾色、基础环境亮度和潜水员头灯；切换画质或时段不会重新开启光照效果。
+Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
 
-水面以波纹法线和掠射角反光模拟天空色、日光与月光高光，光带随时间和波纹移动。水下观看时降低反光和不透明度，避免表面像一面墙；水下光束同时柔化边缘。反光直接计算在原水面材质中，保留雾和颜色空间，不增加反射相机或第二次场景渲染；低、中、高档分别计算 1 / 2 / 3 层微波纹。它模拟天空和光源的反光，船与鱼没有实时镜面倒影。
+Ripple normals and viewing-angle reflection approximate the sky and moving sun / moon highlights on the water. Reflection and opacity are reduced when seen from underwater. Underwater sunlight uses soft, irregular scattering that spreads and weakens with depth; red light is absorbed faster than blue. All 4 / 8 / 14 light shafts share one draw call and disappear at night, in storms or at depth. This runs in the existing water material, preserving fog and color management without a reflection camera or a second scene render. Low, medium and high use 1 / 2 / 3 micro-ripple layers. It reflects the sky and light sources; boats and fish do not have live mirror reflections.
 
-- `npm --prefix game test` 还包含昼夜周期、午夜与色彩关键点连续性、手动渐变、暂停和模式恢复测试。
-- 控制台可查看 `world.dayCycle.hour` / `world.dayCycle.mode`，用 `setTimeOfDay('afternoon')` 预览光色。
+Morning highlights are gently warm, afternoon highlights become golden, and night shifts toward muted blue. The material shaders share one color-grade state; cloud cover reduces saturation and underwater depth removes the warm cast. This adds no fullscreen pass or render target. Sky color and fog remain continuous when lighting effects are disabled.
 
-### 天气系统
+- `npm --prefix game test` also covers the day cycle, midnight and color continuity, manual blends, pauses and returning to the cycle.
+- Inspect `world.dayCycle.hour` / `world.dayCycle.mode` in the console, or preview lighting with `setTimeOfDay('afternoon')`.
 
-Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、Storm，并保存选择。默认自然天气从晴朗开始，每 9 分钟经历晴朗 → 多云 → 下雨 → 风暴 → 下雨 → 多云 → 晴朗；约 5 秒平滑切换手动天气，恢复自然天气时也会平滑衔接。HUD 同时显示实际天气。这里是游戏内天气轮换，不读取现实位置或气象服务。
+### Weather
 
-云量影响天空、太阳/月光强度、水下光束、雾和海面反光；风力影响海浪、船的摇摆与雨丝倾斜，暴风雨增加雨量。雨丝在 GPU 上动画，最多增加一次绘制，晴朗/多云及水下不绘制雨。低、中、高画质分别最多显示 160 / 420 / 800 滴雨，并使用不同天空分辨率和刷新上限，切换天气复用材质和雨滴缓冲区。
+Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Storm, and saves the choice. Natural weather starts clear and cycles through clear → cloudy → rain → storm → rain → cloudy → clear every 9 minutes. Manual changes and returns to natural weather blend over about 5 seconds. The HUD shows the current weather. This is an in-game cycle, with no real-world location or weather service.
 
-暂停和后台冻结自动天气与雨滴动画，暂停设置仍可预览天气渐变。Lighting effects 关闭时依然保留天气，但太阳/月光、光束和水面反光继续保持关闭。天气不改变鱼群、呼吸规则和夜晚稀有鱼加成判定；夜间和阴雨海底保留环境亮度及头灯。本版暴风雨使用风、浪和雨表现，不含闪电或天气音效。
+Cloud cover affects the sky, sun / moon intensity, underwater rays, fog and water reflections. Wind changes wave strength, boat rocking and rain slant; storms increase rainfall. Rain animates on the GPU and adds at most one draw call. Clear / cloudy weather and underwater views do not draw rain. Low, medium and high use at most 160 / 420 / 800 raindrops. The atmospheric sky uses one draw and a seamless 256 × 256 noise texture generated once; low / medium / high use 2 / 3 / 4 cloud texture samples, and low omits the high cloud veil and stars. No sky texture is redrawn or uploaded each frame. Weather changes reuse the material and rain buffers.
 
-- `npm --prefix game test` 覆盖天气循环连续性、帧率一致性、暂停、预设切换和恢复自然天气。
-- 控制台 `world.weather.state` 查看实际天气，`world.setWeather('storm')` 可临时预览风暴；通过设置菜单选择可保存。
+Pause and background states freeze automatic weather and rain animation; manual weather previews still blend in pause settings. Weather remains active when Lighting effects is off, while sun / moon lighting, rays and water reflections stay off. Weather does not change fish populations, breathing rules or the night rarity condition. Ambient light and the headlamp keep nighttime and rainy underwater scenes readable. The Open Ocean scenery's lightning follows storm intensity and the Lighting effects switch. Weather audio is not included.
 
-## 12. 当前状态与待办
-
-### ✅ 已完成
-
-- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、3 个深度区）
-- 憋气才能下潜、水下换气后紧急上浮、黑屏丢鱼、出水入库
-- Presage 管线：浏览器抓帧 → sensor → SDK → 憋气检测；键盘和模拟两种兜底
-- NFT 卡图（由 seed 决定、可复现）、收藏面板
-- Solana 铸造：已在 devnet 端到端验证（临时钱包 → Irys 上传图片和元数据 → Metaplex Core + 链上 Attributes），Solana Explorer 能正常显示卡图。[示例资产](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
-- 健康报告（按需生成）
-
-### 🔜 待办（认领时在 PR 或群里说一声）
-
-- [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
-- [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
-- [ ] **装备经济**：用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯、更大的网；装备有耐久度
-- [ ] **NFT 消耗（sink）**：卖给市场换 Pearl、用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换。`burnFish` 已经写好
-- [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
-- [ ] **三张地图**：每张图一份配置（天空和水色、岸线模型、最大深度、小怪表），主界面加地图选择。设计见策划案第 6 节
-- [ ] **船上垂钓和心率玩法**：平静值决定咬钩速度和水下鱼的警觉距离；鱼竿、鱼饵、船的升级。设计见策划案第 4.2、6.3、7 节
-- [ ] **交易市场（多人的核心）**：挂单、购买、实时成交动态；玩家各自独立世界，只通过交易互动
-- [ ] **后端**：挂单和成交服务，以及经济和公平性数据面板（Tiger Data / Timescale）
-- [ ] **部署**：sensor 每个连接一个 Presage session，要考虑多人并发；`.tech` 域名
-- [ ] **ElevenLabs**：氧气告急、稀有鱼出现时的语音或音效
-- [ ] **Devpost** 文案、截图、demo 视频
+- `npm --prefix game test` covers weather continuity, frame-rate independence, pauses, preset changes and returning to natural weather.
+- Inspect `world.weather.state` in the console. `world.setWeather('storm')` previews a storm temporarily; use the settings menu to save the choice.
 
 ---
 
-## 13. 协作约定
+## 12. Status and to-do
 
-- **分支**：`feat/xxx`、`fix/xxx`、`docs/xxx`，通过 PR 合进 `main`，不要直接推 `main`。
-- **提 PR 前**：`npm --prefix game run build` 必须通过（strict TS，`noUnused` 已开启）。
-- **秘密**：`.env`、私钥、任何 API key 都不要进仓库。新的环境变量要同步加到 `.env.example`（只写变量名，不写值）。
-- **风格**：TypeScript strict；低多边形 + flat shading；颜色变量在 `style.css` 的 `:root`；注释只解释"为什么"。
-- **改参数**：玩法常数集中在 `main.ts` 顶部和 `fish.ts` 的 `RARITY` / `ZONES`，改了请在 PR 里说明。
+### ✅ Done
+
+- Low-poly 2.5D underwater world, diver, procedurally generated fish (6 rarities, 3 depth zones)
+- Diving only while you hold your breath, emergency ascent after breathing underwater, blackout that loses the fish, banking on surfacing
+- Presage pipeline: browser captures frames → sensor → SDK → breath-hold detection; keyboard and simulation as fallbacks
+- NFT card art (determined by the seed, reproducible), collection panel
+- Solana minting: verified end to end on devnet (throwaway wallet → Irys upload of image and metadata → Metaplex Core + on-chain Attributes). Solana Explorer shows the card correctly. [Example asset](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
+- Health report (built on demand)
+- Natural day / night cycle, water reflections and a saved lighting-effects switch
+- Natural weather plus clear / cloudy / rain / storm presets, with quality-scaled clouds and rain
+- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, depth limits, map picker on the start card, unlock by total banked fish value
+- Low-poly models for the upgrade parts (code only, not in the game yet)
+- Rod / net upgrade MVP: three tiers of capacity and catch radius, Pearl rewards, a visibly bigger hoop, saved locally
+
+### 🔜 To do (say so in a PR or the group chat when you pick one up)
+
+- [ ] **Test Presage breath detection on real cameras** and tune the thresholds (section 5)
+- [ ] **Official game Collection**: every fish is a standalone asset right now, so Explorer shows Verified Collection as None. We need a Collection whose authority is held by a server, and to mint fish into it, so marketplaces can filter by Collection and fakes are prevented
+- [ ] **Full gear economy**: beyond the rod / net upgrade MVP, buy air tanks, fins and a headlamp with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
+- [ ] **NFT sinks**: sell to the market for Pearl, craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets. `burnFish` is already written
+- [ ] **Night sea monster**: high-value fish appear at night, together with the sea-monster risk
+- [ ] **Three maps, what remains**: night creatures and daylight hours per map, boat durability and sinking on the ocean map. The design is in section 6 of the design doc
+- [ ] **Boat fishing and heart-rate gameplay**: the calm value sets the bite speed and how far away underwater fish notice you; rod, bait and boat upgrades. The design is in sections 4.2, 6.3 and 7 of the design doc
+- [ ] **Marketplace (the core of multiplayer)**: listings, purchases, a live feed of sales; players stay in separate worlds and interact only through trading
+- [ ] **Backend**: a service for listings and sales, plus a dashboard for economy and fairness data (Tiger Data / Timescale)
+- [ ] **Deployment**: the sensor runs one Presage session per connection, so concurrent players need thought; `.tech` domain
+- [ ] **ElevenLabs**: voice or sound effects when air runs low and when a rare fish appears
+- [ ] **Devpost** copy, screenshots, demo video
 
 ---
 
-## 14. 比赛时间线
+## 13. Working together
 
-完整内容见 [`intro/HackRU26.md`](intro/HackRU26.md)。
+- **Branches**: `feat/xxx`, `fix/xxx`, `docs/xxx`, merged into `main` through PRs. Do not push to `main` directly.
+- **Before a PR**: `npm --prefix game run build` must pass (strict TS, with `noUnused` on).
+- **Secrets**: `.env`, private keys and API keys never go into the repo. Add new environment variables to `.env.example` as well (names only, no values).
+- **Style**: TypeScript strict; low-poly + flat shading; color variables live in `:root` in `style.css`; comments explain only the "why".
+- **Changing parameters**: gameplay constants live at the top of `main.ts` and in `RARITY` / `ZONES` in `fish.ts`. Mention any change in the PR.
+- **Two READMEs**: `README.md` (English) and `README.zh-CN.md` (中文). When you change one, change the other in the same PR.
 
-- 开发：10/10（周六）12:00 开始
-- **提交截止：以 Devpost 页面为准。Devpost 显示周日 10:00 AM，比官网写的 12:00 早，按早的算。**
-- 评审：10/11（周日）13:00 开始，**全员必须到场**
+---
+
+## 14. Hackathon timeline
+
+Full details are in [`intro/HackRU26.md`](intro/HackRU26.md).
+
+- Hacking: starts Saturday 10/10 at 12:00
+- **Submission deadline: go by the Devpost page. Devpost shows Sunday 10:00 AM, which is earlier than the 12:00 on the official site. Use the earlier one.**
+- Judging: starts Sunday 10/11 at 13:00. **The whole team has to be there**

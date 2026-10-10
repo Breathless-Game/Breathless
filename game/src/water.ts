@@ -23,7 +23,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   constructor() {
     super({
       color: '#61bdc9',
-      roughness: 0.38,
+      roughness: 0.44,
       metalness: 0,
       transparent: true,
       opacity: 0.56,
@@ -60,15 +60,18 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           vec3 waterNormal = inverseTransformDirection(normal, viewMatrix);
           if (uWaterEffects > 0.5) {
             vec2 waterPoint = vWaterWorldPosition.xz;
-            float waterRippleA = cos(dot(waterPoint, vec2(0.68, 0.36)) + uWaterTime * 1.4);
-            vec2 waterSlope = vec2(0.085, 0.045) * waterRippleA;
+            // A slow phase warp breaks up parallel sine-wave stripes while
+            // keeping the low setting to one small-scale ripple layer.
+            float waterWarp = sin(dot(waterPoint, vec2(0.13, -0.09)) + uWaterTime * 0.21);
+            float waterRippleA = cos(dot(waterPoint, vec2(0.73, 0.41)) + uWaterTime * 1.25 + waterWarp * 0.72);
+            vec2 waterSlope = vec2(0.061, 0.034) * waterRippleA;
             if (uWaterDetail > 0.5) {
-              float waterRippleB = cos(dot(waterPoint, vec2(-1.05, 0.93)) - uWaterTime * 1.9);
-              waterSlope += vec2(-0.042, 0.037) * waterRippleB;
+              float waterRippleB = cos(dot(waterPoint, vec2(-1.05, 0.93)) - uWaterTime * 1.7 - waterWarp * 0.91);
+              waterSlope += vec2(-0.035, 0.031) * waterRippleB;
             }
             if (uWaterDetail > 1.5) {
-              float waterRippleC = cos(dot(waterPoint, vec2(2.45, 1.72)) + uWaterTime * 2.6);
-              waterSlope += vec2(0.018, 0.013) * waterRippleC;
+              float waterRippleC = cos(dot(waterPoint, vec2(2.45, 1.72)) + uWaterTime * 2.3 + waterWarp * 1.4);
+              waterSlope += vec2(0.016, 0.011) * waterRippleC;
             }
             float waterFace = waterNormal.y < 0.0 ? -1.0 : 1.0;
             waterSlope *= 1.0 + uWaterWind * 0.9;
@@ -89,13 +92,18 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
             outgoingLight = mix(outgoingLight, waterSky, waterReflectionWeight);
             vec3 waterHalfVector = normalize(waterView + uWaterLightDirection);
             float waterAlignment = max(dot(waterNormal, waterHalfVector), 0.0);
-            float waterGlint = pow(waterAlignment, 96.0);
-            if (uWaterDetail > 0.5) waterGlint += 0.18 * pow(waterAlignment, 28.0);
-            float waterGlintWeight = clamp(waterGlint * uWaterLightStrength * uWaterAbove, 0.0, 0.88);
+            // Small, interrupted glints replace the broad secondary lobe that
+            // made the old reflection look like a painted horizontal stripe.
+            vec2 waterGlintPoint = vWaterWorldPosition.xz;
+            float waterGlintWarp = sin(dot(waterGlintPoint, vec2(0.13, -0.09)) + uWaterTime * 0.21);
+            float waterGlintBreakup = smoothstep(0.12, 0.92, 0.5 + 0.5 * sin(
+              dot(waterGlintPoint, vec2(1.6, 0.72)) + uWaterTime * 1.4 + waterGlintWarp * 2.0));
+            float waterGlint = pow(waterAlignment, 132.0) * (0.38 + 0.62 * waterGlintBreakup);
+            float waterGlintWeight = clamp(waterGlint * uWaterLightStrength * uWaterAbove, 0.0, 0.64);
             // Blend toward the light's color rather than accumulating unbounded
             // glare, so afternoon remains golden and moonlight stays cool silver.
             outgoingLight = mix(outgoingLight, max(outgoingLight, uWaterLightColor * 0.98), waterGlintWeight);
-            diffuseColor.a = clamp(diffuseColor.a + waterFresnel * 0.22 * uWaterAbove + waterGlintWeight * 0.08, 0.0, 0.82);
+            diffuseColor.a = clamp(diffuseColor.a + waterFresnel * 0.18 * uWaterAbove + waterGlintWeight * 0.045, 0.0, 0.78);
           }
           #include <opaque_fragment>
         `);
@@ -104,7 +112,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
 
   customProgramCacheKey(): string {
     // Quality and time of day change uniforms, never shader programs.
-    return 'deepbreath-water-sky-v3';
+    return 'deepbreath-water-sky-v4';
   }
 
   setEffectsEnabled(enabled: boolean): void {
@@ -120,17 +128,12 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     uniforms.uWaterSky.value.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
     uniforms.uWaterHorizon.value.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
     uniforms.uWaterLightColor.value.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
-    // The game's camera sits just above a small strip of ocean, while the sky
-    // is a color gradient rather than a distant celestial disc. Compress the
-    // reflected source's elevation and horizontal travel into that visible
-    // strip, preserving east/west motion and its changing color.
-    uniforms.uWaterLightDirection.value.set(
-      lighting.direction[0] * 0.14,
-      0.09 + lighting.direction[1] * 0.12,
-      -1,
-    ).normalize();
-    uniforms.uWaterLightStrength.value = (0.42 + lighting.sunIntensity * 0.24) * (1 - (weather?.cloud ?? 0) * 0.93);
-    this.roughness = 0.38 + (weather?.cloud ?? 0) * 0.3;
+    // The visible sun/moon, scene lighting and reflection all use the same
+    // celestial direction, so the glint follows the disc across the sky.
+    uniforms.uWaterLightDirection.value.set(...lighting.direction).normalize();
+    uniforms.uWaterLightStrength.value = Math.min(0.82, 0.14 + lighting.sunIntensity * 0.26)
+      * (1 - (weather?.cloud ?? 0) * 0.93);
+    this.roughness = 0.44 + (weather?.cloud ?? 0) * 0.26;
     this.color.copy(this.dayWater).lerp(this.nightWater, lighting.nightMix);
     this.opacity = THREE.MathUtils.lerp(0.34, 0.56, uniforms.uWaterAbove.value);
   }

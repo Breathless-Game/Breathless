@@ -202,7 +202,11 @@ class Session {
       phase += (2 * Math.PI * 0.033) / 4; // one breath every 4 s
       let v;
       if (this.simHolding) {
+        // Like a real player: breathe in, hold at the top, and come back out
+        // with an exhale (the detector ends a hold on that drop).
+        holdValue += (1 - holdValue) * 0.1;
         v = holdValue + (Math.random() - 0.5) * 0.02;
+        phase = Math.PI / 2;
       } else {
         v = Math.sin(phase) + (Math.random() - 0.5) * 0.05;
         holdValue = v;
