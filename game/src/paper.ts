@@ -16,9 +16,10 @@ import * as THREE from 'three';
 
 const SEG_X = 48;
 const SEG_Z = 32;
-const CURL = 0.17; // how far the ends curl up at rest, at curl 1
+const CURL = 0.17; // how far the ends curl up, at curl 1
 const CURL_FROM = 0.6; // |u| where the curl starts (u: -1 left edge .. 1 right edge)
 const CREASE = 0.07; // how far the fold stands up, at fold 1
+const UNEVEN = 0.012; // the paper's slight unevenness inside its edges
 const STEP = 1 / 120;
 const MEMORY = 110; // spring back to the rest shape (strong enough to hold the curl against STIFFNESS)
 const STIFFNESS = 700; // smoothing between neighbours (keeps STEP² · 8 · this < 2)
@@ -52,8 +53,8 @@ export class SoftPaper {
   readonly mesh: THREE.Mesh;
   /** 1 = folded (crease standing up), 0 = flat. Changes the rest shape; the sheet follows. */
   fold = 1;
-  /** 1 = ends curled as at rest, 0 = flat. */
-  curl = 1;
+  /** How much the ends curl: 0 lying on the table (edges on the tabletop), some while held up. */
+  curl = 0;
   /** Lying on the table: it can't sink below it. */
   onTable = true;
 
@@ -158,14 +159,22 @@ export class SoftPaper {
 
   // ---- Height field -------------------------------------------------------
 
-  /** The shape the paper wants to be in: ends curled up (corners a touch more), plus the fold. */
+  /**
+   * The shape the paper wants to be in: the fold crease, a little unevenness, and
+   * (held up, curl > 0) ends that curl. Lying on the table (curl 0) its edges rest
+   * on the tabletop: the bumps and the crease fade out toward every edge.
+   */
   private computeRest() {
     for (let i = 0; i < this.rest.length; i++) {
       const u = this.px[i] / (this.w / 2);
       const v = this.pz[i] / (this.d / 2);
       const roll = smoothstep(CURL_FROM, 1, Math.abs(u));
+      const edge = (1 - u * u) * (1 - v * v); // 0 on every edge
+      const bumps = UNEVEN * edge * (Math.sin(u * 4.1 + 1.3) * Math.cos(v * 3.3 - 0.4) + 0.5 * Math.sin(u * 7.7 - v * 5.2));
       this.rest[i] =
-        CURL * this.curl * roll * roll * (1 + 0.35 * smoothstep(0.4, 1, Math.abs(v))) + CREASE * this.fold * Math.max(0, 1 - Math.abs(u));
+        CURL * this.curl * roll * roll * (1 + 0.35 * smoothstep(0.4, 1, Math.abs(v))) +
+        CREASE * this.fold * Math.max(0, 1 - Math.abs(u)) * (1 - v * v * 0.6) +
+        Math.max(0, bumps);
     }
   }
 
