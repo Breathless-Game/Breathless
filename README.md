@@ -300,6 +300,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
+├── assets/                 asset library: a picture and the parameters of every fish species and the fishing rod
 ├── sensor/                 Node breath sensor service
 │   ├── index.mjs           WS server, one Session per connection, Presage SDK, simulator (with fake heart rate)
 │   ├── breath-detector.mjs breath-hold detection (section 5)
@@ -308,6 +309,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 └── game/                   Vite + TypeScript + Three.js
     ├── index.html          DOM for the HUD, title card, collection panel and report panel
     ├── vite.config.ts      port 5173; Node polyfills (needed by Umi and Irys)
+    ├── asset-library.html  dev-only preview page for the asset library (src/asset-library.ts)
     ├── tests/              node --test: unit tests for automatic render quality
     └── src/
         ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
@@ -335,6 +337,8 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 ---
 
 ## 7. Game design parameters
+
+Pictures and per-species numbers for all 17 fish species and the fishing rod are in the [asset library](assets/README.md).
 
 ### Depth zones and drop rates (`ZONES` in `fish.ts`)
 
