@@ -11,6 +11,9 @@ export interface LightingState {
   lightColor: RGB;
   sunIntensity: number;
   ambientIntensity: number;
+  /** Camera-friendly celestial orbits, including their passage below the horizon. */
+  sunDirection: readonly [number, number, number];
+  moonDirection: readonly [number, number, number];
   /** Unit vector from the scene toward the main light, above the horizon. */
   direction: readonly [number, number, number];
 }
@@ -64,6 +67,11 @@ function mixColor(a: RGB, b: RGB, t: number): RGB {
   return [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)];
 }
 
+function unit(x: number, y: number, z: number): readonly [number, number, number] {
+  const length = Math.hypot(x, y, z);
+  return [x / length, y / length, z / length];
+}
+
 /** A periodic, continuous atmosphere with a bright enough moonlit night to play. */
 export function sampleLighting(hour: number): LightingState {
   const normalizedHour = wrapHour(Number.isFinite(hour) ? hour : 9);
@@ -75,15 +83,21 @@ export function sampleLighting(hour: number): LightingState {
   const t = fraction * fraction * (3 - 2 * fraction);
   const daylight = mix(a.daylight, b.daylight, t);
 
-  // Continue across the horizon through dusk and dawn, instead of flipping an
-  // antipodal sun/moon vector that can become zero halfway through a blend.
-  // A southern azimuth keeps its reflection visible from the boat approach.
+  // Compress elevation to keep both celestial orbits in this side-on game's
+  // view. The same vectors drive the visible discs and water reflections.
   const angle = (normalizedHour - 6) * Math.PI / 12;
   const elevation = Math.sin(angle);
-  const x = Math.cos(angle);
-  const y = 0.18 + 0.82 * elevation * elevation;
-  const z = -0.6;
-  const length = Math.hypot(x, y, z);
+  const sunDirection = unit(Math.cos(angle) * 0.55, elevation * 0.31, -1);
+  const moonDirection = unit(-Math.cos(angle) * 0.55, -elevation * 0.31, -1);
+  // Blend their contribution around the horizon without a zero vector or an
+  // instantaneous direction flip. Keep the scene's fill source above water.
+  const blend = Math.max(0, Math.min(1, (elevation + 0.55) / 1.1));
+  const sunWeight = blend * blend * (3 - 2 * blend);
+  const direction = unit(
+    mix(moonDirection[0], sunDirection[0], sunWeight),
+    Math.max(0.025, mix(moonDirection[1], sunDirection[1], sunWeight)),
+    mix(moonDirection[2], sunDirection[2], sunWeight),
+  );
 
   return {
     hour: normalizedHour,
@@ -94,7 +108,9 @@ export function sampleLighting(hour: number): LightingState {
     lightColor: mixColor(a.light, b.light, t),
     sunIntensity: mix(a.sun, b.sun, t),
     ambientIntensity: mix(a.ambient, b.ambient, t),
-    direction: [x / length, y / length, z / length],
+    sunDirection,
+    moonDirection,
+    direction,
   };
 }
 
