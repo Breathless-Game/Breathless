@@ -165,6 +165,7 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
 
 - **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
+- **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
 - **Bandwidth.** Live mode uploads raw 640×480 RGBA frames: 1.23 MB per frame, about 37 MB/s (≈295 Mbit/s) per player at 30 fps. Fine on a LAN; over the internet most players can't upload that fast, so they send fewer frames and Presage's trace degrades below ~15 fps. Keyboard and simulator mode send no frames.
 
 ---
