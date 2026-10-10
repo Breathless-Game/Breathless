@@ -10,7 +10,7 @@
 
 import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
-import { MAPS, MAP_ORDER, isUnlocked, mapDepth, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
 import { SoftPaper } from './paper';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
 
@@ -18,10 +18,11 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 export interface WorkbenchHooks {
   progress(): MapProgress;
-  setUnlockAll(on: boolean): void;
+  /** One frame of the place from where its dive starts; diving grows it over the screen. */
+  preview(map: MapId): HTMLCanvasElement;
   /** The camera pan between the title (0) and the table (1); tableY: screen y of the table's back, for shadows. */
   pan(u: number, tableY: number): void;
-  /** Called at the end of the zoom into the chosen place. */
+  /** Called once the place's preview fills the screen; the live scene must then show that same view. */
   dive(map: MapId, gear: UpgradeId[]): void;
 }
 
@@ -64,6 +65,7 @@ const PICKUP_S = 0.75; // the chart's flight from the table to the middle of the
 const SCATTER_S = 0.55; // gear on the chart hopping off before it is picked up
 const SHADOW_Z = 0.7; // where the title fish's shadows fall, from the table's back edge
 const KNOCK = 0.12; // how hard a thud on the table lifts the chart's paper, per unit of impact speed
+const REVEAL_MS = 750; // the place's preview growing to the full screen
 const HELD_CURL = 0.55; // held up, the ends curl a little: it's paper (on the table they lie flat)
 const TILT = { x: 0.16, y: 0.22 }; // how far the held chart leans toward the pointer, radians edge to edge
 const STEP = 1 / 120;
@@ -123,14 +125,13 @@ export class Workbench {
   private root = $('workbench');
   private canvas = $<HTMLCanvasElement>('wb-canvas');
   private tip = $('wb-tip');
-  private toastEl = $('wb-toast');
   private ui = $('wb-ui');
   private chartEl = $('wb-chart');
   private paperBox = $('wb-paper');
   private chartBg = $('wb-chart-bg');
   private pinsEl = $('wb-pins');
   private placeEl = $('wb-place');
-  private demoBox = $<HTMLInputElement>('wb-demo-box');
+  private previewBox = $('wb-place-preview');
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -167,7 +168,6 @@ export class Workbench {
   private holdTarget = new THREE.Vector3();
   private hovered: Piece | 'map' | null = null;
   private picked: MapId | null = null;
-  private toastTimer = 0;
 
   constructor(private hooks: WorkbenchHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
@@ -207,12 +207,6 @@ export class Workbench {
       if (this.state === 'chart' && (e.target === this.chartEl || e.target === this.chartBg)) this.closeChart();
     });
     $('wb-dive').addEventListener('click', () => this.state === 'chart' && this.picked && this.dive());
-    this.demoBox.addEventListener('change', () => {
-      this.hooks.setUnlockAll(this.demoBox.checked);
-      if (this.picked && !isUnlocked(MAPS[this.picked], this.hooks.progress())) this.picked = null;
-      this.paintMap();
-      this.renderPins();
-    });
     window.addEventListener('resize', () => this.visible && this.resize());
   }
 
@@ -233,7 +227,7 @@ export class Workbench {
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
-    this.chartEl.classList.remove('open', 'ready', 'zooming');
+    this.chartEl.classList.remove('open', 'ready', 'revealing');
     this.tip.classList.add('hidden');
     this.scene.add(this.map); // back on the table, out of the chart layer
     this.map.visible = true;
@@ -371,7 +365,8 @@ export class Workbench {
 
   private paintMap() {
     // Twice the chart's size: it is held up nearly screen-wide.
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, this.hooks.progress(), true);
+    // Every place is open from the chart: no locks painted on.
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...this.hooks.progress(), unlockAll: true }, true);
     this.mapTex.needsUpdate = true;
   }
 
@@ -922,12 +917,6 @@ export class Workbench {
     this.tip.classList.remove('hidden');
   }
 
-  private toast(text: string) {
-    this.toastEl.textContent = text;
-    this.toastEl.classList.add('show');
-    clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), 2000);
-  }
 
   // ---- Chart ------------------------------------------------------------
 
@@ -955,10 +944,9 @@ export class Workbench {
    */
   private pickUpChart() {
     const progress = this.hooks.progress();
-    this.picked = isUnlocked(MAPS[progress.selected], progress) ? progress.selected : null;
-    this.demoBox.checked = progress.unlockAll;
+    this.picked = progress.selected; // every place is open from the chart
     this.renderPins();
-    this.chartEl.classList.remove('hidden', 'ready', 'zooming');
+    this.chartEl.classList.remove('hidden', 'ready', 'revealing');
     // Measured from a steady camera, so it lands where the layout leaves room for it.
     this.shake = 0;
     this.placeCamera();
@@ -1038,45 +1026,35 @@ export class Workbench {
       },
     );
   }
+
   private renderPins() {
-    const progress = this.hooks.progress();
     this.pinsEl.replaceChildren(
       ...MAP_ORDER.map((id, i) => {
         const map = MAPS[id];
-        const open = isUnlocked(map, progress);
         const pin = document.createElement('button');
         pin.type = 'button';
-        pin.className = `wb-pin${open ? '' : ' locked'}${id === this.picked ? ' picked' : ''}`;
+        pin.className = `wb-pin${id === this.picked ? ' picked' : ''}`;
         pin.dataset.map = id; // placed over its spot on the sheet every frame (placePins)
         const dot = document.createElement('span');
         dot.className = 'wb-pin-dot';
-        dot.textContent = open ? ROMAN[i] : '🔒';
+        dot.textContent = ROMAN[i];
         const label = document.createElement('span');
         label.className = 'wb-pin-label';
         const name = document.createElement('b');
         name.textContent = `${map.name} · ${map.nameZh}`;
         const sub = document.createElement('small');
-        sub.textContent = open ? map.difficulty : `Bank ${map.unlockValue} value`;
+        sub.textContent = map.difficulty;
         label.append(name, sub);
         pin.append(dot, label);
-        pin.addEventListener('click', () => this.pickPlace(id, pin));
+        pin.addEventListener('click', () => this.pickPlace(id));
         return pin;
       }),
     );
     this.renderPlace();
   }
 
-  private pickPlace(id: MapId, pin: HTMLElement) {
+  private pickPlace(id: MapId) {
     if (this.state !== 'chart') return;
-    const map = MAPS[id];
-    const progress = this.hooks.progress();
-    if (!isUnlocked(map, progress)) {
-      pin.classList.remove('shake');
-      void pin.offsetWidth;
-      pin.classList.add('shake');
-      this.toast(`🔒 ${map.name}: bank ${map.unlockValue} value to open (you have ${Math.floor(progress.bestValue)})`);
-      return;
-    }
     // A second click on the chosen place dives.
     if (this.picked === id) return this.dive();
     this.picked = id;
@@ -1084,15 +1062,19 @@ export class Workbench {
     this.renderPlace();
   }
 
+  /** The panel beside the chart: a frame of the place itself, what it is, what you carry, and Dive. */
   private renderPlace() {
     const id = this.picked;
     this.placeEl.classList.toggle('empty', !id);
     if (!id) {
+      this.previewBox.replaceChildren();
       $('wb-place-title').textContent = 'Where to? · 去哪儿？';
       $('wb-place-sub').textContent = 'Pick a place on the chart';
       $('wb-place-text').textContent = '';
     } else {
       const map = MAPS[id];
+      // Rendering it also turns the world behind the table to that place, ready for the dive.
+      this.previewBox.replaceChildren(this.hooks.preview(id));
       $('wb-place-title').textContent = `${map.name} · ${map.nameZh}`;
       $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · Shelf ${mapDepth(map)} m · Trench ∞ · ${map.place}`;
       $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
@@ -1102,24 +1084,36 @@ export class Workbench {
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
   }
 
-  /** Zoom into the chosen place, then hand over to the dive. */
+  /**
+   * Into the place: its preview frame grows from the panel to the whole screen,
+   * then the dive takes over underneath, already showing that exact view (main.ts
+   * puts the camera where the frame was taken), and the frame fades off it.
+   */
   private dive() {
     const id = this.picked;
-    if (!id || this.state !== 'chart') return;
+    const shot = this.previewBox.querySelector('canvas');
+    if (!id || !shot || this.state !== 'chart') return;
     this.state = 'diving';
-    // Zoom in around where the place is on screen right now.
-    const v = this.sheet.pointAt(PLACES[id].fx, PLACES[id].fy, tmpV).project(this.camera);
-    const origin = `${((v.x + 1) / 2) * window.innerWidth}px ${((1 - v.y) / 2) * window.innerHeight}px`;
-    for (const el of [$('wb-chart-gl'), this.pinsEl]) el.style.transformOrigin = origin;
+    const r = this.previewBox.getBoundingClientRect();
+    const cover = document.createElement('div');
+    cover.id = 'wb-reveal';
+    cover.append(shot);
+    document.body.append(cover);
     this.chartEl.classList.remove('ready');
-    this.chartEl.classList.add('zooming');
-    window.setTimeout(() => {
+    this.chartEl.classList.add('revealing');
+    const grow = cover.animate(
+      [
+        { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, borderRadius: '12px' },
+        { left: '0px', top: '0px', width: `${window.innerWidth}px`, height: `${window.innerHeight}px`, borderRadius: '0px' },
+      ],
+      { duration: REVEAL_MS, easing: 'cubic-bezier(0.65, 0, 0.35, 1)', fill: 'forwards' },
+    );
+    grow.onfinish = () => {
       this.hooks.dive(id, this.packed);
       this.hide();
-      this.chartEl.classList.remove('zooming', 'open');
-    }, 650);
+      cover.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 450, easing: 'ease-out', fill: 'forwards' }).onfinish = () => cover.remove();
+    };
   }
-
   /** Esc from the table: the camera pans back up to the title. */
   private leave() {
     this.state = 'leaving';

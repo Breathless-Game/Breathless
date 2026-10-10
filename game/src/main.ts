@@ -443,8 +443,9 @@ function showMapOnHud() {
   );
 }
 
-function selectMap(id: MapId) {
-  if (phase !== 'menu' || id === world.map.id || !isUnlocked(MAPS[id], mapProgress)) return;
+/** anyMap: the workbench's chart lets you pick any place, locked or not. */
+function selectMap(id: MapId, anyMap = false) {
+  if (phase !== 'menu' || id === world.map.id || (!anyMap && !isUnlocked(MAPS[id], mapProgress))) return;
   mapProgress.selected = id;
   saveMapProgress(mapProgress);
   world.setMap(MAPS[id]);
@@ -677,14 +678,17 @@ let benchPan = 0;
 
 const workbench = new Workbench({
   progress: () => mapProgress,
-  setUnlockAll: setDemoUnlock,
   pan(u, tableY) {
     benchPan = u;
     titleScreen.setPan(u, tableY);
   },
+  preview: mapPreview,
   dive(id, gear) {
     loadout = gear;
-    selectMap(id);
+    selectMap(id, true);
+    // The preview frame expanding over the screen was taken from exactly here.
+    benchPan = 0;
+    snapToDiveCamera();
     openStartCard();
   },
 });
@@ -818,15 +822,8 @@ function update(dt: number, time: number) {
   for (const f of fishes) f.update(dt, time, diver.pos);
   world.update(time, camera.position.y, camera.position.x);
 
-  // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
-  // the surface so we never look at the diver through the translucent waves.
-  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
-  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
-  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
   // On the menu the camera sinks a little as the workbench pans in.
-  const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - benchDrop, 22);
+  cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 
@@ -835,6 +832,49 @@ function update(dt: number, time: number) {
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
   if (phase === 'calibrating') updateCalibration();
+}
+
+/**
+ * Camera: side-on 2.5D follow with a little lead. Underwater it stays below the
+ * surface so we never look at the diver through the translucent waves. `drop`
+ * sinks it (the workbench pan).
+ */
+function cameraTarget(out: THREE.Vector3, drop: number) {
+  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
+  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
+  const shelfY = world.seabedY + 1.2; // as in update(): lowest the diver can go outside the trench
+  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
+  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
+  return out.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - drop, 22);
+}
+
+/** Puts the camera exactly where a dive starts (no workbench drop, no easing). */
+function snapToDiveCamera() {
+  cameraTarget(camera.position, 0);
+  camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+}
+
+/**
+ * The workbench's place preview: switches the world to that map and renders one
+ * frame from where the dive will start, copied out. Diving expands this frame to
+ * the full screen over the live scene, which is then in exactly that view.
+ */
+function mapPreview(id: MapId): HTMLCanvasElement {
+  selectMap(id, true);
+  const pos = camera.position.clone();
+  const rot = camera.quaternion.clone();
+  snapToDiveCamera();
+  world.update(time, camera.position.y, camera.position.x);
+  renderer.render(scene, camera);
+  // Copied in the same task as the render, so the drawing buffer is still there.
+  const shot = document.createElement('canvas');
+  shot.width = canvas.width;
+  shot.height = canvas.height;
+  shot.getContext('2d')!.drawImage(canvas, 0, 0);
+  camera.position.copy(pos);
+  camera.quaternion.copy(rot);
+  world.update(time, camera.position.y, camera.position.x);
+  return shot;
 }
 
 let time = 0;
@@ -864,6 +904,8 @@ frame();
 Object.assign(window, {
   workbench,
   loadout: () => loadout,
+  /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
+  diveCameraOffset: () => camera.position.distanceTo(cameraTarget(new THREE.Vector3(), 0)),
   breath,
   breathTest,
   titleScreen,
