@@ -165,6 +165,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `SENSOR_RECORD` | 关 | 设成 `1` 才把实时会话写进 `sensor/recordings/`。serve 模式默认关闭：陌生人的呼吸数据绝不落盘。（开发模式照旧录制。） |
 
 - **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
+- **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
 - **带宽。** 实时模式上传的是原始 640×480 RGBA 帧：每帧 1.23 MB，30 fps 时每个玩家约 37 MB/s（≈295 Mbit/s）上行。局域网没问题；走公网时大多数玩家传不了这么快，帧数会掉，低于约 15 fps 时 Presage 的波形会变差。键盘和模拟模式不发帧。
 
 ---
