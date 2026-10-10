@@ -1,4 +1,4 @@
-# HackRU26 · 屏息 Breathless 🫁
+# HackRU26 · 屏息 Breathless 
 
 **English** · [简体中文](README.zh-CN.md)
 
