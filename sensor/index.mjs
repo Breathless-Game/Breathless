@@ -1,9 +1,10 @@
 // Breath sensor bridge.
 //
 // The browser game owns the webcam (so macOS camera permission is the
-// browser's problem, and the player sees themselves). It streams raw RGBA
-// frames here over a WebSocket; we push them into Presage SmartSpectra,
-// turn the breathing trace into HOLD / BREATHE, and stream state back.
+// browser's problem, and the player sees themselves). It streams frames here
+// over a WebSocket (JPEG, or raw RGBA in local dev; see frames.mjs); we decode
+// them, push them into Presage SmartSpectra, turn the breathing trace into
+// HOLD / BREATHE, and stream state back.
 //
 //   node index.mjs                 live Presage mode (dev: ws://<host>:8787, next to Vite)
 //   node index.mjs --sim           no camera, synthetic breathing (hold via the game's debug key)
@@ -25,6 +26,8 @@ import {
 } from '@smartspectra/node-sdk';
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector } from './breath-detector.mjs';
+import { loadJpegDecoder } from './decode.mjs';
+import { FrameFormat, LatestFrameDecoder, parseFrame } from './frames.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
 import { staticHandler } from './static.mjs';
 
@@ -43,9 +46,13 @@ const PORT = SERVE ? Number(process.env.PORT || 8794) : Number(process.env.SENSO
 const HOST = SERVE ? process.env.HOST || '127.0.0.1' : undefined;
 const API_KEY = process.env.PRESAGE_API_KEY;
 const FORCE_SIM = process.argv.includes('--sim');
-const HEADER_BYTES = 12; // f64 timestamp ms, u16 width, u16 height
-// One 640x480 RGBA frame is 1,228,812 bytes; serve mode allows that with headroom.
+// One raw 640x480 RGBA frame is 1,228,812 bytes (a JPEG one ~10-40 kB); serve mode allows
+// a raw frame with headroom.
 const MAX_PAYLOAD = SERVE ? 2 * 1024 * 1024 : 8 * 1024 * 1024;
+// JPEG frames need sharp; without it the server says so once and the game falls back to raw.
+const { decodeJpeg, error: jpegError } = await loadJpegDecoder();
+const NO_JPEG_MESSAGE = "This breath sensor can't decode JPEG frames; sending raw frames instead.";
+const STARTUP_BACKLOG_MS = 250; // see onFrame
 // Recordings are physiological data. Dev records live sessions for analyze.mjs;
 // the public server never writes strangers' breathing to disk unless SENSOR_RECORD=1.
 const RECORD = SERVE ? process.env.SENSOR_RECORD === '1' : process.env.SENSOR_RECORD !== '0';
@@ -110,6 +117,12 @@ class Session {
       if (n && !this.sim) this.rec.write({ k: 'fps', n });
     }, 1000);
     this.simTimer = null;
+    // Compressed frames: decoded one at a time, newest first (frames.mjs).
+    this.jpeg = null;
+    this.noJpegNotified = false;
+    this.sdkStartedAt = -Infinity;
+    this.rx = this.#newRx();
+    this.statsTick = setInterval(() => this.#logFrameStats(), 60_000);
     if (this.sim) this.#startSim();
   }
 
@@ -144,6 +157,7 @@ class Session {
     sdk.useCustomInput(FrameTransform.kNone);
     sdk.start();
     this.sdk = sdk;
+    this.sdkStartedAt = performance.now();
   }
 
   // Native SDK state is process-global: a new session built while the old one is
@@ -226,27 +240,81 @@ class Session {
   onFrame(data) {
     if (this.sim || !this.#claimLive()) return;
     this.#ensureSdk();
-    if (!this.sdk || data.byteLength < HEADER_BYTES) return;
-    const view = new DataView(data.buffer, data.byteOffset, HEADER_BYTES);
-    const tsUs = Math.round(view.getFloat64(0, true) * 1000);
-    const width = view.getUint16(8, true);
-    const height = view.getUint16(10, true);
-    if (tsUs <= this.lastFrameUs) return;
+    if (!this.sdk) return;
+    // Building and starting the SDK blocks the event loop for 1-3 s, so the frames that
+    // arrive right after are a stale backlog. Feeding them in order is pointless, and
+    // decoding only the newest JPEG would leave a > 2 s timestamp gap that restarts Presage.
+    if (performance.now() - this.sdkStartedAt < STARTUP_BACKLOG_MS) {
+      this.rx.backlog++;
+      return;
+    }
+    const frame = parseFrame(data);
+    if (!frame || frame.tsUs <= this.lastFrameUs) return;
+    if (frame.format === FrameFormat.RAW) {
+      this.rx.raw++;
+      this.#sendFrame(frame.tsUs, frame.payload, frame.width, frame.height);
+      return;
+    }
+    if (!decodeJpeg) {
+      if (!this.noJpegNotified) {
+        this.noJpegNotified = true;
+        log('JPEG frame refused (sharp is unavailable); asking the game for raw frames');
+        this.#send({ t: 'error', code: 'frames', message: NO_JPEG_MESSAGE });
+      }
+      return;
+    }
+    this.rx.jpeg++;
+    this.rx.jpegBytes += frame.payload.byteLength;
+    this.jpeg ??= new LatestFrameDecoder(
+      (f) => decodeJpeg(f.payload, f.width, f.height),
+      (f, pixels) => this.#sendFrame(f.tsUs, pixels, f.width, f.height),
+      // At most once per stats window; the stats line counts the rest as "bad".
+      (e) => this.jpeg.stats.failed === 1 && log(`JPEG frame rejected: ${e.message}`),
+    );
+    this.jpeg.push(frame);
+  }
+
+  // Also the landing point for decoded JPEG frames, which may finish after the SDK
+  // restarted or the session left live mode.
+  #sendFrame(tsUs, rgba, width, height) {
+    if (this.sim || !this.sdk || tsUs <= this.lastFrameUs) return;
     // A long stall (tab hidden) makes Presage reject the gap; start a fresh pipeline.
     if (this.lastFrameUs && tsUs - this.lastFrameUs > 2_000_000) {
       this.#restartSdk();
       return;
     }
-    const pixels = data.subarray(HEADER_BYTES);
-    if (pixels.byteLength !== width * height * 4) return;
     try {
-      this.sdk.sendFrame(pixels, width, height, width * 4, PixelFormat.kRGBA, tsUs);
+      this.sdk.sendFrame(rgba, width, height, width * 4, PixelFormat.kRGBA, tsUs);
       this.lastFrameUs = tsUs;
       this.frames++;
     } catch (e) {
       log(`sendFrame failed: ${e.message}`);
       this.#restartSdk();
     }
+  }
+
+  #newRx() {
+    return { raw: 0, jpeg: 0, jpegBytes: 0, backlog: 0, since: Date.now(), sdkFrames: this.frames };
+  }
+
+  // One line a minute (and at close) while frames arrive: what the uplink and decoder cost.
+  #logFrameStats() {
+    const { raw, jpeg, jpegBytes, backlog, since, sdkFrames } = this.rx;
+    this.rx = this.#newRx();
+    const decode = this.jpeg?.summary(true);
+    if (!raw && !jpeg) return;
+    const secs = Math.max(1, (Date.now() - since) / 1000);
+    let line = `frames, last ${secs.toFixed(0)} s: ${raw} raw, ${jpeg} JPEG`;
+    if (backlog) line += `, ${backlog} stale after an SDK start`;
+    if (jpeg) {
+      const kb = jpegBytes / jpeg / 1000;
+      const mbit = (jpegBytes * 8) / secs / 1e6;
+      line += ` (${(jpeg / secs).toFixed(1)} fps, avg ${kb.toFixed(1)} kB, ${mbit.toFixed(2)} Mbit/s)`;
+    }
+    if (decode) {
+      line += `; decoded ${decode.decoded} (avg ${decode.avgMs.toFixed(1)} ms, p95 ${decode.p95Ms.toFixed(1)}, max ${decode.maxMs.toFixed(1)}), ${decode.dropped} dropped behind, ${decode.failed} bad`;
+    }
+    log(`${line}; ${this.frames - sdkFrames} to Presage`);
   }
 
   // ---- Simulator --------------------------------------------------------
@@ -345,6 +413,9 @@ class Session {
     liveSessions.delete(this);
     clearInterval(this.tick);
     clearInterval(this.fpsTick);
+    clearInterval(this.statsTick);
+    this.#logFrameStats();
+    this.jpeg?.close();
     this.rec.close();
     this.#stopSim();
     await this.#restartSdk();
@@ -438,6 +509,7 @@ if (SERVE) {
   log(`listening on ws://localhost:${PORT} (${mode})`);
 }
 if (!API_KEY) log('PRESAGE_API_KEY missing in .env: running simulator only');
+if (jpegError) log(`JPEG frames off, raw only (run npm --prefix sensor install): ${jpegError}`);
 if (MAX_LIVE > 1) log(`warning: MAX_LIVE_SESSIONS=${MAX_LIVE}, but the Presage SDK can't run two sessions in one process`);
 
 setInterval(() => {
