@@ -3,7 +3,8 @@
 # `breathless` user, from a checkout whose game/dist holds the build artifact:
 #
 #   1. rsync sensor/, game/dist/ and package.json into DEPLOY_DIR
-#      (DEPLOY_DIR/.env and sensor/recordings/ are never touched)
+#      (DEPLOY_DIR/.env, sensor/recordings/ and the PEARL market's keys and
+#      state, sensor/.market-*, are never touched)
 #   2. npm ci --omit=dev in sensor/, only when its lockfile or Node changed
 #   3. restart the systemd unit (sudoers-breathless allows exactly that)
 #   4. wait until http://127.0.0.1:$PORT/ serves the new index.html
@@ -41,11 +42,12 @@ log "node $("$NODE_BIN" -v), $SRC_DIR -> $DEPLOY_DIR"
 mkdir -p "$DEPLOY_DIR/sensor" "$DEPLOY_DIR/game/dist"
 
 # 1. Sync. Each rsync --delete is scoped to its own folder, so DEPLOY_DIR/.env is
-#    outside every one of them; node_modules and recordings are excluded and
-#    protected (P) so --delete can never remove them.
+#    outside every one of them; node_modules, recordings and the market's
+#    keypairs + state (.market-*) are excluded and protected (P) so --delete can
+#    never remove them.
 rsync -a --delete \
-  --exclude='/node_modules/' --exclude='/recordings/' --exclude='.env' \
-  --filter='P /node_modules/' --filter='P /recordings/' \
+  --exclude='/node_modules/' --exclude='/recordings/' --exclude='/.market-*' --exclude='.env' \
+  --filter='P /node_modules/' --filter='P /recordings/' --filter='P /.market-*' \
   "$SRC_DIR/sensor/" "$DEPLOY_DIR/sensor/"
 rsync -a --delete "$SRC_DIR/game/dist/" "$DEPLOY_DIR/game/dist/"
 rsync -a "$SRC_DIR/package.json" "$DEPLOY_DIR/package.json"

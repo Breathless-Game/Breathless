@@ -249,7 +249,7 @@ export class Vault {
       return wrap;
     }
     const btn = el('button', 'mini sell', `${verb} · ${quote.pearls} Pearls`);
-    btn.title = quote.mintFirst ? 'Mints the NFT first: the market only buys NFTs' : 'One transaction burns the NFT and pays you PEARL';
+    btn.title = quote.mintFirst ? 'Mints the NFT first: the market only buys NFTs' : 'The market burns the NFT and pays you its value in PEARL';
     btn.addEventListener('click', () => {
       if (needsConfirm(f.rarity)) this.setConfirming(f);
       else this.queue.sell(f);

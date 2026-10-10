@@ -151,7 +151,7 @@ npm run game       # 游戏，http://localhost:5173
 
 ### 自托管 / Self-hosting
 
-`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏和憋气传感器（WebSocket 在 `/sensor`），前面只需要一条隧道或一个反向代理。
+`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏、憋气传感器（WebSocket 在 `/sensor`）和 PEARL 市场（`/api/market`，见第 8 节），前面只需要一条隧道或一个反向代理。
 
 ```bash
 npm run setup      # 一次性：安装 sensor/ 和 game/ 的依赖
@@ -167,6 +167,9 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `MAX_LIVE_SESSIONS` | `1` | 同时使用 Presage 实时检测的玩家数。SDK 的原生状态是进程全局的，一个进程里跑不了两个会话；设成 `0` 关闭实时检测。超出上限的玩家会看到 "Server busy"，自动改用键盘玩。 |
 | `MAX_CONN_PER_IP` | `8` | 每个玩家 IP 可同时打开的传感器连接数（代理在本机时读 `CF-Connecting-IP` / `X-Forwarded-For`）。 |
 | `SENSOR_RECORD` | 关 | 设成 `1` 才把实时会话写进 `sensor/recordings/`。serve 模式默认关闭：陌生人的呼吸数据绝不落盘。（开发模式照旧录制。） |
+| `FISH_MARKET_PROGRAM_ID` | 空 | PEARL 市场模式：空 = 服务端模式，填 program id = 合约模式（第 8 节）。 |
+| `MARKET_DIR` | `sensor` | 市场的密钥和状态文件（`.market-*`）放在哪，相对仓库根目录。`deploy/deploy.sh` 从不覆盖或删除它们；记得备份。市场起不来时，游戏和传感器照常服务，`/api/market` 返回 503。 |
+| `SOLANA_RPC` | devnet | 市场用的 RPC（没设就用 `VITE_SOLANA_RPC`）。 |
 
 - **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
 - **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
@@ -402,7 +405,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── vault.ts        收藏面板：NFT 状态、Sell / Mint & sell、钱包栏
         ├── market.ts       纯经济规则：NFT 状态机、旧存档迁移、卖价、累计解锁价值
         ├── nft-queue.ts    后台铸造和卖鱼队列（懒加载 chain.ts 和 pearl.ts）
-        ├── pearl.ts        PEARL 客户端：余额、卖鱼、消费（目前是 stub）
+        ├── pearl.ts        PEARL 客户端：余额、卖鱼、消费（服务端是 sensor/market.mjs）
         ├── chain.ts        Umi、临时钱包、空投、mintFish、burnFish
         ├── polyfills.ts    Buffer 和 global 全局变量
         ├── health.ts       HealthLog：每次潜水记录憋气时长、心率、恢复时间
@@ -460,7 +463,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
 | Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
 
-**经济**：入库不给钱。每条入库的鱼进入 NFT 队列（`pending → minting → minted`，失败则为 `failed`，自动退避重试，也可以手动 Retry）。Pearls 只来自在收藏里**卖鱼**：一笔交易同时销毁 NFT，并按捕获价值支付 PEARL（一种 SPL token）。还没铸造的鱼显示 **Mint & sell**（市场只收 NFT），正在铸造的鱼暂时不能卖，epic 及以上稀有度要二次确认，"Sell all commons" 会逐条卖掉普通鱼。升级消耗（销毁）PEARL。黑屏丢网不奖励。规则在 `game/src/market.ts`，后台队列在 `game/src/nft-queue.ts`。
+**经济**：入库不给钱。每条入库的鱼进入 NFT 队列（`pending → minting → minted`，失败则为 `failed`，自动退避重试，也可以手动 Retry）。Pearls 只来自在收藏里**卖鱼**：NFT 被销毁，并按捕获价值支付 PEARL（一种 SPL token，见下文「PEARL coin」）。还没铸造的鱼显示 **Mint & sell**（市场只收 NFT），正在铸造的鱼暂时不能卖，epic 及以上稀有度要二次确认，"Sell all commons" 会逐条卖掉普通鱼。升级消耗（销毁）PEARL。黑屏丢网不奖励。规则在 `game/src/market.ts`，后台队列在 `game/src/nft-queue.ts`。
 
 **卖鱼功能之前的存档**：旧规则下入库的鱼已经在出水时付过 Pearls，所以标记为 legacy：显示 "Paid out"，不能卖，也不会自动铸造（保留手动 Mint 按钮）。已经赚到的 Pearls 变成本地的 legacy 余额，和 PEARL 合并显示，消费时先扣它。升级状态保存在 `deepbreath.equipment`。
 
@@ -480,9 +483,23 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
   2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Depth / Length / Weight / Seed）。
   3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / seed），方便以后的游戏逻辑直接在链上读稀有度。
   4. 资产地址写回 `FishSpec.assetId`，持久化到 bank。卡片会显示 "✓ On-chain"，链接到 Solana Explorer。
-- **卖鱼**（NFT 消耗）：`pearl.ts` 的 `sellToMarket` 在一笔交易里销毁 NFT 并支付 PEARL。在 PEARL token 和市场合约上线之前，`pearl.ts` 还是一个 stub（localStorage 账本，用 `burnFish` 销毁）。
+- **卖鱼**（NFT 消耗）：`pearl.ts` 的 `sellToMarket` 把 NFT 卖给 PEARL 市场，市场销毁它并按捕获价值支付 PEARL（见下文「PEARL coin」）。
 - **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
 - **为什么 Vite 要加 polyfill**：Umi 和 Irys 依赖 Node 的 `Buffer`、`stream`、`crypto`，所以 `vite.config.ts` 用了 `vite-plugin-node-polyfills`。
+
+### PEARL coin / 珍珠币
+
+游戏货币珍珠是 devnet 上真正的 SPL 代币 **PEARL**（decimals 0）。客户端是 `game/src/pearl.ts`（`pearlBalance`、`sellToMarket`、`spendPearls`），由 `wallet.ts` 里的 owner 钱包签名（现在是临时钱包，以后换成 Phantom）。服务端是 `sensor/market.mjs`，同源挂在 `/api/market/{info,quote,sell}`。市场启动时选定模式：
+
+- **合约模式**（设置了 `FISH_MARKET_PROGRAM_ID`）：PEARL 的 mint 归 Anchor 合约 `fish_market` 所有（PDA `pearl`）。一条 `sell_fish` 指令原子地烧掉鱼并给卖家铸 PEARL，同时强制执行 `config.max_value`。服务端只当**预言机**：`POST /api/market/quote` 检查卖家确实持有这条鱼、价值合理，然后返回一笔它已部分签名的 `sell_fish` 交易。玩家签名、发送，并支付手续费。
+- **服务端模式**（兜底）：市场钱包自己创建 PEARL mint 并持有铸币权。玩家把鱼转给市场钱包，`POST /api/market/sell` 在链上核验这笔转账，铸 PEARL，再烧掉鱼。`sensor/.market-state.json` 里的已售集合保证重试安全（不会重复付款）。
+- **消费**：两种模式下，`spendPearls` 都是从玩家的代币账户里烧掉 PEARL。
+- **定价**：价值取自鱼的链上 Attributes，没有就按「稀有度价值 × 区域倍率」重算。超过「稀有度价值 × 6」的直接拒绝。
+- **信任模型**：这是 devnet 黑客松版本。鱼由客户端钱包铸造，所以谁都能铸一条「神话」拿来卖。稀有度上限（合约模式下再加 `max_value`）只限制单笔金额，PEARL 没有真实价值。服务端密钥（`sensor/.market-oracle.json` 或 `MARKET_ORACLE_KEYPAIR`，以及 `sensor/.market-keypair.json`）权限 600，已加入 gitignore。它们不打日志，也不放进 `VITE_*`。
+- **开发**：
+  - 在 `npm run dev` 旁边再跑 `npm run market`（端口 8795，可用 `MARKET_PORT` 改）。Vite 会把 `/api` 代理过去。`npm start` 自己就带市场（第 2 节「自托管」）。
+  - 启动时会打印公钥。服务端模式下如果 airdrop 被限流，去 <https://faucet.solana.com> 给它领币。
+  - 单元测试：`npm --prefix sensor test`。对着正在运行的市场在 devnet 上跑一遍卖鱼和消费：`npm --prefix sensor run market:e2e`。
 
 ---
 
@@ -523,7 +540,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
 | `deepbreath.equipment` | 鱼竿等级、缓存的 PEARL 余额和本地 legacy Pearls（`rodLevel`、`pearls`、`legacyPearls`） |
-| `deepbreath.pearl-stub` | stub 版 `pearl.ts` 的 PEARL 余额（临时） |
+| `deepbreath.pearl.pending` | 已发出的 PEARL 卖单，超时后重试会接着走，不会从头再来 |
 | `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`lightingEffects`、`weather`（auto / clear / cloudy / rain / storm）、`showCamera`、`showHelp` |
 | `deepbreath.maps` | 地图进度：选中的地图、历史累计入库价值（`bestValue`）、演示开关 |
 
