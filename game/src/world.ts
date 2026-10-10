@@ -110,7 +110,7 @@ export class World {
       this.scene.remove(this.scenery.group);
       disposeTree(this.scenery.group);
     }
-    this.scenery = buildScenery(map);
+    this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
   }
@@ -338,6 +338,7 @@ export class World {
 
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
+    const detailChanged = this.quality.detail !== quality.detail;
     this.quality = quality;
     this.kelps.forEach((kelp, i) => {
       kelp.root.visible = i < quality.kelpCount;
@@ -354,6 +355,15 @@ export class World {
       this.surface.geometry = this.surfaceGeometry();
       this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
       old.dispose();
+    }
+    if (detailChanged && this.scenery) {
+      const { visible } = this.scenery.group;
+      this.scene.remove(this.scenery.group);
+      disposeTree(this.scenery.group);
+      this.scenery = buildScenery(this.map, quality.detail);
+      this.scenery.group.visible = visible;
+      this.scenery.update(this.lastDecorationTime, this.night, 0);
+      this.scene.add(this.scenery.group);
     }
   }
 
@@ -495,7 +505,8 @@ export class World {
 
   update(time: number, cameraY: number) {
     const elapsed = time - this.lastDecorationTime;
-    if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
+    const tick = elapsed + 1e-6 >= 1 / this.quality.decorationHz;
+    if (tick) {
       this.updateDecorations(time, Math.min(elapsed, 0.25));
       this.lastDecorationTime = time;
     }
@@ -521,7 +532,7 @@ export class World {
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;
-      if (this.scenery.group.visible) this.scenery.update(time, this.night);
+      if (tick && this.scenery.group.visible) this.scenery.update(time, this.night, Math.min(elapsed, 0.25));
     }
     const rayOpacity = this.night ? 0 : 0.35 * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
     this.rays.forEach((ray, i) => {
