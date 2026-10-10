@@ -11,6 +11,7 @@ import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
+import { zoneName } from './depth-odds';
 import { RARITY, type FishSpec } from './fish';
 import { fishCard } from './portrait';
 
@@ -69,10 +70,6 @@ function dataUrlBytes(url: string): Uint8Array {
   return out;
 }
 
-function zoneOf(depthM: number) {
-  return depthM < 18 ? 'Shallows' : depthM < 38 ? 'Coral Reef' : 'The Abyss';
-}
-
 export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
 
 export interface MintResult {
@@ -94,7 +91,7 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const traits: [string, string][] = [
     ['Rarity', rarity],
     ['Species', spec.species],
-    ['Zone', zoneOf(spec.depthM)],
+    ['Zone', zoneName(spec.depthM)],
     ['Depth (m)', String(spec.depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],

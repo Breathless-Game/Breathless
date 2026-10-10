@@ -2,7 +2,11 @@
 // fish drop onto it on fishing lines. The labeled fish are the menu buttons.
 // Plain 2D Verlet physics on a canvas overlay; the 3D sea keeps rendering behind.
 
-import { RARITY, rollFish, ZONES, type Rarity } from './fish';
+import { RARITY, rollFish, type Rarity } from './fish';
+
+// The title fish were picked by look under the old Abyss drop table. Keep rolling
+// them with it so retuning the in-game odds (depth-odds.ts) doesn't reshape them.
+const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
 import { fishSprite } from './portrait';
 
 export interface TitleFish {
@@ -124,7 +128,7 @@ export class TitleScreen {
     this.ctx = canvas.getContext('2d')!;
     this.fish = defs.map((def, i) => {
       const img = new Image();
-      const base = rollFish(def.seed, ZONES[2], 40);
+      const base = rollFish(def.seed, 40, TITLE_ODDS);
       const f: Hanging = {
         def,
         img,

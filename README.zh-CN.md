@@ -54,7 +54,7 @@
 | 难度 | 休闲 | 普通 | 困难 |
 | 场景 | 雪山夹着的峡湾，岸边有木屋和松林，夜里有极光 | 石柱峰林环绕的高山湖，清晨和夜里起雾 | 开阔海面，远处有风暴云 |
 | 时间 | 白天 05:00–20:00，天黑后小怪出现 | 全天循环 | 全天循环 |
-| 可下潜深度 | 0–18 m，只有浅水区 | 0–38 m，加上第二层 | 0–58 m，唯一能下深渊的图 |
+| 可下潜深度 | 0–18 m，只有浅水区 | 0–38 m，加上第二层 | 不限：唯一有深渊、以及深渊下方无底海沟的图 |
 | 夜间小怪 | 野鹿（只吓人）、野熊（出水时心跳太快会被它抢走最贵的一条鱼） | 野熊、巨人（踏地时惊散鱼群，把潜水员推向水面） | 海浪、海怪（在深渊巡游，被追上则丢网） |
 | 失败代价 | 丢网里的鱼 | 丢网里的鱼，加上船耐久损失 | 船耐久归零即沉船，全部装备永久丢失 |
 | 解锁 | 初始 | 累计入库价值 150 | 累计入库价值 1000 |
@@ -331,10 +331,11 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
         ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
         ├── breathtest.ts   标题页的 2.5 分钟憋气测试：按提示憋气和呼吸，自动打标注
-        ├── world.ts        海底、礁石、珊瑚、海带、光束、雪、水面、船；按深度变化雾和颜色；昼夜
+        ├── world.ts        带海沟裂口的海底大陆架、无限延伸的海沟岩壁、礁石、珊瑚、海带、光束、雪、水面、船；按深度变化雾和颜色；昼夜
         ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
         ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
-        ├── fish.ts         稀有度表、区域掉率、物种名、rollFish(seed)、鱼的网格、游动和逃跑 AI
+        ├── fish.ts         稀有度表、区域名、物种名、rollFish(seed, depth)、鱼的网格、游动和逃跑 AI
+        ├── depth-odds.ts   按深度的掉率（RARITY_BY_DEPTH）、zoneName(depth)；没有依赖，测试在 tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
         ├── hud.ts          呼吸面板和波形、深度计、紧急条、网格槽、入库数、toast
@@ -354,13 +355,26 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ## 7. 游戏设计参数
 
-### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
+### 深度分区与掉率（`depth-odds.ts` 中的 `RARITY_BY_DEPTH`）
 
-| 区域 | 深度 | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | – | 10 | 30 | 35 | 19 | 6 |
+海没有底。区域现在只是名字，不再决定掉率：Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m 以下（没有底；船正下方的海床上有一道裂口）**。
+
+稀有度是抓到鱼时所在深度的平滑函数：下表是各锚点深度的百分比权重，锚点之间线性插值，350 m 以下保持不变。epic 只在 15 m 以下出现，legendary 在 30 m 以下，mythic 在 50 m 以下。锚点间距按实测游速约 7.75 m/s 设计：憋气 30 秒不抓鱼能下到约 115 m 再回来，60 秒约 230 m。
+
+| 深度 | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 m | 90 | 9.5 | 0.5 | – | – | – |
+| 15 m | 80 | 17 | 3 | – | – | – |
+| 30 m | 68 | 24 | 7 | 1 | – | – |
+| 50 m | 58 | 28 | 10.5 | 3 | 0.5 | – |
+| 80 m | 48 | 31 | 14 | 5.5 | 1.3 | 0.2 |
+| 120 m | 39 | 32 | 18 | 8 | 2.4 | 0.6 |
+| 200 m | 30 | 30 | 22 | 12 | 4.5 | 1.5 |
+| 350 m+ | 22 | 26 | 25 | 16.5 | 7.5 | 3 |
+
+夜晚每条鱼掷两次稀有度，取更稀有的那次（`main.ts` 中的 `rollFor`）。
+
+按一网 6 条鱼算（白天，期望条数 = 6 × P(legendary 或 mythic)）：80 m 是 6 × 1.5% = 0.09，大约每 11 网出 1 条 legendary 及以上；120 m 是 6 × 3.0% = 0.18，大约每 5.6 网 1 条。
 
 ### 稀有度（`RARITY`）
 
@@ -377,7 +391,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ### 主循环常数（`main.ts`）
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]`（三个浅层区域，开局放好）· `TRENCH_FISH 12`（海沟里跟着潜水员深度走的一群鱼，每条按它出生的深度抽稀有度）· `DEPTH_LIMIT Infinity`（以后地图配置可以限制）
 
 ---
 
@@ -505,7 +519,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - **提 PR 前**：`npm --prefix game run build` 必须通过（strict TS，`noUnused` 已开启）。
 - **秘密**：`.env`、私钥、任何 API key 都不要进仓库。新的环境变量要同步加到 `.env.example`（只写变量名，不写值）。
 - **风格**：TypeScript strict；低多边形 + flat shading；颜色变量在 `style.css` 的 `:root`；注释只解释"为什么"。
-- **改参数**：玩法常数集中在 `main.ts` 顶部和 `fish.ts` 的 `RARITY` / `ZONES`，改了请在 PR 里说明。
+- **改参数**：玩法常数集中在 `main.ts` 顶部、`fish.ts` 的 `RARITY` / `ZONES` 和 `depth-odds.ts` 的 `RARITY_BY_DEPTH`，改了请在 PR 里说明。
 - **README 有两份**：`README.md`（English）和 `README.zh-CN.md`（中文）。改其中一份时，请在同一个 PR 里把另一份也改了。
 
 ---
