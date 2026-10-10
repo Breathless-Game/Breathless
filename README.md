@@ -175,7 +175,9 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 
 - **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
 - **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
-- **Bandwidth.** Live mode uploads raw 640×480 RGBA frames: 1.23 MB per frame, about 37 MB/s (≈295 Mbit/s) per player at 30 fps. Fine on a LAN; over the internet most players can't upload that fast, so they send fewer frames and Presage's trace degrades below ~15 fps. Keyboard and simulator mode send no frames.
+- **Bandwidth.** Live mode sends every 640×480 camera frame as a JPEG, 30 fps, about **3–6 Mbit/s of upload per player** (Chrome at quality 0.7: 16–20 kB per frame for a plain scene, 30–35 kB for a busy one). Presage wants ~25+ fps and its trace degrades below ~15, so the game keeps the frame rate and gives up quality instead: it aims at 25 kB per frame (6 Mbit/s at 30 fps) and steps the JPEG quality between 0.8 and 0.4 when frames run larger or a slow uplink makes it skip frames. A ~5 Mbit/s uplink keeps 30 fps for typical scenes; slower ones skip frames. The sensor decodes with [sharp](https://sharp.pixelplumbing.com/) (libvips): about 2 ms per frame on its own thread, roughly 3% of one core more than raw frames. Keyboard and simulator mode send no frames.
+  - Raw RGBA (1.23 MB per frame, ≈295 Mbit/s at 30 fps) is still the default for a dev build talking to a sensor on the same machine. Add `?frames=raw` or `?frames=jpeg` to the page URL (or set `VITE_FRAME_FORMAT` at build time) to force either.
+  - To check a deployment's upload path from a player's network without a camera: `node sensor/stream-test.mjs wss://<your host>/sensor` streams synthetic JPEG frames for 20 s and prints the upload rate, frames skipped and frames Presage accepted (`--raw`, `--fps`, `--quality`, `--image face.jpg` are options).
 
 ---
 
@@ -199,7 +201,8 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 **Workbench** (`workbench.ts`, chart in `chart.ts`): a wooden table seen at an angle (2.5D, its own Three.js scene), with a folded sea chart in the middle and a READY tray on the right.
 - The gear (fins, emergency tank, headlamp, rod, net, bait) drops in as 3D models and lands with a thud: a bounce, a puff of dust, a camera shake, and nearby pieces jump. Hand-rolled physics: gravity, a bounce off the tabletop, circle collisions on the table.
 - Hover a piece for its name and effect. Click it to set it in the READY tray (green ring); click it there to toss it back onto the table. Pieces can also be dragged (onto the tray to get them ready) and thrown.
-- Click the chart: it lifts off the table and unfolds into a map with the three places, one per chapter (I Fjord, II Heaven Lake, III Open Ocean; a place's difficulty is the game difficulty). Pick a place to see it and your ready gear, then **Dive** (or click the place again, or Enter): the chart zooms into it and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the chart or press Esc to fold it back.
+- The title fish hang over the back of the table and cast soft shadows on it. Gear can be set down on the chart too; clicking the chart makes whatever lies on it hop off and land beside it.
+- Click the chart: it is picked up, flattened out and carried to the middle of the screen, where it turns into the full chart (the 3D chart lands exactly where the big one is laid out) with the three places, one per chapter (I Fjord, II Heaven Lake, III Open Ocean; a place's difficulty is the game difficulty). Pick a place to see it and your ready gear, then **Dive** (or click the place again, or Enter): the chart zooms into it and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the chart or press Esc to fold it back.
 - Locked places shake and say what they need; the "Unlock all maps (demo)" switch is at the bottom left of the chart. Esc on the bare table pans back up to the title.
 - The packed gear is passed to the game (`loadout`), but the upgrade effects aren't wired into the dive yet.
 
@@ -237,14 +240,15 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 
 **Browser → sensor**
 
-- **Binary frames**: a 12-byte header followed by RGBA pixels, all little-endian.
+- **Binary frames**: a 12-byte header followed by the image, all little-endian. `game/src/frame-codec.ts` writes them and `sensor/frames.mjs` reads them; `game/tests/frame-protocol.test.mjs` tests the two against each other.
   | Offset | Type | Meaning |
   | --- | --- | --- |
   | 0 | f64 | Timestamp (ms, must keep increasing; the SDK restarts if the gap is over 2 s) |
-  | 8 | u16 | Width (640) |
+  | 8 | u16 | Bits 0–11: width (640). Bits 12–15: format, `0` = raw RGBA, `1` = JPEG |
   | 10 | u16 | Height (480) |
-  | 12… | u8[] | RGBA, width × height × 4 |
-  - Backpressure: the browser skips frames when `ws.bufferedAmount` gets too large.
+  | 12… | u8[] | Raw: RGBA, width × height × 4. JPEG: one JPEG image of width × height |
+  - Format 0 leaves the width field as it always was, so raw frames are byte-for-byte the original protocol. The sensor decodes JPEG to RGBA and hands Presage exactly what raw frames gave it. Decoding runs one frame at a time with one newer frame waiting; a frame that arrives while one waits replaces it, so a slow server drops frames instead of queueing them.
+  - Backpressure: the browser skips frames while `ws.bufferedAmount` is over 100 kB (JPEG) or 4 frames (raw), and encodes one JPEG at a time.
 - **JSON commands**: `{ "t": "sim", "on": true }` turns simulation on or off; `{ "t": "simHold", "holding": true }` sets the simulated hold.
 
 **Sensor → browser** (every 80 ms)
@@ -263,7 +267,7 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 }
 ```
 
-Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard.
+Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard. `"code": "frames"` means the sensor can't decode JPEG (sharp isn't installed): the game switches to raw frames.
 
 ---
 

@@ -561,7 +561,16 @@ button.link {
   position: fixed;
   inset: 0;
   z-index: 30;
+}
+
+/* The vignette fades out as the camera pans down: the title layer sits over the workbench table. */
+#title-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
   background: radial-gradient(ellipse at center 40%, rgba(4, 18, 34, 0.1), rgba(2, 8, 18, 0.7));
+  opacity: calc(1 - var(--pan, 0));
+  pointer-events: none;
 }
 
 #title-canvas {
@@ -605,13 +614,35 @@ button.link {
 }
 
 /* ---- workbench ---- */
-/* Sits over the title screen, whose rope and fish stay live at the top: only
-   the chart, tip and toast take the pointer; the 3D table reads clicks through
-   the title canvas underneath (see workbench.ts). */
+/* Three layers: the 3D table (#workbench) under the title screen, whose rope
+   and fish stay live and hang in front of the table, and the chart, tip and
+   toast (#wb-ui) over both. The table reads its clicks off the title canvas
+   (see workbench.ts). */
 #workbench {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 29;
+  pointer-events: none;
+}
+
+/* While the chart is picked up and held toward the camera it is nearer than the
+   fish: the table goes on top and the fish fade out (they'd be cut by the table). */
+body.wb-lifted #workbench {
+  z-index: 31;
+}
+
+#title-screen {
+  transition: opacity 0.25s;
+}
+
+body.wb-lifted #title-screen {
+  opacity: 0;
+}
+
+#wb-ui {
+  position: fixed;
+  inset: 0;
+  z-index: 32;
   pointer-events: none;
 }
 
@@ -698,9 +729,16 @@ button.link {
   transition: opacity 0.3s;
 }
 
+/* .pre: laid out (so the paper can be measured) but not shown yet, while the
+   3D map is carried up to exactly where the paper sits. */
+#wb-chart.pre,
 #wb-chart.closing {
   opacity: 0;
   pointer-events: none;
+}
+
+#wb-chart.pre {
+  transition: none;
 }
 
 #wb-paper {
@@ -710,30 +748,11 @@ button.link {
   aspect-ratio: 1000 / 640;
   border-radius: 6px;
   box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
-  animation: wb-unfold 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-#wb-chart.closing #wb-paper:not(.zooming) {
-  animation: wb-fold 0.3s ease-in forwards;
 }
 
 #wb-paper.zooming {
   transform: scale(4);
   transition: transform 0.65s cubic-bezier(0.5, 0, 0.75, 0);
-}
-
-@keyframes wb-unfold {
-  from {
-    transform: perspective(1400px) translateY(20vh) rotateX(60deg) scaleX(0.5);
-    opacity: 0;
-  }
-}
-
-@keyframes wb-fold {
-  to {
-    transform: perspective(1400px) translateY(20vh) rotateX(60deg) scaleX(0.5);
-    opacity: 0;
-  }
 }
 
 #wb-chart-canvas {
@@ -829,6 +848,9 @@ button.link {
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
+}
+
+#wb-chart:not(.pre) #wb-place {
   animation: wb-place-in 0.4s ease-out;
 }
 
