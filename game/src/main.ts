@@ -166,7 +166,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
@@ -501,7 +501,7 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
-// START drops its fish onto the workbench (gear + map); the dive launches from the start card.
+// START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
   { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
@@ -511,32 +511,39 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
 // Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
 let loadout: UpgradeId[] = [];
 
+// How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
+const BENCH_CAMERA_DROP = 1.4;
+let benchPan = 0;
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   setUnlockAll: setDemoUnlock,
+  pan(u) {
+    benchPan = u;
+    titleScreen.setPan(u);
+  },
   dive(id, gear) {
     loadout = gear;
     selectMap(id);
     openStartCard();
   },
-  back: () => showTitle(false),
 });
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
   workbench.hide();
+  benchPan = 0;
+  titleScreen.setPan(0);
   titleScreen.show(intro);
 }
 
 function openWorkbench() {
-  titleScreen.dropAway('START', () => {
-    titleScreen.hide();
-    workbench.show(true);
-  });
+  if (!workbench.visible) workbench.show(true);
 }
 
 function openStartCard() {
   titleScreen.hide();
+  benchPan = 0;
   overlay.classList.remove('hidden');
 }
 
@@ -546,6 +553,7 @@ function backFromStartCard() {
   if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
   else {
     overlay.classList.add('hidden');
+    titleScreen.show(false);
     workbench.show(false);
   }
 }
@@ -628,7 +636,8 @@ function update(dt: number, time: number) {
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9), 22);
+  const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
+  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9) - benchDrop, 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 
