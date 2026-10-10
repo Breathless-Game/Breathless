@@ -42,6 +42,7 @@
 - **贪心与风险**：深渊（38 m 以下）才有神话级鱼，但离水面越远，换气后越难赶回去。
 - **夜晚模式**（`N`）：每条鱼稀有度掷两次取高的。海怪风险还在待办里。
 - **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。
+- **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。入库鱼按稀有度换算 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
 
 ### 比赛定位
 
@@ -120,6 +121,7 @@ npm run game       # 游戏，http://localhost:5173
 | `Space` | 挥网抓鱼 |
 | `Shift`（按住） | 憋气（键盘模式和模拟模式） |
 | `C` | 收藏和 NFT 面板 |
+| `G` | 鱼竿 / 渔网升级面板 |
 | `H` | 健康报告（只在你按的时候生成） |
 | `N` | 切换白天 / 夜晚 |
 | `K` | 切换呼吸输入：presage → sim → keyboard |
@@ -223,6 +225,8 @@ npm run game       # 游戏，http://localhost:5173
         ├── world.ts        海底、礁石、珊瑚、海带、光束、雪、水面、船；按深度变化雾和颜色；昼夜
         ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
         ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
+        ├── equipment.ts    鱼竿等级、Pearl 余额、本地存档和升级规则
+        ├── gear-panel.ts   鱼竿 / 渔网升级面板
         ├── fish.ts         稀有度表、区域掉率、物种名、rollFish(seed)、鱼的网格、游动和逃跑 AI
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
@@ -262,7 +266,17 @@ npm run game       # 游戏，http://localhost:5173
 
 ### 主循环常数（`main.ts`）
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `FISH_PER_ZONE [16, 16, 12]`
+
+鱼竿概念在当前融合版中落地为潜水员手持的渔网。升级档位如下；升级只影响装备，不会延长憋气时间。
+
+| 等级 | 名称 | 容量 | 收网范围 | 升级消耗 |
+| --- | --- | ---: | ---: | ---: |
+| Lv1 | Basic Net | 6 | 2.4 m | 初始 |
+| Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
+| Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
+
+每条成功入库的鱼都会按 `RARITY.value` 奖励 Pearls（common 1、uncommon 3、rare 10、epic 35、legendary 150、mythic 800）；黑屏丢网不奖励。升级状态保存在 `deepbreath.equipment`，不会删除或消费收藏鱼。
 
 ---
 
@@ -319,6 +333,7 @@ npm run game       # 游戏，http://localhost:5173
 | `deepbreath.bank` | 入库的鱼（`FishSpec[]`，铸造后带 `assetId`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
+| `deepbreath.equipment` | 鱼竿等级和 Pearls 余额（`rodLevel`、`pearls`） |
 
 重置：在浏览器控制台执行 `localStorage.clear()`。
 
@@ -344,12 +359,13 @@ npm run game       # 游戏，http://localhost:5173
 - NFT 卡图（由 seed 决定、可复现）、收藏面板
 - Solana 铸造：已在 devnet 端到端验证（临时钱包 → Irys 上传图片和元数据 → Metaplex Core + 链上 Attributes），Solana Explorer 能正常显示卡图。[示例资产](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - 健康报告（按需生成）
+- 鱼竿 / 渔网升级 MVP：三档容量和收网范围、Pearl 奖励、可见网圈缩放、本地持久化
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 
 - [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
 - [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
-- [ ] **装备经济**：用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯、更大的网；装备有耐久度
+- [ ] **完整装备经济**：在鱼竿 / 渔网升级 MVP 之外，用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯；装备有耐久度
 - [ ] **NFT 消耗（sink）**：卖给市场换 Pearl、用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换。`burnFish` 已经写好
 - [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
 - [ ] **交易市场（多人的核心）**：挂单、购买、实时成交动态；玩家各自独立世界，只通过交易互动

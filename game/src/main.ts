@@ -7,6 +7,8 @@ import { Vault } from './vault';
 import { HealthLog } from './health';
 import { Report } from './report';
 import { HALF_WIDTH, SEABED_Y, World } from './world';
+import { GearPanel } from './gear-panel';
+import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -15,8 +17,6 @@ const MAX_SPEED = 7.5;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
 const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
-const NET_CAPACITY = 6;
-const CATCH_RADIUS = 2.4;
 const FISH_PER_ZONE = [16, 16, 12];
 const MAX_DEPTH = -SEABED_Y;
 
@@ -77,6 +77,7 @@ let outOfAir = false;
 let emergency = 1;
 let net: FishSpec[] = [];
 const bank: FishSpec[] = loadBank();
+const equipment: EquipmentState = loadEquipment();
 let lastHolding = false;
 
 function loadBank(): FishSpec[] {
@@ -93,12 +94,44 @@ function saveBank() {
   } catch {}
 }
 
-hud.setNet(net, NET_CAPACITY);
+const currentTier = () => rodTier(equipment);
+hud.setNet(net, currentTier().capacity);
 hud.setBank(bank);
 const vault = new Vault(bank, saveBank);
 const health = new HealthLog();
 const report = new Report(health);
+const gear = new GearPanel(() => buyNextRod());
+gear.render(equipment);
+hud.setEquipment(equipment, currentTier());
+diver.setNetLevel(currentTier().level);
 let nowMs = 0;
+
+function refreshEquipment() {
+  const tier = currentTier();
+  saveEquipment(equipment);
+  hud.setEquipment(equipment, tier);
+  hud.setNet(net, tier.capacity);
+  gear.render(equipment);
+  diver.setNetLevel(tier.level);
+}
+
+function buyNextRod() {
+  const next = nextRodTier(equipment);
+  if (!next) {
+    gear.showNotice('The net is already at maximum level.');
+    return;
+  }
+  const upgraded = upgrade(equipment);
+  if (!upgraded) {
+    gear.showNotice(`Need ${next.cost - equipment.pearls} more Pearls.`);
+    hud.message(`Need ${next.cost - equipment.pearls} more Pearls`, 1500);
+    return;
+  }
+  equipment.rodLevel = upgraded.rodLevel;
+  equipment.pearls = upgraded.pearls;
+  refreshEquipment();
+  hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+}
 
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
@@ -111,6 +144,8 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+  } else if (e.key.toLowerCase() === 'g') {
+    gear.toggle();
   } else if (e.key.toLowerCase() === 'n') {
     night = !night;
     world.setNight(night);
@@ -124,6 +159,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
+document.getElementById('gear-open')!.addEventListener('click', () => gear.toggle(true));
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
 
 function axis(neg: string[], pos: string[]) {
@@ -134,13 +170,14 @@ function axis(neg: string[], pos: string[]) {
 function tryCatch() {
   diver.swing();
   if (diver.pos.y > -SURFACE_DEPTH) return;
-  if (net.length >= NET_CAPACITY) {
+  const tier = currentTier();
+  if (net.length >= tier.capacity) {
     hud.message('Net full! Surface to bank it.');
     return;
   }
   const p = diver.netPoint();
   let best: Fish | null = null;
-  let bestD = CATCH_RADIUS;
+  let bestD = tier.catchRadius;
   for (const f of fishes) {
     const d = Math.hypot(f.pos.x - p.x, f.pos.y - p.y);
     if (d < bestD) {
@@ -153,7 +190,7 @@ function tryCatch() {
   scene.remove(best.mesh.group);
   const caught = { ...best.spec, depthM: Math.round(-best.pos.y) };
   net.push(caught);
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, tier.capacity);
   hud.toast(caught);
   const zone = best.zone;
   setTimeout(() => spawnFish(zone), 4000);
@@ -161,13 +198,16 @@ function tryCatch() {
 
 function bankNet() {
   if (!net.length) return;
+  const reward = net.reduce((sum, f) => sum + RARITY[f.rarity].value, 0);
   bank.push(...net);
   saveBank();
+  equipment.pearls += reward;
+  refreshEquipment();
   const rarest = net.reduce((a, f) => (RARITY[f.rarity].value > RARITY[a.rarity].value ? f : a));
-  hud.message(`Banked ${net.length} fish!`);
+  hud.message(`Banked ${net.length} fish · +${reward} Pearls`);
   hud.toast(rarest, 'BANKED');
   net = [];
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, currentTier().capacity);
   hud.setBank(bank);
 }
 
@@ -176,7 +216,7 @@ function blackout() {
   const lost = net.length;
   health.end(nowMs, 'blackout', lost);
   net = [];
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, currentTier().capacity);
   hud.message(lost ? `BLACKOUT · ${lost} fish lost` : 'BLACKOUT', 2200);
   hud.setEmergency(null);
   setTimeout(() => {
