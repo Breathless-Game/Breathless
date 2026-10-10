@@ -263,13 +263,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
   }
   keys.add(e.key.toLowerCase());
-  // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
+  // Not on the workbench: the report would pop up over the table and the chart.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
   if (phase !== 'play') return;
   if (e.code === 'Space') {
@@ -600,42 +600,49 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
-// START drops its fish onto the workbench (gear + map); the dive launches from the start card.
+// START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
   { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
-// Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
+// Gear set in the workbench's READY tray for this dive. Not used by the dive yet: upgrades aren't wired in.
 let loadout: UpgradeId[] = [];
+
+// How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
+const BENCH_CAMERA_DROP = 1.4;
+let benchPan = 0;
 
 const workbench = new Workbench({
   progress: () => mapProgress,
   setUnlockAll: setDemoUnlock,
+  pan(u) {
+    benchPan = u;
+    titleScreen.setPan(u);
+  },
   dive(id, gear) {
     loadout = gear;
     selectMap(id);
     openStartCard();
   },
-  back: () => showTitle(false),
 });
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
   workbench.hide();
+  benchPan = 0;
+  titleScreen.setPan(0);
   titleScreen.show(intro);
 }
 
 function openWorkbench() {
-  titleScreen.dropAway('START', () => {
-    titleScreen.hide();
-    workbench.show(true);
-  });
+  if (!workbench.visible) workbench.show(true);
 }
 
 function openStartCard() {
   titleScreen.hide();
+  benchPan = 0;
   overlay.classList.remove('hidden');
 }
 
@@ -645,6 +652,7 @@ function backFromStartCard() {
   if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
   else {
     overlay.classList.add('hidden');
+    titleScreen.show(false);
     workbench.show(false);
   }
 }
@@ -717,7 +725,8 @@ function update(dt: number, time: number) {
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
-    if (outOfAir) {
+    // Only in play: during the blackout the lift can still carry you up, and that's no rescue.
+    if (outOfAir && phase === 'play') {
       outOfAir = false;
       hud.message(net.length ? 'Made it!' : 'Phew.', 900);
     }
@@ -738,7 +747,9 @@ function update(dt: number, time: number) {
   // Over the shelf the camera stays above the seabed; in the trench it follows you down.
   const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
   const camFloor = inTrench ? -Infinity : world.seabedY + 9;
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor), 22);
+  // On the menu the camera sinks a little as the workbench pans in.
+  const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
+  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - benchDrop, 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 

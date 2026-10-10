@@ -592,11 +592,14 @@ button.link {
 }
 
 /* ---- workbench ---- */
+/* Sits over the title screen, whose rope and fish stay live at the top: only
+   the chart, tip and toast take the pointer; the 3D table reads clicks through
+   the title canvas underneath (see workbench.ts). */
 #workbench {
   position: fixed;
   inset: 0;
   z-index: 30;
-  background: radial-gradient(ellipse at center, rgba(4, 18, 34, 0.2), rgba(2, 8, 18, 0.75));
+  pointer-events: none;
 }
 
 #wb-canvas {
@@ -604,32 +607,52 @@ button.link {
   inset: 0;
   width: 100%;
   height: 100%;
-  touch-action: none;
 }
 
 #wb-hint {
   position: absolute;
-  bottom: 4.5%;
+  bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
-  color: rgba(255, 240, 210, 0.7);
-  white-space: nowrap;
-  pointer-events: none;
+  max-width: calc(100vw - 32px);
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(20, 10, 2, 0.45);
+  color: rgba(255, 240, 210, 0.85);
+  text-align: center;
 }
 
-#wb-demo {
+#wb-tip {
   position: absolute;
-  left: 5%;
-  bottom: 4.5%;
-  color: rgba(255, 240, 210, 0.7);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
+  left: 0;
+  top: 0;
+  min-width: 180px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+}
+
+.wb-tip-title {
+  font-weight: 900;
+}
+
+.wb-tip-sub {
+  font-size: 12px;
+  color: var(--hold);
+  margin-top: 2px;
+}
+
+.wb-tip-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
 }
 
 #wb-toast {
   position: absolute;
+  z-index: 2;
   top: 6%;
   left: 50%;
   transform: translate(-50%, -10px);
@@ -640,7 +663,6 @@ button.link {
   font-weight: 700;
   opacity: 0;
   transition: opacity 0.25s, transform 0.25s;
-  pointer-events: none;
 }
 
 #wb-toast.show {
@@ -648,66 +670,227 @@ button.link {
   transform: translate(-50%, 0);
 }
 
-#wb-inspect {
+#wb-chart {
   position: absolute;
   inset: 0;
-  z-index: 2;
-  background: rgba(2, 8, 18, 0.45);
-  backdrop-filter: blur(8px);
-  cursor: pointer;
-  transition: opacity 0.4s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 16px 16px 56px;
+  background: rgba(2, 8, 18, 0.5);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+  transition: opacity 0.3s;
 }
 
-#wb-inspect.fading {
+#wb-chart.closing {
   opacity: 0;
   pointer-events: none;
 }
 
-#wb-zoom {
-  position: absolute;
-  left: 0;
-  top: 0;
-  transform-origin: center;
-  filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.5));
+#wb-paper {
+  position: relative;
+  /* Leaves room beside it for the place panel (300px + the gap). */
+  width: min(calc(100vw - 354px), 940px, calc((100vh - 120px) * 1.5625));
+  aspect-ratio: 1000 / 640;
+  border-radius: 6px;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
+  animation: wb-unfold 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-#wb-info {
+#wb-chart.closing #wb-paper:not(.zooming) {
+  animation: wb-fold 0.3s ease-in forwards;
+}
+
+#wb-paper.zooming {
+  transform: scale(4);
+  transition: transform 0.65s cubic-bezier(0.5, 0, 0.75, 0);
+}
+
+@keyframes wb-unfold {
+  from {
+    transform: perspective(1400px) translateY(20vh) rotateX(60deg) scaleX(0.5);
+    opacity: 0;
+  }
+}
+
+@keyframes wb-fold {
+  to {
+    transform: perspective(1400px) translateY(20vh) rotateX(60deg) scaleX(0.5);
+    opacity: 0;
+  }
+}
+
+#wb-chart-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+}
+
+.wb-pin {
   position: absolute;
-  z-index: 3;
-  left: 6%;
-  top: 50%;
-  transform: translateY(-50%);
-  width: min(320px, 34vw);
+  transform: translate(-19px, -50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #3a2410;
+  text-align: left;
+}
+
+.wb-pin-dot {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 3px solid #fff3d6;
+  background: #b8322a;
+  color: #fff7e6;
+  font: 900 16px Georgia, serif;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s;
+}
+
+.wb-pin:hover .wb-pin-dot {
+  transform: scale(1.12);
+}
+
+.wb-pin.picked .wb-pin-dot {
+  background: #1f8a62;
+  animation: wb-pin-pulse 1.2s ease-out infinite;
+}
+
+.wb-pin.locked .wb-pin-dot {
+  background: #7d7466;
+  font-size: 15px;
+}
+
+.wb-pin-label {
+  display: flex;
+  flex-direction: column;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(255, 246, 222, 0.82);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.wb-pin-label small {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.wb-pin.shake {
+  animation: wb-shake 0.35s;
+}
+
+@keyframes wb-pin-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(62, 240, 168, 0.7), 0 4px 10px rgba(0, 0, 0, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgba(62, 240, 168, 0), 0 4px 10px rgba(0, 0, 0, 0.35);
+  }
+}
+
+@keyframes wb-shake {
+  25% {
+    margin-left: -6px;
+  }
+  75% {
+    margin-left: 6px;
+  }
+}
+
+#wb-place {
+  width: min(300px, 100%);
   padding: 20px 22px;
   border-radius: 18px;
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
-  pointer-events: none;
-  animation: wb-info-in 0.35s ease-out;
+  animation: wb-place-in 0.4s ease-out;
 }
 
-#wb-info-title {
-  font-size: 24px;
+#wb-place-title {
+  font-size: 22px;
   font-weight: 900;
   line-height: 1.2;
 }
 
-#wb-info-sub {
+#wb-place-sub {
   color: var(--hold);
   font-weight: 700;
   margin-top: 6px;
 }
 
-#wb-info-text {
+#wb-place-text {
   line-height: 1.5;
-  margin: 14px 0;
+  margin: 12px 0;
 }
 
-@keyframes wb-info-in {
+#wb-place-gear {
+  margin-bottom: 14px;
+}
+
+#wb-dive {
+  width: 100%;
+}
+
+#wb-place.empty #wb-place-text {
+  display: none;
+}
+
+@keyframes wb-place-in {
   from {
     opacity: 0;
-    transform: translate(-24px, -50%);
+    transform: translateX(24px);
+  }
+}
+
+#wb-demo {
+  position: absolute;
+  left: 16px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 240, 210, 0.8);
+  cursor: pointer;
+}
+
+#wb-chart-hint {
+  position: absolute;
+  right: 16px;
+  bottom: 18px;
+  color: var(--muted);
+}
+
+/* Narrow screens: the place panel goes under the chart and the overlay scrolls. */
+@media (max-width: 760px) {
+  #wb-chart {
+    align-content: flex-start;
+    overflow-y: auto;
+    padding-top: 24px;
+  }
+
+  #wb-paper {
+    width: 100%;
+  }
+
+  .wb-pin-label {
+    font-size: 11px;
+  }
+
+  #wb-chart-hint {
+    display: none;
   }
 }
 
