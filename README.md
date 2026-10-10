@@ -387,8 +387,9 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── sky.ts          atmospheric sky, time-driven sun / moon and layered clouds
         ├── color-grade.ts  shared morning / afternoon / night color balance in scene materials
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
-        ├── water.ts        GPU waves, facet color and polygonal sun / moon reflection patches
-        ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
+        ├── water.ts        flat wave-face lighting and sun / moon reflections
+        ├── water-waves.ts  shared CPU / GPU directional waves for the surface, boat and buoys
+        ├── water-geometry.ts indexed, watertight triangles with foreground density bias
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
         ├── maps.ts         the three map definitions (depth, unlock value, palette) and the saved map progress
@@ -577,10 +578,11 @@ The game picks the starting quality from the CPU logical core count and the devi
 | DPR cap | 1 | 1.5 | 2 |
 | Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
 | Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
-| Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
+| Water surface segments | 64 × 32 | 96 × 48 | 128 × 72 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
-| Water triangles | 480 | 1920 | 4320 |
-| Reflection detail | Polygon patches | + secondary colored facets | + bright tips |
+| Water triangles | 4096 | 9216 | 18432 |
+| Shared water vertices | 2145 | 4753 | 9417 |
+| Directional wave layers | 2 broad waves | + fine wave | + smaller fine wave |
 | Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
@@ -601,7 +603,7 @@ Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Ni
 
 Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
 
-The sea keeps a low-poly silhouette: slightly irregular triangles have separate blue-green facet colors and flat normals. Sun and moon reflections appear as short angular wedges and trapezoids, arranged along a path toward the visible source. Low quality retains this shape; medium adds another family of colored facets and high adds sparse bright tips. Waves run in the vertex shader, eliminating per-frame water vertex uploads and CPU normal rebuilding. Shared corners remain watertight. The existing water draw handles the reflections without a reflection camera or extra scene render; boats and fish do not have live mirror reflections.
+The sea is one continuous, gently rolling triangle mesh. Face normals come from the displaced surface, so neighboring facets share a wave and reflect the sun/moon according to their slope and viewing angle. There are no randomly painted face colors or cut-out reflection patches. A denser mesh with mild foreground bias avoids giant foreground tiles; low/medium/high evaluate 2/3/4 directional waves in the vertex shader. Boat and buoy height/tilt use the same coefficients and frozen wave clock, including paused weather/quality previews. Shared corners stay watertight, and no vertex buffers or normals are rebuilt on the CPU each frame. The existing water draw handles sky and celestial reflections without an extra render target or reflection camera; boats and fish do not have live mirror reflections. [Implementation references and budgets](docs/water-rendering.md).
 
 Large luminous sun and moon discs use warm gold and cool silver-blue layered halos. Low keeps the core and primary halos; higher settings add softer transitions. Clouds attenuate their light before compositing so a thick storm can hide the bright core. No fullscreen bloom pass or render target is allocated. Their compressed elevation keeps the enlarged discs within the side-on camera at noon.
 

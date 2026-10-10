@@ -6,6 +6,7 @@ import { RENDER_QUALITY, type RenderQuality } from './render-quality';
 import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
 import { WaterSurfaceMaterial } from './water';
 import { waterGeometry } from './water-geometry';
+import { waterHeight, waterSlope } from './water-waves';
 import { WeatherCycle, type WeatherMode } from './weather';
 import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
@@ -718,6 +719,11 @@ export class World {
     const waterMaterial = this.surface.material as WaterSurfaceMaterial;
     waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves);
     waterMaterial.color.multiply(this.surfaceTint);
+    // Re-pose even while paused, so previewing wind/quality keeps the hull on
+    // the same surface. Reading the wave clock does not advance it.
+    const boatSwell = this.swell() * this.map.waves;
+    this.boat.position.y = 0.25 + waterHeight(0, 30, this.waveTime, this.quality.waterDetail) * boatSwell;
+    this.boat.rotation.z = Math.atan(waterSlope(0, 30, this.waveTime, this.quality.waterDetail, 'x') * boatSwell);
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
   }
 
@@ -729,6 +735,7 @@ export class World {
     env.lightingEffects = this.lightingEffects;
     env.waveTime = this.waveTime;
     env.swell = this.swell();
+    env.waterDetail = this.quality.waterDetail;
     this.scenery.update(time, this.night, dt, env);
   }
 
@@ -738,13 +745,6 @@ export class World {
   }
 
   private updateDecorations(time: number, dt: number) {
-    // Waves.
-    const waveTime = this.waveTime;
-    const swell = this.swell();
-    const waves = this.map.waves;
-    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
-    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
-
     for (const k of this.kelps) {
       if (!k.root.visible) continue;
       k.segments.forEach((seg, i) => {
