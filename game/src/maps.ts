@@ -32,10 +32,12 @@ export interface MapDef {
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
   sand: string;
+  /** Fixed facet pigments for each underwater biome. */
+  sediment: readonly string[];
   rocks: readonly string[];
   /** What covers the bottom besides rock and kelp. */
   life: 'none' | 'logs' | 'coral';
-  kelp: { count: number; hue: readonly [number, number] };
+  kelp: { count: number; hue: readonly [number, number]; palette: readonly string[] };
 }
 
 export const MAPS: Record<MapId, MapDef> = {
@@ -62,9 +64,10 @@ export const MAPS: Record<MapId, MapDef> = {
       [60, '#04162b'],
     ],
     sand: '#9aa7ad',
-    rocks: ['#5b6b78', '#46535f', '#6f7f8a', '#39444f'],
+    sediment: ['#9eafb0', '#7e979d', '#b4c3ba', '#869ca7', '#a5b6a4'],
+    rocks: ['#728d9a', '#516a80', '#8eaba9', '#617d86', '#a2b8b2'],
     life: 'none',
-    kelp: { count: 55, hue: [0.25, 0.36] },
+    kelp: { count: 72, hue: [0.27, 0.40], palette: ['#73b68c', '#91bb69', '#57a69b', '#acd08b'] },
   },
   tianchi: {
     id: 'tianchi',
@@ -89,9 +92,10 @@ export const MAPS: Record<MapId, MapDef> = {
       [60, '#021514'],
     ],
     sand: '#7d7a63',
-    rocks: ['#6a6657', '#55513f', '#7b7765', '#403d31'],
+    sediment: ['#b5ac77', '#969960', '#cfbe8e', '#a6b17d', '#b7a487'],
+    rocks: ['#9c986a', '#777e62', '#c0b187', '#819682', '#a69778'],
     life: 'logs',
-    kelp: { count: 26, hue: [0.17, 0.26] },
+    kelp: { count: 38, hue: [0.18, 0.29], palette: ['#a8c15c', '#7fa964', '#c6ca77', '#72b493'] },
   },
   ocean: {
     id: 'ocean',
@@ -116,9 +120,10 @@ export const MAPS: Record<MapId, MapDef> = {
       [60, '#020a1a'],
     ],
     sand: '#c2a874',
-    rocks: ['#5d6f7a', '#4a5b68', '#6b7d85', '#3e4c59'],
+    sediment: ['#d2b98a', '#b0bda0', '#dcca9d', '#90b4b4', '#b6ada5'],
+    rocks: ['#749da9', '#638395', '#a8bdb5', '#9c9fae', '#a1aba0'],
     life: 'coral',
-    kelp: { count: 55, hue: [0.22, 0.32] },
+    kelp: { count: 72, hue: [0.30, 0.45], palette: ['#55bea7', '#83c98a', '#62b8bc', '#afd697'] },
   },
 };
 

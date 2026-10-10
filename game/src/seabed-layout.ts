@@ -83,11 +83,14 @@ export function createHabitat(seed: number, seabedY: number, plantCount: number)
     }
   }
   const plants: HabitatPlant[] = [];
+  // Reserve the same complete root pool at every quality. New stones must not
+  // occupy a root that will become visible when the vegetation budget increases.
+  const rootBudget = Math.max(72, plantCount);
   // Round-robin patches makes each prefix a distributed LOD, not one dense
   // corner of the map. Exclusion spacing keeps fronds from sharing one root.
-  for (let round = 0; plants.length < plantCount && round < 35; round++) {
+  for (let round = 0; plants.length < rootBudget && round < 35; round++) {
     for (const [patch, p] of patches.entries()) {
-      if (plants.length >= plantCount) break;
+      if (plants.length >= rootBudget) break;
       for (let attempt = 0; attempt < 18; attempt++) {
         const angle = rng.range(-1.6, 1.6) + 0.45;
         const distance = p.radius + rng.range(0.8, 4.8);
@@ -107,5 +110,27 @@ export function createHabitat(seed: number, seabedY: number, plantCount: number)
       }
     }
   }
-  return { patches, rocks, plants };
+  // Add a little weathered scree after the accepted outcrops and root layout.
+  // Its independent stream preserves every original stone and plant identity.
+  const talusRng = new Rng(seed ^ 0x4f1bbcdc);
+  for (let slot = 0; slot < 3; slot++) {
+    for (const [patch, p] of patches.entries()) {
+      if (slot === 2 && patch % 2 !== 0) continue;
+      const detail: 1 | 2 | 3 = slot === 0 ? (patch < 4 ? 1 : 2) : 3;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const radius = p.radius * talusRng.range(0.09, 0.19);
+        const angle = talusRng.range(0, Math.PI * 2);
+        const distance = p.radius * talusRng.range(1.15, 2.5);
+        const x = p.x + Math.cos(angle) * distance;
+        const z = p.z + Math.sin(angle) * distance * 0.7;
+        if (!supported(x, z, radius * 1.6)) continue;
+        if (plants.some(plant => Math.hypot(plant.x - x, plant.z - z) < radius * 0.85 + 0.4)) continue;
+        if (rocks.some(rock => Math.hypot(rock.x - x, rock.z - z) < (radius + rock.radius) * 0.65)) continue;
+        rocks.push({ x, z, radius, squash: talusRng.range(0.42, 0.68),
+          seed: talusRng.int(1, 0x7fffffff), detail, patch });
+        break;
+      }
+    }
+  }
+  return { patches, rocks, plants: plants.slice(0, plantCount) };
 }

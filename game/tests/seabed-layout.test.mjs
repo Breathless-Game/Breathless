@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
@@ -17,9 +18,12 @@ const { createHabitat, habitatHeight, SHELF_EDGE } = await import(await sourceUr
 }));
 
 const maps = [
-  { name: 'fjord', seed: 0xf10d5ea, bed: -20, plants: 55 },
-  { name: 'tianchi', seed: 0x71a2c41, bed: -40, plants: 26 },
-  { name: 'ocean', seed: 20261010, bed: -62, plants: 55 },
+  { name: 'fjord', seed: 0xf10d5ea, bed: -20, plants: 72, previousPlants: 55,
+    previousRocks: [14, 56, 138], previousLayout: '9f01b086a26936eca34395337df3bf02716378183ebf7141dd755559dc2332a7' },
+  { name: 'tianchi', seed: 0x71a2c41, bed: -40, plants: 38, previousPlants: 26,
+    previousRocks: [14, 55, 139], previousLayout: '9861d285bb4ce02f9d7231da2671e5e9e6d0ff07ed5a224ab80a4e0cff813c8b' },
+  { name: 'ocean', seed: 20261010, bed: -62, plants: 72, previousPlants: 55,
+    previousRocks: [14, 56, 140], previousLayout: 'ff908f745f9323b04541be2cb228ab51e1de9ba996cad298a1b8e550ef54ae1e' },
 ];
 
 // Raycast actual PlaneGeometry triangles. This independently checks the ground
@@ -60,13 +64,42 @@ test('habitats rebuild deterministically and retain the same plants across quali
     assert.deepEqual(full, createHabitat(map.seed, map.bed, map.plants));
     assert.equal(full.plants.length, map.plants, `${map.name} supports the requested vegetation budget`);
     assert.notDeepEqual(full.rocks, createHabitat(map.seed + 1, map.bed, map.plants).rocks);
-    for (const count of [0, 12, Math.min(30, map.plants)]) {
+    for (const count of [0, 16, Math.min(40, map.plants)]) {
       const low = createHabitat(map.seed, map.bed, count);
       assert.deepEqual(low.rocks, full.rocks, 'plant budgets cannot move the outcrops');
       assert.deepEqual(low.patches, full.patches);
       assert.deepEqual(low.plants, full.plants.slice(0, count), 'lower budgets preserve root positions, height and identity');
       if (count) assert.ok(new Set(low.plants.map(plant => plant.patch)).size >= 4,
         'the low tier distributes plants across the habitat instead of one corner');
+    }
+  }
+});
+
+test('denser habitats preserve every previously accepted rock and root', () => {
+  for (const map of maps) {
+    const full = createHabitat(map.seed, map.bed, map.plants);
+    const previous = {
+      patches: full.patches,
+      rocks: full.rocks.slice(0, map.previousRocks[2]),
+      plants: full.plants.slice(0, map.previousPlants),
+    };
+    // Captured before density increased: this catches RNG changes that subtly
+    // relocate the accepted outcrops or change existing roots/heights/identity.
+    const signature = createHash('sha256').update(JSON.stringify(previous)).digest('hex');
+    assert.equal(signature, map.previousLayout, `${map.name} retains its existing habitat`);
+    const added = full.rocks.slice(map.previousRocks[2]);
+    assert.equal(added.filter(rock => rock.detail === 1).length, 4, 'low quality adds only four small companions');
+    for (const detail of [2, 3]) {
+      const count = full.rocks.filter(rock => rock.detail <= detail).length;
+      const previousCount = map.previousRocks[detail - 1];
+      assert.ok(count >= previousCount * 1.2 && count <= previousCount * 1.3,
+        'medium and high add a modest 20–30% of nearby stones');
+    }
+    for (const rock of added) {
+      const patch = full.patches[rock.patch];
+      assert.ok(rock.radius < patch.radius * 0.2, 'new stones complement the existing large anchors');
+      assert.ok(Math.hypot(rock.x - patch.x, rock.z - patch.z) <= patch.radius * 2.5,
+        'new scree stays around existing outcrops');
     }
   }
 });

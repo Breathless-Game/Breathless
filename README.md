@@ -394,7 +394,8 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── water-geometry.ts indexed, watertight triangles with varied facet sizes
         ├── seabed-layout.ts spaced outcrops, rooted habitats and terrain-height sampling
         ├── rock-geometry.ts clipped low-poly rock shapes with coherent fracture planes
-        ├── kelp.ts         batched sculpted ribbons with rooted GPU current animation
+        ├── kelp.ts         three seeded water-plant forms batched into one GPU draw
+        ├── biome-colors.ts fixed multicolor triangle pigments from map palettes
         ├── kelp-motion.ts  shared bend and tip-lag model
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
@@ -605,7 +606,7 @@ The game picks the starting quality from the CPU logical core count and the devi
 | --- | --- | --- | --- |
 | DPR cap | 1 | 1.5 | 2 |
 | Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
-| Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| Kelp / light rays / particles | 16 / 4 / 300 | 40 / 8 / 700 | 72 / 14 / 1400 |
 | Water surface segments | 64 × 32 | 96 × 48 | 128 × 72 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
 | Water triangles | 4096 | 9216 | 18432 |
@@ -623,7 +624,7 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
 
-Rock outcrops use large buried anchors, nearby smaller talus and open sand channels. The rear reef and trench walls form connected bedrock; plants and coral follow the rendered terrain instead of floating at random depths. Kelp has curved, tapered ribbons with a raised midrib, fixed roots and delayed tip motion in a shared current. Quality controls plant count, frond subdivisions and small stones, preserving the main outcrop locations. [Habitat rendering references and budgets](docs/habitat-rendering.md).
+Rock outcrops use large buried anchors, nearby smaller talus and open sand channels. The rear reef and trench walls form connected bedrock; plants and coral follow the rendered terrain instead of floating at random depths. Kelp mixes three seeded forms: thin flowing ribbons, the original straps with triangular side leaves, and curved broad fronds. Roots stay fixed while tips lag behind the shared current. Fixed multicolor triangle pigments and distinct map palettes keep the illustrated underwater look. Quality controls plant count, frond subdivisions and small stones, preserving the main outcrop locations. [Habitat rendering references and budgets](docs/habitat-rendering.md).
 
 ### Natural daylight and water reflections
 
