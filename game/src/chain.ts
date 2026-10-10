@@ -11,7 +11,8 @@ import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { RARITY, type FishSpec } from './fish';
+import { RARITY, fishValue, zoneForDepth, type FishSpec } from './fish';
+import { MAPS, type MapId } from './maps';
 import { fishCard } from './portrait';
 
 // Everything here runs in the browser against Solana devnet. The player gets a
@@ -69,10 +70,6 @@ function dataUrlBytes(url: string): Uint8Array {
   return out;
 }
 
-function zoneOf(depthM: number) {
-  return depthM < 18 ? 'Shallows' : depthM < 38 ? 'Coral Reef' : 'The Abyss';
-}
-
 export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
 
 export interface MintResult {
@@ -94,16 +91,18 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const traits: [string, string][] = [
     ['Rarity', rarity],
     ['Species', spec.species],
-    ['Zone', zoneOf(spec.depthM)],
+    ['Zone', zoneForDepth(spec.depthM).name],
+    ...(spec.map && spec.map in MAPS ? [['Map', MAPS[spec.map as MapId].name] as [string, string]] : []),
     ['Depth (m)', String(spec.depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],
+    ['Catch value', String(fishValue(spec))],
     ['Seed', spec.id],
   ];
   const uri = await u.uploader.uploadJson({
     name: spec.name,
     symbol: SYMBOL,
-    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Deep Breath. The art is a pure function of seed ${spec.id}.`,
+    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
     image,
     attributes: traits.map(([trait_type, value]) => ({ trait_type, value })),
     properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },

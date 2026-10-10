@@ -401,7 +401,8 @@ body {
   padding: 16px;
 }
 
-#overlay .card {
+#overlay .card,
+#pause .card {
   max-width: 560px;
   width: 100%;
   background: var(--panel);
@@ -480,6 +481,132 @@ button.link {
 #calib-step {
   font-weight: 800;
   font-size: 20px;
+}
+
+/* ---- title screen ---- */
+#title-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: radial-gradient(ellipse at center 40%, rgba(4, 18, 34, 0.1), rgba(2, 8, 18, 0.7));
+}
+
+#title-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+#title-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 66%;
+  text-align: center;
+  pointer-events: none;
+  text-shadow: 0 6px 30px rgba(0, 0, 0, 0.55);
+}
+
+#title-name .zh {
+  font-size: clamp(56px, 11vw, 132px);
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  line-height: 1;
+  margin-left: 0.18em;
+}
+
+#title-name .en {
+  font-size: clamp(14px, 2vw, 20px);
+  font-weight: 800;
+  letter-spacing: 0.6em;
+  color: var(--hold);
+  margin: 10px 0 0 0.6em;
+}
+
+.title-hint {
+  margin-top: 22px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ---- pause menu ---- */
+#pause {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 18, 0.6);
+  padding: 16px;
+}
+
+#pause .card {
+  max-width: 420px;
+  text-align: center;
+}
+
+#pause h2 {
+  margin: 0 0 18px;
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 18px 0 8px;
+}
+
+button.danger {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+}
+
+.setting {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+}
+
+.setting select {
+  font: inherit;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.setting select option {
+  background: #04121f;
+}
+
+.setting input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--hold);
+}
+
+#countdown-num {
+  font-size: 96px;
+  font-weight: 900;
+  line-height: 1.1;
+  color: var(--hold);
+  font-variant-numeric: tabular-nums;
+}
+
+#cam-wrap.off {
+  display: none;
 }
 
 /* ---- collection ---- */
@@ -829,4 +956,160 @@ button:disabled {
   #report-delete {
     display: none;
   }
+}
+
+/* ---- guided breath test ---- */
+#overlay.testing {
+  background: rgba(2, 8, 18, 0.3);
+}
+
+#overlay.testing .card > :not(#test) {
+  display: none;
+}
+
+#start-test {
+  margin-bottom: 10px;
+}
+
+#test-title {
+  font-size: 26px;
+  font-weight: 900;
+}
+
+#test-count {
+  font-size: 44px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+#test[data-kind='hold'] #test-title,
+#test[data-kind='hold'] #test-count {
+  color: var(--hold);
+}
+
+#test[data-kind='ready'] #test-title,
+#test[data-kind='ready'] #test-count {
+  color: var(--gold);
+}
+
+#test-sub {
+  color: var(--muted);
+  min-height: 16px;
+}
+
+.test-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 14px 0 10px;
+  overflow: hidden;
+}
+
+#test-bar {
+  height: 100%;
+  width: 0;
+  background: var(--breathe);
+  transition: width 0.1s linear;
+}
+
+.test-seen {
+  font-weight: 800;
+  color: var(--breathe);
+}
+
+.test-seen.holding {
+  color: var(--hold);
+}
+
+#test-result {
+  margin: 14px 0 4px;
+  line-height: 1.6;
+}
+
+#test:not([data-kind='done']) #test-done,
+#test[data-kind='done'] #test-stop,
+#test[data-kind='done'] .test-seen {
+  display: none;
+}
+
+#test-done {
+  margin-top: 14px;
+}
+
+/* ---- map picker (start card) ---- */
+#map-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.map-card {
+  display: block;
+  text-align: left;
+  padding: 0 0 10px;
+  overflow: hidden;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.map-card > :not(.map-swatch) {
+  padding: 0 10px;
+}
+
+.map-swatch {
+  height: 46px;
+  margin-bottom: 8px;
+  background: linear-gradient(var(--sky) 0 42%, var(--water) 42%, var(--deep));
+}
+
+.map-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.map-meta {
+  margin-top: 4px;
+}
+
+.map-lock {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.map-card.selected {
+  border-color: var(--hold);
+  box-shadow: 0 0 0 1px var(--hold) inset;
+}
+
+.map-card.locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.map-card.locked .map-lock {
+  color: var(--gold);
+}
+
+#maps-demo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
+@media (max-width: 560px) {
+  #map-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The start card is taller with the map picker: short screens scroll it instead of clipping it. */
+#overlay {
+  overflow-y: auto;
+}
+
+#overlay .card {
+  margin: auto;
 }
