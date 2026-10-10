@@ -87,7 +87,7 @@ const LINE_SEGS = 5;
 const SWING_S = 1.15;
 const FIRST_DROP_S = 1.35;
 const DROP_GAP_S = 0.28;
-const DROP_AWAY_MS = 650;
+const PAN_FRAC = 0.09; // how far the rope rides up when the camera pans down to the workbench
 const CLICK_MOVE_PX = 8;
 const CLICK_MS = 450;
 
@@ -165,7 +165,8 @@ export class TitleScreen {
   private last = 0;
   private raf = 0;
   private running = false;
-  private leaving = false; // a fish is dropping away; ignore clicks
+  private panU = 0;
+  private name: HTMLElement;
 
   private pointer = { x: -1e4, y: -1e4, vx: 0, vy: 0, t: 0 };
   private held: { i: number; inv: number } | null = null;
@@ -176,6 +177,7 @@ export class TitleScreen {
     defs: TitleFish[],
   ) {
     this.ctx = canvas.getContext('2d')!;
+    this.name = canvas.parentElement!.querySelector('#title-name')!;
     this.fish = defs.map((def, i) => {
       const img = new Image();
       const base = rollFish(def.seed, 40, TITLE_ODDS);
@@ -208,20 +210,23 @@ export class TitleScreen {
     return this.running;
   }
 
-  /** Cuts the named fish's lines so it drops off the bottom, then calls done. */
-  dropAway(label: string, done: () => void) {
-    const f = this.fish.find((x) => x.def.label === label);
-    if (this.leaving) return;
-    // Enter during the intro, before the fish has even arrived: nothing to drop, just go.
-    if (!f?.dropped) return done();
-    this.leaving = true;
-    const cut = new Set(f.lines.flatMap((l) => l.links));
-    f.links = f.links.filter((l) => !cut.has(l));
-    f.lines = [];
-    window.setTimeout(() => {
-      this.leaving = false;
-      done();
-    }, DROP_AWAY_MS);
+  /**
+   * The camera pans down to the workbench: 0 = the title, 1 = the rope and its
+   * fish ride up to the top of the screen and the name scrolls away.
+   */
+  setPan(u: number) {
+    this.panU = u;
+    this.name.style.transform = u ? `translateY(${-u * 40}vh)` : '';
+    this.name.style.opacity = u ? String(Math.max(0, 1 - u * 2.2)) : '';
+  }
+
+  private get pan() {
+    return this.panU * this.h * PAN_FRAC;
+  }
+
+  /** Pointer position in rope space (the drawing is shifted up by the pan). */
+  private at(e: PointerEvent) {
+    return { x: e.clientX, y: e.clientY + this.pan };
   }
 
   /** intro: replay the rope swing and the fish drop; otherwise start settled. */
@@ -470,9 +475,10 @@ export class TitleScreen {
 
   private onDown(e: PointerEvent) {
     this.trackPointer(e);
-    const hit = this.fishAt(e.clientX, e.clientY);
-    const i = hit ? (hit.u < 0.5 ? hit.f.head : hit.f.tail) : this.ropeAt(e.clientX, e.clientY);
-    this.press = { fish: hit?.f ?? null, x: e.clientX, y: e.clientY, t: performance.now() };
+    const { x, y } = this.at(e);
+    const hit = this.fishAt(x, y);
+    const i = hit ? (hit.u < 0.5 ? hit.f.head : hit.f.tail) : this.ropeAt(x, y);
+    this.press = { fish: hit?.f ?? null, x, y, t: performance.now() };
     if (i == null || this.swinging) return;
     this.held = { i, inv: this.ps[i].inv };
     this.ps[i].inv = 0;
@@ -514,9 +520,10 @@ export class TitleScreen {
     }
     const press = this.press;
     this.press = null;
-    if (!press?.fish?.def.onClick || this.leaving) return;
-    const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
-    if (moved < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS && this.fishAt(e.clientX, e.clientY)?.f === press.fish) {
+    if (!press?.fish?.def.onClick) return;
+    const { x, y } = this.at(e);
+    const moved = Math.hypot(x - press.x, y - press.y);
+    if (moved < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS && this.fishAt(x, y)?.f === press.fish) {
       press.fish.def.onClick();
     }
   }
@@ -524,15 +531,16 @@ export class TitleScreen {
   private trackPointer(e: PointerEvent) {
     const now = performance.now();
     const dt = Math.max(1, now - this.pointer.t) / 1000;
+    const { x, y } = this.at(e);
     if (this.pointer.t && dt < 0.1) {
       // Smoothed so a single jittery event doesn't fling things.
-      this.pointer.vx = this.pointer.vx * 0.5 + ((e.clientX - this.pointer.x) / dt) * 0.5;
-      this.pointer.vy = this.pointer.vy * 0.5 + ((e.clientY - this.pointer.y) / dt) * 0.5;
+      this.pointer.vx = this.pointer.vx * 0.5 + ((x - this.pointer.x) / dt) * 0.5;
+      this.pointer.vy = this.pointer.vy * 0.5 + ((y - this.pointer.y) / dt) * 0.5;
     } else {
       this.pointer.vx = this.pointer.vy = 0;
     }
-    this.pointer.x = e.clientX;
-    this.pointer.y = e.clientY;
+    this.pointer.x = x;
+    this.pointer.y = y;
     this.pointer.t = now;
   }
 
@@ -541,6 +549,8 @@ export class TitleScreen {
   private draw() {
     const c = this.ctx;
     c.clearRect(0, 0, this.w, this.h);
+    c.save();
+    c.translate(0, -this.pan);
 
     // Fishing lines behind everything.
     c.strokeStyle = 'rgba(234, 248, 255, 0.6)';
@@ -556,6 +566,7 @@ export class TitleScreen {
 
     this.drawRope();
     for (const f of this.fish) if (f.dropped) this.drawFish(f);
+    c.restore();
   }
 
   private drawRope() {
