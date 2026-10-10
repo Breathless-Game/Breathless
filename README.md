@@ -278,6 +278,8 @@ npm run game       # 游戏，http://localhost:5173
 
 每条成功入库的鱼都会按 `RARITY.value` 奖励 Pearls（common 1、uncommon 3、rare 10、epic 35、legendary 150、mythic 800）；黑屏丢网不奖励。升级状态保存在 `deepbreath.equipment`，不会删除或消费收藏鱼。
 
+![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
+
 ---
 
 ## 8. Solana NFT
