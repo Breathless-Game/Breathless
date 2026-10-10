@@ -40,6 +40,11 @@ export class Diver {
   private bubbleEmitScale = 1;
   private bubbleHz = 60;
   private bubbleUpdateAccumulator = 0;
+  private waterRing: THREE.Mesh;
+  private waterRingMat: THREE.MeshStandardMaterial;
+  private lastWaterDepth = 0.4;
+  private waterPulse = 0;
+  private materialBinder: ((root: THREE.Object3D) => void) | null = null;
 
   constructor(private scene: THREE.Scene) {
     // A shared shell shader gives bubbles a bright rim and transparent centre
@@ -95,6 +100,22 @@ export class Diver {
     this.body.add(this.netArm);
 
     this.group.add(this.body);
+    this.waterRingMat = new THREE.MeshStandardMaterial({
+      color: '#b9f5ff',
+      emissive: '#2d92a8',
+      emissiveIntensity: 0.35,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      roughness: 0.2,
+      side: THREE.DoubleSide,
+    });
+    this.waterRing = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.028, 6, 32), this.waterRingMat);
+    this.waterRing.name = 'diver-water-contact-ripple';
+    this.waterRing.position.y = this.lastWaterDepth + 0.03;
+    this.waterRing.renderOrder = 2;
+    this.waterRing.visible = false;
+    this.group.add(this.waterRing);
     this.headlamp = new THREE.PointLight('#fff1c4', 0, 22, 1.6);
     this.headlamp.position.set(1.4, 0.2, 0.6);
     this.body.add(this.headlamp);
@@ -116,6 +137,36 @@ export class Diver {
       const bubble = this.bubbles.shift();
       if (bubble) this.scene.remove(bubble.mesh);
     }
+  }
+
+  /** Register a scene material pass for particles created after scene setup. */
+  setMaterialBinder(binder: (root: THREE.Object3D) => void): void {
+    this.materialBinder = binder;
+  }
+
+  /**
+   * Show the diver's contact with the waterline. It is a single shared ring:
+   * continuous ripples stay cheap near the surface and a short pulse marks
+   * each entry or exit without spawning extra meshes.
+   */
+  private updateWaterContact(dt: number, time: number, depth: number): void {
+    const safeDepth = THREE.MathUtils.clamp(Number.isFinite(depth) ? depth : 60, 0, 60);
+    const nearSurface = THREE.MathUtils.clamp(1 - safeDepth / 1.8, 0, 1);
+    if ((this.lastWaterDepth > 0.32 && safeDepth <= 0.32) || (this.lastWaterDepth <= 0.32 && safeDepth > 0.32)) {
+      this.waterPulse = 1;
+    }
+    this.lastWaterDepth = safeDepth;
+    this.waterPulse = Math.max(0, this.waterPulse - Math.max(0, dt) * 2.2);
+
+    this.waterRing.position.set(0, safeDepth + 0.03, 0);
+    this.waterRing.rotation.y = time * 0.22;
+    const pulse = this.waterPulse;
+    this.waterRing.visible = nearSurface > 0.01 || pulse > 0.01;
+    if (!this.waterRing.visible) return;
+    const spread = 0.82 + (1 - nearSurface) * 0.36 + pulse * 0.82;
+    this.waterRing.scale.setScalar(spread);
+    this.waterRingMat.opacity = THREE.MathUtils.clamp(nearSurface * 0.18 + pulse * 0.38, 0, 0.56);
+    this.waterRingMat.emissiveIntensity = 0.18 + nearSurface * 0.28 + pulse * 0.72;
   }
 
   private makeLeg(suit: THREE.Material, accent: THREE.Material, z: number) {
@@ -184,6 +235,9 @@ export class Diver {
       const size = 0.5 + Math.random() * 1.4;
       b.scale.setScalar(size);
       this.scene.add(b);
+      // Bubbles are created after the initial scene traversal. Apply the
+      // shared day/night and underwater color-grade hook to their material.
+      this.materialBinder?.(b);
       const maxLife = 2.4 + Math.random() * 1.2;
       this.bubbles.push({
         mesh: b,
@@ -227,6 +281,7 @@ export class Diver {
     }
 
     this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * 60;
+    this.updateWaterContact(dt, time, depth);
 
     this.bubbleUpdateAccumulator += dt;
     const interval = 1 / this.bubbleHz;
