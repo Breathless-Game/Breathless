@@ -158,19 +158,22 @@ body {
   position: absolute;
   right: 26px;
   top: 170px;
-  bottom: 120px;
+  /* clear the bank panel below it (count, best fish, gear line, two buttons ≈ 190px) */
+  bottom: 206px;
   width: 16px;
   border-radius: 8px;
-  background: linear-gradient(#46c1d6, #0d4d73 50%, #020a1a);
+  /* non-linear scale: 50% = 60 m, so the bar is already deep blue by the middle */
+  background: linear-gradient(#46c1d6, #1a7a99 20%, #0d4d73 35%, #052844 50%, #020a1a 75%, #000408);
   border: 1px solid var(--line);
 }
 
+/* zone bands (left of the bar); --top / --h are set by Hud from the depth scale */
 .zone {
   position: absolute;
   right: 26px;
   top: var(--top);
-  height: var(--h);
-  font-size: 11px;
+  height: calc(var(--h) - 2px);
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -187,6 +190,63 @@ body {
 
 .zone.abyss {
   color: #c79bff;
+}
+
+/* bottomless: the bracket fades out instead of ending */
+.zone.trench {
+  color: #5fe0d0;
+  border-image: linear-gradient(rgba(255, 255, 255, 0.15), transparent) 1;
+}
+
+/* depth ticks (right of the bar), centred on their depth */
+.tick {
+  position: absolute;
+  left: calc(100% + 2px);
+  height: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0.8;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.tick::before {
+  content: '';
+  width: 4px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* deepest this session: thin gold tick under the main marker */
+#depth-best {
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(255, 204, 77, 0.6);
+  transform: translateY(-1px);
+}
+
+#depth-best-label {
+  position: absolute;
+  right: calc(100% + 11px);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
 #time-of-day {
@@ -1492,7 +1552,7 @@ button:disabled {
 #map-picker {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 8px;
   margin: 4px 0 8px;
 }
 
@@ -1505,8 +1565,13 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Three columns leave ~142px of text per card: every line below is sized to fit on one row. */
 .map-card > :not(.map-swatch) {
-  padding: 0 10px;
+  padding: 0 7px;
+}
+
+.map-place {
+  letter-spacing: 0.02em;
 }
 
 .map-swatch {
@@ -1524,8 +1589,23 @@ button:disabled {
   margin-top: 4px;
 }
 
+.map-lock,
+.map-trench {
+  font-size: 11px;
+  line-height: 15px;
+}
+
 .map-lock {
   margin-top: 2px;
+  color: var(--muted);
+}
+
+/* same teal as the Trench band on the depth gauge */
+.map-trench {
+  color: #5fe0d0;
+}
+
+.map-card.locked .map-trench {
   color: var(--muted);
 }
 

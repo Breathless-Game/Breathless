@@ -40,17 +40,18 @@ export class MapPicker {
         };
         const swatch = document.createElement('div');
         swatch.className = 'map-swatch';
+        // Two short lines under the meta, so every card keeps one line per row in the
+        // three-column layout: the shelf's zones then the trench, or what unlocks the map.
+        const [zones, below] = open
+          ? [map.zoneLabels.join(' · '), '+ Trench ∞']
+          : [`🔒 Bank ${map.unlockValue} value`, `you have ${Math.floor(this.progress.bestValue)}`];
         card.append(
           swatch,
           line('map-name', `${map.name} · ${map.nameZh}`),
           line('map-place small muted', map.place),
-          line('map-meta small', `${map.difficulty} · 0–${mapDepth(map) - 2} m`),
-          line(
-            'map-lock small',
-            open
-              ? map.zoneLabels.join(' + ')
-              : `🔒 Bank ${map.unlockValue} value (you have ${Math.floor(this.progress.bestValue)})`,
-          ),
+          line('map-meta small', `${map.difficulty} · Shelf ${mapDepth(map)} m`),
+          line('map-lock small', zones),
+          line('map-trench small', below),
         );
         card.title = map.blurb;
         card.addEventListener('click', () => this.onPick(id));

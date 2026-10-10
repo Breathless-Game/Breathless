@@ -699,14 +699,14 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   lights.placeAt(1, -27.2, 3.4, -42.6, 0.34, 0.42);
   panes.forEach(([x, y, z], i) => lights.placeAt(2 + i, x, y, z, 0));
 
-  // A mooring buoy off the bow and a line of net floats to starboard.
+  // One mooring buoy and a few small net floats; keep open water around the boat.
   const buoyGeo = compound([
     [new THREE.IcosahedronGeometry(0.75, 1), '#ffffff', 0, 0.15, 0],
     [new THREE.CylinderGeometry(0.79, 0.79, 0.16, 10), '#2b3138', 0, 0.12, 0],
     [new THREE.CylinderGeometry(0.1, 0.16, 0.6, 6), '#3a3f45', 0, 1.0, 0],
   ]);
-  const floats: FloatSpec[] = [{ x: -11, z: -13, size: 1, tint: '#e8582f', sink: 0.2, lamp: { index: 0, y: 1.42, size: 0.3, tall: 1.3 } }];
-  for (let i = 0; i < 5; i++) {
+  const floats: FloatSpec[] = [{ x: -16, z: -22, size: 0.8, tint: '#e8582f', sink: 0.2, lamp: { index: 0, y: 1.42, size: 0.3, tall: 1.3 } }];
+  for (let i = 0; i < perDetail(detail, [0, 1, 2] as const); i++) {
     floats.push({ x: 7 + i * 2.3, z: -11 - i * 1.5 - Math.sin(i * 0.9) * 0.6, size: 0.38, tint: i % 2 ? '#f4f1e8' : '#f39a2b', sink: 0.04, lean: 1.5 });
   }
   const buoys = new Floats(group, buoyGeo, painted, floats, map.waves, stream(0xf10d, 2), lights);
@@ -1086,12 +1086,11 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
   const sweep = (t: number) => Math.pow(Math.abs(Math.sin(t * 0.8)), 6);
 
   // Lamps: the channel markers', the freighter's, and the lighthouse's glow.
+  const markerCount = perDetail(detail, [1, 2, 2] as const);
   const specs: LightSpec[] = [
-    { color: '#ff4433', glass: '#7a2a22', period: 4, flash: 0.6, halo: 1.8 },
-    { color: '#44ff77', glass: '#285f3c', period: 3, flash: 0.6, phase: 1.3, halo: 1.8 },
-    { color: '#ff4433', glass: '#7a2a22', period: 4, flash: 0.6, phase: 2.1, halo: 1.8 },
-    { color: '#44ff77', glass: '#285f3c', period: 3, flash: 0.6, phase: 0.4, halo: 1.8 },
-  ];
+    { color: '#ff4433', glass: '#7a2a22', period: 4, flash: 0.6, halo: 1.2 },
+    { color: '#44ff77', glass: '#285f3c', period: 3, flash: 0.6, phase: 1.3, halo: 1.2 },
+  ].slice(0, markerCount);
   const shipLights: [number, number, number, number, number, string][] = [
     // dx, y, dz, width, height, colour
     [-9.5, 4.6, 1.75, 0.6, 0.4, '#ffe2a0'],
@@ -1104,21 +1103,21 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
   const lighthouseGlow = specs.length;
   specs.push({ color: '#ffe9a8', glass: '#000000', halo: 7, level: sweep });
   const lights = new Lights(group, new THREE.CylinderGeometry(0.5, 0.5, 1, 6), specs, detail);
-  shipLights.forEach(([dx, y, dz, w, h], i) => lights.placeAt(4 + i, sx + dx, y, sz + dz, w, h));
+  shipLights.forEach(([dx, y, dz, w, h], i) => lights.placeAt(markerCount + i, sx + dx, y, sz + dz, w, h));
   lights.placeAt(lighthouseGlow, lx, 18.2, lz + 1.2, 0);
 
-  // Channel markers: red to port, green to starboard, leading out toward the lighthouse.
+  // Sparse distant channel markers leave the foreground and reflection path open.
   const markerGeo = compound([
     [new THREE.CylinderGeometry(0.8, 0.62, 0.9, 8), '#ffffff', 0, 0, 0],
     [new THREE.CylinderGeometry(0.3, 0.42, 1.7, 6), '#ffffff', 0, 1.25, 0],
     [new THREE.CylinderGeometry(0.5, 0.5, 0.08, 6), '#2b3138', 0, 2.12, 0],
   ]);
-  const marker = (x: number, z: number, tint: string, index: number): FloatSpec => ({ x, z, size: 1, tint, lean: 0.9, sink: 0.3, lamp: { index, y: 2.36, size: 0.34 } });
+  const marker = (x: number, z: number, tint: string, index: number): FloatSpec => ({ x, z, size: 0.72, tint, lean: 0.9, sink: 0.22, lamp: { index, y: 2.36, size: 0.34 } });
   const markers = new Floats(
     group,
     markerGeo,
     painted,
-    [marker(-13, -12, red, 0), marker(14, -15, '#2e8b57', 1), marker(-23, -33, red, 2), marker(27, -38, '#2e8b57', 3)],
+    [marker(-23, -33, red, 0), marker(27, -38, '#2e8b57', 1)].slice(0, markerCount),
     map.waves,
     stream(0x0cea17, 2),
     lights,
