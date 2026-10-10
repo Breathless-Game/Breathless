@@ -9,7 +9,7 @@ import { waterGeometry } from './water-geometry';
 import { waterHeight, waterSlope } from './water-waves';
 import { rockGeometry } from './rock-geometry';
 import { createHabitat, habitatHeight, habitatGroundHeight, type HabitatLayout } from './seabed-layout';
-import { KelpField } from './kelp';
+import { KelpField, kelpHeightScale } from './kelp';
 import { paintBiomeFaces } from './biome-colors';
 import { WeatherCycle, type WeatherMode } from './weather';
 import { RainEffect } from './rain';
@@ -387,7 +387,12 @@ export class World {
       this.kelp.dispose();
     }
     this.kelp = new KelpField({
-      plants: this.habitat.plants.slice(0, this.quality.kelpCount),
+      plants: this.habitat.plants.slice(0, this.quality.kelpCount).map(plant => ({
+        ...plant,
+        // Taller straps retain their established roots, with room below the
+        // surface even on the shallow rear reef. Growth is stable across LOD.
+        height: Math.min(plant.height * kelpHeightScale(plant.seed), -plant.y - 3.5),
+      })),
       hue: this.map.kelp.hue,
       palette: this.map.kelp.palette,
       detail: this.quality.detail,
