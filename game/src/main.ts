@@ -12,8 +12,13 @@ import { TitleScreen } from './title';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
-import { HALF_WIDTH, World } from './world';
-import { cameraTargetX, clampWorldX } from './bounds';
+import { HALF_WIDTH, MAX_HALF_WIDTH, World } from './world';
+import {
+  advanceWorldBounds,
+  cameraTargetXToBounds,
+  clampWorldXToBounds,
+  createWorldBounds,
+} from './bounds';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
@@ -49,6 +54,9 @@ const mapProgress = loadMapProgress();
 if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
 const world = new World(renderQuality.settings, MAPS[mapProgress.selected]);
 let maxDepth = mapDepth(world.map);
+// The generated terrain supports the full ±200 m safety corridor. Edges open
+// only when the diver is moving toward them, then ease back toward ±140 m.
+const worldBounds = createWorldBounds(HALF_WIDTH, MAX_HALF_WIDTH);
 const scene = world.scene;
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
 camera.position.set(0, 1.5, 24);
@@ -70,6 +78,16 @@ const hud = new Hud();
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
+let fishCoverageLeft = worldBounds.left;
+let fishCoverageRight = worldBounds.right;
+const FISH_EDGE_BAND = 8;
+
+function resetWorldBounds() {
+  worldBounds.left = -worldBounds.baseHalfWidth;
+  worldBounds.right = worldBounds.baseHalfWidth;
+  fishCoverageLeft = worldBounds.left;
+  fishCoverageRight = worldBounds.right;
+}
 
 function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
@@ -83,10 +101,19 @@ function rollFor(zone: Zone, depth: number): FishSpec {
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
 }
 
-function spawnFish(zone: Zone) {
+function spawnFish(zone: Zone, minX = worldBounds.left, maxX = worldBounds.right) {
   const depth = THREE.MathUtils.randFloat(zone.top + 1.5, zone.bottom - 0.5);
   const spec = rollFor(zone, depth);
-  const fish = new Fish(spec, zone, THREE.MathUtils.randFloat(-HALF_WIDTH, HALF_WIDTH), -depth, HALF_WIDTH);
+  const left = Math.min(minX, maxX);
+  const right = Math.max(minX, maxX);
+  const fish = new Fish(
+    spec,
+    zone,
+    THREE.MathUtils.randFloat(left, right),
+    -depth,
+    worldBounds.maxHalfWidth,
+  );
+  fish.setWorldBounds(worldBounds.left, worldBounds.right);
   fishes.push(fish);
   scene.add(fish.mesh.group);
   world.colorGrade.apply(fish.mesh.group);
@@ -96,9 +123,27 @@ function spawnFish(zone: Zone) {
 function populate() {
   for (const f of fishes) scene.remove(f.mesh.group);
   fishes.length = 0;
+  fishCoverageLeft = worldBounds.left;
+  fishCoverageRight = worldBounds.right;
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
   });
+}
+
+/** Keep encounter density continuous when a newly opened edge becomes reachable. */
+function extendFishCoverage() {
+  if (worldBounds.right - fishCoverageRight >= FISH_EDGE_BAND) {
+    const start = fishCoverageRight;
+    const end = worldBounds.right;
+    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    fishCoverageRight = end;
+  }
+  if (fishCoverageLeft - worldBounds.left >= FISH_EDGE_BAND) {
+    const start = worldBounds.left;
+    const end = fishCoverageLeft;
+    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    fishCoverageLeft = start;
+  }
 }
 populate();
 
@@ -350,6 +395,7 @@ function selectMap(id: MapId) {
   if (phase !== 'menu' || id === world.map.id || !isUnlocked(MAPS[id], mapProgress)) return;
   mapProgress.selected = id;
   saveMapProgress(mapProgress);
+  resetWorldBounds();
   world.setMap(MAPS[id]);
   maxDepth = mapDepth(world.map);
   populate();
@@ -402,6 +448,7 @@ function markCalib(phase: string) {
 
 function startGame() {
   phase = 'play';
+  resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
   workbench.hide();
@@ -519,6 +566,7 @@ function goToMenu() {
   lastHolding = false;
   diver.pos.set(0, -0.4, 0);
   diver.vel.set(0, 0, 0);
+  resetWorldBounds();
   paused = false;
   phase = 'menu';
   pauseMenu.close();
@@ -696,7 +744,9 @@ function update(dt: number, time: number) {
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   diver.pos.addScaledVector(diver.vel, dt);
-  diver.pos.x = clampWorldX(diver.pos.x, HALF_WIDTH);
+  advanceWorldBounds(worldBounds, diver.pos.x, diver.vel.x, dt);
+  extendFishCoverage();
+  diver.pos.x = clampWorldXToBounds(diver.pos.x, worldBounds);
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, world.seabedY + 1.2, -0.05);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
@@ -711,14 +761,17 @@ function update(dt: number, time: number) {
   }
 
   diver.update(dt, time, -diver.pos.y);
-  for (const f of fishes) f.update(dt, time, diver.pos);
+  for (const f of fishes) {
+    f.setWorldBounds(worldBounds.left, worldBounds.right);
+    f.update(dt, time, diver.pos);
+  }
   world.update(time, camera.position.y, camera.position.x);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
   const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
-  camTarget.set(cameraTargetX(diver.pos.x, diver.vel.x, HALF_WIDTH), Math.max(camY, world.seabedY + 9) - benchDrop, 22);
+  camTarget.set(cameraTargetXToBounds(diver.pos.x, diver.vel.x, worldBounds), Math.max(camY, world.seabedY + 9) - benchDrop, 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 

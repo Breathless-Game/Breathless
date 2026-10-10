@@ -395,21 +395,32 @@ export class Fish {
     this.rng = new Rng(spec.seed ^ 0xabcdef);
     this.pos = new THREE.Vector3(x, y, this.rng.range(-4, 2));
     this.phase = this.rng.range(0, Math.PI * 2);
-    this.halfWidth = worldHalfWidth;
+    this.leftBound = -Math.max(0, Number.isFinite(worldHalfWidth) ? worldHalfWidth : 0);
+    this.rightBound = -this.leftBound;
     this.pickTarget();
     this.mesh.group.position.copy(this.pos);
   }
 
-  private halfWidth: number;
+  private leftBound: number;
+  private rightBound: number;
   private readonly profile: SpeciesProfile;
   private readonly toDiver = new THREE.Vector3();
   private readonly toTarget = new THREE.Vector3();
   private readonly desired = new THREE.Vector3();
 
+  /** Update the fish corridor when the player opens a new side of the map. */
+  setWorldBounds(left: number, right: number): void {
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return;
+    this.leftBound = Math.min(left, right);
+    this.rightBound = Math.max(left, right);
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, this.leftBound, this.rightBound);
+    this.target.x = THREE.MathUtils.clamp(this.target.x, this.leftBound, this.rightBound);
+  }
+
   private pickTarget() {
     const span = 18;
     this.target.set(
-      THREE.MathUtils.clamp(this.pos.x + this.rng.range(-span, span), -this.halfWidth, this.halfWidth),
+      THREE.MathUtils.clamp(this.pos.x + this.rng.range(-span, span), this.leftBound, this.rightBound),
       -this.rng.range(this.zone.top + 1.5, this.zone.bottom - 0.5),
       this.rng.range(-4, 2),
     );
@@ -446,7 +457,7 @@ export class Fish {
     const top = -(this.zone.top + 0.5);
     const bottom = -(this.zone.bottom + 3);
     this.pos.y = THREE.MathUtils.clamp(this.pos.y, bottom, top);
-    this.pos.x = THREE.MathUtils.clamp(this.pos.x, -this.halfWidth, this.halfWidth);
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, this.leftBound, this.rightBound);
 
     if (Math.abs(this.vel.x) > 0.15) this.facing = this.vel.x > 0 ? 1 : -1;
     const g = this.mesh.group;
