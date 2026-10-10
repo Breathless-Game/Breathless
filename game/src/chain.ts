@@ -1,0 +1,140 @@
+import './polyfills';
+import {
+  createGenericFile,
+  generateSigner,
+  keypairIdentity,
+  publicKey,
+  sol,
+  type Umi,
+} from '@metaplex-foundation/umi';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
+import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
+import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
+import { base58 } from '@metaplex-foundation/umi/serializers';
+import { RARITY, type FishSpec } from './fish';
+import { fishCard } from './portrait';
+
+// Everything here runs in the browser against Solana devnet. The player gets a
+// burner wallet stored in localStorage; it pays for the Irys upload and the
+// Metaplex Core mint, and owns the resulting fish NFTs.
+
+const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://api.devnet.solana.com';
+const WALLET_KEY = 'deepbreath.wallet';
+const SYMBOL = 'DIVE';
+
+let umi: Umi | null = null;
+
+function getUmi(): Umi {
+  if (umi) return umi;
+  const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
+  let secret: Uint8Array | null = null;
+  try {
+    const raw = localStorage.getItem(WALLET_KEY);
+    if (raw) secret = Uint8Array.from(JSON.parse(raw));
+  } catch {}
+  if (!secret) {
+    secret = u.eddsa.generateKeypair().secretKey;
+    try {
+      localStorage.setItem(WALLET_KEY, JSON.stringify(Array.from(secret)));
+    } catch {}
+  }
+  u.use(keypairIdentity(u.eddsa.createKeypairFromSecretKey(secret)));
+  umi = u;
+  return u;
+}
+
+export const explorer = (kind: 'address' | 'tx', id: string) =>
+  `https://explorer.solana.com/${kind}/${id}?cluster=devnet`;
+
+export function walletAddress(): string {
+  return getUmi().identity.publicKey.toString();
+}
+
+export async function balanceSol(): Promise<number> {
+  const u = getUmi();
+  const bal = await u.rpc.getBalance(u.identity.publicKey);
+  return Number(bal.basisPoints) / 1e9;
+}
+
+/** Devnet faucet. Rate limited, so callers must handle failure gracefully. */
+export async function airdrop(amount = 1): Promise<void> {
+  const u = getUmi();
+  await u.rpc.airdrop(u.identity.publicKey, sol(amount), { commitment: 'confirmed' });
+}
+
+function dataUrlBytes(url: string): Uint8Array {
+  const bin = atob(url.slice(url.indexOf(',') + 1));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function zoneOf(depthM: number) {
+  return depthM < 18 ? 'Shallows' : depthM < 38 ? 'Coral Reef' : 'The Abyss';
+}
+
+export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
+
+export interface MintResult {
+  asset: string;
+  signature: string;
+  image: string;
+  uri: string;
+}
+
+export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): Promise<MintResult> {
+  const u = getUmi();
+  const rarity = RARITY[spec.rarity].label;
+
+  onStep?.('upload-image');
+  const png = createGenericFile(dataUrlBytes(fishCard(spec)), `${spec.id}.png`, { contentType: 'image/png' });
+  const [image] = await u.uploader.upload([png]);
+
+  onStep?.('upload-metadata');
+  const traits: [string, string][] = [
+    ['Rarity', rarity],
+    ['Species', spec.species],
+    ['Zone', zoneOf(spec.depthM)],
+    ['Depth (m)', String(spec.depthM)],
+    ['Length (cm)', String(spec.lengthCm)],
+    ['Weight (kg)', String(spec.weightKg)],
+    ['Seed', spec.id],
+  ];
+  const uri = await u.uploader.uploadJson({
+    name: spec.name,
+    symbol: SYMBOL,
+    description: `A ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Deep Breath. The art is a pure function of seed ${spec.id}.`,
+    image,
+    attributes: traits.map(([trait_type, value]) => ({ trait_type, value })),
+    properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },
+  });
+
+  onStep?.('mint');
+  const asset = generateSigner(u);
+  const { signature } = await create(u, {
+    asset,
+    name: spec.name,
+    uri,
+    plugins: [
+      {
+        type: 'Attributes',
+        attributeList: [
+          { key: 'rarity', value: spec.rarity },
+          { key: 'species', value: spec.species },
+          { key: 'depth', value: String(spec.depthM) },
+          { key: 'seed', value: spec.id },
+        ],
+      },
+    ],
+  }).sendAndConfirm(u);
+
+  return { asset: asset.publicKey.toString(), signature: base58.deserialize(signature)[0], image, uri };
+}
+
+/** Burning is the sink: the NFT is destroyed on-chain. */
+export async function burnFish(assetId: string): Promise<string> {
+  const u = getUmi();
+  const asset = await fetchAsset(u, publicKey(assetId));
+  const { signature } = await burn(u, { asset }).sendAndConfirm(u);
+  return base58.deserialize(signature)[0];
+}
