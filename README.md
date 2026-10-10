@@ -327,13 +327,15 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 
 ## 7. 游戏设计参数
 
-### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
+### 三张地图与掉率（`fish.ts` 中的 `ZONES`）
 
-| 区域 | 深度 | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | – | 10 | 30 | 35 | 19 | 6 |
+每张地图只生成对应深度带的鱼。地图难度同时提高奖励倍率，因此越深、越难的地图，捕获同一稀有度鱼的积分越高。
+
+| 地图 | 深度 | 难度 | 奖励倍率 | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 长白山冰川部落群（Changbai Glacier Tribe） | 0–18 m | 1 | 1.0× | 70 | 25 | 5 | – | – | – |
+| 礁石（Reef） | 18–38 m | 2 | 1.6× | 20 | 35 | 30 | 13 | 2 | – |
+| 风暴（Storm） | 38–58 m | 3 | 2.5× | – | 10 | 30 | 35 | 19 | 6 |
 
 ### 稀有度（`RARITY`）
 

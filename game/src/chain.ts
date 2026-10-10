@@ -11,7 +11,7 @@ import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { RARITY, type FishSpec } from './fish';
+import { RARITY, zoneForDepth, type FishSpec } from './fish';
 import { fishCard } from './portrait';
 
 // Everything here runs in the browser against Solana devnet. The player gets a
@@ -70,7 +70,7 @@ function dataUrlBytes(url: string): Uint8Array {
 }
 
 function zoneOf(depthM: number) {
-  return depthM < 18 ? 'Shallows' : depthM < 38 ? 'Coral Reef' : 'The Abyss';
+  return zoneForDepth(depthM).name;
 }
 
 export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
@@ -95,9 +95,11 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
     ['Rarity', rarity],
     ['Species', spec.species],
     ['Zone', zoneOf(spec.depthM)],
+    ['Map', zoneForDepth(spec.depthM).mapNameZh],
     ['Depth (m)', String(spec.depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],
+    ['Catch value', String(spec.value ?? RARITY[spec.rarity].value)],
     ['Seed', spec.id],
   ];
   const uri = await u.uploader.uploadJson({

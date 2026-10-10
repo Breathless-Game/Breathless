@@ -22,18 +22,33 @@ export const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'le
 export const ZONES = [
   {
     name: 'Shallows',
+    mapId: 'changbai-glacier-tribe',
+    mapName: 'Changbai Glacier Tribe',
+    mapNameZh: '长白山冰川部落群',
+    difficulty: 1,
+    rewardMultiplier: 1,
     top: 0,
     bottom: 18,
     odds: [['common', 70], ['uncommon', 25], ['rare', 5]] as [Rarity, number][],
   },
   {
     name: 'Coral Reef',
+    mapId: 'reef',
+    mapName: 'Reef',
+    mapNameZh: '礁石',
+    difficulty: 2,
+    rewardMultiplier: 1.6,
     top: 18,
     bottom: 38,
     odds: [['common', 20], ['uncommon', 35], ['rare', 30], ['epic', 13], ['legendary', 2]] as [Rarity, number][],
   },
   {
     name: 'The Abyss',
+    mapId: 'storm',
+    mapName: 'Storm',
+    mapNameZh: '风暴',
+    difficulty: 3,
+    rewardMultiplier: 2.5,
     top: 38,
     bottom: 58,
     odds: [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]] as [Rarity, number][],
@@ -165,6 +180,8 @@ export interface FishSpec {
   accentHue: number;
   stripes: number;
   scale: number;
+  /** Catch value rises with both rarity and the map's difficulty. */
+  value?: number;
   /** Metaplex Core asset address once minted on devnet. */
   assetId?: string;
 }
@@ -196,7 +213,13 @@ export function rollFish(seed: number, zone: Zone, depthM: number): FishSpec {
     accentHue: (hue + rng.range(140, 220)) % 360,
     stripes: rng.next() < 0.55 ? rng.int(2, 5) : 0,
     scale,
+    value: Math.round(RARITY[rarity].value * zone.rewardMultiplier),
   };
+}
+
+/** Resolve the map band for metadata and UI without duplicating depth cutoffs. */
+export function zoneForDepth(depthM: number): Zone {
+  return ZONES.find((zone) => depthM >= zone.top && depthM < zone.bottom) ?? ZONES[ZONES.length - 1];
 }
 
 // ---- Mesh ---------------------------------------------------------------

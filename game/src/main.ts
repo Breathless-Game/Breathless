@@ -190,7 +190,9 @@ function bankNet() {
   if (!net.length) return;
   bank.push(...net);
   saveBank();
-  const rarest = net.reduce((a, f) => (RARITY[f.rarity].value > RARITY[a.rarity].value ? f : a));
+  const rarest = net.reduce((a, f) => (
+    (f.value ?? RARITY[f.rarity].value) > (a.value ?? RARITY[a.rarity].value) ? f : a
+  ));
   hud.message(`Banked ${net.length} fish!`);
   hud.toast(rarest, 'BANKED');
   net = [];
