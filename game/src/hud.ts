@@ -40,7 +40,12 @@ export class Hud {
     this.chip.className = `chip ${danger ? 'danger' : holding ? 'holding' : 'breathing'}`;
     this.holdTime.textContent = `${(s.holdMs / 1000).toFixed(1)}s`;
     this.camWrap.className = danger ? 'danger' : holding ? 'holding' : '';
-    this.source.textContent = s.mode === 'presage' && !s.connected ? 'Presage · sensor offline' : SOURCE_LABEL[s.mode];
+    this.source.textContent =
+      s.mode === 'presage' && !s.connected
+        ? 'Presage · sensor offline'
+        : s.label
+          ? 'Presage · ⏺ marking your hold'
+          : SOURCE_LABEL[s.mode];
     const parts = [];
     if (s.rate != null && s.mode === 'presage') parts.push(`${Math.round(s.rate)} br/min`);
     if (s.pulse != null && s.mode === 'presage') parts.push(`♥ ${Math.round(s.pulse)}`);

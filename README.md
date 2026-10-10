@@ -200,17 +200,52 @@ npm run game       # 游戏，http://localhost:5173
 
 文件：`sensor/breath-detector.mjs`。数据来自 Presage 的胸部起伏曲线 `breathing.upperTrace`，再配合 `apnea` 和 `face.talking`。
 
-1. **基线幅度**：最近 4 s 窗口的峰峰值（p2p），只在正常呼吸时更新，代表"一口正常呼吸"的幅度。
-2. **判定憋气**：最近 1.3 s 窗口的 p2p 小于 `0.22 × 基线`，或者 Presage 报告 apnea，而且没有在说话。
+1. **基线幅度**：最近 4 s 窗口的峰峰值（p2p），代表"一口正常呼吸"的幅度。只有在短窗口里能看到明显起伏时才更新，免得憋气刚开始的几秒把基线拉低。
+2. **判定憋气**：最近 2 s 窗口的 p2p 小于 `0.22 × 基线`，或者 Presage 报告 apnea，而且没有在说话。窗口要比两口呼吸之间的自然停顿长，否则正常呼吸时会乱跳。
 3. **判定恢复呼吸**：曲线偏离憋气开始时的参考值超过 `0.4 × 基线`，或者检测到说话。
+4. **游戏侧防抖**（`main.ts` 的 `RELEASE_DEBOUNCE_MS`）：水下"换气"必须持续 0.5 s 才算，单帧误判不会让你丢网。
 
-| 常数 | 默认值 | 调大 / 调小的效果 |
+所有阈值都在 `DEFAULTS` 里，构造时可以覆盖：
+
+| 选项 | 默认值 | 调大 / 调小的效果 |
 | --- | --- | --- |
-| `HOLD_WINDOW_US` | 1.3 s | 越大越不容易误判为憋气，但进入 HOLDING 越慢 |
-| `AMP_WINDOW_US` | 4 s | 学习正常呼吸幅度用的窗口 |
-| `FLAT_RATIO` | 0.22 | 越大越容易判为憋气 |
-| `RELEASE_RATIO` | 0.4 | 越小越灵敏，稍微一动就判定为换气 |
-| `MIN_SAMPLES` | 8 | 窗口内最少需要的采样数 |
+| `holdWindowUs` | 2 s | 越大越不容易误判为憋气，但进入 HOLDING 越慢 |
+| `ampWindowUs` | 4 s | 学习正常呼吸幅度用的窗口 |
+| `flatRatio` | 0.22 | 越大越容易判为憋气 |
+| `releaseRatio` | 0.4 | 越小越灵敏，稍微一动就判定为换气 |
+| `learnRatio` | 0.5 | 短窗口 p2p 超过 `learnRatio × 基线` 时才学习基线 |
+| `useApnea` | true | 是否把 Presage 的 apnea 标志当作憋气证据 |
+
+### 用真实数据调参（录制 → 分析）
+
+不要凭感觉改阈值，先录数据：
+
+1. 用摄像头模式玩。**每次真的憋气时，同时按住 `Shift`**，换气时松开。HUD 左上会显示 "⏺ marking your hold"，这就是标准答案。
+2. sensor 会把整个会话写进 `sensor/recordings/<时间>.jsonl`，内容包括原始胸部和腹部曲线、apnea、说话、心率、帧率、你的 Shift 标注、校准阶段。**这是生理数据，已经 gitignore，不要提交。**
+3. 分析：
+
+```bash
+node sensor/analyze.mjs
+```
+
+它会输出：
+
+- 摄像头帧率、Presage 数据批次间隔和延迟；
+- 胸部和腹部曲线在"憋气"和"呼吸"时的幅度比（比值越大越好分）；
+- 憋气期间曲线有没有漂移；
+- 当前检测器和你标注的一致率、误判率、每分钟跳变次数、检测延迟。
+
+```bash
+node sensor/analyze.mjs --sweep
+```
+
+网格搜索 `holdWindowUs` / `flatRatio` / `releaseRatio` / `useApnea`，给出最好的几组。
+
+```bash
+node sensor/analyze.mjs --trace=lo --flatRatio=0.3
+```
+
+改用腹部曲线、或者指定某组参数重放。
 
 注意：Presage 的呼吸频率需要约 30 s 窗口，说话时不可用；所有指标都只用于健康参考（wellness），不是医疗用途。
 
@@ -226,7 +261,9 @@ npm run game       # 游戏，http://localhost:5173
 ├── intro/HackRU26.md       比赛介绍和时间线（中英双语）
 ├── sensor/                 Node 憋气传感器服务
 │   ├── index.mjs           WS 服务、每个连接一个 Session、Presage SDK、模拟器（含模拟心率）
-│   └── breath-detector.mjs 憋气检测（第 5 节）
+│   ├── breath-detector.mjs 憋气检测（第 5 节）
+│   ├── recorder.mjs        把摄像头会话录成 JSONL（sensor/recordings/，已 gitignore）
+│   └── analyze.mjs         重放录制数据、对比 Shift 标注、网格搜索阈值
 └── game/                   Vite + TypeScript + Three.js
     ├── index.html          HUD、标题卡、收藏面板、报告面板的 DOM
     ├── vite.config.ts      端口 5173；Node polyfills（Umi 和 Irys 需要）
