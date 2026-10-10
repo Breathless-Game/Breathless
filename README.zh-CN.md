@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+<p align="center"><img src="docs/showcase.gif" alt="屏息 Breathless：极光下的峡湾，潜水员憋着气下潜抓鱼" width="800"></p>
+
 > **用你真实的憋气来潜水抓鱼。** 摄像头通过 Presage 识别你是否在憋气，憋住气潜水员才能下潜；越深鱼越稀有；在水下一换气就必须马上浮上去，否则网里的鱼全丢。抓到的鱼可以铸造成 Solana NFT，玩家之间交易。游戏还会安静地记录每次憋气的时长和心率，你想看的时候一键生成健康报告。
 
 低多边形（low-poly）2.5D 风格，Three.js + TypeScript，前端为主，加一个本地 Node 传感器服务。
@@ -405,6 +407,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── chart.ts        海图绘制（折起的地图贴图和展开后的海图）
         ├── settings.ts     玩家设置（画质、光照效果、天气、摄像头小窗、操作提示），存 localStorage
         ├── render-quality.ts  自动画质：按设备选初始档位，持续掉帧时降档
+        ├── showcase.ts     展示页（`/showcase.html`）：README 顶部 GIF 的场景，用的是游戏里的潜水员和鱼模型
         └── style.css       深色玻璃风 HUD
 ```
 
@@ -525,6 +528,14 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - 标签页在后台时 `requestAnimationFrame` 会降到约 2 fps，可以用 `debugStep(2)` 直接模拟 2 秒。
 - sensor 的日志直接看运行 `npm run sensor` 的那个终端。Presage 的状态码和 ValidationCode 提示会翻译成 HUD 左上角的黄色 hint。
 - Presage 一直卡在 `starting`：检查 `.env` 里的 key，看浏览器是否真的在发帧（HUD 的 frames 计数），以及光线够不够。
+
+### 重新录制 README 顶部的 GIF
+
+先启动游戏（`npm run game`），再执行下面的命令。需要本机装有 Chrome 和 ffmpeg。脚本用无头 Chrome 逐帧渲染 `game/showcase.html`，输出到 `docs/showcase.gif`，首尾帧无缝循环。
+
+```bash
+npm run showcase:gif
+```
 
 ### 自动画质
 
