@@ -800,3 +800,81 @@ button:disabled {
     display: none;
   }
 }
+
+/* ---- guided breath test ---- */
+#overlay.testing {
+  background: rgba(2, 8, 18, 0.3);
+}
+
+#overlay.testing .card > :not(#test) {
+  display: none;
+}
+
+#start-test {
+  margin-bottom: 10px;
+}
+
+#test-title {
+  font-size: 26px;
+  font-weight: 900;
+}
+
+#test-count {
+  font-size: 44px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+#test[data-kind='hold'] #test-title,
+#test[data-kind='hold'] #test-count {
+  color: var(--hold);
+}
+
+#test[data-kind='ready'] #test-title,
+#test[data-kind='ready'] #test-count {
+  color: var(--gold);
+}
+
+#test-sub {
+  color: var(--muted);
+  min-height: 16px;
+}
+
+.test-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 14px 0 10px;
+  overflow: hidden;
+}
+
+#test-bar {
+  height: 100%;
+  width: 0;
+  background: var(--breathe);
+  transition: width 0.1s linear;
+}
+
+.test-seen {
+  font-weight: 800;
+  color: var(--breathe);
+}
+
+.test-seen.holding {
+  color: var(--hold);
+}
+
+#test-result {
+  margin: 14px 0 4px;
+  line-height: 1.6;
+}
+
+#test:not([data-kind='done']) #test-done,
+#test[data-kind='done'] #test-stop,
+#test[data-kind='done'] .test-seen {
+  display: none;
+}
+
+#test-done {
+  margin-top: 14px;
+}
