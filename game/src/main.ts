@@ -6,6 +6,7 @@ import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
 import { Report } from './report';
+import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
 import { loadSettings, PIXEL_RATIO, type Settings } from './settings';
 import { HALF_WIDTH, SEABED_Y, World } from './world';
@@ -247,6 +248,27 @@ document.getElementById('start-keys')!.addEventListener('click', () => {
 });
 document.getElementById('calib-skip')!.addEventListener('click', startGame);
 
+// Guided breath test: labeled data for tuning the detector (see sensor/analyze.mjs).
+const breathTest = new BreathTest(breath);
+async function startBreathTest() {
+  try {
+    if (!breath.video.srcObject) await breath.startLive();
+    document.getElementById('cam-wrap')!.style.visibility = 'visible';
+    hud.show();
+    breathTest.start();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('start-test')!.textContent = 'Camera blocked: allow camera access, then retry · 请允许摄像头';
+  }
+}
+document.getElementById('start-test')!.addEventListener('click', startBreathTest);
+document.getElementById('test-again')!.addEventListener('click', () => breathTest.start());
+document.getElementById('test-stop')!.addEventListener('click', () => breathTest.stop());
+document.getElementById('test-play')!.addEventListener('click', () => {
+  breathTest.stop();
+  startGame();
+});
+
 function updateCalibration() {
   const s = breath.state;
   if (!s.connected) {
@@ -289,6 +311,7 @@ function onEscape() {
   if (pauseMenu.open) pauseMenu.back();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
+  else if (breathTest.open) breathTest.stop();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
 }
@@ -443,6 +466,7 @@ frame();
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
   breath,
+  breathTest,
   diver,
   fishes,
   keys,
