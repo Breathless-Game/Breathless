@@ -16,6 +16,8 @@
     "@metaplex-foundation/umi": "^1.6.0",
     "@metaplex-foundation/umi-bundle-defaults": "^1.6.0",
     "@metaplex-foundation/umi-uploader-irys": "^1.6.0",
+    "@metaplex-foundation/umi-web3js-adapters": "^1.6.0",
+    "@noble/curves": "^1.9.7",
     "buffer": "^6.0.3",
     "three": "^0.170.0"
   },
