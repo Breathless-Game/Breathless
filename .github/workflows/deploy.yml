@@ -36,10 +36,18 @@ jobs:
       - name: Build (typecheck + vite build)
         run: npm run build
 
+      # index.mjs imports the PEARL market (market.mjs and its modules) lazily, so a
+      # syntax error there would only show up as a 503 at runtime: check them all here.
       - name: Check sensor syntax
         run: |
           node --check sensor/index.mjs
           node --check sensor/static.mjs
+          node --check sensor/market.mjs
+          node --check sensor/market-rules.mjs
+          node --check sensor/fish-market.mjs
+          node --check sensor/market-program-mode.mjs
+          node --check sensor/market-server-mode.mjs
+          node --check sensor/pearl-png.mjs
 
       - uses: actions/upload-artifact@v4
         with:
