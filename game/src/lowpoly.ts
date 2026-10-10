@@ -107,6 +107,8 @@ export function disposeTree(root: THREE.Object3D) {
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.geometry) return;
+    // Instanced meshes also hold per-instance buffers on the GPU.
+    if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
     m.geometry.dispose();
     for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
   });
