@@ -651,9 +651,10 @@ button.link {
   }
 }
 
-/* The workbench picks the map now; the start card only launches the dive. */
-#map-picker,
-#maps-demo-row {
+/* The workbench picks the map now; the start card only launches the dive.
+   Scoped to #overlay so it outranks the map picker's own display rules below. */
+#overlay #map-picker,
+#overlay #maps-demo-row {
   display: none;
 }
 
