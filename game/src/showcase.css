@@ -1,0 +1,157 @@
+/* Showcase page: one rounded card on a dark desk. `?capture` drops the frame so the card
+   fills the viewport for the GIF recorder; `?clean` hides the title and gauge. */
+
+:root {
+  --ink: #eaf8ff;
+  --breathe: #6ab8ff; /* same blue as the HUD's breathing chip */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #12161f;
+}
+
+.stage {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
+.card {
+  position: relative;
+  margin: 0;
+  width: min(100%, calc((100vh - 56px) * 1.6), 1440px);
+  aspect-ratio: 16 / 10;
+  border-radius: 18px;
+  overflow: hidden;
+  container-type: inline-size;
+  background: #06213f;
+  color: var(--ink);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  box-shadow:
+    0 0 0 1px rgba(160, 230, 255, 0.1),
+    0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.card canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Vignette, heavier along the bottom where the title sits. */
+.card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to top, rgba(2, 10, 22, 0.5), transparent 34%),
+    radial-gradient(120% 95% at 50% 45%, transparent 60%, rgba(2, 8, 18, 0.4) 100%);
+}
+
+.lockup {
+  position: absolute;
+  z-index: 1;
+  left: 4.6%;
+  bottom: 6.2%;
+  display: grid;
+  justify-items: start;
+  text-shadow: 0 0 2.2cqw rgba(2, 10, 22, 0.75);
+}
+
+.lockup .cn {
+  font: 800 2.9cqw/1 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  letter-spacing: 0.42em;
+  opacity: 0.92;
+}
+
+.lockup h1 {
+  margin: 0.9cqw 0 0;
+  font-size: 6.6cqw;
+  font-weight: 900;
+  line-height: 0.95;
+  letter-spacing: 0.03em;
+}
+
+.lockup h1 span {
+  color: var(--breathe);
+  text-shadow: 0 0 2.4cqw rgba(106, 184, 255, 0.5);
+}
+
+.trace {
+  width: 100%;
+  height: 2.5cqw;
+  margin-top: 1cqw;
+  overflow: visible;
+}
+
+#trace-line {
+  fill: none;
+  stroke: url(#trace-ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+#trace-dot {
+  fill: #fff;
+  filter: drop-shadow(0 0 0.5cqw var(--breathe));
+}
+
+.lockup p {
+  margin: 0.8cqw 0 0;
+  font-size: 1.5cqw;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(234, 248, 255, 0.72);
+}
+
+.gauge span {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  padding-right: 2.6cqw;
+  translate: 0 -50%;
+  font-size: 1.15cqw;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(234, 248, 255, 0.6);
+  text-shadow: 0 0 1cqw rgba(2, 10, 22, 0.8);
+}
+
+.gauge span::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1.8cqw;
+  border-top: 1px solid rgba(234, 248, 255, 0.5);
+}
+
+.clean .lockup,
+.clean .gauge {
+  display: none;
+}
+
+.capture .stage {
+  padding: 0;
+}
+
+.capture .card {
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  border-radius: 0;
+  box-shadow: none;
+}

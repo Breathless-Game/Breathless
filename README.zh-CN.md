@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+<p align="center"><img src="docs/showcase.gif" alt="屏息 Breathless：极光下的峡湾，潜水员憋着气下潜抓鱼" width="800"></p>
+
 > **用你真实的憋气来潜水抓鱼。** 摄像头通过 Presage 识别你是否在憋气，憋住气潜水员才能下潜；越深鱼越稀有；在水下一换气就必须马上浮上去，否则网里的鱼全丢。抓到的鱼可以铸造成 Solana NFT，玩家之间交易。游戏还会安静地记录每次憋气的时长和心率，你想看的时候一键生成健康报告。
 
 低多边形（low-poly）2.5D 风格，Three.js + TypeScript，前端为主，加一个本地 Node 传感器服务。
@@ -108,6 +110,8 @@ npm run game       # 游戏，http://localhost:5173
 
 （也可以用 `npm run dev` 同时启动两个，macOS 和 Windows 都可以用，Ctrl+C 会一起停掉。）
 
+`git pull` 之后照常启动即可。如果拉下来的代码加了新依赖，游戏和 sensor 启动时会发现缺了它，先自动装好再启动。
+
 ### Windows
 
 - **x64 电脑**：直接按上面的步骤操作即可。
@@ -145,6 +149,29 @@ npm run game       # 游戏，http://localhost:5173
 
 如果误判多，去调 `sensor/breath-detector.mjs` 里的常数（见第 5 节）。
 
+### 自托管 / Self-hosting
+
+`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏和憋气传感器（WebSocket 在 `/sensor`），前面只需要一条隧道或一个反向代理。
+
+```bash
+npm run setup      # 一次性：安装 sensor/ 和 game/ 的依赖
+npm run build      # 把 game/ 构建到 game/dist
+npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/sensor
+```
+
+| 变量 | 默认 | 含义 |
+| --- | --- | --- |
+| `PRESAGE_API_KEY` | 空 | **只放在服务器**仓库根目录的 `.env` 里。没有 key 时服务器跑模拟器。 |
+| `PORT` | `8794` | HTTP + WebSocket 端口。开发模式（`npm run sensor`）仍用 `SENSOR_PORT`，8787。 |
+| `HOST` | `127.0.0.1` | 监听地址。只听本机，因为同机的隧道 / 代理是唯一入口。 |
+| `MAX_LIVE_SESSIONS` | `1` | 同时使用 Presage 实时检测的玩家数。SDK 的原生状态是进程全局的，一个进程里跑不了两个会话；设成 `0` 关闭实时检测。超出上限的玩家会看到 "Server busy"，自动改用键盘玩。 |
+| `MAX_CONN_PER_IP` | `8` | 每个玩家 IP 可同时打开的传感器连接数（代理在本机时读 `CF-Connecting-IP` / `X-Forwarded-For`）。 |
+| `SENSOR_RECORD` | 关 | 设成 `1` 才把实时会话写进 `sensor/recordings/`。serve 模式默认关闭：陌生人的呼吸数据绝不落盘。（开发模式照旧录制。） |
+
+- **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
+- **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
+- **带宽。** 实时模式上传的是原始 640×480 RGBA 帧：每帧 1.23 MB，30 fps 时每个玩家约 37 MB/s（≈295 Mbit/s）上行。局域网没问题；走公网时大多数玩家传不了这么快，帧数会掉，低于约 15 fps 时 Presage 的波形会变差。键盘和模拟模式不发帧。
+
 ---
 
 ## 3. 操作方式
@@ -162,12 +189,13 @@ npm run game       # 游戏，http://localhost:5173
 | `Esc` | 暂停菜单：继续、设置、回到主页面。先关闭打开的面板；在设置里按是返回上一层；校准时按直接回主页面 |
 | `Enter`（主页面） | 等于点 START 鱼 |
 
-**主页面**：进入时一根绳子（两端都在屏幕外）从左边荡出、挂到右边，然后几条鱼从上方掉下来，用鱼线挂在绳子上。按钮名字印在鱼身上。名字长（4 个字符以上）的鱼用头、尾两根鱼线横着挂；两根线像滑轮一样自动调长短，所以绳子倾斜的地方鱼和字也保持水平。点金色的 **START** 鱼（或按 Enter）：鱼线断开、鱼掉下去，进入工作台；紫色的 **SETTINGS** 鱼打开设置。鱼和绳子都能用鼠标拖、甩，划过时会被推开。系统开了"减少动态效果"时跳过入场动画。
+**主页面**：进入时一根绳子（两端都在屏幕外）从左边荡出、挂到右边，然后几条鱼从上方掉下来，用鱼线挂在绳子上。按钮名字印在鱼身上。名字长（4 个字符以上）的鱼用头、尾两根鱼线横着挂；两根线像滑轮一样自动调长短，所以绳子倾斜的地方鱼和字也保持水平。点金色的 **START** 鱼（或按 Enter）：镜头下移到工作台（绳子和鱼升到屏幕顶部，仍然可以拖）；紫色的 **SETTINGS** 鱼打开设置。鱼和绳子都能用鼠标拖、甩，划过时会被推开。系统开了"减少动态效果"时跳过入场动画。
 
-**工作台**（`workbench.ts`）：俯视的木桌，东西从上方落到桌上并互相碰撞（matter-js，无重力的桌面物理）。左上是 START 鱼，右上是三张地图卡（章节 I / II / III，背面朝上，地图的难度就是游戏难度），左下是配件（脚蹼、应急气瓶、头灯），右下是捕鱼器（鱼竿、渔网、鱼饵）。
-- 所有东西都能拖、甩。点一件装备：放大到屏幕中央、背景虚化、左边显示描述（目前是占位文字）；再点一下或按任意键，它就放进桌子中间的 PACK 圈（发绿光 = 已带上）；对已带上的再做一次会放回原来的角落。Esc 取消。
-- 点一张地图：卡片落到桌子中央，把带上的装备吸进去，然后翻到正面。点地图本身：把桌上所有东西都吸进去，卡片放大盖住屏幕，转场到这张地图，接着是开始卡片（摄像头 / 键盘 / 憋气测试）。点地图外面：把装备吐出来，翻回背面，回到右上角。
-- 未解锁的地图点了会抖一下并提示需要的价值；左下角有"解锁全部地图（演示）"开关。
+**工作台**（`workbench.ts`，海图在 `chart.ts`）：斜视角的木桌（2.5D，单独的 Three.js 场景），中间放着一张折起来的海图，右边是准备区（READY）。
+- 装备（脚蹼、应急气瓶、头灯、鱼竿、渔网、鱼饵）以 3D 模型从上方掉下来砸在桌上：会弹起、扬起一圈灰、镜头震一下，旁边的东西也会跳起来。物理是手写的：重力、桌面反弹、桌面上的圆形碰撞。
+- 鼠标移到装备上显示名字和效果。点一下放进右边的准备区（绿圈）；在准备区里再点一下就扔回桌上。也可以拖动（拖到准备区就算准备好）和甩出去。
+- 点海图：从桌上拿起来展开成一张地图，上面有三个地点，每章一个（I 峡湾、II 天池、III 汪洋；地点的难度就是游戏难度）。选一个地点会显示介绍和已准备的装备，然后点 **Dive · 下潜**（或再点一次那个地点、或按 Enter）：海图放大进这个地点，转场到对应地图，接着是开始卡片（摄像头 / 键盘 / 憋气测试）。点海图外面或按 Esc 把它折回桌上。
+- 未解锁的地点会抖一下并提示需要的价值；海图左下角有"解锁全部地图（演示）"开关。在空桌面上按 Esc，镜头移回主页面。
 - 带上的装备会传给游戏（`loadout`），但升级效果还没接进潜水玩法。
 
 **暂停的细节**：暂停时游戏完全冻结，切走标签页也会自动暂停。在水下点"继续"会先倒数 3 秒，让玩家吸一口气再憋住，否则暂停时的换气会被直接判成"水下呼吸"。回到主页面会释放摄像头和 sensor 连接；网里有鱼时会先弹确认，鱼会丢失，但这次憋气仍然记进健康数据。
@@ -200,7 +228,7 @@ npm run game       # 游戏，http://localhost:5173
 
 **为什么摄像头由浏览器打开，而不是 Node？** macOS 不会给从 IDE 或 Claude 启动的 node 进程摄像头权限，SDK 的 `useCamera` 一直收不到帧。所以浏览器抓帧，经 WebSocket 推给 sensor，sensor 再用 `useCustomInput` + `sendFrame` 交给 SDK。
 
-### WebSocket 协议（`ws://<host>:8787`）
+### WebSocket 协议（开发时 `ws://<host>:8787`，`npm start` 时同源 `/sensor`）
 
 **浏览器 → sensor**
 
@@ -229,6 +257,8 @@ npm run game       # 游戏，http://localhost:5173
   "trace": [ /* 最近 90 个胸部起伏采样 */ ]
 }
 ```
+
+错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。
 
 ---
 
@@ -326,6 +356,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 .
 ├── package.json            根目录脚本：setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev：同时启动 sensor 和 game（跨平台）
+├── scripts/ensure-deps.mjs 游戏和 sensor 启动前运行：自动安装缺少的依赖
 ├── .env.example            PRESAGE_API_KEY、SENSOR_PORT
 ├── intro/HackRU26.md       比赛介绍和时间线（中英双语）
 ├── design/game-design-document.md  策划案：三张地图、小怪、升级、改进点
@@ -368,9 +399,11 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── report.ts       健康报告：指标卡、两张图、解读文字、存 PDF、删除数据
         ├── pause.ts        Esc 暂停菜单：继续（水下 3 秒倒数）、设置、回到主页面
         ├── title.ts        主页面：Verlet 绳子 + 鱼线挂鱼，鼠标拖拽和推动，START / SETTINGS 鱼是按钮
-        ├── workbench.ts    工作台：桌面物理（matter-js）、查看/打包装备、地图卡吸入/吐出/翻面/转场
+        ├── workbench.ts    工作台：2.5D 桌面场景、装备掉落物理、准备区、展开成三个地点的海图
+        ├── chart.ts        海图绘制（折起的地图贴图和展开后的海图）
         ├── settings.ts     玩家设置（画质、摄像头小窗、操作提示），存 localStorage
         ├── render-quality.ts  自动画质：按设备选初始档位，持续掉帧时降档
+        ├── showcase.ts     展示页（`/showcase.html`）：README 顶部 GIF 的场景，用的是游戏里的潜水员和鱼模型
         └── style.css       深色玻璃风 HUD
 ```
 
@@ -495,6 +528,14 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - 标签页在后台时 `requestAnimationFrame` 会降到约 2 fps，可以用 `debugStep(2)` 直接模拟 2 秒。
 - sensor 的日志直接看运行 `npm run sensor` 的那个终端。Presage 的状态码和 ValidationCode 提示会翻译成 HUD 左上角的黄色 hint。
 - Presage 一直卡在 `starting`：检查 `.env` 里的 key，看浏览器是否真的在发帧（HUD 的 frames 计数），以及光线够不够。
+
+### 重新录制 README 顶部的 GIF
+
+先启动游戏（`npm run game`），再执行下面的命令。需要本机装有 Chrome 和 ffmpeg。脚本用无头 Chrome 逐帧渲染 `game/showcase.html`，输出到 `docs/showcase.gif`，首尾帧无缝循环。
+
+```bash
+npm run showcase:gif
+```
 
 ### 自动画质
 

@@ -19,11 +19,19 @@ export interface BreathState {
   pulse: number | null;
   /** Presage mode: player is holding Shift to mark a real breath hold (ground truth for tuning). */
   label: boolean;
+  /** Last error from the sensor, e.g. why live mode fell back to keyboard; '' when none. */
+  error: string;
 }
 
 const FRAME_W = 640;
 const FRAME_H = 480;
-const SENSOR_URL = `ws://${location.hostname || 'localhost'}:8787`;
+// Dev: the sensor runs on its own port next to Vite. Production (`npm start`) serves the
+// game and the sensor from one origin, so it works behind an HTTPS tunnel (wss://).
+const SENSOR_URL =
+  (import.meta.env.VITE_SENSOR_URL as string | undefined) ||
+  (import.meta.env.PROD
+    ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/sensor`
+    : `ws://${location.hostname || 'localhost'}:8787`);
 
 export class BreathSource {
   state: BreathState = {
@@ -39,6 +47,7 @@ export class BreathSource {
     rate: null,
     pulse: null,
     label: false,
+    error: '',
   };
   video: HTMLVideoElement;
   private ws: WebSocket | null = null;
@@ -82,6 +91,7 @@ export class BreathSource {
   }
 
   async startLive(): Promise<void> {
+    this.state.error = '';
     this.stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: FRAME_W }, height: { ideal: FRAME_H }, frameRate: { ideal: 30 }, facingMode: 'user' },
       audio: false,
@@ -105,6 +115,7 @@ export class BreathSource {
 
   setMode(mode: BreathMode) {
     this.state.mode = mode;
+    this.state.error = '';
     this.state.holding = false;
     this.state.calibrated = mode === 'keyboard';
     if (mode !== 'keyboard') this.connect();
@@ -130,6 +141,7 @@ export class BreathSource {
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') return;
       const msg = JSON.parse(ev.data);
+      if (msg.t === 'error') return this.onSensorError(msg);
       if (msg.t !== 'state' || this.state.mode === 'keyboard') return;
       this.state.holding = msg.holding;
       this.state.holdMs = msg.holdMs;
@@ -143,6 +155,17 @@ export class BreathSource {
       this.emit();
     };
     this.ws = ws;
+  }
+
+  // Presage errors also arrive in the state's hint. "busy" means the server's live
+  // Presage slots are all taken: stop streaming frames nobody will process and fall
+  // back to the keyboard, which always works.
+  private onSensorError(msg: { code?: string; message?: string }) {
+    const message = msg.message || 'Breath sensor error';
+    console.warn(`[breath] ${message}`);
+    if (msg.code === 'busy' && this.state.mode === 'presage') this.stopLive();
+    this.state.error = message;
+    this.emit();
   }
 
   /** Marks a real breath hold (ground truth) in the sensor's recording. */

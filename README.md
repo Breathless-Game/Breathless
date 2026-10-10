@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+<p align="center"><img src="docs/showcase.gif" alt="Breathless: a fjord under the aurora, where a diver holds their breath and dives down to catch fish" width="800"></p>
+
 > **Hold your real breath to dive and catch fish.** Your webcam, through Presage, detects whether you are holding your breath. The diver can only descend while you hold. The deeper you go, the rarer the fish. The moment you breathe underwater you have to race back to the surface, or you lose everything in your net. Fish you bring up can be minted as Solana NFTs and traded between players. The game also quietly records how long each hold lasted and your heart rate, and builds a health report whenever you ask for one.
 
 Low-poly 2.5D, built with Three.js + TypeScript. Mostly front end, plus a local Node sensor service.
@@ -108,6 +110,8 @@ npm run game       # the game, http://localhost:5173
 
 (Or run `npm run dev` to start both at once. It works on macOS and Windows, and Ctrl+C stops both.)
 
+After a `git pull`, start them the same way. If the pull added a dependency, the game and the sensor notice it is missing when they start and install it first.
+
 ### Windows
 
 - **x64 machines**: follow the steps above as they are.
@@ -145,6 +149,29 @@ Click **Start with camera**. Keep your face and chest in frame, in bright light.
 
 If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` (see section 5).
 
+### Self-hosting / 自托管
+
+`npm start` is the production server: one Node process on one port serves the built game and the breath sensor (WebSocket at `/sensor`) together, so a single tunnel or reverse proxy can front it.
+
+```bash
+npm run setup      # once: installs sensor/ and game/ dependencies
+npm run build      # builds game/ into game/dist
+npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. |
+| `PORT` | `8794` | HTTP + WebSocket port. Dev mode (`npm run sensor`) keeps `SENSOR_PORT`, 8787. |
+| `HOST` | `127.0.0.1` | Bind address. Loopback, because the tunnel / proxy on the same machine is the only way in. |
+| `MAX_LIVE_SESSIONS` | `1` | Players using live Presage at the same time. The SDK's native state is process-global, so it can't run two sessions in one process; `0` turns live sensing off. Anyone over the cap sees "Server busy" and plays with the keyboard. |
+| `MAX_CONN_PER_IP` | `8` | Open sensor connections per player IP (read from `CF-Connecting-IP` / `X-Forwarded-For` when the proxy is local). |
+| `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
+
+- **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
+- **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
+- **Bandwidth.** Live mode uploads raw 640×480 RGBA frames: 1.23 MB per frame, about 37 MB/s (≈295 Mbit/s) per player at 30 fps. Fine on a LAN; over the internet most players can't upload that fast, so they send fewer frames and Presage's trace degrades below ~15 fps. Keyboard and simulator mode send no frames.
+
 ---
 
 ## 3. Controls
@@ -162,12 +189,13 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
-**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) cuts its lines, drops it, and opens the workbench; the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) pans the camera down to the workbench (the rope and its fish ride up to the top of the screen and stay live); the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
 
-**Workbench** (`workbench.ts`): a top-down wooden table. Everything drops onto it from above and collides (matter-js, table-plane physics with no gravity). The START fish is top left, the three map cards top right (chapters I / II / III, face down; a map's difficulty is the game difficulty), accessories bottom left (fins, emergency tank, headlamp), and catching gear bottom right (rod, net, bait).
-- Everything can be dragged and flung. Click a piece of gear: it zooms to the centre, the background blurs, and its description shows on the left (placeholder text for now). Click again or press any key to set it in the PACK ring in the middle (green glow = packed); do it again on packed gear to put it back in its corner. Esc cancels.
-- Click a map: the card drops into the middle, sucks in the packed gear and flips face up. Click the map itself to suck in everything on the table; the card grows to cover the screen and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the map to spit the gear back out; the card flips back and returns to the top right.
-- A locked map rattles and says what it needs; the "Unlock all maps (demo)" switch is at the bottom left.
+**Workbench** (`workbench.ts`, chart in `chart.ts`): a wooden table seen at an angle (2.5D, its own Three.js scene), with a folded sea chart in the middle and a READY tray on the right.
+- The gear (fins, emergency tank, headlamp, rod, net, bait) drops in as 3D models and lands with a thud: a bounce, a puff of dust, a camera shake, and nearby pieces jump. Hand-rolled physics: gravity, a bounce off the tabletop, circle collisions on the table.
+- Hover a piece for its name and effect. Click it to set it in the READY tray (green ring); click it there to toss it back onto the table. Pieces can also be dragged (onto the tray to get them ready) and thrown.
+- Click the chart: it lifts off the table and unfolds into a map with the three places, one per chapter (I Fjord, II Heaven Lake, III Open Ocean; a place's difficulty is the game difficulty). Pick a place to see it and your ready gear, then **Dive** (or click the place again, or Enter): the chart zooms into it and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the chart or press Esc to fold it back.
+- Locked places shake and say what they need; the "Unlock all maps (demo)" switch is at the bottom left of the chart. Esc on the bare table pans back up to the title.
 - The packed gear is passed to the game (`loadout`), but the upgrade effects aren't wired into the dive yet.
 
 **Pause details**: the game freezes completely while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
@@ -200,7 +228,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 **Why does the browser open the camera, and not Node?** macOS does not grant camera permission to a node process started from an IDE or from Claude, so the SDK's `useCamera` never receives a frame. Instead the browser captures frames and pushes them to the sensor over WebSocket, and the sensor hands them to the SDK with `useCustomInput` + `sendFrame`.
 
-### WebSocket protocol (`ws://<host>:8787`)
+### WebSocket protocol (`ws://<host>:8787` in dev, same-origin `/sensor` with `npm start`)
 
 **Browser → sensor**
 
@@ -229,6 +257,8 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
   "trace": [ /* the last 90 chest-movement samples */ ]
 }
 ```
+
+Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard.
 
 ---
 
@@ -326,6 +356,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 .
 ├── package.json            root scripts: setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev: starts sensor and game together (cross-platform)
+├── scripts/ensure-deps.mjs runs before the game and the sensor start: installs dependencies that are missing
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
@@ -368,9 +399,11 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── report.ts       health report: metric tiles, two charts, interpretation text, save as PDF, delete data
         ├── pause.ts        Esc pause menu: resume (3-second countdown underwater), settings, back to the main menu
         ├── title.ts        main menu: a Verlet rope with fish hanging on fishing lines, mouse dragging and pushing; the START / SETTINGS fish are the buttons
-        ├── workbench.ts    workbench: table physics (matter-js), inspect / pack gear, map cards that suck in, spit out, flip and transition
+        ├── workbench.ts    workbench: 2.5D table scene, gear drop physics, READY tray, sea chart that opens into the three places
+        ├── chart.ts        the sea chart drawing (folded map texture and the open chart)
         ├── settings.ts     player settings (render quality, camera preview, control hints), stored in localStorage
         ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
+        ├── showcase.ts     showcase page (`/showcase.html`): the scene in the GIF at the top of the README, built from the game's own diver and fish models
         └── style.css       dark glass-style HUD
 ```
 
@@ -495,6 +528,14 @@ To reset, run `localStorage.clear()` in the browser console.
 - When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.
 - The sensor logs are in the terminal that runs `npm run sensor`. Presage status codes and ValidationCode hints are translated into the yellow hint at the top left of the HUD.
 - Presage stuck on `starting`: check the key in `.env`, check that the browser is really sending frames (the frames counter in the HUD), and check that there is enough light.
+
+### Re-recording the GIF at the top of the README
+
+Start the game first (`npm run game`), then run the command below. You need Chrome and ffmpeg on your machine. The script renders `game/showcase.html` frame by frame in headless Chrome and writes `docs/showcase.gif`, which loops seamlessly from the last frame back to the first.
+
+```bash
+npm run showcase:gif
+```
 
 ### Automatic render quality
 
