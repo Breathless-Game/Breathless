@@ -249,6 +249,19 @@ body {
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
+#time-of-day {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  color: #e8f5ff;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 #depth-marker {
   position: absolute;
   left: -6px;
