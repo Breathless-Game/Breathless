@@ -44,6 +44,12 @@
         <div id="net-slots"></div>
       </section>
 
+      <section id="active-gear" class="panel" aria-live="polite">
+        <div class="small muted">EQUIPPED · <span id="active-gear-number">1</span></div>
+        <strong id="active-gear-label">捕捞网</strong>
+        <div id="active-gear-hint" class="small">按 1 快速切换 · Tab 轮盘</div>
+      </section>
+
       <section id="bank" class="panel">
         <div class="small muted">BANKED</div>
         <div id="bank-count">0 fish</div>
@@ -54,7 +60,13 @@
       </section>
 
       <div id="toasts"></div>
-      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
+      <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
+
+      <div id="loadout-wheel" class="loadout-wheel hidden" role="dialog" aria-label="Dive gear wheel" aria-hidden="true">
+        <div id="loadout-wheel-center" class="loadout-wheel-center"></div>
+        <div id="loadout-wheel-slots" class="loadout-wheel-slots"></div>
+        <div class="loadout-wheel-caption">松开 Tab 确认 · 方向键 / Q E 选择</div>
+      </div>
     </div>
 
     <div id="title-screen" class="hidden">

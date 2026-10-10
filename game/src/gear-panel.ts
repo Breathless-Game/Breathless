@@ -1,11 +1,14 @@
 import {
+  activePath,
   EQUIPMENT_TIERS,
+  EQUIPMENT_PATHS,
   deriveStats,
   nextRodTier,
   nextSlotTier,
   rodTier,
   slotTier,
   type EquipmentSlot,
+  type EquipmentPathId,
   type EquipmentState,
 } from './equipment';
 
@@ -40,9 +43,11 @@ export class GearPanel {
   private upgrade = $<HTMLButtonElement>('gear-upgrade');
   private notice = $('gear-notice');
   private onUpgrade: (slot: EquipmentSlot) => void;
+  private onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void;
 
-  constructor(onUpgrade: (slot: EquipmentSlot) => void) {
+  constructor(onUpgrade: (slot: EquipmentSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
     this.onUpgrade = onUpgrade;
+    this.onPathChange = onPathChange;
     $('gear-close').addEventListener('click', () => this.toggle(false));
     // Keep the legacy button useful as a keyboard-friendly net shortcut.
     this.upgrade.addEventListener('click', () => this.onUpgrade('net'));
@@ -120,6 +125,26 @@ export class GearPanel {
       const tradeoff = document.createElement('div');
       tradeoff.className = 'gear-slot-tradeoff';
       tradeoff.textContent = ui.tradeoff;
+
+      const paths = document.createElement('div');
+      paths.className = 'gear-paths';
+      const pathLabel = document.createElement('span');
+      pathLabel.className = 'gear-path-label';
+      pathLabel.textContent = current.level >= 2 ? '分支模块' : 'Lv2 解锁分支模块';
+      paths.appendChild(pathLabel);
+      const selectedPath = activePath(state, ui.slot);
+      for (const path of EQUIPMENT_PATHS[ui.slot]) {
+        const pathButton = document.createElement('button');
+        pathButton.type = 'button';
+        pathButton.className = 'gear-path-button';
+        pathButton.textContent = path.nameZh;
+        pathButton.title = `${path.name}: ${path.summary}`;
+        pathButton.disabled = current.level < 2;
+        pathButton.classList.toggle('selected', path.id === selectedPath);
+        pathButton.addEventListener('click', () => this.onPathChange(ui.slot, path.id));
+        paths.appendChild(pathButton);
+      }
+      card.appendChild(paths);
 
       const footer = document.createElement('div');
       footer.className = 'gear-slot-footer';

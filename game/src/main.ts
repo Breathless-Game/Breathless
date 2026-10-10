@@ -18,7 +18,8 @@ import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { deriveStats, loadEquipment, nextSlotTier, rodTier, saveEquipment, upgradeSlot, type EquipmentState, type EquipmentSlot } from './equipment';
+import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
+import { deriveStats, loadEquipment, nextSlotTier, rodTier, saveEquipment, setEquipmentPath, upgradeSlot, type EquipmentPathId, type EquipmentState, type EquipmentSlot } from './equipment';
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
@@ -104,6 +105,7 @@ const equipment: EquipmentState = loadEquipment();
 // The persistent inventory is filtered by the workbench for each dive. A null
 // loadout means the debug/title state where all owned upgrades are available.
 let activeLoadout: readonly UpgradeId[] | null = null;
+let activeTool: EquipmentSlot = 'net';
 const currentStats = () => deriveStats(equipment, activeLoadout ?? undefined);
 const activeLevel = (slot: EquipmentSlot): number => {
   const packed = activeLoadout;
@@ -146,11 +148,25 @@ hud.setBank(bank);
 const vault = new Vault(bank, saveBank);
 const health = new HealthLog();
 const report = new Report(health);
-const gear = new GearPanel((slot) => buyNextUpgrade(slot));
+const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => selectEquipmentPath(slot, path));
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
 diver.setNetLevel(currentTier().level);
 applyEquipmentVisuals();
+const loadoutWheel = new LoadoutWheel({
+  isAvailable: (slot) => activeLoadout == null || activeLoadout.includes(slot),
+  onSelect: (slot) => {
+    activeTool = slot;
+    hud.setActiveGear(slot, activeLoadout == null || activeLoadout.includes(slot));
+    const label = QUICK_SLOTS.find((item) => item.slot === slot)?.label ?? slot;
+    hud.message(`${label} 已装备`, 900);
+  },
+  onUnavailable: (slot) => {
+    const label = QUICK_SLOTS.find((item) => item.slot === slot)?.label ?? slot;
+    hud.message(`${label} 未装配 · 下次下潜前在工作台打包`, 1800);
+  },
+});
+hud.setActiveGear(activeTool, true);
 let nowMs = 0;
 
 function refreshEquipment() {
@@ -164,6 +180,10 @@ function refreshEquipment() {
 }
 
 function buyNextUpgrade(slot: EquipmentSlot = 'net') {
+  if (phase === 'play') {
+    gear.showNotice('Return to the workbench before upgrading gear.');
+    return;
+  }
   const next = nextSlotTier(equipment, slot);
   if (!next) {
     gear.showNotice(`${nextSlotLabel(slot)} is already at maximum level.`);
@@ -180,6 +200,21 @@ function buyNextUpgrade(slot: EquipmentSlot = 'net') {
   hud.message(`${nextSlotLabel(slot)} upgraded: Level ${next.level}`, 1800);
 }
 
+function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
+  if (phase === 'play') {
+    gear.showNotice('Return to the workbench before changing a module.');
+    return;
+  }
+  const next = setEquipmentPath(equipment, slot, path);
+  if (!next) {
+    gear.showNotice('Upgrade this slot to Lv2 before selecting a branch.');
+    return;
+  }
+  Object.assign(equipment, next);
+  refreshEquipment();
+  hud.message(`${nextSlotLabel(slot)} module changed`, 1200);
+}
+
 function nextSlotLabel(slot: EquipmentSlot) {
   return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp' } as const)[slot];
 }
@@ -188,9 +223,16 @@ function nextSlotLabel(slot: EquipmentSlot) {
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (loadoutWheel.open) {
+      loadoutWheel.closeWheel(false);
+      return;
+    }
     onEscape();
     return;
   }
+  // Tab is a hold-to-open radial wheel. Number keys and Q/E are instant
+  // quick-slot shortcuts; consume them before movement/catch handling.
+  if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
   if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
@@ -200,6 +242,11 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.key.toLowerCase());
   // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
+  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating' && !workbench.visible) {
+    e.preventDefault();
+    gear.toggle();
+    return;
+  }
   if (phase !== 'play') return;
   if (e.code === 'Space') {
     e.preventDefault();
@@ -232,7 +279,10 @@ function setTimeOfDay(mode: TimeOfDay) {
   const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
   hud.message(labels[mode]);
 }
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  if (loadoutWheel.handleKeyUp(e)) return;
+  keys.delete(e.key.toLowerCase());
+});
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 document.getElementById('gear-open')!.addEventListener('click', () => gear.toggle(true));
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
@@ -460,6 +510,7 @@ function pause() {
   if (phase !== 'play' || paused) return;
   paused = true;
   keys.clear();
+  loadoutWheel.closeWheel(false);
   vault.toggle(false);
   gear.toggle(false);
   report.toggle(false);
@@ -484,6 +535,9 @@ function goToMenu() {
   net = [];
   activeLoadout = null;
   loadout = [];
+  activeTool = 'net';
+  loadoutWheel.setActive(activeTool);
+  hud.setActiveGear(activeTool, true);
   applyEquipmentVisuals();
   hud.setNet(net, currentStats().netCapacity);
   hud.setEmergency(null);
@@ -555,6 +609,10 @@ const workbench = new Workbench({
   dive(id, gear) {
     loadout = gear;
     activeLoadout = [...gear];
+    const firstPacked = QUICK_SLOTS.find((item) => gear.includes(item.slot));
+    activeTool = firstPacked?.slot ?? 'net';
+    loadoutWheel.setActive(activeTool);
+    hud.setActiveGear(activeTool, activeLoadout.includes(activeTool));
     applyEquipmentVisuals();
     hud.setNet(net, currentStats().netCapacity);
     selectMap(id);
