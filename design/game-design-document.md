@@ -244,7 +244,7 @@ Calm = clamp((1.10·HR0 − HR) / (0.20·HR0), 0, 1)      在基线时为 0.5
 
 | 装备 | 效果（对应常数） |
 | --- | --- |
-| 渔网 | 容量 6 → 8 → 10（`NET_CAPACITY`） |
+| 渔网 | 容量 6 → 8 → 10，收网范围 2.4 → 2.8 → 3.2 m（`rodTier()` 的 `capacity` / `catchRadius`，定义在 `equipment.ts` 的 `ROD_TIERS`） |
 | 脚蹼 | 游速 7.5 → 8.5 → 9.5（`MAX_SPEED`） |
 | 应急气瓶 | 紧急上浮时间 +1 秒 / +2 秒（`EMERGENCY_SECONDS`）；有耐久，用几次就坏 |
 | 头灯 | 深渊和夜晚的可见范围 |

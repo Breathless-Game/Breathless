@@ -9,6 +9,8 @@ import { Report } from './report';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
 import { TitleScreen } from './title';
+import { Workbench } from './workbench';
+import type { UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, World } from './world';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
@@ -167,10 +169,11 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
-    openStartCard();
+    openWorkbench();
   }
   keys.add(e.key.toLowerCase());
-  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
+  // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
+  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
   if (phase !== 'play') return;
   if (e.code === 'Space') {
     e.preventDefault();
@@ -293,13 +296,15 @@ function selectMap(id: MapId) {
   mapPicker.render();
 }
 
-const mapPicker = new MapPicker(mapProgress, selectMap, (on) => {
+function setDemoUnlock(on: boolean) {
   mapProgress.unlockAll = on;
   // Turning the demo switch off while standing on a locked map sends you back to the first one.
   if (!isUnlocked(world.map, mapProgress)) selectMap('fjord');
   saveMapProgress(mapProgress);
   mapPicker.render();
-});
+}
+
+const mapPicker = new MapPicker(mapProgress, selectMap, setDemoUnlock);
 showMapOnHud();
 noteBankValue(false);
 
@@ -337,6 +342,8 @@ function markCalib(phase: string) {
 function startGame() {
   phase = 'play';
   overlay.classList.add('hidden');
+  // The workbench's dive transition may still be fading out if the player was quick.
+  workbench.hide();
   hud.show();
   hud.message('Hold your breath and dive!', 2400);
 }
@@ -433,6 +440,7 @@ function onEscape() {
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
+  else if (workbench.visible && phase === 'menu') workbench.escape();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
   else if (!overlay.classList.contains('hidden')) backFromStartCard();
@@ -493,16 +501,38 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
-// Start opens the existing start card (camera / keyboard / breath test).
+// START drops its fish onto the workbench (gear + map); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openStartCard },
+  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
   { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
+// Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
+let loadout: UpgradeId[] = [];
+
+const workbench = new Workbench({
+  progress: () => mapProgress,
+  setUnlockAll: setDemoUnlock,
+  dive(id, gear) {
+    loadout = gear;
+    selectMap(id);
+    openStartCard();
+  },
+  back: () => showTitle(false),
+});
+
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
+  workbench.hide();
   titleScreen.show(intro);
+}
+
+function openWorkbench() {
+  titleScreen.dropAway('START', () => {
+    titleScreen.hide();
+    workbench.show(true);
+  });
 }
 
 function openStartCard() {
@@ -514,7 +544,10 @@ function backFromStartCard() {
   if (breathTest.open) breathTest.stop();
   // The camera may already be on (calibration or breath test): release it on the way out.
   if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
-  else showTitle(false);
+  else {
+    overlay.classList.add('hidden');
+    workbench.show(false);
+  }
 }
 
 document.getElementById('card-back')!.addEventListener('click', backFromStartCard);
@@ -624,6 +657,8 @@ frame();
 
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
+  workbench,
+  loadout: () => loadout,
   breath,
   breathTest,
   titleScreen,
