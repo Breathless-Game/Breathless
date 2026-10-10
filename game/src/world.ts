@@ -82,6 +82,10 @@ export class World {
   private daySkyTint: [number, number, number] = [1, 1, 1];
   private nightSkyTint: [number, number, number] = [1, 1, 1];
   private surfaceTint = new THREE.Color(1, 1, 1);
+  private boatLamps: THREE.MeshStandardMaterial[] = [];
+  private boatSurfaceLight?: THREE.PointLight;
+  private readonly boatLampAmber = new THREE.Color('#ff9e3d');
+  private readonly boatLampRed = new THREE.Color('#ef3028');
   private lastSceneTime = 0;
   private lastCameraY = 1.5;
   private lastCameraX = 0;
@@ -376,8 +380,9 @@ export class World {
     const metalMat = flatMat('#4c6570', { metalness: 0.7, roughness: 0.32 });
     const woodMat = flatMat('#624431');
     const ropeMat = flatMat('#8c7353');
-    const lampMat = flatMat('#ffcc4d', { emissive: '#ff9e3d', emissiveIntensity: 1.8 });
-    const redLampMat = flatMat('#ef5b52', { emissive: '#ef3028', emissiveIntensity: 1.2 });
+    const lampMat = flatMat('#ffcc4d', { emissive: '#ff9e3d', emissiveIntensity: 0 });
+    const redLampMat = flatMat('#ef5b52', { emissive: '#ef3028', emissiveIntensity: 0 });
+    this.boatLamps = [lampMat, redLampMat];
 
     // A side-profile extrusion gives the hull a readable pointed bow and a
     // deep keel, while keeping the same flat-shaded low-poly language.
@@ -607,6 +612,12 @@ export class World {
       band.rotation.z = i * Math.PI / 2;
       boat.add(band);
     }
+    // The boat remains a surface object while the diver descends. This soft
+    // local fill keeps its hull readable through the water without raising
+    // the global underwater sun intensity that should stay depth attenuated.
+    this.boatSurfaceLight = new THREE.PointLight('#fff0c7', 0, 18, 2);
+    this.boatSurfaceLight.position.set(0, 3.4, 2.6);
+    boat.add(this.boatSurfaceLight);
     boat.position.set(0, 0.2, 0);
     this.scene.add(boat);
     return boat;
@@ -700,6 +711,26 @@ export class World {
     this.hemi.intensity = lighting.ambientIntensity * light;
     this.sun.position.set(...lighting.direction).multiplyScalar(80);
     this.sun.intensity = lighting.sunIntensity * light * light;
+    // Surface fixtures use the same weather/day state as the global lights,
+    // but do not inherit the camera's underwater attenuation. Otherwise the
+    // boat becomes a dark silhouette as soon as the diver descends.
+    const surfaceWeather = 1 - weather.cloud * 0.78;
+    const surfaceDay = lighting.daylight * surfaceWeather;
+    const surfaceNight = lighting.nightMix * (0.72 + 0.28 * surfaceWeather);
+    const lampScale = this.lightingEffects ? THREE.MathUtils.clamp(surfaceDay * 0.16 + surfaceNight * 1.8, 0, 1.8) : 0;
+    if (this.boatLamps.length >= 2) {
+      this.boatLamps[0].emissiveIntensity = lampScale;
+      this.boatLamps[1].emissiveIntensity = lampScale * 0.72;
+      this.boatLamps[0].emissive.copy(this.sun.color).lerp(this.boatLampAmber, 0.45);
+      this.boatLamps[1].emissive.copy(this.sun.color).lerp(this.boatLampRed, 0.65);
+    }
+    if (this.boatSurfaceLight) {
+      this.boatSurfaceLight.visible = this.lightingEffects && (surfaceDay + surfaceNight) > 0.01;
+      this.boatSurfaceLight.color.copy(this.sun.color).lerp(this.horizonColor, 0.25);
+      this.boatSurfaceLight.intensity = this.lightingEffects
+        ? THREE.MathUtils.clamp(0.08 + surfaceDay * 0.32 + surfaceNight * 0.58, 0, 0.9)
+        : 0;
+    }
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;

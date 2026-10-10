@@ -447,6 +447,8 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 `SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [32, 32, 24]`
 
+The playable corridor is 280 m wide (`x = -140…140`). Diver movement and camera look-ahead share the same clamped boundary, so pressing into either edge never reveals the empty side of the map.
+
 ### Rod / net upgrades (`ROD_TIERS` in `equipment.ts`)
 
 The fishing rod is the diver's hand net. Upgrades change only the gear; they never extend breath time.
@@ -569,6 +571,8 @@ A large screen may use a DPR below 1 to stay within the pixel budget; the HUD st
 Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver body, fish, breath and lighting; bubble particles use the quality-specific physics update cap above. The headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and hidden kelp is removed from the scene to avoid matrix updates.
 
 Diver bubbles spawn from the mask and snorkel anchor, rise with buoyancy and horizontal drag, and fade out before their lifetime ends. Low and medium quality use the low-poly bubble mesh with smaller particle budgets; high quality uses the subdivided mesh and full burst size. Switching quality trims excess live bubbles and rebinds the remaining meshes before releasing the old shared geometry.
+
+Near the surface, a shared ripple mesh marks the diver's contact with the water and briefly expands when the diver enters or exits. The boat's navigation lamps and a soft surface fill use the same day, night, cloud and lighting-effects state as the world lights, so the boat remains readable through the water without becoming a separate lighting style.
 
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.

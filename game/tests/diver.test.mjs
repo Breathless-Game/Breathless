@@ -69,6 +69,38 @@ test('quality budgets limit emitted particles and repeated bursts cannot exceed 
   assert.ok(burstCounts[0] < burstCounts[1] && burstCounts[1] < burstCounts[2]);
 });
 
+test('late-created bubbles pass through the scene material binder', () => {
+  const { diver } = createDiver();
+  let bound = 0;
+  diver.setMaterialBinder((root) => {
+    bound++;
+    assert.equal(root.type, 'Mesh');
+  });
+  diver.exhale(3);
+  assert.equal(bound, 3);
+});
+
+test('the diver creates a subtle waterline ripple and a crossing pulse', () => {
+  const { diver } = createDiver(RENDER_QUALITY.high, -4);
+  const ring = diver.group.getObjectByName('diver-water-contact-ripple');
+  assert.ok(ring);
+  diver.update(1 / 60, 0, 4);
+  assert.equal(ring.visible, false, 'deep swimming does not leave a surface ripple');
+
+  diver.pos.y = -0.2;
+  diver.update(1 / 60, 1, 0.2);
+  assert.equal(ring.visible, true);
+  diver.group.updateMatrixWorld(true);
+  assert.ok(Math.abs(ring.getWorldPosition(new THREE.Vector3()).y - 0.03) < 1e-6);
+  const nearOpacity = ring.material.opacity;
+  assert.ok(nearOpacity > 0 && nearOpacity < 0.56);
+
+  diver.pos.y = -1;
+  diver.update(1 / 60, 2, 1);
+  assert.equal(ring.visible, true, 'the entry/exit pulse survives just below the surface');
+  assert.ok(ring.material.opacity > 0.3 && ring.material.opacity < 0.56, 'crossing adds a visible pulse');
+});
+
 test('changing quality rebinds live meshes before disposing shared geometry and trims old particles', () => {
   const { scene, diver } = createDiver();
   diver.exhale(1000);

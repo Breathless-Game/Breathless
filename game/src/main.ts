@@ -13,6 +13,7 @@ import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, World } from './world';
+import { cameraTargetX, clampWorldX } from './bounds';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
@@ -64,6 +65,7 @@ resize();
 const diver = new Diver(scene);
 diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
+diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 const hud = new Hud();
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
@@ -694,7 +696,7 @@ function update(dt: number, time: number) {
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   diver.pos.addScaledVector(diver.vel, dt);
-  diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -HALF_WIDTH, HALF_WIDTH);
+  diver.pos.x = clampWorldX(diver.pos.x, HALF_WIDTH);
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, world.seabedY + 1.2, -0.05);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
@@ -716,7 +718,7 @@ function update(dt: number, time: number) {
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
   const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9) - benchDrop, 22);
+  camTarget.set(cameraTargetX(diver.pos.x, diver.vel.x, HALF_WIDTH), Math.max(camY, world.seabedY + 9) - benchDrop, 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 
