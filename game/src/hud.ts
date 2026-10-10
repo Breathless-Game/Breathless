@@ -124,7 +124,7 @@ export class Hud {
     if (s.rate != null && s.mode === 'presage') parts.push(`${Math.round(s.rate)} br/min`);
     if (s.pulse != null && s.mode === 'presage') parts.push(`♥ ${Math.round(s.pulse)}`);
     this.vitals.textContent = parts.join(' · ');
-    this.hint.textContent = s.mode === 'presage' ? s.hint || (s.calibrated ? '' : 'Calibrating: breathe normally') : '';
+    this.hint.textContent = s.mode === 'presage' ? s.hint || (s.calibrated ? '' : 'Calibrating: breathe normally') : s.error;
     this.drawTrace(s.trace, holding, danger);
   }
 

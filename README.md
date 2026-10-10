@@ -110,6 +110,8 @@ npm run game       # the game, http://localhost:5173
 
 (Or run `npm run dev` to start both at once. It works on macOS and Windows, and Ctrl+C stops both.)
 
+After a `git pull`, start them the same way. If the pull added a dependency, the game and the sensor notice it is missing when they start and install it first.
+
 ### Windows
 
 - **x64 machines**: follow the steps above as they are.
@@ -146,6 +148,29 @@ Click **Start with camera**. Keep your face and chest in frame, in bright light.
 3. As soon as you breathe, it switches back to **BREATHING**.
 
 If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` (see section 5).
+
+### Self-hosting / 自托管
+
+`npm start` is the production server: one Node process on one port serves the built game and the breath sensor (WebSocket at `/sensor`) together, so a single tunnel or reverse proxy can front it.
+
+```bash
+npm run setup      # once: installs sensor/ and game/ dependencies
+npm run build      # builds game/ into game/dist
+npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. |
+| `PORT` | `8794` | HTTP + WebSocket port. Dev mode (`npm run sensor`) keeps `SENSOR_PORT`, 8787. |
+| `HOST` | `127.0.0.1` | Bind address. Loopback, because the tunnel / proxy on the same machine is the only way in. |
+| `MAX_LIVE_SESSIONS` | `1` | Players using live Presage at the same time. The SDK's native state is process-global, so it can't run two sessions in one process; `0` turns live sensing off. Anyone over the cap sees "Server busy" and plays with the keyboard. |
+| `MAX_CONN_PER_IP` | `8` | Open sensor connections per player IP (read from `CF-Connecting-IP` / `X-Forwarded-For` when the proxy is local). |
+| `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
+
+- **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
+- **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
+- **Bandwidth.** Live mode uploads raw 640×480 RGBA frames: 1.23 MB per frame, about 37 MB/s (≈295 Mbit/s) per player at 30 fps. Fine on a LAN; over the internet most players can't upload that fast, so they send fewer frames and Presage's trace degrades below ~15 fps. Keyboard and simulator mode send no frames.
 
 ---
 
@@ -202,7 +227,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 **Why does the browser open the camera, and not Node?** macOS does not grant camera permission to a node process started from an IDE or from Claude, so the SDK's `useCamera` never receives a frame. Instead the browser captures frames and pushes them to the sensor over WebSocket, and the sensor hands them to the SDK with `useCustomInput` + `sendFrame`.
 
-### WebSocket protocol (`ws://<host>:8787`)
+### WebSocket protocol (`ws://<host>:8787` in dev, same-origin `/sensor` with `npm start`)
 
 **Browser → sensor**
 
@@ -231,6 +256,8 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
   "trace": [ /* the last 90 chest-movement samples */ ]
 }
 ```
+
+Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard.
 
 ---
 
@@ -328,6 +355,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 .
 ├── package.json            root scripts: setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev: starts sensor and game together (cross-platform)
+├── scripts/ensure-deps.mjs runs before the game and the sensor start: installs dependencies that are missing
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
