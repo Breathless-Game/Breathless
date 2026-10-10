@@ -1,7 +1,7 @@
 import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
 import { fishIcon } from './portrait';
-import type { EquipmentState, RodTier } from './equipment';
+import type { EquipmentSlot, EquipmentState, RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -29,6 +29,9 @@ export class Hud {
   private bankCount = $('bank-count');
   private bankValue = $('bank-value');
   private gearSummary = $('gear-summary');
+  private activeGear = $('active-gear');
+  private activeGearLabel = $('active-gear-label');
+  private activeGearHint = $('active-gear-hint');
   private toasts = $('toasts');
   private msgTimer = 0;
 
@@ -147,6 +150,22 @@ export class Hud {
 
   setEquipment(state: EquipmentState, tier: RodTier) {
     this.gearSummary.textContent = `NET Lv${tier.level} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${state.pearls} ◇`;
+  }
+
+  /** Show the currently selected quick slot beside the net inventory. */
+  setActiveGear(slot: EquipmentSlot, packed = true) {
+    const labels: Record<EquipmentSlot, string> = {
+      net: '捕捞网',
+      rod: '杆身',
+      reel: '线轮',
+      fins: '脚蹼',
+      tank: '应急气瓶',
+      lamp: '探照灯',
+    };
+    const keys: Record<EquipmentSlot, number> = { net: 1, rod: 2, reel: 3, fins: 4, tank: 5, lamp: 6 };
+    this.activeGear.classList.toggle('unavailable', !packed);
+    this.activeGearLabel.textContent = packed ? labels[slot] : `${labels[slot]} · 未装配`;
+    this.activeGearHint.textContent = `按 ${keys[slot]} 快速切换 · Tab 轮盘`;
   }
 
   toast(spec: FishSpec, title?: string) {
