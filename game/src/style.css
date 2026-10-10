@@ -389,7 +389,8 @@ body {
   padding: 16px;
 }
 
-#overlay .card {
+#overlay .card,
+#pause .card {
   max-width: 560px;
   width: 100%;
   background: var(--panel);
@@ -468,6 +469,84 @@ button.link {
 #calib-step {
   font-weight: 800;
   font-size: 20px;
+}
+
+/* ---- pause menu ---- */
+#pause {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 18, 0.6);
+  padding: 16px;
+}
+
+#pause .card {
+  max-width: 420px;
+  text-align: center;
+}
+
+#pause h2 {
+  margin: 0 0 18px;
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 18px 0 8px;
+}
+
+button.danger {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+}
+
+.setting {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+}
+
+.setting select {
+  font: inherit;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.setting select option {
+  background: #04121f;
+}
+
+.setting input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--hold);
+}
+
+#countdown-num {
+  font-size: 96px;
+  font-weight: 900;
+  line-height: 1.1;
+  color: var(--hold);
+  font-variant-numeric: tabular-nums;
+}
+
+#cam-wrap.off {
+  display: none;
 }
 
 /* ---- collection ---- */
