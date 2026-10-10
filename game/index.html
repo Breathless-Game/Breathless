@@ -54,7 +54,7 @@
       </section>
 
       <div id="toasts"></div>
-      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>N</b> night · <b>K</b> breath input</div>
+      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
     </div>
 
     <div id="overlay">
@@ -77,6 +77,55 @@
           <div id="calib-step">Connecting to breath sensor…</div>
           <div id="calib-sub" class="small muted"></div>
           <button id="calib-skip" class="link">skip</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pause" class="hidden">
+      <div class="card">
+        <div id="pause-main">
+          <h2>Paused</h2>
+          <div class="menu-buttons">
+            <button id="pause-resume" class="primary">Resume</button>
+            <button id="pause-settings">Settings</button>
+            <button id="pause-menu">Main menu</button>
+          </div>
+          <p class="small muted">Esc to resume</p>
+        </div>
+
+        <div id="settings" class="hidden">
+          <h2>Settings</h2>
+          <label class="setting"><span>Breath input</span><select id="set-input"></select></label>
+          <label class="setting"><span>Night mode</span><input type="checkbox" id="set-night" /></label>
+          <label class="setting">
+            <span>Render quality</span>
+            <select id="set-quality">
+              <option value="auto">Auto</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
+          <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <div class="menu-buttons">
+            <button id="settings-back">Back</button>
+          </div>
+        </div>
+
+        <div id="pause-confirm" class="hidden">
+          <h2>Leave this dive?</h2>
+          <p id="confirm-text"></p>
+          <div class="menu-buttons">
+            <button id="confirm-leave" class="danger">Leave</button>
+            <button id="confirm-stay">Stay</button>
+          </div>
+        </div>
+
+        <div id="pause-countdown" class="hidden">
+          <h2>Take a breath and hold it</h2>
+          <div id="countdown-num">3</div>
+          <p class="small muted">You are underwater: breathing after this counts as out of air.</p>
         </div>
       </div>
     </div>
