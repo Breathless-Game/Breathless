@@ -8,7 +8,7 @@ import { RARITY, rollFish, type Archetype, type Rarity } from './fish';
 
 // The title fish were picked by look under the old Abyss drop table. Keep rolling
 // them with it so retuning the in-game odds (depth-odds.ts) doesn't reshape them.
-const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
+export const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
 import { fishSprite } from './portrait';
 
 export interface TitleFish {
@@ -87,6 +87,7 @@ const LINE_SEGS = 5;
 const SWING_S = 1.15;
 const FIRST_DROP_S = 1.35;
 const DROP_GAP_S = 0.28;
+const DROP_AWAY_MS = 650;
 const CLICK_MOVE_PX = 8;
 const CLICK_MS = 450;
 
@@ -164,6 +165,7 @@ export class TitleScreen {
   private last = 0;
   private raf = 0;
   private running = false;
+  private leaving = false; // a fish is dropping away; ignore clicks
 
   private pointer = { x: -1e4, y: -1e4, vx: 0, vy: 0, t: 0 };
   private held: { i: number; inv: number } | null = null;
@@ -204,6 +206,22 @@ export class TitleScreen {
 
   get visible() {
     return this.running;
+  }
+
+  /** Cuts the named fish's lines so it drops off the bottom, then calls done. */
+  dropAway(label: string, done: () => void) {
+    const f = this.fish.find((x) => x.def.label === label);
+    if (this.leaving) return;
+    // Enter during the intro, before the fish has even arrived: nothing to drop, just go.
+    if (!f?.dropped) return done();
+    this.leaving = true;
+    const cut = new Set(f.lines.flatMap((l) => l.links));
+    f.links = f.links.filter((l) => !cut.has(l));
+    f.lines = [];
+    window.setTimeout(() => {
+      this.leaving = false;
+      done();
+    }, DROP_AWAY_MS);
   }
 
   /** intro: replay the rope swing and the fish drop; otherwise start settled. */
@@ -496,7 +514,7 @@ export class TitleScreen {
     }
     const press = this.press;
     this.press = null;
-    if (!press?.fish?.def.onClick) return;
+    if (!press?.fish?.def.onClick || this.leaving) return;
     const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
     if (moved < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS && this.fishAt(e.clientX, e.clientY)?.f === press.fish) {
       press.fish.def.onClick();

@@ -15,9 +15,11 @@
     "@metaplex-foundation/umi-bundle-defaults": "^1.6.0",
     "@metaplex-foundation/umi-uploader-irys": "^1.6.0",
     "buffer": "^6.0.3",
+    "matter-js": "^0.20.0",
     "three": "^0.170.0"
   },
   "devDependencies": {
+    "@types/matter-js": "^0.19.8",
     "@types/three": "^0.170.0",
     "typescript": "^5.6.3",
     "vite": "^6.3.5",
