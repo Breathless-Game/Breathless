@@ -18,8 +18,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 export interface WorkbenchHooks {
   progress(): MapProgress;
   setUnlockAll(on: boolean): void;
-  /** The camera pan between the title (0) and the table (1). */
-  pan(u: number): void;
+  /** The camera pan between the title (0) and the table (1); tableY: screen y of the table's back, for shadows. */
+  pan(u: number, tableY: number): void;
   /** Called at the end of the zoom into the chosen place. */
   dive(map: MapId, gear: UpgradeId[]): void;
 }
@@ -55,13 +55,18 @@ const GRAVITY = 26;
 const RESTITUTION = 0.32;
 const BOUNCE_MIN = 2.2; // slower than this and it just settles
 const HOLD_Y = 0.85;
-const MAP_SLIDE = 30; // push off the chart, units/s²
+const MAP_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.07);
+const MAP_TOP = 0.03; // gear resting on the chart sits this much higher
+const CREASE = 0.07; // how far the fold stands up off the table
+const PICKUP_S = 0.75; // the chart's flight from the table to the middle of the screen
+const SCATTER_S = 0.55; // gear on the chart hopping off before it is picked up
+const SHADOW_Z = 0.7; // where the title fish's shadows fall, from the table's back edge
 const STEP = 1 / 120;
 
 // Camera: aimed above the table, so the table fills the lower half and the title
 // rope keeps the top; the pan starts RISE units higher.
 const CAM = new THREE.Vector3(0, 6.2, 9.5);
-const LOOK = new THREE.Vector3(0, 1.2, 0);
+const LOOK = new THREE.Vector3(0, 0.85, 0);
 const BASE_ASPECT = 1.6;
 const RISE = 7.5;
 const PAN_S = 1.15;
@@ -114,6 +119,7 @@ export class Workbench {
   private canvas = $<HTMLCanvasElement>('wb-canvas');
   private tip = $('wb-tip');
   private toastEl = $('wb-toast');
+  private ui = $('wb-ui');
   private chartEl = $('wb-chart');
   private paper = $('wb-paper');
   private chartCanvas = $<HTMLCanvasElement>('wb-chart-canvas');
@@ -203,13 +209,16 @@ export class Workbench {
   /** intro: pan down from the title and drop the gear; otherwise come back to the table as it was. */
   show(intro: boolean) {
     this.root.classList.remove('hidden');
+    this.lift(false);
+    this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
-    this.chartEl.classList.remove('closing');
+    this.chartEl.classList.remove('closing', 'pre');
     this.paper.classList.remove('zooming');
     this.tip.classList.add('hidden');
     this.map.visible = true;
     this.map.position.copy(MAP_AT);
-    this.map.rotation.set(0, 0.07, 0);
+    this.map.quaternion.copy(MAP_REST);
+    this.setCrease(1);
     this.tweens = [];
     this.held = null;
     this.press = null;
@@ -227,6 +236,7 @@ export class Workbench {
       this.state = 'idle';
       this.setPan(1);
     }
+    this.placeCamera();
     this.last = performance.now();
     cancelAnimationFrame(this.raf);
     const loop = (now: number) => {
@@ -242,9 +252,16 @@ export class Workbench {
     this.state = 'closed';
     cancelAnimationFrame(this.raf);
     this.root.classList.add('hidden');
+    this.ui.classList.add('hidden');
+    this.lift(false);
     this.chartEl.classList.add('hidden');
     this.tip.classList.add('hidden');
     document.body.style.cursor = '';
+  }
+
+  /** The chart is held up toward the camera: the table goes over the title fish, which fade out (style.css). */
+  private lift(on: boolean) {
+    document.body.classList.toggle('wb-lifted', on);
   }
 
   /** Esc: fold the chart; from the bare table, pan back up to the title. */
@@ -328,9 +345,6 @@ export class Workbench {
   private buildMap() {
     const geo = new THREE.PlaneGeometry(MAP_W, MAP_D, 2, 1);
     geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) if (Math.abs(pos.getX(i)) < 1e-3) pos.setY(i, 0.07);
-    geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, this.mapMat);
     mesh.position.y = 0.012;
     mesh.castShadow = true;
@@ -338,6 +352,15 @@ export class Workbench {
     this.map.add(mesh);
     this.scene.add(this.map);
     return mesh;
+  }
+
+  /** 1 = folded (the crease stands up), 0 = flattened out to hold up and read. */
+  private setCrease(fold: number) {
+    const geo = this.mapMesh.geometry;
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) if (Math.abs(pos.getX(i)) < 1e-3) pos.setY(i, CREASE * fold);
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
   }
 
   private paintMap() {
@@ -367,8 +390,12 @@ export class Workbench {
 
     const obj = new THREE.Group();
     obj.add(holder);
-    // An invisible ball to click: thin parts like a rod are hard to hit otherwise.
-    const hit = new THREE.Mesh(new THREE.SphereGeometry(wide[0] * 0.5, 10, 8), new THREE.MeshBasicMaterial({ visible: false }));
+    // An invisible box to click, fitted to the model but never thinner than a
+    // finger: thin parts like a rod are hard to hit otherwise.
+    const hit = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.max(size.x * 1.1, 0.3), Math.max(size.y * 1.1, 0.3), Math.max(size.z * 1.1, 0.3)),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    );
     obj.add(hit);
     obj.visible = false;
     this.scene.add(obj);
@@ -438,9 +465,9 @@ export class Workbench {
 
   private setPan(u: number) {
     this.panU = u;
-    this.hooks.pan(u);
   }
 
+  /** Places the camera, then tells the title where the table's back is now, for the fish's shadows. */
   private placeCamera() {
     // A narrower window backs the camera off so the whole table still fits across.
     const fit = Math.max(1, BASE_ASPECT / this.camera.aspect);
@@ -449,6 +476,9 @@ export class Workbench {
     const jy = (Math.random() - 0.5) * this.shake;
     this.camera.position.set(CAM.x * fit + jx, CAM.y * fit + lift + jy, LOOK.z + (CAM.z - LOOK.z) * fit);
     this.camera.lookAt(LOOK.x + jx * 0.5, LOOK.y + lift + jy * 0.5, LOOK.z);
+    this.camera.updateMatrixWorld();
+    const back = tmpV.set(0, 0, TABLE.z0 + SHADOW_Z).project(this.camera);
+    this.hooks.pan(this.panU, ((1 - back.y) / 2) * window.innerHeight);
   }
 
   // ---- Loop -------------------------------------------------------------
@@ -521,8 +551,9 @@ export class Workbench {
 
       p.vel.y -= GRAVITY * dt;
       p.pos.addScaledVector(p.vel, dt);
-      if (p.pos.y <= p.restY) {
-        p.pos.y = p.restY;
+      const floor = p.restY + (this.onMap(p) ? MAP_TOP : 0);
+      if (p.pos.y <= floor) {
+        p.pos.y = floor;
         if (p.vel.y < -BOUNCE_MIN) {
           this.thud(p, -p.vel.y);
           p.vel.y *= -RESTITUTION;
@@ -533,13 +564,12 @@ export class Workbench {
           p.vel.y = 0;
           p.grounded = true;
         }
-      } else if (p.pos.y > p.restY + 0.01) p.grounded = false;
+      } else if (p.pos.y > floor + 0.01) p.grounded = false;
 
       if (p.grounded) {
         const k = Math.exp(-dt * 6);
         p.vel.x *= k;
         p.vel.z *= k;
-        this.offMap(p, dt);
         p.q.slerp(this.restQ(p), 1 - Math.exp(-dt * 14));
         p.spin.multiplyScalar(Math.exp(-dt * 8));
       } else {
@@ -548,7 +578,7 @@ export class Workbench {
       }
 
       // Walls only near the table top: a piece tossed out of the tray flies over them.
-      if (p.pos.y < p.restY + 0.5) {
+      if (p.pos.y < floor + 0.5) {
         const xMax = TRAY.x0 - p.r - 0.05;
         if (p.pos.x < TABLE.x0 + p.r) ((p.pos.x = TABLE.x0 + p.r), (p.vel.x = Math.abs(p.vel.x) * 0.4));
         if (p.pos.x > xMax) ((p.pos.x = xMax), (p.vel.x = -Math.abs(p.vel.x) * 0.4));
@@ -559,15 +589,28 @@ export class Workbench {
     this.collide();
   }
 
-  /** The chart keeps itself clear: a piece resting on it slides off the nearest edge, so the chart stays clickable. */
-  private offMap(p: Piece, dt: number) {
-    const dx = p.pos.x - MAP_AT.x;
-    const dz = p.pos.z - MAP_AT.z;
-    const ox = MAP_W / 2 + p.r * 0.4 - Math.abs(dx);
-    const oz = MAP_D / 2 + p.r * 0.4 - Math.abs(dz);
-    if (ox <= 0 || oz <= 0) return;
-    if (ox < oz) p.vel.x += Math.sign(dx || 1) * MAP_SLIDE * dt;
-    else p.vel.z += Math.sign(dz || 1) * MAP_SLIDE * dt;
+  /** Whether a piece lies over the chart while the chart is down on the table. */
+  private onMap(p: Piece) {
+    if (!this.map.visible || this.map.position.y > 0.05) return false;
+    return Math.abs(p.pos.x - MAP_AT.x) < MAP_W / 2 && Math.abs(p.pos.z - MAP_AT.z) < MAP_D / 2;
+  }
+
+  /** Hops a piece off the chart, landing just past its nearest edge (straight out from the chart's middle). */
+  private hopOff(p: Piece) {
+    let dx = p.pos.x - MAP_AT.x;
+    let dz = p.pos.z - MAP_AT.z;
+    if (Math.hypot(dx, dz) < 0.05) [dx, dz] = [Math.random() - 0.5, Math.random() - 0.5];
+    const n = Math.hypot(dx, dz);
+    const nx = dx / n;
+    const nz = dz / n;
+    const reach = Math.min((MAP_W / 2 + p.r + 0.3) / (Math.abs(nx) || 1e-3), (MAP_D / 2 + p.r + 0.3) / (Math.abs(nz) || 1e-3));
+    const tx = THREE.MathUtils.clamp(MAP_AT.x + nx * reach + (Math.random() - 0.5) * 0.3, TABLE.x0 + p.r, TRAY.x0 - p.r - 0.1);
+    const tz = THREE.MathUtils.clamp(MAP_AT.z + nz * reach + (Math.random() - 0.5) * 0.3, TABLE.z0 + p.r, TABLE.z1 - p.r);
+    const t = SCATTER_S * 0.9;
+    p.vel.set((tx - p.pos.x) / t, 0.5 * GRAVITY * t, (tz - p.pos.z) / t);
+    p.spin.set((Math.random() - 0.5) * 7, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 7);
+    p.yaw += (Math.random() - 0.5) * 1.2;
+    p.grounded = false;
   }
 
   /** Circles in the table plane, for pieces at about the same height. */
@@ -805,50 +848,104 @@ export class Workbench {
 
   // ---- Chart ------------------------------------------------------------
 
-  /** The map lifts off the table and unfolds into the full chart. */
+  /**
+   * Gear lying on the chart hops off first; then the chart is picked up, flattened
+   * out and held up in the middle of the screen, exactly where the big chart is
+   * laid out, which then takes over.
+   */
   private openChart() {
     this.state = 'opening';
     this.hovered = null;
     this.tip.classList.add('hidden');
     document.body.style.cursor = '';
+    const on = this.pieces.filter((p) => p.mode === 'free' && this.onMap(p));
+    on.forEach((p) => this.hopOff(p));
+    if (on.length) this.tween(SCATTER_S, () => {}, () => this.pickUpChart());
+    else this.pickUpChart();
+  }
+
+  private pickUpChart() {
     const progress = this.hooks.progress();
     this.picked = isUnlocked(MAPS[progress.selected], progress) ? progress.selected : null;
     this.demoBox.checked = progress.unlockAll;
-    const y0 = this.map.position.y;
+    drawChart(this.chartCanvas, Math.min(window.devicePixelRatio, 2) * 1.2, progress, false);
+    this.renderPins();
+    // Laid out but invisible, so we know where the paper will be.
+    this.chartEl.classList.remove('hidden', 'closing');
+    this.chartEl.classList.add('pre');
+    // Measured from a steady camera: a shake now would throw the hand-off off by pixels.
+    this.shake = 0;
+    this.placeCamera();
+    const to = this.heldPose(this.paper.getBoundingClientRect());
+    this.lift(true);
+    const p0 = this.map.position.clone();
+    const q0 = this.map.quaternion.clone();
     this.tween(
-      0.35,
+      PICKUP_S,
       (u) => {
-        this.map.position.y = y0 + easeOut(u) * 1.6;
-        this.map.rotation.x = -easeOut(u) * 0.5;
+        const e = easeInOut(u);
+        this.map.position.lerpVectors(p0, to.pos, e);
+        this.map.position.y += Math.sin(u * Math.PI) * 0.6; // up off the table first
+        // It stays flat while it comes up, then turns to face us.
+        this.map.quaternion.slerpQuaternions(q0, to.q, easeInOut(Math.max(0, (u - 0.15) / 0.85)));
+        this.setCrease(1 - easeOut(Math.min(1, u / 0.6)));
       },
       () => {
-        this.map.visible = false;
-        drawChart(this.chartCanvas, Math.min(window.devicePixelRatio, 2) * 1.2, progress, false);
-        this.renderPins();
-        this.chartEl.classList.remove('hidden', 'closing');
+        this.chartEl.classList.remove('pre');
         this.state = 'chart';
+        // The paper fades in over the 3D chart, which sits exactly behind it.
+        window.setTimeout(() => this.state === 'chart' && (this.map.visible = false), 300);
       },
     );
   }
 
+  /**
+   * Where the 3D chart has to be to cover `rect` on screen: square to the camera
+   * (a plane parallel to the screen projects without distortion), at the depth
+   * where its width matches the rect's.
+   */
+  private heldPose(rect: DOMRect) {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const depth = (MAP_W * h) / (2 * tanHalf * rect.width);
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const dir = new THREE.Vector3((cx / w) * 2 - 1, 1 - (cy / h) * 2, 0.5).unproject(this.camera).sub(this.camera.position).normalize();
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    const pos = this.camera.position.clone().addScaledVector(dir, depth / dir.dot(forward));
+    // The chart lies in the table plane facing up; tip it up to face the camera.
+    const q = this.camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+    return { pos, q };
+  }
+
+  /** The big chart fades back into the 3D one, which is carried back down and set on the table. */
   private closeChart() {
     this.state = 'closing';
+    this.map.visible = true;
     this.chartEl.classList.add('closing');
     window.setTimeout(() => {
       this.chartEl.classList.add('hidden');
-      this.map.visible = true;
-      const y0 = this.map.position.y;
-      const r0 = this.map.rotation.x;
+      const p0 = this.map.position.clone();
+      const q0 = this.map.quaternion.clone();
       this.tween(
-        0.35,
+        PICKUP_S * 0.85,
         (u) => {
           const e = easeInOut(u);
-          this.map.position.y = lerp(y0, MAP_AT.y, e);
-          this.map.rotation.x = lerp(r0, 0, e);
+          this.map.position.lerpVectors(p0, MAP_AT, e);
+          this.map.position.y += Math.sin(u * Math.PI) * 0.5;
+          this.map.quaternion.slerpQuaternions(q0, MAP_REST, easeInOut(Math.min(1, u / 0.85)));
+          this.setCrease(easeInOut(Math.max(0, (u - 0.4) / 0.6)));
         },
-        () => (this.state = 'idle'),
+        () => {
+          // Set down: a little puff, and the gear nearby feels it.
+          this.puff(MAP_AT.x, MAP_AT.z, 1.6);
+          this.shake = Math.max(this.shake, 0.04);
+          this.lift(false);
+          this.state = 'idle';
+        },
       );
-    }, 280);
+    }, 300);
   }
 
   private renderPins() {
@@ -979,7 +1076,7 @@ function drawPlanks(w: number, h: number): HTMLCanvasElement {
   return cv;
 }
 
-/** Felt for the ready tray, with its label along the back edge. */
+/** Felt for the ready tray, with its label. */
 function drawTray(w: number, d: number): HTMLCanvasElement {
   const cv = document.createElement('canvas');
   cv.width = 256;
@@ -995,6 +1092,7 @@ function drawTray(w: number, d: number): HTMLCanvasElement {
   c.fillStyle = 'rgba(255, 240, 210, 0.8)';
   c.textAlign = 'center';
   c.font = '800 22px Inter, system-ui, sans-serif';
-  c.fillText('READY · 准备区', cv.width / 2, 44);
+  // Along the front edge: the title fish hang over the back of the table.
+  c.fillText('READY · 准备区', cv.width / 2, cv.height - 26);
   return cv;
 }

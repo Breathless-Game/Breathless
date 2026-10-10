@@ -87,7 +87,7 @@ const LINE_SEGS = 5;
 const SWING_S = 1.15;
 const FIRST_DROP_S = 1.35;
 const DROP_GAP_S = 0.28;
-const PAN_FRAC = 0.09; // how far the rope rides up when the camera pans down to the workbench
+const PAN_FRAC = 0.03; // how far the rope rides up when the camera pans down to the workbench
 const CLICK_MOVE_PX = 8;
 const CLICK_MS = 450;
 
@@ -166,6 +166,7 @@ export class TitleScreen {
   private raf = 0;
   private running = false;
   private panU = 0;
+  private tableY: number | null = null; // screen y where the fish's shadows fall on the workbench table
   private name: HTMLElement;
 
   private pointer = { x: -1e4, y: -1e4, vx: 0, vy: 0, t: 0 };
@@ -214,8 +215,10 @@ export class TitleScreen {
    * The camera pans down to the workbench: 0 = the title, 1 = the rope and its
    * fish ride up to the top of the screen and the name scrolls away.
    */
-  setPan(u: number) {
+  setPan(u: number, tableY: number | null = null) {
     this.panU = u;
+    this.tableY = tableY;
+    this.canvas.parentElement!.style.setProperty('--pan', String(u));
     this.name.style.transform = u ? `translateY(${-u * 40}vh)` : '';
     this.name.style.opacity = u ? String(Math.max(0, 1 - u * 2.2)) : '';
   }
@@ -549,6 +552,7 @@ export class TitleScreen {
   private draw() {
     const c = this.ctx;
     c.clearRect(0, 0, this.w, this.h);
+    this.drawShadows();
     c.save();
     c.translate(0, -this.pan);
 
@@ -567,6 +571,38 @@ export class TitleScreen {
     this.drawRope();
     for (const f of this.fish) if (f.dropped) this.drawFish(f);
     c.restore();
+  }
+
+  /**
+   * Over the workbench, each fish casts a soft shadow onto the table below it
+   * (screen space), so it reads as hanging above the table, not just in front.
+   */
+  private drawShadows() {
+    if (this.tableY == null || !this.panU) return;
+    const c = this.ctx;
+    for (const f of this.fish) {
+      if (!f.dropped) continue;
+      const h = this.ps[f.head];
+      const t = this.ps[f.tail];
+      // Just under the fish where it hangs over the table, else on the table's back.
+      const bottom = Math.max(h.y, t.y) - this.pan;
+      const y = Math.max(this.tableY, bottom + 18);
+      // Lower fish hang nearer the table: darker, tighter shadows.
+      const lift = Math.max(0, this.tableY - bottom);
+      const near = Math.max(0.25, 1 - lift / (this.h * 0.4));
+      const r = Math.max(Math.abs(h.x - t.x), f.len * 0.35) * (0.45 + 0.25 / near);
+      const g = c.createRadialGradient(0, 0, 0, 0, 0, r);
+      g.addColorStop(0, `rgba(20, 10, 2, ${0.55 * near * this.panU})`);
+      g.addColorStop(1, 'rgba(20, 10, 2, 0)');
+      c.save();
+      c.translate((h.x + t.x) / 2, y);
+      c.scale(1, 0.22); // flattened onto the tabletop
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(0, 0, r, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
   }
 
   private drawRope() {
