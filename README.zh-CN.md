@@ -145,6 +145,28 @@ npm run game       # 游戏，http://localhost:5173
 
 如果误判多，去调 `sensor/breath-detector.mjs` 里的常数（见第 5 节）。
 
+### 自托管 / Self-hosting
+
+`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏和憋气传感器（WebSocket 在 `/sensor`），前面只需要一条隧道或一个反向代理。
+
+```bash
+npm run setup      # 一次性：安装 sensor/ 和 game/ 的依赖
+npm run build      # 把 game/ 构建到 game/dist
+npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/sensor
+```
+
+| 变量 | 默认 | 含义 |
+| --- | --- | --- |
+| `PRESAGE_API_KEY` | 空 | **只放在服务器**仓库根目录的 `.env` 里。没有 key 时服务器跑模拟器。 |
+| `PORT` | `8794` | HTTP + WebSocket 端口。开发模式（`npm run sensor`）仍用 `SENSOR_PORT`，8787。 |
+| `HOST` | `127.0.0.1` | 监听地址。只听本机，因为同机的隧道 / 代理是唯一入口。 |
+| `MAX_LIVE_SESSIONS` | `1` | 同时使用 Presage 实时检测的玩家数。SDK 的原生状态是进程全局的，一个进程里跑不了两个会话；设成 `0` 关闭实时检测。超出上限的玩家会看到 "Server busy"，自动改用键盘玩。 |
+| `MAX_CONN_PER_IP` | `8` | 每个玩家 IP 可同时打开的传感器连接数（代理在本机时读 `CF-Connecting-IP` / `X-Forwarded-For`）。 |
+| `SENSOR_RECORD` | 关 | 设成 `1` 才把实时会话写进 `sensor/recordings/`。serve 模式默认关闭：陌生人的呼吸数据绝不落盘。（开发模式照旧录制。） |
+
+- **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
+- **带宽。** 实时模式上传的是原始 640×480 RGBA 帧：每帧 1.23 MB，30 fps 时每个玩家约 37 MB/s（≈295 Mbit/s）上行。局域网没问题；走公网时大多数玩家传不了这么快，帧数会掉，低于约 15 fps 时 Presage 的波形会变差。键盘和模拟模式不发帧。
+
 ---
 
 ## 3. 操作方式
@@ -194,7 +216,7 @@ npm run game       # 游戏，http://localhost:5173
 
 **为什么摄像头由浏览器打开，而不是 Node？** macOS 不会给从 IDE 或 Claude 启动的 node 进程摄像头权限，SDK 的 `useCamera` 一直收不到帧。所以浏览器抓帧，经 WebSocket 推给 sensor，sensor 再用 `useCustomInput` + `sendFrame` 交给 SDK。
 
-### WebSocket 协议（`ws://<host>:8787`）
+### WebSocket 协议（开发时 `ws://<host>:8787`，`npm start` 时同源 `/sensor`）
 
 **浏览器 → sensor**
 
@@ -223,6 +245,8 @@ npm run game       # 游戏，http://localhost:5173
   "trace": [ /* 最近 90 个胸部起伏采样 */ ]
 }
 ```
+
+错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。
 
 ---
 

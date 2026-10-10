@@ -326,6 +326,7 @@ const calibStep = document.getElementById('calib-step')!;
 const calibSub = document.getElementById('calib-sub')!;
 let sawHold = false;
 let calibPhase = '';
+let calibFallback: ReturnType<typeof setTimeout> | null = null;
 
 function markCalib(phase: string) {
   if (phase === calibPhase) return;
@@ -383,9 +384,15 @@ document.getElementById('test-play')!.addEventListener('click', () => {
 
 function updateCalibration() {
   const s = breath.state;
-  if (!s.connected) {
+  if (s.mode === 'keyboard' && s.error) {
+    // breath.ts dropped to keyboard, e.g. the server's live Presage slots are all taken.
+    calibStep.textContent = 'Playing with keyboard: hold Shift to dive';
+    calibSub.textContent = s.error;
+    camWrap.style.visibility = 'hidden';
+    if (!calibFallback) calibFallback = setTimeout(() => phase === 'calibrating' && startGame(), 3000);
+  } else if (!s.connected) {
     calibStep.textContent = 'Connecting to breath sensor…';
-    calibSub.textContent = 'Start it with: npm run sensor';
+    calibSub.textContent = import.meta.env.DEV ? 'Start it with: npm run sensor' : 'Reconnecting…';
   } else if (!s.trace.length) {
     calibStep.textContent = 'Presage is warming up…';
     calibSub.textContent = s.hint || 'Sit still, face and chest in view';
@@ -451,6 +458,8 @@ function goToMenu() {
   breath.stopLive();
   sawHold = false;
   calibPhase = '';
+  if (calibFallback) clearTimeout(calibFallback);
+  calibFallback = null;
   calib.classList.add('hidden');
   camWrap.style.visibility = 'hidden';
   hud.hide();
