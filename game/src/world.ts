@@ -69,6 +69,7 @@ export class World {
   private rays: THREE.Mesh[] = [];
   private snow: THREE.Points;
   private quality: RenderQuality;
+  private lightingEffects = true;
   private lastDecorationTime = 0;
   readonly dayCycle = new DayCycle();
   private lighting: LightingState = this.dayCycle.state;
@@ -303,7 +304,7 @@ export class World {
       else this.scene.remove(kelp.root);
     });
     this.rays.forEach((ray, i) => {
-      ray.visible = i < quality.rayCount && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
+      ray.visible = this.lightingEffects && i < quality.rayCount && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
     });
     this.snow.geometry.setDrawRange(0, quality.snowCount);
     if (surfaceChanged) {
@@ -344,6 +345,13 @@ export class World {
 
   setTimeOfDay(mode: TimeOfDay) {
     this.dayCycle.setMode(mode);
+  }
+
+  setLightingEffects(enabled: boolean) {
+    this.lightingEffects = enabled;
+    this.sun.visible = enabled;
+    (this.surface.material as WaterSurfaceMaterial).setEffectsEnabled(enabled);
+    if (!enabled) this.rays.forEach((ray) => { ray.visible = false; });
   }
 
   advanceTime(dt: number, running = true) {
@@ -400,7 +408,7 @@ export class World {
     this.hemi.intensity = lighting.ambientIntensity * light;
     this.sun.position.set(...lighting.direction).multiplyScalar(80);
     this.sun.intensity = lighting.sunIntensity * light * light;
-    const rayOpacity = 0.35 * lighting.daylight * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
+    const rayOpacity = this.lightingEffects ? 0.35 * lighting.daylight * THREE.MathUtils.clamp(1 - depth / 35, 0, 1) : 0;
     this.rays.forEach((ray, i) => {
       ray.visible = i < this.quality.rayCount && rayOpacity > 0;
       const material = ray.material as THREE.MeshBasicMaterial;

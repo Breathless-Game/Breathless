@@ -46,6 +46,7 @@ export class PauseMenu {
 
   private input = $<HTMLSelectElement>('set-input');
   private timeOfDay = $<HTMLSelectElement>('set-time');
+  private lighting = $<HTMLInputElement>('set-lighting');
   private quality = $<HTMLSelectElement>('set-quality');
   private camera = $<HTMLInputElement>('set-camera');
   private help = $<HTMLInputElement>('set-help');
@@ -63,6 +64,7 @@ export class PauseMenu {
 
     this.input.addEventListener('change', () => hooks.setBreathMode(this.input.value as BreathMode));
     this.timeOfDay.addEventListener('change', () => hooks.setTimeOfDay(this.timeOfDay.value as TimeOfDay));
+    this.lighting.addEventListener('change', () => this.update({ lightingEffects: this.lighting.checked }));
     this.quality.addEventListener('change', () => this.update({ quality: this.quality.value as Quality }));
     this.camera.addEventListener('change', () => this.update({ showCamera: this.camera.checked }));
     this.help.addEventListener('change', () => this.update({ showHelp: this.help.checked }));
@@ -126,6 +128,7 @@ export class PauseMenu {
       ...this.hooks.breathModes().map((m) => new Option(MODE_LABEL[m], m, false, m === this.hooks.breathMode())),
     );
     this.timeOfDay.value = this.hooks.timeOfDay();
+    this.lighting.checked = this.settings.lightingEffects;
     this.quality.value = this.settings.quality;
     this.camera.checked = this.settings.showCamera;
     this.help.checked = this.settings.showHelp;
