@@ -64,7 +64,7 @@ const PICKUP_S = 0.75; // the chart's flight from the table to the middle of the
 const SCATTER_S = 0.55; // gear on the chart hopping off before it is picked up
 const SHADOW_Z = 0.7; // where the title fish's shadows fall, from the table's back edge
 const KNOCK = 0.12; // how hard a thud on the table lifts the chart's paper, per unit of impact speed
-const HELD_CURL = 0.55; // held up, the ends still curl a little: it's paper
+const HELD_CURL = 0.55; // held up, the ends curl a little: it's paper (on the table they lie flat)
 const TILT = { x: 0.16, y: 0.22 }; // how far the held chart leans toward the pointer, radians edge to edge
 const STEP = 1 / 120;
 
@@ -239,7 +239,8 @@ export class Workbench {
     this.map.visible = true;
     this.map.position.copy(MAP_AT);
     this.map.quaternion.copy(MAP_REST);
-    this.sheet.fold = this.sheet.curl = 1;
+    this.sheet.fold = 1;
+    this.sheet.curl = 0; // lying on the table, its edges rest on the tabletop
     this.sheet.reset();
     this.tweens = [];
     this.held = null;
@@ -360,7 +361,7 @@ export class Workbench {
   /** The folded sea chart: a soft sheet (paper.ts) lying on the table. */
   private buildMap() {
     const mesh = this.sheet.mesh;
-    mesh.position.y = 0.012;
+    mesh.position.y = 0.005; // just clear of the tabletop: its edges lie on the wood
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.map.add(mesh);
@@ -979,7 +980,7 @@ export class Workbench {
         // It stays flat while it comes up, then turns to face us.
         this.map.quaternion.slerpQuaternions(q0, to.q, easeInOut(Math.max(0, (u - 0.15) / 0.85)));
         s.fold = 1 - easeOut(Math.min(1, u / 0.6));
-        s.curl = lerp(1, HELD_CURL, e);
+        s.curl = lerp(0, HELD_CURL, e);
       },
       () => {
         this.state = 'chart';
@@ -1023,7 +1024,7 @@ export class Workbench {
         this.map.position.y += Math.sin(u * Math.PI) * 0.5;
         this.map.quaternion.slerpQuaternions(q0, MAP_REST, easeInOut(Math.min(1, u / 0.85)));
         s.fold = easeInOut(Math.max(0, (u - 0.4) / 0.6));
-        s.curl = lerp(HELD_CURL, 1, e);
+        s.curl = lerp(HELD_CURL, 0, e);
       },
       () => {
         this.scene.add(this.map); // back on the table, in its light and shadows
