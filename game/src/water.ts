@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LightingState } from './daylight';
 import type { RenderQuality } from './render-quality';
+import type { WeatherState } from './weather';
 
 /** A single-pass approximation of the sky reflected by a rippling water surface. */
 export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
@@ -10,6 +11,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     uWaterTime: { value: 0 },
     uWaterEffects: { value: 1 },
     uWaterDetail: { value: 1 },
+    uWaterWind: { value: 0 },
     uWaterAbove: { value: 1 },
     uWaterSky: { value: new THREE.Color('#a8e3f5') },
     uWaterHorizon: { value: new THREE.Color('#e5f3e6') },
@@ -44,6 +46,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           uniform float uWaterTime;
           uniform float uWaterEffects;
           uniform float uWaterDetail;
+          uniform float uWaterWind;
           uniform float uWaterAbove;
           uniform vec3 uWaterSky;
           uniform vec3 uWaterHorizon;
@@ -68,6 +71,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
               waterSlope += vec2(0.018, 0.013) * waterRippleC;
             }
             float waterFace = waterNormal.y < 0.0 ? -1.0 : 1.0;
+            waterSlope *= 1.0 + uWaterWind * 0.9;
             waterNormal = normalize(waterNormal + vec3(-waterSlope.x, 0.0, -waterSlope.y) * waterFace);
             normal = normalize(mat3(viewMatrix) * waterNormal);
           }
@@ -100,17 +104,18 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
 
   customProgramCacheKey(): string {
     // Quality and time of day change uniforms, never shader programs.
-    return 'deepbreath-water-sky-v2';
+    return 'deepbreath-water-sky-v3';
   }
 
   setEffectsEnabled(enabled: boolean): void {
     this.waterUniforms.uWaterEffects.value = enabled ? 1 : 0;
   }
 
-  update(time: number, lighting: LightingState, cameraY: number, quality: RenderQuality): void {
+  update(time: number, lighting: LightingState, cameraY: number, quality: RenderQuality, weather?: WeatherState): void {
     const uniforms = this.waterUniforms;
     uniforms.uWaterTime.value = time;
     uniforms.uWaterDetail.value = quality.waterDetail;
+    uniforms.uWaterWind.value = weather?.wind ?? 0;
     uniforms.uWaterAbove.value = THREE.MathUtils.smoothstep(cameraY, -0.65, 0.9);
     uniforms.uWaterSky.value.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
     uniforms.uWaterHorizon.value.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
@@ -124,7 +129,8 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
       0.09 + lighting.direction[1] * 0.12,
       -1,
     ).normalize();
-    uniforms.uWaterLightStrength.value = 0.42 + lighting.sunIntensity * 0.24;
+    uniforms.uWaterLightStrength.value = (0.42 + lighting.sunIntensity * 0.24) * (1 - (weather?.cloud ?? 0) * 0.93);
+    this.roughness = 0.38 + (weather?.cloud ?? 0) * 0.3;
     this.color.copy(this.dayWater).lerp(this.nightWater, lighting.nightMix);
     this.opacity = THREE.MathUtils.lerp(0.34, 0.56, uniforms.uWaterAbove.value);
   }

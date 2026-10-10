@@ -3,6 +3,8 @@ import { Rng } from './rng';
 import { RENDER_QUALITY, type RenderQuality } from './render-quality';
 import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
 import { WaterSurfaceMaterial } from './water';
+import { WeatherCycle, type WeatherMode } from './weather';
+import { RainEffect } from './rain';
 
 export const HALF_WIDTH = 70;
 export const SEABED_Y = -60;
@@ -58,6 +60,33 @@ interface Kelp {
   phase: number;
 }
 
+// A small repeating cloud layer, generated once. Moving it on the sky canvas
+// costs no scene geometry or extra draw calls and shares the sky refresh budget.
+function cloudLayer(night: boolean): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  const pixels = ctx.createImageData(256, 128);
+  for (let y = 0; y < 128; y++) {
+    for (let x = 0; x < 256; x++) {
+      const u = x / 256 * Math.PI * 2;
+      const v = y / 128;
+      const noise = Math.sin(u * 2 + Math.sin(v * 13)) * 0.26
+        + Math.sin(u * 5 - v * 18) * 0.14 + Math.cos(u * 9 + v * 35) * 0.07;
+      const density = THREE.MathUtils.smoothstep(0.42 + noise, 0.26, 0.68);
+      const alpha = density * (1 - THREE.MathUtils.smoothstep(v, 0.45, 0.95));
+      const i = (y * 256 + x) * 4;
+      pixels.data[i] = night ? 39 : 196;
+      pixels.data[i + 1] = night ? 55 : 205;
+      pixels.data[i + 2] = night ? 80 : 211;
+      pixels.data[i + 3] = alpha * 220;
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+  return canvas;
+}
+
 export class World {
   scene = new THREE.Scene();
   hemi: THREE.HemisphereLight;
@@ -72,6 +101,11 @@ export class World {
   private lightingEffects = true;
   private lastDecorationTime = 0;
   readonly dayCycle = new DayCycle();
+  readonly weather = new WeatherCycle();
+  readonly rain = new RainEffect();
+  private weatherTime = 0;
+  private cloudTime = 0;
+  private waveTime = 0;
   private lighting: LightingState = this.dayCycle.state;
   private skyColor = new THREE.Color();
   private horizonColor = new THREE.Color();
@@ -79,10 +113,12 @@ export class World {
   private skyCanvas = document.createElement('canvas');
   private skyTexture: THREE.CanvasTexture;
   private skyRefresh = 0;
+  private dayClouds = cloudLayer(false);
+  private nightClouds = cloudLayer(true);
 
   constructor(quality: RenderQuality = RENDER_QUALITY.high) {
     this.quality = quality;
-    this.skyCanvas.width = 2;
+    this.skyCanvas.width = quality.skyWidth;
     this.skyCanvas.height = 128;
     this.skyTexture = new THREE.CanvasTexture(this.skyCanvas);
     this.skyTexture.colorSpace = THREE.SRGBColorSpace;
@@ -96,6 +132,7 @@ export class World {
     this.sun = new THREE.DirectionalLight('#fff6dd', 2.2);
     this.sun.position.set(20, 60, 30);
     this.scene.add(this.hemi, this.sun);
+    this.scene.add(this.rain);
 
     this.buildSeabed(rng);
     this.buildRocks(rng);
@@ -297,6 +334,17 @@ export class World {
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
     this.quality = quality;
+    this.rain.setQuality(quality);
+    if (this.skyCanvas.width !== quality.skyWidth) {
+      this.skyCanvas.width = quality.skyWidth;
+      // Resizing a previously uploaded texture requires fresh GPU storage.
+      this.skyTexture.dispose();
+      this.skyTexture = new THREE.CanvasTexture(this.skyCanvas);
+      this.skyTexture.colorSpace = THREE.SRGBColorSpace;
+      this.skyTexture.minFilter = THREE.LinearFilter;
+      this.skyTexture.generateMipmaps = false;
+      this.skyRefresh = 0;
+    }
     this.kelps.forEach((kelp, i) => {
       kelp.root.visible = i < quality.kelpCount;
       // Hidden objects still receive Three.js matrix updates while in the scene.
@@ -347,6 +395,10 @@ export class World {
     this.dayCycle.setMode(mode);
   }
 
+  setWeather(mode: WeatherMode) {
+    this.weather.setMode(mode);
+  }
+
   setLightingEffects(enabled: boolean) {
     this.lightingEffects = enabled;
     this.sun.visible = enabled;
@@ -356,20 +408,37 @@ export class World {
 
   advanceTime(dt: number, running = true) {
     this.lighting = this.dayCycle.advance(dt, running);
+    const weather = this.weather.advance(dt, running);
+    if (running && Number.isFinite(dt) && dt > 0) {
+      this.weatherTime += dt;
+      this.cloudTime += dt * (0.15 + weather.wind * 0.5);
+      this.waveTime += dt * (1 + weather.wind * 0.35);
+    }
     this.skyRefresh -= dt;
   }
 
-  update(time: number, cameraY: number) {
+  update(time: number, cameraY: number, cameraX = 0) {
     const elapsed = time - this.lastDecorationTime;
     if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
       this.updateDecorations(time, Math.min(elapsed, 0.25));
       this.lastDecorationTime = time;
     }
-    this.updateLighting(time, cameraY);
+    this.updateLighting(time, cameraY, cameraX);
   }
 
-  updateLighting(time: number, cameraY: number) {
-    const lighting = this.lighting;
+  updateLighting(_time: number, cameraY: number, cameraX = 0) {
+    const weather = this.weather.state;
+    const baseLight = this.lighting;
+    const overcast = weather.cloud * 0.85;
+    const mixSky = (color: readonly number[], day: readonly number[], night: readonly number[]): [number, number, number] =>
+      color.map((c, i) => THREE.MathUtils.lerp(c, THREE.MathUtils.lerp(day[i], night[i], baseLight.nightMix), overcast)) as [number, number, number];
+    const lighting: LightingState = {
+      ...baseLight,
+      skyColor: mixSky(baseLight.skyColor, [0.36, 0.44, 0.51], [0.04, 0.065, 0.12]),
+      horizonColor: mixSky(baseLight.horizonColor, [0.57, 0.63, 0.67], [0.08, 0.12, 0.19]),
+      sunIntensity: baseLight.sunIntensity * (1 - weather.cloud * 0.88),
+      ambientIntensity: baseLight.ambientIntensity * (1 - weather.cloud * 0.28),
+    };
     this.skyColor.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
     this.horizonColor.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
     if (this.skyRefresh <= 0) {
@@ -379,6 +448,14 @@ export class World {
       gradient.addColorStop(1, this.horizonColor.getStyle());
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, this.skyCanvas.width, this.skyCanvas.height);
+      const width = this.skyCanvas.width;
+      const offset = this.cloudTime % 256 / 256 * width;
+      for (const [layer, blend] of [[this.dayClouds, 1 - lighting.nightMix], [this.nightClouds, lighting.nightMix]] as const) {
+        ctx.globalAlpha = weather.cloud * blend;
+        ctx.drawImage(layer, offset, 0, width, this.skyCanvas.height);
+        ctx.drawImage(layer, offset - width, 0, width, this.skyCanvas.height);
+      }
+      ctx.globalAlpha = 1;
       this.skyTexture.needsUpdate = true;
       this.skyRefresh = 1 / this.quality.skyRefreshHz;
     }
@@ -389,12 +466,12 @@ export class World {
     if (depth < 0) {
       this.scene.background = this.skyTexture;
       fog.color.copy(this.horizonColor);
-      fog.near = 40;
-      fog.far = 200;
+      fog.near = THREE.MathUtils.lerp(40, 18, weather.rain);
+      fog.far = THREE.MathUtils.lerp(200, 95, weather.rain);
     } else {
       this.waterBackground.copy(waterColorAt(depth));
       this.waterBackground.lerp(this.horizonColor, 0.06 * Math.max(0, 1 - depth / 60));
-      this.waterBackground.multiplyScalar(THREE.MathUtils.lerp(1, 0.35, lighting.nightMix));
+      this.waterBackground.multiplyScalar(THREE.MathUtils.lerp(1, 0.35, lighting.nightMix) * (1 - weather.cloud * 0.12));
       this.scene.background = this.waterBackground;
       fog.color.copy(this.waterBackground);
       fog.near = 6;
@@ -408,7 +485,7 @@ export class World {
     this.hemi.intensity = lighting.ambientIntensity * light;
     this.sun.position.set(...lighting.direction).multiplyScalar(80);
     this.sun.intensity = lighting.sunIntensity * light * light;
-    const rayOpacity = this.lightingEffects ? 0.35 * lighting.daylight * THREE.MathUtils.clamp(1 - depth / 35, 0, 1) : 0;
+    const rayOpacity = this.lightingEffects ? 0.35 * lighting.daylight * (1 - weather.cloud * 0.95) * THREE.MathUtils.clamp(1 - depth / 35, 0, 1) : 0;
     this.rays.forEach((ray, i) => {
       ray.visible = i < this.quality.rayCount && rayOpacity > 0;
       const material = ray.material as THREE.MeshBasicMaterial;
@@ -417,23 +494,27 @@ export class World {
       ray.rotation.z = -Math.atan2(lighting.direction[0], Math.max(0.1, lighting.direction[1])) * 0.3;
     });
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
-    (this.surface.material as WaterSurfaceMaterial).update(time, lighting, cameraY, this.quality);
+    (this.surface.material as WaterSurfaceMaterial).update(this.waveTime, lighting, cameraY, this.quality, weather);
+    this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
   }
 
   private updateDecorations(time: number, dt: number) {
     // Waves.
+    const wind = this.weather.state.wind;
+    const waveTime = this.waveTime;
+    const swell = 1 + wind * 0.75;
     const pos = this.surface.geometry.attributes.position;
     const base = this.surfaceBase;
     for (let i = 0; i < pos.count; i++) {
       const x = base[i * 3];
       const z = base[i * 3 + 2];
-      pos.setY(i, Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25);
+      pos.setY(i, (Math.sin(x * 0.15 + waveTime * 1.3) * 0.35 + Math.cos(z * 0.2 + waveTime * 0.9) * 0.25) * swell);
     }
     pos.needsUpdate = true;
     this.surface.geometry.computeVertexNormals();
 
-    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18;
-    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05;
+    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell;
+    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell;
 
     for (const k of this.kelps) {
       if (!k.root.visible) continue;
