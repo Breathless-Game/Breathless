@@ -3,13 +3,18 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
 
-// market.ts and equipment.ts have no runtime imports; transpile them in memory to keep tests usable on Node 20.
+// Stand-in for wallet.ts: equipment.ts only needs storageKey, and the real one pulls in Umi and Phantom.
+// It maps names to the pre-namespacing keys so the fixtures below keep their shape.
+const WALLET_STUB = `data:text/javascript;base64,${Buffer.from("export const storageKey = (name) => (name.startsWith('deepbreath.') ? name : 'deepbreath.' + name);").toString('base64')}`;
+
+// Transpile market.ts and equipment.ts in memory to keep tests usable on Node 20.
 async function load(path) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   });
-  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+  const code = outputText.replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`);
+  return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
 }
 
 const {

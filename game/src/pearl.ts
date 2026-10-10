@@ -11,6 +11,9 @@
 //            verifies the transfer, mints PEARL to the owner and burns the fish.
 // Either way the owner (wallet.ts) signs and pays the fees.
 
+// Already loaded by main.ts; only the chain libraries below are lazy.
+import { storageKey } from './wallet';
+
 export type SellStep = 'verify' | 'sign' | 'confirm';
 export interface SellResult {
   pearls: number;
@@ -84,7 +87,8 @@ async function liveInfo(): Promise<LiveInfo> {
   return info as LiveInfo;
 }
 
-let toolboxReady = false;
+// getUmi() hands out one Umi per connected owner; register the toolbox on each.
+const toolboxReady = new WeakSet<object>();
 
 async function lib() {
   const [chain, wallet, toolbox, core, umi, serializers] = await Promise.all([
@@ -96,9 +100,9 @@ async function lib() {
     import('@metaplex-foundation/umi/serializers'),
   ]);
   const u = chain.getUmi();
-  if (!toolboxReady) {
+  if (!toolboxReady.has(u)) {
     u.use(toolbox.mplToolbox());
-    toolboxReady = true;
+    toolboxReady.add(u);
   }
   return {
     u,
@@ -136,7 +140,7 @@ export async function pearlBalance(): Promise<number> {
 
 function pending(): Record<string, Pending> {
   try {
-    return JSON.parse(localStorage.getItem(PENDING_KEY) ?? '{}') as Record<string, Pending>;
+    return JSON.parse(localStorage.getItem(storageKey(PENDING_KEY)) ?? '{}') as Record<string, Pending>;
   } catch {
     return {};
   }
@@ -147,7 +151,7 @@ function setPending(assetId: string, entry: Pending | null) {
     const all = pending();
     if (entry) all[assetId] = entry;
     else delete all[assetId];
-    localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+    localStorage.setItem(storageKey(PENDING_KEY), JSON.stringify(all));
   } catch {}
 }
 
