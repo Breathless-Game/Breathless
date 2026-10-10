@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+<p align="center"><img src="docs/showcase.gif" alt="Breathless: a fjord under the aurora, where a diver holds their breath and dives down to catch fish" width="800"></p>
+
 > **Hold your real breath to dive and catch fish.** Your webcam, through Presage, detects whether you are holding your breath. The diver can only descend while you hold. The deeper you go, the rarer the fish. The moment you breathe underwater you have to race back to the surface, or you lose everything in your net. Fish you bring up can be minted as Solana NFTs and traded between players. The game also quietly records how long each hold lasted and your heart rate, and builds a health report whenever you ask for one.
 
 Low-poly 2.5D, built with Three.js + TypeScript. Mostly front end, plus a local Node sensor service.
@@ -398,6 +400,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── chart.ts        the sea chart drawing (folded map texture and the open chart)
         ├── settings.ts     player settings (render quality, camera preview, control hints), stored in localStorage
         ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
+        ├── showcase.ts     showcase page (`/showcase.html`): the scene in the GIF at the top of the README, built from the game's own diver and fish models
         └── style.css       dark glass-style HUD
 ```
 
@@ -518,6 +521,14 @@ To reset, run `localStorage.clear()` in the browser console.
 - When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.
 - The sensor logs are in the terminal that runs `npm run sensor`. Presage status codes and ValidationCode hints are translated into the yellow hint at the top left of the HUD.
 - Presage stuck on `starting`: check the key in `.env`, check that the browser is really sending frames (the frames counter in the HUD), and check that there is enough light.
+
+### Re-recording the GIF at the top of the README
+
+Start the game first (`npm run game`), then run the command below. You need Chrome and ffmpeg on your machine. The script renders `game/showcase.html` frame by frame in headless Chrome and writes `docs/showcase.gif`, which loops seamlessly from the last frame back to the first.
+
+```bash
+npm run showcase:gif
+```
 
 ### Automatic render quality
 
