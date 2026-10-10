@@ -178,8 +178,10 @@ class Session {
       this.rate = { value: this.simHolding ? 0 : 15, confidence: 100 };
       if (wasHolding && !this.simHolding) releasedAt = tUs;
       wasHolding = this.simHolding;
-      const target = this.simHolding ? 58 : tUs - releasedAt < 12e6 ? 86 : 72;
-      bpm += (target - bpm) * 0.006 + (Math.random() - 0.5) * 0.25;
+      const rebound = !this.simHolding && tUs - releasedAt < 12e6;
+      const target = this.simHolding ? 58 : rebound ? 86 : 72;
+      // The first gasp kicks the heart up fast; settling back is slow.
+      bpm += (target - bpm) * (rebound ? 0.03 : 0.006) + (Math.random() - 0.5) * 0.25;
       this.pulse = { value: bpm, confidence: 90 };
     }, 33);
   }
