@@ -6,6 +6,8 @@ import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
 import { Report } from './report';
+import { PauseMenu } from './pause';
+import { loadSettings, PIXEL_RATIO, type Settings } from './settings';
 import { HALF_WIDTH, SEABED_Y, World } from './world';
 
 // ---- Tuning -------------------------------------------------------------
@@ -24,7 +26,6 @@ const MAX_DEPTH = -SEABED_Y;
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const world = new World();
@@ -105,6 +106,11 @@ let nowMs = 0;
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    onEscape();
+    return;
+  }
+  if (paused) return;
   keys.add(e.key.toLowerCase());
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
   if (phase !== 'play') return;
@@ -114,16 +120,27 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
   } else if (e.key.toLowerCase() === 'n') {
-    night = !night;
-    world.setNight(night);
-    hud.message(night ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+    setNight(!night);
   } else if (e.key.toLowerCase() === 'k') {
-    const order: BreathMode[] = breath.video.srcObject ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
-    const next = order[(order.indexOf(breath.state.mode) + 1) % order.length];
-    breath.setMode(next);
-    hud.message(`Breath input: ${next}`);
+    const order = breathModes();
+    setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
   }
 });
+
+function breathModes(): BreathMode[] {
+  return breath.video.srcObject ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
+}
+
+function setBreathMode(mode: BreathMode) {
+  breath.setMode(mode);
+  hud.message(`Breath input: ${mode}`);
+}
+
+function setNight(on: boolean) {
+  night = on;
+  world.setNight(on);
+  hud.message(on ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+}
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
@@ -250,10 +267,86 @@ function updateCalibration() {
       sawHold = true;
       markCalib('done');
       calibStep.textContent = 'Got it. Dive!';
-      setTimeout(startGame, 900);
+      setTimeout(() => phase === 'calibrating' && startGame(), 900);
     }
   }
 }
+
+// ---- Pause menu ---------------------------------------------------------
+const camWrap = document.getElementById('cam-wrap')!;
+let paused = false;
+
+function pause() {
+  if (phase !== 'play' || paused) return;
+  paused = true;
+  keys.clear();
+  vault.toggle(false);
+  report.toggle(false);
+  pauseMenu.show();
+}
+
+function onEscape() {
+  if (pauseMenu.open) pauseMenu.back();
+  else if (report.open) report.toggle(false);
+  else if (vault.open) vault.toggle(false);
+  else if (phase === 'play') pause();
+  else if (phase === 'calibrating') goToMenu();
+}
+
+function goToMenu() {
+  // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
+  health.end(nowMs, 'surfaced', 0);
+  net = [];
+  hud.setNet(net, NET_CAPACITY);
+  hud.setEmergency(null);
+  outOfAir = false;
+  breathSince = null;
+  lastHolding = false;
+  diver.pos.set(0, -0.4, 0);
+  diver.vel.set(0, 0, 0);
+  paused = false;
+  phase = 'menu';
+  pauseMenu.close();
+  vault.toggle(false);
+  report.toggle(false);
+  breath.stopLive();
+  sawHold = false;
+  calibPhase = '';
+  calib.classList.add('hidden');
+  camWrap.style.visibility = 'hidden';
+  hud.hide();
+  overlay.classList.remove('hidden');
+}
+
+function applySettings(s: Settings) {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, PIXEL_RATIO[s.quality]));
+  resize();
+  camWrap.classList.toggle('off', !s.showCamera);
+  document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
+}
+
+const pauseMenu = new PauseMenu(loadSettings(), {
+  resume() {
+    paused = false;
+    keys.clear();
+    // Whatever the player did while paused doesn't count toward "breathed underwater".
+    breathSince = null;
+  },
+  quitToMenu: goToMenu,
+  needsCountdown: () => -diver.pos.y > SURFACE_DEPTH,
+  quitWarning: () => (net.length ? `Your net (${net.length} fish) will be lost.` : null),
+  breathModes,
+  breathMode: () => breath.state.mode,
+  setBreathMode,
+  night: () => night,
+  setNight,
+  applySettings,
+});
+
+// A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pause();
+});
 
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
@@ -338,8 +431,10 @@ function update(dt: number, time: number) {
 let time = 0;
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  time += dt;
-  update(dt, time);
+  if (!paused) {
+    time += dt;
+    update(dt, time);
+  }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
