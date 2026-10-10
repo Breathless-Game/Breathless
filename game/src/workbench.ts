@@ -55,6 +55,7 @@ const GRAVITY = 26;
 const RESTITUTION = 0.32;
 const BOUNCE_MIN = 2.2; // slower than this and it just settles
 const HOLD_Y = 0.85;
+const MAP_SLIDE = 30; // push off the chart, units/s²
 const STEP = 1 / 120;
 
 // Camera: aimed above the table, so the table fills the lower half and the title
@@ -538,6 +539,7 @@ export class Workbench {
         const k = Math.exp(-dt * 6);
         p.vel.x *= k;
         p.vel.z *= k;
+        this.offMap(p, dt);
         p.q.slerp(this.restQ(p), 1 - Math.exp(-dt * 14));
         p.spin.multiplyScalar(Math.exp(-dt * 8));
       } else {
@@ -555,6 +557,17 @@ export class Workbench {
       }
     }
     this.collide();
+  }
+
+  /** The chart keeps itself clear: a piece resting on it slides off the nearest edge, so the chart stays clickable. */
+  private offMap(p: Piece, dt: number) {
+    const dx = p.pos.x - MAP_AT.x;
+    const dz = p.pos.z - MAP_AT.z;
+    const ox = MAP_W / 2 + p.r * 0.4 - Math.abs(dx);
+    const oz = MAP_D / 2 + p.r * 0.4 - Math.abs(dz);
+    if (ox <= 0 || oz <= 0) return;
+    if (ox < oz) p.vel.x += Math.sign(dx || 1) * MAP_SLIDE * dt;
+    else p.vel.z += Math.sign(dz || 1) * MAP_SLIDE * dt;
   }
 
   /** Circles in the table plane, for pieces at about the same height. */
