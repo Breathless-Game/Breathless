@@ -1,0 +1,40 @@
+# /etc/systemd/system/breathless.service: the Breathless game + Presage breath
+# sensor on 127.0.0.1:8794 (Cloudflare Tunnel in front). Installed by
+# deploy/bootstrap-dell.sh, which rewrites the Node path if NODE_DIR is changed.
+#
+# PRESAGE_API_KEY and optional overrides (MAX_LIVE_SESSIONS, SENSOR_RECORD, ...)
+# live in /srv/breathless/app/.env, which sensor/index.mjs loads itself (dotenv,
+# ../.env). Values set below win over .env.
+[Unit]
+Description=Breathless game and Presage breath sensor
+Documentation=https://github.com/LucasYanzy/HackRU26/blob/main/deploy/SETUP.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=breathless
+Group=breathless
+WorkingDirectory=/srv/breathless/app
+Environment=NODE_ENV=production
+Environment=PORT=8794
+Environment=HOST=127.0.0.1
+ExecStart=/opt/breathless-node/bin/node sensor/index.mjs --serve game/dist
+Restart=always
+RestartSec=3
+MemoryMax=900M
+
+# Hardening. The app writes only under /srv/breathless (the SmartSpectra SDK
+# caches in ~/.cache; recordings, if enabled, go to app/sensor/recordings).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

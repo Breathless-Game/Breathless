@@ -5,10 +5,13 @@
 // frames here over a WebSocket; we push them into Presage SmartSpectra,
 // turn the breathing trace into HOLD / BREATHE, and stream state back.
 //
-//   node index.mjs          live Presage mode
-//   node index.mjs --sim    no camera, synthetic breathing (hold via the game's debug key)
+//   node index.mjs                 live Presage mode (dev: ws://<host>:8787, next to Vite)
+//   node index.mjs --sim           no camera, synthetic breathing (hold via the game's debug key)
+//   node index.mjs --serve <dir>   production: serves the built game from <dir> and the
+//                                  sensor at /sensor on one port (PORT, default 8794)
 
 import { config } from 'dotenv';
+import { createServer, STATUS_CODES } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
@@ -23,13 +26,44 @@ import {
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector } from './breath-detector.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
+import { staticHandler } from './static.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
-const PORT = Number(process.env.SENSOR_PORT ?? 8787);
+const serveAt = process.argv.indexOf('--serve');
+const SERVE_DIR = serveAt >= 0 ? process.argv[serveAt + 1] : undefined;
+if (serveAt >= 0 && !SERVE_DIR) {
+  console.error('usage: node index.mjs --serve <dir>   (e.g. ../game/dist)');
+  process.exit(2);
+}
+const SERVE = SERVE_DIR !== undefined;
+// Serve mode sits behind a tunnel / reverse proxy, so it binds loopback by default
+// and never opens the dev port 8787.
+const PORT = SERVE ? Number(process.env.PORT || 8794) : Number(process.env.SENSOR_PORT ?? 8787);
+const HOST = SERVE ? process.env.HOST || '127.0.0.1' : undefined;
 const API_KEY = process.env.PRESAGE_API_KEY;
 const FORCE_SIM = process.argv.includes('--sim');
 const HEADER_BYTES = 12; // f64 timestamp ms, u16 width, u16 height
+// One 640x480 RGBA frame is 1,228,812 bytes; serve mode allows that with headroom.
+const MAX_PAYLOAD = SERVE ? 2 * 1024 * 1024 : 8 * 1024 * 1024;
+// Recordings are physiological data. Dev records live sessions for analyze.mjs;
+// the public server never writes strangers' breathing to disk unless SENSOR_RECORD=1.
+const RECORD = SERVE ? process.env.SENSOR_RECORD === '1' : process.env.SENSOR_RECORD !== '0';
+const NO_RECORDER = { write() {}, close() {} };
+// The SmartSpectra SDK's native state is process-global; its own Electron host says
+// "two SmartSpectra sessions must never run concurrently" (node-sdk js/main/index.js).
+// So one live Presage session at a time; more would need one process per session.
+const MAX_LIVE = envInt('MAX_LIVE_SESSIONS', 1);
+const MAX_PER_IP = envInt('MAX_CONN_PER_IP', 8); // serve mode only
+const BUSY_MESSAGE =
+  MAX_LIVE > 0
+    ? `Server busy: live breath sensing is in use by another player (${MAX_LIVE} at a time). Try again later.`
+    : 'Live breath sensing is turned off on this server.';
+
+// Sessions holding a live Presage slot, and native teardowns still in flight. A new
+// native session must not start until every old one has finished tearing down.
+const liveSessions = new Set();
+let teardowns = 0;
 
 const STATUS_NAMES = Object.fromEntries(Object.entries(ProcessingStatus).map(([k, v]) => [v, k.slice(1).toLowerCase()]));
 const HINTS = {
@@ -67,7 +101,8 @@ class Session {
     this.frames = 0;
     this.metricsEvents = 0;
     this.tick = setInterval(() => this.#broadcast(), 80);
-    this.rec = new Recorder((path) => log(`recording to ${path}`));
+    this.rec = RECORD ? new Recorder((path) => log(`recording to ${path}`)) : NO_RECORDER;
+    this.busyNotified = false;
     this.framesAtLastSecond = 0;
     this.fpsTick = setInterval(() => {
       const n = this.frames - this.framesAtLastSecond;
@@ -81,7 +116,7 @@ class Session {
   // ---- Presage ----------------------------------------------------------
 
   #ensureSdk() {
-    if (this.sdk || this.sim || this.restarting) return;
+    if (this.sdk || this.sim || this.restarting || teardowns > 0) return;
     this.status = 'starting';
     const sdk = new SmartSpectraSDK({
       apiKey: API_KEY,
@@ -100,6 +135,8 @@ class Session {
     });
     sdk.on('error', (code, message, retryable) => {
       log(`presage error ${code}: ${message} (retryable=${retryable})`);
+      // Also shown as the hint until the next validation status replaces it.
+      this.hint = `Presage: ${message}`;
       this.#send({ t: 'error', message: `Presage: ${message}` });
       if (retryable) this.#restartSdk();
     });
@@ -111,7 +148,8 @@ class Session {
 
   // Native SDK state is process-global: a new session built while the old one is
   // still tearing down gets its model download cancelled (error 8). Frames that
-  // arrive during teardown are dropped; the next one after it builds a fresh SDK.
+  // arrive during teardown (this session's or any other's) are dropped; the next
+  // one after it builds a fresh SDK.
   #restartSdk() {
     if (this.restarting) return this.restarting;
     const old = this.sdk;
@@ -119,14 +157,41 @@ class Session {
     this.lastFrameUs = 0;
     this.restarting = (async () => {
       if (!old) return;
+      teardowns++;
       try {
         await old.stopAsync();
         await old.destroy();
-      } catch {}
+      } catch {
+      } finally {
+        teardowns--;
+      }
     })().finally(() => {
       this.restarting = null;
     });
     return this.restarting;
+  }
+
+  // Claims a live Presage slot (MAX_LIVE_SESSIONS). Over the cap the session stays
+  // idle, drops frames and tells the game once; it takes the next slot that frees up.
+  #claimLive() {
+    if (liveSessions.has(this)) return true;
+    if (liveSessions.size < MAX_LIVE) {
+      liveSessions.add(this);
+      this.busyNotified = false;
+      if (this.status === 'busy') {
+        this.status = 'idle';
+        this.hint = '';
+      }
+      return true;
+    }
+    this.status = 'busy';
+    this.hint = BUSY_MESSAGE;
+    if (!this.busyNotified) {
+      this.busyNotified = true;
+      log(`live session refused: ${liveSessions.size}/${MAX_LIVE} slots in use`);
+      this.#send({ t: 'error', code: 'busy', message: BUSY_MESSAGE });
+    }
+    return false;
   }
 
   #onMetrics(buf) {
@@ -159,7 +224,7 @@ class Session {
   }
 
   onFrame(data) {
-    if (this.sim) return;
+    if (this.sim || !this.#claimLive()) return;
     this.#ensureSdk();
     if (!this.sdk || data.byteLength < HEADER_BYTES) return;
     const view = new DataView(data.buffer, data.byteOffset, HEADER_BYTES);
@@ -231,16 +296,21 @@ class Session {
   onCommand(msg) {
     if (msg.t === 'sim') {
       const on = Boolean(msg.on) || !API_KEY;
-      if (on === this.sim) return;
-      this.sim = on;
-      this.detector = new BreathDetector();
-      if (on) {
-        this.#restartSdk();
-        this.#startSim();
-      } else {
-        this.#stopSim();
-        this.status = 'idle';
+      if (on !== this.sim) {
+        this.sim = on;
+        this.detector = new BreathDetector();
+        if (on) {
+          liveSessions.delete(this);
+          this.hint = '';
+          this.#restartSdk();
+          this.#startSim();
+        } else {
+          this.#stopSim();
+          this.status = 'idle';
+        }
       }
+      // The game sends this on connect: claim a slot now, so a full server says so before any frame.
+      if (!on) this.#claimLive();
     } else if (msg.t === 'simHold') {
       this.simHolding = Boolean(msg.holding);
     } else if (msg.t === 'label' && !this.sim) {
@@ -271,6 +341,8 @@ class Session {
   }
 
   async close() {
+    // The slot frees now; the teardown counter keeps the next native session from overlapping this one.
+    liveSessions.delete(this);
     clearInterval(this.tick);
     clearInterval(this.fpsTick);
     this.rec.close();
@@ -283,8 +355,16 @@ function log(msg) {
   console.log(`[sensor ${new Date().toLocaleTimeString()}] ${msg}`);
 }
 
-const wss = new WebSocketServer({ port: PORT, maxPayload: 8 * 1024 * 1024 });
-wss.on('connection', (ws) => {
+function envInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 0) return n;
+  console.warn(`[sensor] ignoring ${name}=${raw}: expected a whole number >= 0`);
+  return fallback;
+}
+
+function onConnection(ws) {
   log('game connected');
   const session = new Session(ws);
   ws.on('message', (data, isBinary) => {
@@ -299,10 +379,73 @@ wss.on('connection', (ws) => {
     log('game disconnected');
     session.close();
   });
-});
+}
 
-log(`listening on ws://localhost:${PORT} (${FORCE_SIM || !API_KEY ? 'simulator' : 'Presage live'})`);
+// Behind the tunnel every socket comes from loopback, so the proxy's client-IP
+// header is trusted there (and only there) for the per-IP connection limit.
+function clientIp(req) {
+  const peer = req.socket.remoteAddress ?? '';
+  if (peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1') {
+    const cf = req.headers['cf-connecting-ip'];
+    if (typeof cf === 'string' && cf) return cf.trim();
+    const xff = req.headers['x-forwarded-for'];
+    if (typeof xff === 'string' && xff) return xff.split(',').at(-1).trim();
+  }
+  return peer;
+}
+
+function refuse(socket, code) {
+  socket.end(`HTTP/1.1 ${code} ${STATUS_CODES[code]}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
+
+const mode = FORCE_SIM || !API_KEY ? 'simulator' : `Presage live, max ${MAX_LIVE} at a time`;
+let wss;
+if (SERVE) {
+  // One port for the tunnel: the built game over HTTP, the sensor WebSocket at /sensor.
+  wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
+  wss.on('connection', onConnection);
+  const perIp = new Map();
+  const server = createServer(staticHandler(SERVE_DIR));
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => {});
+    // A malformed request line must not crash the server: new URL throws on it.
+    let pathname;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://x').pathname;
+    } catch {
+      return refuse(socket, 400);
+    }
+    if (pathname !== '/sensor') return refuse(socket, 404);
+    const ip = clientIp(req);
+    if ((perIp.get(ip) ?? 0) >= MAX_PER_IP) {
+      log(`refused a connection: ${MAX_PER_IP} already open from one address`);
+      return refuse(socket, 429);
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
+      ws.once('close', () => {
+        const n = (perIp.get(ip) ?? 1) - 1;
+        if (n > 0) perIp.set(ip, n);
+        else perIp.delete(ip);
+      });
+      wss.emit('connection', ws, req);
+    });
+  });
+  server.on('error', (e) => {
+    console.error(`[sensor] ${e.message}`);
+    process.exit(1);
+  });
+  server.listen(PORT, HOST, () => {
+    log(`serving ${SERVE_DIR} on http://${HOST}:${PORT}, sensor at /sensor (${mode})`);
+    log(`recordings ${RECORD ? 'ON (SENSOR_RECORD=1): sensor/recordings/' : 'off'}`);
+  });
+} else {
+  wss = new WebSocketServer({ port: PORT, maxPayload: MAX_PAYLOAD });
+  wss.on('connection', onConnection);
+  log(`listening on ws://localhost:${PORT} (${mode})`);
+}
 if (!API_KEY) log('PRESAGE_API_KEY missing in .env: running simulator only');
+if (MAX_LIVE > 1) log(`warning: MAX_LIVE_SESSIONS=${MAX_LIVE}, but the Presage SDK can't run two sessions in one process`);
 
 setInterval(() => {
   for (const ws of wss.clients) ws.ping();
