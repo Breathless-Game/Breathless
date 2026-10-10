@@ -3,7 +3,7 @@
 //
 //   node analyze.mjs                         latest recording, default settings
 //   node analyze.mjs rec.jsonl --trace=lo    use the abdominal trace instead of chest
-//   node analyze.mjs --activityWindowUs=2500000 --holdRatio=0.45
+//   node analyze.mjs --exhaleRatio=1.3 --holdRatio=0.45
 //   node analyze.mjs --sweep                 grid-search the main thresholds
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -127,11 +127,14 @@ separation(lo, 'abdomen (lo)');
 function replay(o) {
   const det = new BreathDetector(o);
   const out = []; // [at, holding]
+  out.reasons = {}; // what ended each hold
   for (const m of metrics) {
     const pts = m[trace];
+    const was = det.holding;
     if (pts?.length) det.pushTrace(pts.map(([timestamp, value]) => ({ timestamp, value })));
     if (o.useApnea !== false && m.apnea?.length) det.setApnea(Boolean(m.apnea.at(-1)[1]));
     if (m.talking?.length) det.setTalking(Boolean(m.talking.at(-1)[1]));
+    if (was && !det.holding) out.reasons[det.releaseReason] = (out.reasons[det.releaseReason] ?? 0) + 1;
     out.push([m.at, det.holding]);
   }
   return out;
@@ -167,9 +170,13 @@ function score(series) {
   }
   const delays = [];
   const releases = [];
+  let midHold = 0; // the game would say "you breathed" while the player is still holding
   for (const [a, b] of holds) {
-    const on = series.find(([at, h]) => h && at >= a - 500 && at <= b);
-    if (on) delays.push(on[0] - a);
+    const on = series.findIndex(([at, h]) => h && at >= a - 500 && at <= b);
+    if (on >= 0) {
+      delays.push(series[on][0] - a);
+      for (let j = on + 1; j < series.length && series[j][0] < b - 1000; j++) if (series[j - 1][1] && !series[j][1]) midHold++;
+    }
     const off = series.find(([at, h]) => !h && at >= b - 500);
     if (off) releases.push(off[0] - b);
   }
@@ -183,35 +190,40 @@ function score(series) {
     delay: median(delays),
     release: median(releases),
     missed: holds.length - delays.length,
+    midHold,
   };
 }
 
 const show = (name, s) =>
   console.log(
-    `${name.padEnd(17)} acc ${f(s.acc * 100, 0)}%  hold-recall ${f(s.recall * 100, 0)}%  false-hold ${f(s.falseHold * 100, 0)}%  toggles ${f(s.togglesPerMin, 1)}/min (truth ${f(s.labelTogglesPerMin, 1)})  detect +${f(s.delay / 1000, 1)}s  release +${f(s.release / 1000, 1)}s  missed ${s.missed}`,
+    `${name.padEnd(17)} acc ${f(s.acc * 100, 0)}%  hold-recall ${f(s.recall * 100, 0)}%  false-hold ${f(s.falseHold * 100, 0)}%  toggles ${f(s.togglesPerMin, 1)}/min (truth ${f(s.labelTogglesPerMin, 1)})  detect +${f(s.delay / 1000, 1)}s  release +${f(s.release / 1000, 1)}s  missed ${s.missed}  mid-hold releases ${s.midHold}`,
   );
 
 console.log('');
 show('live (recorded)', score(metrics.map((m) => [m.at, Boolean(m.holding)])));
 const settings = { ...DEFAULTS, ...opts };
-show(`replay ${trace}`, score(replay(settings)));
+const rep = replay(settings);
+show(`replay ${trace}`, score(rep));
+console.log(`release reasons   ${JSON.stringify(rep.reasons)}`);
 console.log(`settings          ${JSON.stringify(settings)}`);
 
 if (sweep && holds.length) {
   const rows = [];
-  for (const activityWindowUs of [1_500_000, 2_000_000, 2_500_000])
-    for (const holdRatio of [0.3, 0.38, 0.45, 0.55])
-      for (const releaseRatio of [0.35, 0.5, 0.7, 1.0])
-        for (const releaseHoldUs of [100_000, 200_000, 400_000]) {
-          const o = { ...settings, activityWindowUs, holdRatio, releaseRatio, releaseHoldUs };
+  for (const holdRatio of [0.3, 0.38, 0.45])
+    for (const exhaleRatio of [0.9, 1.1, 1.3, 1.5])
+      for (const exhaleWindowUs of [1_000_000, 1_500_000, 2_500_000])
+        for (const trustAfterUs of [1_000_000, 2_000_000, 3_000_000]) {
+          const o = { ...settings, holdRatio, exhaleRatio, exhaleWindowUs, trustAfterUs };
           const s = score(replay(o));
-          // Reward agreement, punish flicker beyond what the labels themselves do.
-          const objective = s.acc - 0.02 * Math.max(0, s.togglesPerMin - s.labelTogglesPerMin) - 0.1 * s.missed;
+          // Reward agreement; punish flicker beyond what the labels themselves do,
+          // and above all telling a diver they breathed while they're still holding.
+          const objective =
+            s.acc - 0.02 * Math.max(0, s.togglesPerMin - s.labelTogglesPerMin) - 0.1 * s.missed - 0.1 * s.midHold;
           rows.push({ objective, o, s });
         }
   rows.sort((a, b) => b.objective - a.objective);
   console.log('\nbest settings:');
   for (const r of rows.slice(0, 5)) {
-    show(`  ${r.o.activityWindowUs / 1e6}s/${r.o.holdRatio}/${r.o.releaseRatio}/${r.o.releaseHoldUs / 1e3}ms`, r.s);
+    show(`  H${r.o.holdRatio} x${r.o.exhaleRatio} w${r.o.exhaleWindowUs / 1e6}s t${r.o.trustAfterUs / 1e6}s`, r.s);
   }
 }

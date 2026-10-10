@@ -225,35 +225,53 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 File: `sensor/breath-detector.mjs`. The input is Presage's chest-movement trace, `breathing.upperTrace`.
 
-**What a real recording told us** (2026-10-10, one 2.5-minute breath test with 4 holds):
+**What real recordings told us** (2026-10-10, two 2.5-minute breath tests by the same person, 8 holds in total):
 
 - For the first few seconds after Presage starts, the trace swings wildly (about 10 times the amplitude of normal breathing). The old detector used those seconds to learn the "normal breathing amplitude", so it called a hold right at the start and never left it: 44% accuracy, with normal breathing misread as a hold 86% of the time.
 - The trace is high-pass filtered. During a hold it first jumps up with the last inhale, then takes about 3 seconds to settle back to flat. It does not stay high.
 - Over 15-second holds, Presage's own apnea flag never fired once, so it is off by default.
-- The signal itself separates well: the movement within 2 seconds of normal breathing is about 20 times the movement during a hold.
+- The signal itself separates well: the movement within 2 seconds of normal breathing is about 5–20 times the movement during a hold.
+- **The trace glitches mid-hold.** In the second test the player stayed completely still and did not breathe, yet the trace jumped twice in the middle of a hold. Once it jumped up by about one breath's size, once it dipped a little. Activity alone can't tell these apart from breathing again, so the activity-only detector (v3) told the diver "you breathed" twice.
+- **A real release always starts with an exhale.** All 8 releases begin with the trace dropping 1.55–3.5 × the baseline. The two glitches dropped about 1 × at most. Up is inhale, down is exhale.
 
-**What the detector does now: it looks at "activity"**, which is the distance the trace travels per second (path length).
+**What the detector does now: holds are found by "activity"**, which is the distance the trace travels per second (path length). **Releases are found by the exhale.**
 
 1. **Learn a baseline**: take the activity over the last 30 seconds of normal breathing and use the **median** as the baseline B, so an occasional spike does not affect it. Nothing is learned in the first 8 seconds after start. The first few seconds of a hold are dropped too, so they do not pull the baseline down.
 2. **Call a hold**: the activity over the last 2 seconds is below `0.38 × B`.
-3. **Call a release**: the activity over the last 0.75 seconds is above `0.5 × B` and stays there for 0.2 seconds. Talking for more than 0.5 seconds also counts as a release.
-4. **Right after a release**: no new hold is called for 2 seconds.
-5. **Debounce on the game side** (`RELEASE_DEBOUNCE_MS` in `main.ts`): "breathing" underwater has to last 0.5 seconds before it counts.
+3. **Call a release, mainly on the exhale**: the detector tracks a "hold level". It follows the slow settling after the inhale, but freezes while the trace jumps around, so a glitch can't drag it along. The hold ends when the trace drops more than `1.1 × B` below that level, and also below the highest point of the last 1.5 seconds, for 0.1 seconds. A jump up of more than `2 × B` also counts; that covers someone who held with empty lungs and breathes in first.
+4. **In the first 2 seconds of a hold**, which may just be a pause between breaths, activity alone still ends it: the activity over 0.75 seconds is above `0.5 × B` for 0.2 seconds.
+5. **Fallback**: activity over 2 seconds above `0.8 × B` for 4 seconds in a row always ends a hold, so it can never get stuck. Talking for more than 0.5 seconds also counts as a release.
+6. **Right after a release**: no new hold is called for 2 seconds.
+7. **Debounce on the game side** (`RELEASE_DEBOUNCE_MS` in `main.ts`): "breathing" underwater has to last 0.5 seconds before it counts.
 
-Replaying that recording gives **44% → 90% accuracy**, and normal breathing misread as a hold goes from 86% to 4% (what remains is mostly reaction time after a release). Counted from the "hold" prompt, a hold is recognized in about 2.4–4.3 seconds, which includes the person's reaction and inhale. A release is recognized within about 1 second.
+Replaying both recordings:
+
+| | v3 (activity only) | now (exhale) |
+| --- | --- | --- |
+| "You breathed" while still holding | 2 | **0** |
+| Hold recognized (from the prompt) | median 2.9 s | median 2.8 s |
+| Release recognized | about 1.0 s | median 1.6 s, worst 2.0 s |
+| Normal breathing misread as a hold | 1.2% | 1.2% |
+
+Releases are about 0.6 seconds slower. In return, a diver is never wrongly told they breathed. Any exhale threshold from 1.0 to 1.3 gives zero mid-hold releases; at 0.9 errors start, so 1.1 leaves margin on both sides. `--sweep` prefers 0.9 because it only sees these two recordings, and we don't trust it.
 
 | Option | Default | Effect |
 | --- | --- | --- |
 | `activityWindowUs` | 2 s | Window for the hold test |
-| `releaseWindowUs` | 0.75 s | Short window for the release test; shorter reacts faster |
 | `holdRatio` | 0.38 | Higher calls a hold more easily and earlier, with more false positives |
-| `releaseRatio` | 0.5 | Lower is more sensitive: a small movement already counts as a release |
-| `releaseHoldUs` | 0.2 s | How long the release signal has to last |
+| `exhaleRatio` | 1.1 | How far (× B) the trace has to drop to count as an exhale. Lower releases faster, but small glitches mid-hold may count |
+| `inhaleRatio` | 2.0 | How far (× B) a jump up has to go to count as breathing in first |
+| `exhaleWindowUs` | 1.5 s | The drop has to happen within this window, which rules out the slow settling after a hold starts |
+| `exhaleHoldUs` | 0.1 s | How long the exhale has to last |
+| `quietRatio` / `levelTauUs` | 0.5 / 1 s | The hold level only follows the trace while it is quiet, and this fast |
+| `trustAfterUs` | 2 s | For this long into a hold, activity alone ends it |
+| `releaseWindowUs` / `releaseRatio` / `releaseHoldUs` | 0.75 s / 0.5 / 0.2 s | What "activity" means in the line above |
+| `sustainedRatio` / `sustainedUs` | 0.8 / 4 s | Fallback: this much breathing for this long always ends a hold |
 | `warmupUs` | 8 s | Ignores the seconds when Presage swings wildly at start-up |
 | `minBaselineUs` | 6 s | How much normal breathing has to be learned before any hold is called |
 | `useApnea` | false | Whether to use Presage's apnea flag |
 
-Note: the thresholds have been checked against one person and one recording only. Record more people before relying on them.
+Note: the thresholds have been checked against one person and two recordings only. **On a new person, run the breath test once to confirm them**, and check especially that "down is exhale" holds on their camera too. `analyze.mjs` prints `release reasons`; normally most should be `exhale`.
 
 ### Tuning with real data (record → analyze)
 
@@ -279,10 +297,10 @@ It prints:
 node sensor/analyze.mjs --sweep
 ```
 
-Grid-searches `activityWindowUs` / `holdRatio` / `releaseRatio` / `releaseHoldUs` and lists the best few combinations.
+Grid-searches `holdRatio` / `exhaleRatio` / `exhaleWindowUs` / `trustAfterUs` and lists the best few combinations. Telling a diver they breathed while still holding costs the most.
 
 ```bash
-node sensor/analyze.mjs --trace=lo --holdRatio=0.45
+node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 ```
 
 Replays with the abdomen trace, or with a specific set of parameters.
