@@ -9,6 +9,7 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
     "types": ["vite/client"]
   },
   "include": ["src"]
