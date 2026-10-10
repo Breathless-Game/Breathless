@@ -108,6 +108,8 @@ npm run game       # 游戏，http://localhost:5173
 
 （也可以用 `npm run dev` 同时启动两个，macOS 和 Windows 都可以用，Ctrl+C 会一起停掉。）
 
+`git pull` 之后照常启动即可。如果拉下来的代码加了新依赖，游戏和 sensor 启动时会发现缺了它，先自动装好再启动。
+
 ### Windows
 
 - **x64 电脑**：直接按上面的步骤操作即可。
@@ -351,6 +353,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 .
 ├── package.json            根目录脚本：setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev：同时启动 sensor 和 game（跨平台）
+├── scripts/ensure-deps.mjs 游戏和 sensor 启动前运行：自动安装缺少的依赖
 ├── .env.example            PRESAGE_API_KEY、SENSOR_PORT
 ├── intro/HackRU26.md       比赛介绍和时间线（中英双语）
 ├── design/game-design-document.md  策划案：三张地图、小怪、升级、改进点
