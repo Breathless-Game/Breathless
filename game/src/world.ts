@@ -4,6 +4,15 @@ import { RENDER_QUALITY, type RenderQuality } from './render-quality';
 
 export const HALF_WIDTH = 70;
 export const SEABED_Y = -60;
+/** Open water under the boat: |x| < this goes down forever, the rest is shelf. */
+export const TRENCH_HALF_WIDTH = 14;
+
+/** Nothing may intrude into the diver's lane: |x| < LANE_X while z is in LANE_Z. */
+const LANE_X = TRENCH_HALF_WIDTH - 0.5;
+const LANE_Z: readonly [number, number] = [-5, 3];
+const CHUNK_HEIGHT = 40;
+/** Marine snow occupies this tall a band around the camera. */
+const SNOW_BAND = 80;
 
 const WATER_COLORS: [number, THREE.Color][] = [
   [0, new THREE.Color('#46c1d6')],

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
-import { Fish, FishSpec, RARITY, RARITY_ORDER, rollFish, ZONES, type Zone } from './fish';
+import { type Band, Fish, FishSpec, RARITY, RARITY_ORDER, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
@@ -10,7 +10,7 @@ import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
 import { TitleScreen } from './title';
 import { loadSettings, type Settings } from './settings';
-import { HALF_WIDTH, SEABED_Y, World } from './world';
+import { HALF_WIDTH, SEABED_Y, TRENCH_HALF_WIDTH, World } from './world';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 
 // ---- Tuning -------------------------------------------------------------
@@ -24,7 +24,15 @@ const NET_CAPACITY = 6;
 const CATCH_RADIUS = 2.4;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 const FISH_PER_ZONE = [16, 16, 12];
-const MAX_DEPTH = -SEABED_Y;
+// Below the shelf the trench has no bottom. A map config can cap this later
+// (design doc §6 gives each map its own dive depth).
+const DEPTH_LIMIT = Infinity;
+const SHELF_Y = SEABED_Y + 1.2; // lowest the diver can go outside the trench
+const TRENCH_X = TRENCH_HALF_WIDTH - 1.2; // how far left/right the diver can go inside it
+// The trench is too deep to stock up front: a school of fish follows the
+// diver down, each one rolled for the depth it's spawned at.
+const TRENCH_FISH = 12;
+const TRENCH_TOP = -SEABED_Y + 2;
 
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -61,25 +69,66 @@ function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
 }
 
-function rollFor(zone: Zone, depth: number): FishSpec {
-  const a = rollFish(randomSeed(), zone, depth);
+function rollFor(depth: number): FishSpec {
+  const a = rollFish(randomSeed(), depth);
   if (!night) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
-  const b = rollFish(randomSeed(), zone, depth);
+  const b = rollFish(randomSeed(), depth);
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
 }
 
-function spawnFish(zone: Zone) {
-  const depth = THREE.MathUtils.randFloat(zone.top + 1.5, zone.bottom - 0.5);
-  const spec = rollFor(zone, depth);
-  const fish = new Fish(spec, zone, THREE.MathUtils.randFloat(-HALF_WIDTH, HALF_WIDTH), -depth, HALF_WIDTH);
+function addFish(band: Band, depth: number, halfWidth: number) {
+  const fish = new Fish(rollFor(depth), band, THREE.MathUtils.randFloat(-halfWidth, halfWidth), -depth, halfWidth);
   fishes.push(fish);
   scene.add(fish.mesh.group);
+  return fish;
+}
+
+function removeFish(fish: Fish) {
+  fishes.splice(fishes.indexOf(fish), 1);
+  scene.remove(fish.mesh.group);
+  trenchFish.delete(fish);
+}
+
+function spawnFish(band: Band) {
+  addFish(band, THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5), HALF_WIDTH);
 }
 
 ZONES.forEach((zone, i) => {
   for (let k = 0; k < FISH_PER_ZONE[i]; k++) spawnFish(zone);
 });
+
+// Trench fish live in a window around the diver's depth. New ones appear
+// out of view (not within VIEW_M of the diver) so they never pop in on screen.
+const trenchFish = new Set<Fish>();
+const VIEW_M = 14;
+
+function trenchWindow(diverDepth: number): [number, number] {
+  const top = Math.max(TRENCH_TOP, diverDepth - 25);
+  return [top, Math.max(top + 45, diverDepth + 45)];
+}
+
+function spawnTrenchFish(diverDepth: number) {
+  const [top, bottom] = trenchWindow(diverDepth);
+  let depth = THREE.MathUtils.randFloat(top, bottom);
+  for (let tries = 0; tries < 8 && Math.abs(depth - diverDepth) < VIEW_M; tries++) {
+    depth = THREE.MathUtils.randFloat(top, bottom);
+  }
+  // Each fish keeps to a few metres around where it was rolled, so its rarity matches its depth.
+  const band = { top: Math.max(TRENCH_TOP - 1, depth - 4), bottom: depth + 4 };
+  trenchFish.add(addFish(band, depth, TRENCH_X - 0.8));
+}
+
+for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
+
+function tendTrench(diverDepth: number) {
+  const [top, bottom] = trenchWindow(diverDepth);
+  for (const f of [...trenchFish]) {
+    const d = -f.pos.y;
+    if (d < top - 15 || d > bottom + 15) removeFish(f);
+  }
+  while (trenchFish.size < TRENCH_FISH) spawnTrenchFish(diverDepth);
+}
 
 // ---- Game state ---------------------------------------------------------
 type Phase = 'menu' | 'calibrating' | 'play' | 'blackout';
@@ -178,14 +227,17 @@ function tryCatch() {
     }
   }
   if (!best) return;
-  fishes.splice(fishes.indexOf(best), 1);
-  scene.remove(best.mesh.group);
+  const inTrench = trenchFish.has(best);
+  removeFish(best);
   const caught = { ...best.spec, depthM: Math.round(-best.pos.y) };
   net.push(caught);
   hud.setNet(net, NET_CAPACITY);
   hud.toast(caught);
-  const zone = best.zone;
-  setTimeout(() => spawnFish(zone), 4000);
+  // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
+  if (!inTrench) {
+    const band = best.band;
+    setTimeout(() => spawnFish(band), 4000);
+  }
 }
 
 function bankNet() {
@@ -459,8 +511,12 @@ function update(dt: number, time: number) {
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   diver.pos.addScaledVector(diver.vel, dt);
-  diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -HALF_WIDTH, HALF_WIDTH);
-  diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, SEABED_Y + 1.2, -0.05);
+  // Below the shelf you're inside the trench; above it, the shelf is the floor
+  // everywhere except over the trench mouth.
+  const wall = diver.pos.y < SHELF_Y ? TRENCH_X : HALF_WIDTH;
+  diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -wall, wall);
+  const floor = Math.abs(diver.pos.x) > TRENCH_X ? SHELF_Y : -DEPTH_LIMIT;
+  diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
     if (outOfAir) {
@@ -474,18 +530,21 @@ function update(dt: number, time: number) {
   }
 
   diver.update(dt, time, -diver.pos.y);
+  tendTrench(-diver.pos.y);
   for (const f of fishes) f.update(dt, time, diver.pos);
   world.update(time, camera.position.y);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, SEABED_Y + 9), 22);
+  // Over the shelf the camera stays above the seabed; over the trench it follows you down.
+  const camFloor = Math.abs(diver.pos.x) > TRENCH_X ? SEABED_Y + 9 : -Infinity;
+  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor), 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 
   hud.setBreath(s, outOfAir);
-  hud.setDepth(-diver.pos.y, MAX_DEPTH);
+  hud.setDepth(-diver.pos.y);
   hud.setEmergency(outOfAir ? emergency : null);
   if (phase === 'calibrating') updateCalibration();
 }

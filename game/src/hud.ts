@@ -10,6 +10,24 @@ const SOURCE_LABEL = {
   keyboard: 'Keyboard · hold Shift',
 };
 
+// ---- depth gauge: the sea has no bottom, so the bar uses a compressive scale ----
+/** Depth (m) that lands at the middle of the bar. */
+const DEPTH_HALF_M = 60;
+/** Bar position (fraction from the top) for a depth in metres: 0 m → 0, 60 m → 0.5, 540 m → 0.9, ∞ → 1. */
+const depthPos = (d: number) => (Number.isFinite(d) ? Math.max(0, d) / (Math.max(0, d) + DEPTH_HALF_M) : 1);
+
+const DEPTH_BANDS = [
+  { name: 'Shallows', top: 0, bottom: 18, cls: '' },
+  { name: 'Reef', top: 18, bottom: 38, cls: 'reef' },
+  { name: 'Abyss', top: 38, bottom: 60, cls: 'abyss' },
+  { name: 'Trench', top: 60, bottom: Infinity, cls: 'trench' },
+];
+const DEPTH_TICKS = [0, 20, 60, 100, 200, 500];
+/** Only mark a "best" depth once the player has actually dived. */
+const BEST_MIN_M = 5;
+/** Hide the "best" text when it would sit on top of the current-depth label (fraction of bar). */
+const BEST_LABEL_GAP = 0.04;
+
 export class Hud {
   private chip = $('breath-chip');
   private holdTime = $('hold-time');
@@ -19,8 +37,13 @@ export class Hud {
   private vitals = $('vitals');
   private hint = $('hint');
   private camWrap = $('cam-wrap');
+  private depthGauge = $('depth');
   private depthMarker = $('depth-marker');
   private depthLabel = $('depth-label');
+  private depthBest = $('depth-best');
+  private depthBestLabel = $('depth-best-label');
+  /** Deepest depth passed to setDepth since page load (no persistence). */
+  private bestDepth = 0;
   private emergency = $('emergency');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
@@ -29,6 +52,33 @@ export class Hud {
   private bankValue = $('bank-value');
   private toasts = $('toasts');
   private msgTimer = 0;
+
+  constructor() {
+    this.buildDepthScale();
+  }
+
+  /** Zone bands (left) and tick marks (right), placed with the same scale as the marker. */
+  private buildDepthScale() {
+    const frag = document.createDocumentFragment();
+    for (const b of DEPTH_BANDS) {
+      const top = depthPos(b.top);
+      const el = document.createElement('div');
+      el.className = b.cls ? `zone ${b.cls}` : 'zone';
+      el.textContent = b.name;
+      el.style.setProperty('--top', `${(top * 100).toFixed(2)}%`);
+      el.style.setProperty('--h', `${((depthPos(b.bottom) - top) * 100).toFixed(2)}%`);
+      frag.appendChild(el);
+    }
+    for (const m of DEPTH_TICKS) {
+      const el = document.createElement('div');
+      el.className = 'tick';
+      el.textContent = String(m);
+      el.style.top = `${(depthPos(m) * 100).toFixed(2)}%`;
+      frag.appendChild(el);
+    }
+    // Before the markers, so the best tick and the current marker draw on top.
+    this.depthGauge.insertBefore(frag, this.depthBest);
+  }
 
   show() {
     $('hud').classList.remove('hidden');
@@ -81,10 +131,26 @@ export class Hud {
     ctx.stroke();
   }
 
-  setDepth(depth: number, maxDepth: number) {
-    const d = Math.max(0, depth);
-    this.depthMarker.style.top = `${Math.min(100, (d / maxDepth) * 100)}%`;
-    this.depthLabel.textContent = `${d.toFixed(0)} m`;
+  setDepth(depth: number) {
+    const d = Number.isFinite(depth) ? Math.max(0, depth) : 0;
+    const pos = depthPos(d);
+    this.depthMarker.style.top = `${pos * 100}%`;
+    const label = `${d.toFixed(0)} m`;
+    if (this.depthLabel.textContent !== label) this.depthLabel.textContent = label;
+
+    if (d > this.bestDepth) {
+      this.bestDepth = d;
+      if (d >= BEST_MIN_M) {
+        this.depthBest.classList.remove('hidden');
+        this.depthBest.style.top = `${pos * 100}%`;
+        const best = `best ${d.toFixed(0)} m`;
+        if (this.depthBestLabel.textContent !== best) this.depthBestLabel.textContent = best;
+      }
+    }
+    if (this.bestDepth >= BEST_MIN_M) {
+      // While descending the best tick sits under the marker; only label it once the diver rises off it.
+      this.depthBestLabel.classList.toggle('hidden', depthPos(this.bestDepth) - pos < BEST_LABEL_GAP);
+    }
   }
 
   setEmergency(fraction: number | null) {

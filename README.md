@@ -54,7 +54,7 @@ The game currently has one sea, which is the base for Map 3. Maps 1 and 2 and th
 | Difficulty | Casual | Normal | Hard |
 | Setting | A fjord between snowy mountains, with cabins and pine forest on the shore and aurora at night | A mountain lake ringed by stone pillars, with fog at dawn and at night | Open sea, with storm clouds in the distance |
 | Time | Daytime 05:00–20:00; creatures appear after dark | Full day-night cycle | Full day-night cycle |
-| Diving depth | 0–18 m, shallows only | 0–38 m, adds the second zone | 0–58 m, the only map that reaches the Abyss |
+| Diving depth | 0–18 m, shallows only | 0–38 m, adds the second zone | No limit: the only map with the Abyss and the bottomless trench below it |
 | Night creatures | Deer (only startles you), bear (if your heart is racing when you surface, it steals your most valuable fish) | Bear, giant (its stomp scatters the fish and pushes the diver toward the surface) | Waves, sea monster (patrols the Abyss; if it catches you, you lose your net) |
 | Cost of failure | The fish in your net | The fish in your net, plus boat durability | When boat durability reaches zero the boat sinks and all gear is lost for good |
 | Unlock | From the start | 150 total banked value | 1000 total banked value |
@@ -331,10 +331,11 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
         ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
         ├── breathtest.ts   the 2.5-minute breath test on the title screen: prompts holds and breathing, labels them automatically
-        ├── world.ts        seabed, rocks, coral, kelp, light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── world.ts        seabed shelf with the trench gap, endless trench walls, rocks, coral, kelp, light rays, snow, water surface, boat; fog and color by depth; day and night
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
-        ├── fish.ts         rarity table, drop rates per zone, species names, rollFish(seed), fish meshes, swim and flee AI
+        ├── fish.ts         rarity table, zone names, species names, rollFish(seed, depth), fish meshes, swim and flee AI
+        ├── depth-odds.ts   drop rates by depth (RARITY_BY_DEPTH), zoneName(depth); no imports, tested in tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 seeded random numbers
         ├── portrait.ts     offscreen rendering: fishIcon (192 px) and fishCard (512 px, the NFT card)
         ├── hud.ts          breath panel and waveform, depth gauge, emergency bar, net slots, banked count, toasts
@@ -354,13 +355,26 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 
 ## 7. Game design parameters
 
-### Depth zones and drop rates (`ZONES` in `fish.ts`)
+### Depth zones and drop rates (`RARITY_BY_DEPTH` in `depth-odds.ts`)
 
-| Zone | Depth | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | – | 10 | 30 | 35 | 19 | 6 |
+The sea has no bottom. Zones are names only and no longer set the odds: Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m+ (no bottom; a gap in the seabed under the boat)**.
+
+Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Epic only appears below 15 m, legendary below 30 m, mythic below 50 m. The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
+
+| Depth | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 m | 90 | 9.5 | 0.5 | – | – | – |
+| 15 m | 80 | 17 | 3 | – | – | – |
+| 30 m | 68 | 24 | 7 | 1 | – | – |
+| 50 m | 58 | 28 | 10.5 | 3 | 0.5 | – |
+| 80 m | 48 | 31 | 14 | 5.5 | 1.3 | 0.2 |
+| 120 m | 39 | 32 | 18 | 8 | 2.4 | 0.6 |
+| 200 m | 30 | 30 | 22 | 12 | 4.5 | 1.5 |
+| 350 m+ | 22 | 26 | 25 | 16.5 | 7.5 | 3 |
+
+At night every fish rolls twice and keeps the rarer result (`rollFor` in `main.ts`).
+
+Per net of 6 fish (day, expected count = 6 × P(legendary or mythic)): at 80 m that is 6 × 1.5% = 0.09, about 1 legendary-or-better per ~11 nets; at 120 m 6 × 3.0% = 0.18, about 1 per ~5.6 nets.
 
 ### Rarity (`RARITY`)
 
@@ -377,7 +391,7 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 ### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]` (the three shallow zones, stocked at start) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (a map config can cap it)
 
 ---
 
@@ -505,7 +519,7 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - **Before a PR**: `npm --prefix game run build` must pass (strict TS, with `noUnused` on).
 - **Secrets**: `.env`, private keys and API keys never go into the repo. Add new environment variables to `.env.example` as well (names only, no values).
 - **Style**: TypeScript strict; low-poly + flat shading; color variables live in `:root` in `style.css`; comments explain only the "why".
-- **Changing parameters**: gameplay constants live at the top of `main.ts` and in `RARITY` / `ZONES` in `fish.ts`. Mention any change in the PR.
+- **Changing parameters**: gameplay constants live at the top of `main.ts` in `RARITY` / `ZONES` in `fish.ts`, and in `RARITY_BY_DEPTH` in `depth-odds.ts`. Mention any change in the PR.
 - **Two READMEs**: `README.md` (English) and `README.zh-CN.md` (中文). When you change one, change the other in the same PR.
 
 ---
