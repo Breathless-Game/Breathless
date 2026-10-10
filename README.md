@@ -1,6 +1,8 @@
-# HackRU26 · 屏息 Breathless 🫁
+# HackRU26 · 屏息 Breathless
 
 **English** · [简体中文](README.zh-CN.md)
+
+<p align="center"><img src="docs/showcase.gif" alt="Breathless: a fjord under the aurora, where a diver holds their breath and dives down to catch fish" width="800"></p>
 
 > **Hold your real breath to dive and catch fish.** Your webcam, through Presage, detects whether you are holding your breath. The diver can only descend while you hold. The deeper you go, the rarer the fish. The moment you breathe underwater you have to race back to the surface, or you lose everything in your net. Fish you bring up can be minted as Solana NFTs and traded between players. The game also quietly records how long each hold lasted and your heart rate, and builds a health report whenever you ask for one.
 
@@ -42,7 +44,7 @@ Surface = fish banked ◀── reach the surface within 3.2 s ────┤
 
 - **Your breath is the air tank**: the game has no oxygen bar. Your lungs are the bar.
 - **Greed against risk**: mythic fish only live in the Abyss (below 38 m), but the farther you are from the surface, the harder it is to get back after you breathe.
-- **Night mode** (`N`): every fish rolls its rarity twice and keeps the higher result. The sea-monster risk is still on the to-do list.
+- **Night**: when the natural cycle becomes dark, newly spawned fish roll their rarity twice and keep the higher result. `N` gradually switches between morning and night. The sea-monster risk is still on the to-do list.
 - **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it.
 - **Rod upgrades** (`G`): in this game the fishing rod is the diver's hand net. Banked fish earn Pearls; Pearls buy a bigger net with more capacity and a longer catch reach.
 
@@ -63,7 +65,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 - **Unlocking**: a map opens by the total catch value of banked fish (see "Catch value" in section 7). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
 - **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
-- **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), the in-game clock (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
+- **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), map-specific daylight hours (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
 - **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying with Pearl is not wired up.
 
 ### Hackathon positioning
@@ -108,6 +110,8 @@ npm run game       # the game, http://localhost:5173
 
 (Or run `npm run dev` to start both at once. It works on macOS and Windows, and Ctrl+C stops both.)
 
+After a `git pull`, start them the same way. If the pull added a dependency, the game and the sensor notice it is missing when they start and install it first.
+
 ### Windows
 
 - **x64 machines**: follow the steps above as they are.
@@ -145,6 +149,29 @@ Click **Start with camera**. Keep your face and chest in frame, in bright light.
 
 If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` (see section 5).
 
+### Self-hosting / 自托管
+
+`npm start` is the production server: one Node process on one port serves the built game and the breath sensor (WebSocket at `/sensor`) together, so a single tunnel or reverse proxy can front it.
+
+```bash
+npm run setup      # once: installs sensor/ and game/ dependencies
+npm run build      # builds game/ into game/dist
+npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. |
+| `PORT` | `8794` | HTTP + WebSocket port. Dev mode (`npm run sensor`) keeps `SENSOR_PORT`, 8787. |
+| `HOST` | `127.0.0.1` | Bind address. Loopback, because the tunnel / proxy on the same machine is the only way in. |
+| `MAX_LIVE_SESSIONS` | `1` | Players using live Presage at the same time. The SDK's native state is process-global, so it can't run two sessions in one process; `0` turns live sensing off. Anyone over the cap sees "Server busy" and plays with the keyboard. |
+| `MAX_CONN_PER_IP` | `8` | Open sensor connections per player IP (read from `CF-Connecting-IP` / `X-Forwarded-For` when the proxy is local). |
+| `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
+
+- **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
+- **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
+- **Bandwidth.** Live mode uploads raw 640×480 RGBA frames: 1.23 MB per frame, about 37 MB/s (≈295 Mbit/s) per player at 30 fps. Fine on a LAN; over the internet most players can't upload that fast, so they send fewer frames and Presage's trace degrades below ~15 fps. Keyboard and simulator mode send no frames.
+
 ---
 
 ## 3. Controls
@@ -157,20 +184,21 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 | `C` | Collection and NFT panel |
 | `G` | Rod / net upgrade panel |
 | `H` | Health report (built only when you press it) |
-| `N` | Toggle day / night |
+| `N` | Gradually switch morning / night; natural cycle and afternoon are available in pause settings |
 | `K` | Cycle the breath input: presage → sim → keyboard |
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
-**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) cuts its lines, drops it, and opens the workbench; the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) pans the camera down to the workbench (the rope and its fish ride up to the top of the screen and stay live); the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
 
-**Workbench** (`workbench.ts`): a top-down wooden table. Everything drops onto it from above and collides (matter-js, table-plane physics with no gravity). The START fish is top left, the three map cards top right (chapters I / II / III, face down; a map's difficulty is the game difficulty), accessories bottom left (fins, emergency tank, headlamp), and catching gear bottom right (rod, net, bait).
-- Everything can be dragged and flung. Click a piece of gear: it zooms to the centre, the background blurs, and its description shows on the left (placeholder text for now). Click again or press any key to set it in the PACK ring in the middle (green glow = packed); do it again on packed gear to put it back in its corner. Esc cancels.
-- Click a map: the card drops into the middle, sucks in the packed gear and flips face up. Click the map itself to suck in everything on the table; the card grows to cover the screen and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the map to spit the gear back out; the card flips back and returns to the top right.
-- A locked map rattles and says what it needs; the "Unlock all maps (demo)" switch is at the bottom left.
+**Workbench** (`workbench.ts`, chart in `chart.ts`): a wooden table seen at an angle (2.5D, its own Three.js scene), with a folded sea chart in the middle and a READY tray on the right.
+- The gear (fins, emergency tank, headlamp, rod, net, bait) drops in as 3D models and lands with a thud: a bounce, a puff of dust, a camera shake, and nearby pieces jump. Hand-rolled physics: gravity, a bounce off the tabletop, circle collisions on the table.
+- Hover a piece for its name and effect. Click it to set it in the READY tray (green ring); click it there to toss it back onto the table. Pieces can also be dragged (onto the tray to get them ready) and thrown.
+- Click the chart: it lifts off the table and unfolds into a map with the three places, one per chapter (I Fjord, II Heaven Lake, III Open Ocean; a place's difficulty is the game difficulty). Pick a place to see it and your ready gear, then **Dive** (or click the place again, or Enter): the chart zooms into it and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the chart or press Esc to fold it back.
+- Locked places shake and say what they need; the "Unlock all maps (demo)" switch is at the bottom left of the chart. Esc on the bare table pans back up to the title.
 - The packed gear is passed to the game (`loadout`), but the upgrade effects aren't wired into the dive yet.
 
-**Pause details**: the game freezes completely while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
+**Pause details**: gameplay freezes while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
 
 ---
 
@@ -200,7 +228,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 **Why does the browser open the camera, and not Node?** macOS does not grant camera permission to a node process started from an IDE or from Claude, so the SDK's `useCamera` never receives a frame. Instead the browser captures frames and pushes them to the sensor over WebSocket, and the sensor hands them to the SDK with `useCustomInput` + `sendFrame`.
 
-### WebSocket protocol (`ws://<host>:8787`)
+### WebSocket protocol (`ws://<host>:8787` in dev, same-origin `/sensor` with `npm start`)
 
 **Browser → sensor**
 
@@ -229,6 +257,8 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
   "trace": [ /* the last 90 chest-movement samples */ ]
 }
 ```
+
+Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard.
 
 ---
 
@@ -326,6 +356,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 .
 ├── package.json            root scripts: setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev: starts sensor and game together (cross-platform)
+├── scripts/ensure-deps.mjs runs before the game and the sensor start: installs dependencies that are missing
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
@@ -339,12 +370,19 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
     ├── index.html          DOM for the HUD, title card, collection panel and report panel
     ├── vite.config.ts      port 5173; Node polyfills (needed by Umi and Irys)
     ├── asset-library.html  dev-only preview page for the asset library (src/asset-library.ts)
-    ├── tests/              node --test: unit tests for automatic render quality
+    ├── tests/              node --test: render quality, daylight and weather tests
     └── src/
         ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
         ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
         ├── breathtest.ts   the 2.5-minute breath test on the title screen: prompts holds and breathing, labels them automatically
         ├── world.ts        underwater terrain built from the selected map (seabed, rocks, coral, kelp), light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── daylight.ts     continuous 24-hour lighting, 12-minute natural cycle, smooth morning / afternoon / night previews
+        ├── sky.ts          atmospheric sky, time-driven sun / moon and layered clouds
+        ├── color-grade.ts  shared morning / afternoon / night color balance in scene materials
+        ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
+        ├── water.ts        sky reflection and moving sun / moon highlights in one water draw call
+        ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
+        ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
         ├── maps.ts         the three map definitions (depth, unlock value, palette) and the saved map progress
         ├── scenery.ts      the above-water scenery for each map
         ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
@@ -365,9 +403,11 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── report.ts       health report: metric tiles, two charts, interpretation text, save as PDF, delete data
         ├── pause.ts        Esc pause menu: resume (3-second countdown underwater), settings, back to the main menu
         ├── title.ts        main menu: a Verlet rope with fish hanging on fishing lines, mouse dragging and pushing; the START / SETTINGS fish are the buttons
-        ├── workbench.ts    workbench: table physics (matter-js), inspect / pack gear, map cards that suck in, spit out, flip and transition
-        ├── settings.ts     player settings (render quality, camera preview, control hints), stored in localStorage
+        ├── workbench.ts    workbench: 2.5D table scene, gear drop physics, READY tray, sea chart that opens into the three places
+        ├── chart.ts        the sea chart drawing (folded map texture and the open chart)
+        ├── settings.ts     player settings (render quality, lighting effects, weather, camera preview, control hints), stored in localStorage
         ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
+        ├── showcase.ts     showcase page (`/showcase.html`): the scene in the GIF at the top of the README, built from the game's own diver and fish models
         └── style.css       dark glass-style HUD
 ```
 
@@ -474,7 +514,7 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
 | `deepbreath.equipment` | Rod level and Pearl balance (`rodLevel`, `pearls`) |
-| `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `showCamera`, `showHelp` |
+| `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `lightingEffects`, `weather` (auto / clear / cloudy / rain / storm), `showCamera`, `showHelp` |
 | `deepbreath.maps` | Map progress: the selected map, the best total banked value, the demo switch |
 
 To reset, run `localStorage.clear()` in the browser console.
@@ -489,6 +529,14 @@ To reset, run `localStorage.clear()` in the browser console.
 - The sensor logs are in the terminal that runs `npm run sensor`. Presage status codes and ValidationCode hints are translated into the yellow hint at the top left of the HUD.
 - Presage stuck on `starting`: check the key in `.env`, check that the browser is really sending frames (the frames counter in the HUD), and check that there is enough light.
 
+### Re-recording the GIF at the top of the README
+
+Start the game first (`npm run game`), then run the command below. You need Chrome and ffmpeg on your machine. The script renders `game/showcase.html` frame by frame in headless Chrome and writes `docs/showcase.gif`, which loops seamlessly from the last frame back to the first.
+
+```bash
+npm run showcase:gif
+```
+
 ### Automatic render quality
 
 Settings → Render quality in the pause menu defaults to Auto. You can also pick high, medium or low yourself, and the choice is saved; a level you picked is never lowered automatically. Existing manual settings keep working. Frame rate is not sampled while the game is paused, and toggling the camera preview or the control hints does not reset the level Auto has already dropped to.
@@ -502,6 +550,10 @@ The game picks the starting quality from the CPU logical core count and the devi
 | Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
 | Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
+| Water micro-ripple layers | 1 | 2 | 3 |
+| Cloud texture samples per sky pixel | 2 | 3 | 4 |
+| Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
+| Maximum raindrops | 160 | 420 | 800 |
 
 A large screen may use a DPR below 1 to stay within the pixel budget; the HUD still uses the browser's native resolution. After a start-up grace period, two consecutive 3-second windows that average below 45 FPS lower the quality by one level. A drop is followed by a 6-second cooldown, and within one session the quality only goes down, never up. Hidden tabs and isolated long stalls are not counted, but a sustained very low frame rate still triggers a drop.
 
@@ -509,6 +561,32 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
+
+### Natural daylight and water reflections
+
+The game starts at 09:00 and completes a 24-hour cycle every 12 minutes. Sky and horizon colors, the main light's direction and intensity, underwater fog and light rays change continuously: morning is clear and slightly warm, afternoon is golden, dusk fades gradually, and night uses cool blue moonlight. The visible sun and moon follow the same continuous celestial directions as the reflected light, rising and setting at the horizon. Their halos and cloud occlusion change with time and weather. The HUD shows game time. Automatic time stops while paused or in the background, and returning to the tab does not catch up the missed time.
+
+Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Night. Manual changes blend over about 2 seconds, including a return to Natural cycle. You can preview them while paused. The rarity bonus for newly spawned fish follows the actual night lighting state, so it activates automatically as night falls.
+
+Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
+
+Ripple normals and viewing-angle reflection approximate the sky and moving sun / moon highlights on the water. Reflection and opacity are reduced when seen from underwater. Underwater sunlight uses soft, irregular scattering that spreads and weakens with depth; red light is absorbed faster than blue. All 4 / 8 / 14 light shafts share one draw call and disappear at night, in storms or at depth. This runs in the existing water material, preserving fog and color management without a reflection camera or a second scene render. Low, medium and high use 1 / 2 / 3 micro-ripple layers. It reflects the sky and light sources; boats and fish do not have live mirror reflections.
+
+Morning highlights are gently warm, afternoon highlights become golden, and night shifts toward muted blue. The material shaders share one color-grade state; cloud cover reduces saturation and underwater depth removes the warm cast. This adds no fullscreen pass or render target. Sky color and fog remain continuous when lighting effects are disabled.
+
+- `npm --prefix game test` also covers the day cycle, midnight and color continuity, manual blends, pauses and returning to the cycle.
+- Inspect `world.dayCycle.hour` / `world.dayCycle.mode` in the console, or preview lighting with `setTimeOfDay('afternoon')`.
+
+### Weather
+
+Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Storm, and saves the choice. Natural weather starts clear and cycles through clear → cloudy → rain → storm → rain → cloudy → clear every 9 minutes. Manual changes and returns to natural weather blend over about 5 seconds. The HUD shows the current weather. This is an in-game cycle, with no real-world location or weather service.
+
+Cloud cover affects the sky, sun / moon intensity, underwater rays, fog and water reflections. Wind changes wave strength, boat rocking and rain slant; storms increase rainfall. Rain animates on the GPU and adds at most one draw call. Clear / cloudy weather and underwater views do not draw rain. Low, medium and high use at most 160 / 420 / 800 raindrops. The atmospheric sky uses one draw and a seamless 256 × 256 noise texture generated once; low / medium / high use 2 / 3 / 4 cloud texture samples, and low omits the high cloud veil and stars. No sky texture is redrawn or uploaded each frame. Weather changes reuse the material and rain buffers.
+
+Pause and background states freeze automatic weather and rain animation; manual weather previews still blend in pause settings. Weather remains active when Lighting effects is off, while sun / moon lighting, rays and water reflections stay off. Weather does not change fish populations, breathing rules or the night rarity condition. Ambient light and the headlamp keep nighttime and rainy underwater scenes readable. The Open Ocean scenery's lightning follows storm intensity and the Lighting effects switch. Weather audio is not included.
+
+- `npm --prefix game test` covers weather continuity, frame-rate independence, pauses, preset changes and returning to natural weather.
+- Inspect `world.weather.state` in the console. `world.setWeather('storm')` previews a storm temporarily; use the settings menu to save the choice.
 
 ---
 
@@ -522,6 +600,8 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - NFT card art (determined by the seed, reproducible), collection panel
 - Solana minting: verified end to end on devnet (throwaway wallet → Irys upload of image and metadata → Metaplex Core + on-chain Attributes). Solana Explorer shows the card correctly. [Example asset](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - Health report (built on demand)
+- Natural day / night cycle, water reflections and a saved lighting-effects switch
+- Natural weather plus clear / cloudy / rain / storm presets, with quality-scaled clouds and rain
 - Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, depth limits, map picker on the start card, unlock by total banked fish value
 - Low-poly models for the upgrade parts (code only, not in the game yet)
 - Rod / net upgrade MVP: three tiers of capacity and catch radius, Pearl rewards, a visibly bigger hoop, saved locally
@@ -533,7 +613,7 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - [ ] **Full gear economy**: beyond the rod / net upgrade MVP, buy air tanks, fins and a headlamp with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
 - [ ] **NFT sinks**: sell to the market for Pearl, craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets. `burnFish` is already written
 - [ ] **Night sea monster**: high-value fish appear at night, together with the sea-monster risk
-- [ ] **Three maps, what remains**: night creatures per map, the in-game clock, boat durability and sinking on the ocean map. The design is in section 6 of the design doc
+- [ ] **Three maps, what remains**: night creatures and daylight hours per map, boat durability and sinking on the ocean map. The design is in section 6 of the design doc
 - [ ] **Boat fishing and heart-rate gameplay**: the calm value sets the bite speed and how far away underwater fish notice you; rod, bait and boat upgrades. The design is in sections 4.2, 6.3 and 7 of the design doc
 - [ ] **Marketplace (the core of multiplayer)**: listings, purchases, a live feed of sales; players stay in separate worlds and interact only through trading
 - [ ] **Backend**: a service for listings and sales, plus a dashboard for economy and fairness data (Tiger Data / Timescale)

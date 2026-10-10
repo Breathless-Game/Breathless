@@ -3,21 +3,36 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Batch, flatMat, jitter, paintFaces, pyramid, type Placement } from './lowpoly';
 import type { MapDef, MapId } from './maps';
 import type { SceneryDetail } from './render-quality';
+import type { WeatherState } from './weather';
 import { Rng } from './rng';
 
 // What you see above the water on each map: the fjord's snow peaks and cabins,
-// Heaven Lake's stone pillars and mist, the ocean's storm front and lighthouse.
+// Heaven Lake's stone pillars and mist, the ocean's lighthouse and freighter.
 // The camera sits at z = +22 looking toward -z, so everything lives behind the
 // boat. Static pieces are painted with vertex colours and batched into as few
 // meshes as possible; each kind of moving piece (buoys, lamps, smoke, birds) is
-// one InstancedMesh. No piece adds a real light: lamps glow by colour alone.
+// one InstancedMesh. No piece adds a real light: lamps glow by colour alone, and
+// only at night with the "Lighting effects" setting on.
 // Lower detail only drops pieces. Every layout comes from a fixed seed, and each
 // feature draws from its own stream, so what remains sits where it does on high.
 
 export interface Scenery {
   group: THREE.Group;
-  /** Animate the living parts. Runs at the world's decoration rate; `dt` is seconds since the last call. */
-  update(time: number, night: boolean, dt: number): void;
+  /**
+   * Animate the living parts. Runs at the world's decoration rate; `dt` is seconds
+   * since the last call, and 0 re-poses everything without moving it on.
+   */
+  update(time: number, night: boolean, dt: number, env?: SceneryEnv): void;
+}
+
+/** What the world around the shore is doing. */
+export interface SceneryEnv {
+  weather?: WeatherState;
+  /** The "Lighting effects" setting: off leaves lamps, windows, beams, aurora and lightning dark. Default on. */
+  lightingEffects?: boolean;
+  /** World's wave clock and swell height, so floating things ride the surface. Default `time` and 1. */
+  waveTime?: number;
+  swell?: number;
 }
 
 type Builder = (map: MapDef, detail: SceneryDetail) => Scenery;
@@ -154,7 +169,10 @@ const additive = () =>
     side: THREE.DoubleSide,
   });
 
-/** Height of the water at (x, z). Mirrors the wave field in World.updateDecorations (surface centred at z = -30). */
+/**
+ * Height of the water at (x, z). Mirrors the wave field in World.updateDecorations
+ * (surface centred at z = -30): `t` is the world's wave clock, `waves` the map's swell times the weather's.
+ */
 function waterY(x: number, z: number, t: number, waves: number) {
   return (Math.sin(x * 0.15 + t * 1.3) * 0.35 + Math.cos((z + 30) * 0.2 + t * 0.9) * 0.25) * waves;
 }
@@ -198,7 +216,7 @@ class Lights {
   private at: Float32Array;
   private lit: THREE.Color[];
   private glass: THREE.Color[];
-  private night: boolean | null = null;
+  private shining: boolean | null = null;
 
   constructor(group: THREE.Group, geo: THREE.BufferGeometry, private specs: LightSpec[], detail: SceneryDetail) {
     this.heads = instanced(geo, new THREE.MeshBasicMaterial({ vertexColors: geo.hasAttribute('color') }), specs.length);
@@ -231,21 +249,22 @@ class Lights {
     this.place(i, _m2.compose(_p.set(x, y, z), _q.identity(), _s.set(sx, sy, sx)));
   }
 
-  update(time: number, night: boolean) {
-    if (night !== this.night) {
-      // At night lamps shine through the haze; by day they sit in it like everything else.
+  /** Lamps shine only when `shine` is set: at night, with the "Lighting effects" setting on. */
+  update(time: number, night: boolean, shine: boolean) {
+    if (shine !== this.shining) {
+      // Lit lamps shine through the haze; dark ones sit in it like everything else.
       const mat = this.heads.material as THREE.MeshBasicMaterial;
-      mat.fog = !night;
+      mat.fog = !shine;
       mat.needsUpdate = true;
-      if (this.glows) this.glows.visible = night;
-      this.night = night;
+      if (this.glows) this.glows.visible = shine;
+      this.shining = shine;
     }
     const glows = this.glows;
     for (let i = 0; i < this.specs.length; i++) {
       const s = this.specs[i];
-      const f = night ? brightness(s, time) : 0;
+      const f = shine ? brightness(s, time) : 0;
       this.heads.setColorAt(i, _c.copy(this.glass[i]).multiplyScalar(night ? 0.3 : 1).lerp(this.lit[i], f));
-      if (!glows || !night) continue;
+      if (!glows || !shine) continue;
       if (!s.halo || f < 0.02) {
         glows.setMatrixAt(i, HIDDEN);
         continue;
@@ -257,7 +276,7 @@ class Lights {
       glows.setColorAt(i, _c.copy(this.lit[i]).multiplyScalar(0.45 * f));
     }
     this.heads.instanceColor!.needsUpdate = true;
-    if (glows && night) {
+    if (glows && shine) {
       glows.instanceMatrix.needsUpdate = true;
       glows.instanceColor!.needsUpdate = true;
     }
@@ -307,18 +326,21 @@ class Floats {
     group.add(this.mesh);
   }
 
-  update(time: number) {
+  update(time: number, env?: SceneryEnv) {
+    // Ride the world's wave clock and the weather's swell, so bodies stay on the surface.
+    const waveTime = env?.waveTime ?? time;
+    const waves = this.waves * (env?.swell ?? 1);
     for (let i = 0; i < this.specs.length; i++) {
       const s = this.specs[i];
       const x = s.x + (s.wander ?? 0) * Math.sin(time * (s.pace ?? 0) + this.phase[i]);
       // Lean with the local wave slope (exaggerated: a real buoy also rolls), plus a little wobble.
-      const lean = (s.lean ?? 1) * this.waves * 4;
+      const lean = (s.lean ?? 1) * waves * 4;
       const wob = Math.sin(time * 1.7 + this.phase[i]) * 0.02 * lean;
-      const slopeX = 0.0525 * Math.cos(x * 0.15 + time * 1.3);
-      const slopeZ = -0.05 * Math.sin((s.z + 30) * 0.2 + time * 0.9);
+      const slopeX = 0.0525 * Math.cos(x * 0.15 + waveTime * 1.3);
+      const slopeZ = -0.05 * Math.sin((s.z + 30) * 0.2 + waveTime * 0.9);
       _q.setFromEuler(_e.set(-Math.atan(slopeZ * lean) + wob, this.yaw[i] + time * 0.03, Math.atan(slopeX * lean) + wob * 0.7, 'ZXY'));
       const st = s.stretch ?? UNIT;
-      _m.compose(_p.set(x, waterY(x, s.z, time, this.waves) - (s.sink ?? 0), s.z), _q, _s.set(s.size * st[0], s.size * st[1], s.size * st[2]));
+      _m.compose(_p.set(x, waterY(x, s.z, waveTime, waves) - (s.sink ?? 0), s.z), _q, _s.set(s.size * st[0], s.size * st[1], s.size * st[2]));
       this.mesh.setMatrixAt(i, _m);
       if (s.lamp && this.lights) {
         const l = s.lamp;
@@ -751,18 +773,20 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
 
   return {
     group,
-    update(time, night) {
-      windows.emissiveIntensity = night ? 1.8 : 0;
-      buoys.update(time);
-      floes?.update(time);
-      lights.update(time, night);
+    update(time, night, _dt, env) {
+      const shine = night && (env?.lightingEffects ?? true);
+      windows.emissiveIntensity = shine ? 1.8 : 0;
+      buoys.update(time, env);
+      floes?.update(time, env);
+      lights.update(time, night, shine);
       smokeLook.setNight(night);
       smoke.swell = night ? 1.2 : 1;
       smoke.update(time);
+      const auroraVisibility = shine ? 1 - (env?.weather?.cloud ?? 0) : 0;
       for (const r of ribbons) {
-        r.mesh.visible = night;
-        if (!night) continue;
-        (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 0.35 + r.phase) * 0.14;
+        r.mesh.visible = auroraVisibility > 0.01;
+        if (!r.mesh.visible) continue;
+        (r.mesh.material as THREE.MeshBasicMaterial).opacity = (0.42 + Math.sin(time * 0.35 + r.phase) * 0.14) * auroraVisibility;
         const pos = r.mesh.geometry.attributes.position;
         for (let v = 0; v < pos.count; v++) {
           const x = r.base[v * 3];
@@ -973,8 +997,9 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
 
   return {
     group,
-    update(time, night, dt) {
-      lantern.emissiveIntensity = night ? 2 : 0;
+    update(time, night, dt, env) {
+      const shine = night && (env?.lightingEffects ?? true);
+      lantern.emissiveIntensity = shine ? 2 : 0;
       mistMat.opacity = night ? 0.3 : 0.18;
       for (let i = 0; i < mist.length; i++) {
         const m = mist[i];
@@ -984,15 +1009,15 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
         mistMesh.setMatrixAt(i, _m.compose(_p.set(m.x, m.y, m.z), _q.identity(), _s.set(m.r, m.r * 0.1, m.r * 0.45)));
       }
       mistMesh.instanceMatrix.needsUpdate = true;
-      floats.update(time);
+      floats.update(time, env);
       for (let k = 0; k < skyLanterns.length; k++) {
         // Released from the far shore, they rise and drift until they wink out above the view.
         const s = skyLanterns[k];
         const age = fract(time / s.life + s.phase);
-        const size = night ? 1.5 * Math.min(1, age * 30) * Math.min(1, (1 - age) * 12) : 0;
+        const size = shine ? 1.5 * Math.min(1, age * 30) * Math.min(1, (1 - age) * 12) : 0;
         lights.placeAt(skyBase + k, s.x + Math.sin(time * 0.15 + s.phase * 6) * s.sway + age * 14, 1 + age * 70, s.z - age * 10, size, size * 1.2);
       }
-      lights.update(time, night);
+      lights.update(time, night, shine);
       smokeLook.setNight(night);
       smoke.update(time);
       cranes.update(time, night);
@@ -1011,27 +1036,7 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
   const put = (geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x: number, y: number, z: number, o?: Placement) =>
     batch.add(solid(geo, color), painted, x, y, z, o);
 
-  // Clouds sit beyond the fog range, so they opt out of fog to stay visible. They are
-  // seen from below, where only the dim ground light reaches, so they glow slightly.
-  const storm = [
-    flatMat('#56616f', { fog: false, emissive: '#dfeaff', emissiveIntensity: 0 }),
-    flatMat('#6c7888', { fog: false, emissive: '#dfeaff', emissiveIntensity: 0 }),
-  ];
-  const fair = flatMat('#f3f9fc', { fog: false, emissive: '#f3f9fc', emissiveIntensity: 0.5 });
-  const cloud = (x: number, y: number, z: number, blobs: number, size: [number, number], mats: THREE.Material[]) => {
-    for (let i = 0; i < blobs; i++) {
-      const r = rng.range(size[0], size[1]);
-      const geo = jitter(new THREE.IcosahedronGeometry(r, 1), rng, r * 0.14);
-      batch.add(geo, rng.pick(mats), x + rng.range(-38, 38), y + rng.range(-5, 5), z + rng.range(-8, 8), { sy: 0.45 });
-    }
-  };
-  // The storm front fills the left of the sky; the right is still clear.
-  cloud(-160, 52, -168, 9, [16, 28], storm);
-  cloud(-80, 60, -176, 9, [16, 28], storm);
-  cloud(-10, 52, -170, 7, [14, 24], storm);
-  cloud(110, 60, -172, 4, [9, 15], [fair]);
-  cloud(190, 52, -168, 3, [8, 13], [fair]);
-
+  // The sky's clouds are shared by every map (see sky.ts); this map adds only sheet lightning.
   const stack = '#3f4a55';
   const stacks: [number, number, number][] = [];
   for (const [x, z] of [[-118, -92], [-64, -98], [38, -106], [128, -88]]) {
@@ -1058,7 +1063,7 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     put(jitter(ring, foam, 0.3), '#eef6f8', x, 0.22, z);
   }
 
-  // A freighter far out under the storm front, steaming toward the clear sky.
+  // A freighter far out on the horizon.
   const [sx, sz] = [-24, -140];
   const hullShape = new THREE.Shape([new THREE.Vector2(-12, -1.2), new THREE.Vector2(11, -1.2), new THREE.Vector2(14, 2.2), new THREE.Vector2(-12.4, 2)]);
   const shipHull = new THREE.ExtrudeGeometry(hullShape, { depth: 4, bevelEnabled: false });
@@ -1181,24 +1186,52 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     group.add(beam);
   }
 
+  // Atmospheric clouds are shared by every map. Keep occasional ocean sheet
+  // lightning as a soft localized glow, without another polygon cloud layer.
+  const flashCanvas = document.createElement('canvas');
+  flashCanvas.width = flashCanvas.height = 64;
+  const ctx = flashCanvas.getContext('2d')!;
+  const glow = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  glow.addColorStop(0, 'rgba(215,230,255,1)');
+  glow.addColorStop(0.35, 'rgba(190,215,255,0.45)');
+  glow.addColorStop(1, 'rgba(170,205,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, 64, 64);
+  const flashTexture = new THREE.CanvasTexture(flashCanvas);
+  flashTexture.colorSpace = THREE.SRGBColorSpace;
+  const flashMaterial = new THREE.MeshBasicMaterial({
+    map: flashTexture, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+    depthWrite: false, fog: false,
+  });
+  const flashSheet = new THREE.Mesh(new THREE.PlaneGeometry(170, 75), flashMaterial);
+  flashSheet.position.set(-55, 38, -140);
+  flashSheet.visible = false;
+  group.add(flashSheet);
+
   let flash = 0;
+  let lastSlot = -1;
   return {
     group,
-    update(time, night, dt) {
+    update(time, night, dt, env) {
+      const lightingEffects = env?.lightingEffects ?? true;
+      const shine = night && lightingEffects;
       // Sheet lightning: a rare deterministic strike that decays over a fraction of a second.
       const slot = Math.floor(time * 4);
       const roll = Math.abs(Math.sin(slot * 12.9898) * 43758.5453) % 1;
-      flash = Math.max(flash * Math.pow(0.85, dt * 60), roll > 0.965 ? 1 : 0);
-      for (const m of storm) m.emissiveIntensity = 0.14 + flash * 0.9;
+      if (dt > 0) flash = Math.max(flash * Math.exp(-8 * dt), slot !== lastSlot && roll > 0.965 ? 1 : 0);
+      lastSlot = slot;
+      const stormStrength = lightingEffects ? env?.weather?.storm ?? 1 : 0;
+      flashMaterial.opacity = flash * stormStrength * 0.22;
+      flashSheet.visible = flashMaterial.opacity > 0.005;
       // The lamp turns: bright when a beam sweeps past the viewer.
-      beacon.emissiveIntensity = night ? 0.6 + sweep(time) * 2.4 : 0;
+      beacon.emissiveIntensity = shine ? 0.6 + sweep(time) * 2.4 : 0;
       if (beam) {
-        beam.visible = night;
+        beam.visible = shine;
         // A beam faces the camera whenever |sin(0.8 t)| peaks, matching the lamp.
         beam.rotation.y = time * 0.8 - Math.PI / 2 + facing;
       }
-      markers.update(time);
-      lights.update(time, night);
+      markers.update(time, env);
+      lights.update(time, night, shine);
       gulls.update(time, night);
       spray.update(time);
     },

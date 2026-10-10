@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ROD_TIERS } from './equipment';
 
 export type UpgradeId = 'rod' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
 export type UpgradeLevel = 1 | 2 | 3;
@@ -21,7 +22,15 @@ export const UPGRADES: UpgradeDef[] = [
   { id: 'boatSpeed', group: 'boat', name: 'Boat engine', nameZh: '船 · 速度', effects: ['Trip takes 2 h', 'Trip takes 1 h', 'Trip takes 30 min'], prices: [0, 80, 500] },
   { id: 'boatHull', group: 'boat', name: 'Boat hull', nameZh: '船 · 耐久', effects: ['Durability 3', 'Durability 5', 'Durability 8'], prices: [0, 80, 500] },
   { id: 'boatDeck', group: 'boat', name: 'Fishing deck', nameZh: '船 · 鱼台', effects: ['1 rod', '2 rods', '3 rods'], prices: [0, 80, 500] },
-  { id: 'net', group: 'dive', name: 'Net', nameZh: '渔网', effects: ['Holds 6 fish', 'Holds 8 fish', 'Holds 10 fish'], prices: [0, 60, 400] },
+  // The net's real stats and prices live in equipment.ts.
+  {
+    id: 'net',
+    group: 'dive',
+    name: 'Net',
+    nameZh: '渔网',
+    effects: [`Holds ${ROD_TIERS[0].capacity} fish`, `Holds ${ROD_TIERS[1].capacity} fish`, `Holds ${ROD_TIERS[2].capacity} fish`],
+    prices: [ROD_TIERS[0].cost, ROD_TIERS[1].cost, ROD_TIERS[2].cost],
+  },
   { id: 'fins', group: 'dive', name: 'Fins', nameZh: '脚蹼', effects: ['Swim speed 7.5', 'Swim speed 8.5', 'Swim speed 9.5'], prices: [0, 60, 400] },
   { id: 'tank', group: 'dive', name: 'Emergency tank', nameZh: '应急气瓶', effects: ['No reserve air', '+1 s emergency air', '+2 s emergency air'], prices: [0, 80, 500] },
   { id: 'lamp', group: 'dive', name: 'Headlamp', nameZh: '头灯', effects: ['Short beam', 'Wide beam', 'Wide, long beam'], prices: [0, 40, 300] },
