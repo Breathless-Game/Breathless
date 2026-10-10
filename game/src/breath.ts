@@ -1,7 +1,10 @@
 // Breath input. In live mode the browser owns the webcam, shows it to the
-// player, and streams raw frames to the local sensor bridge, which runs
-// Presage SmartSpectra and answers with HOLD / BREATHE.
+// player, and streams its frames (JPEG, or raw RGBA in local dev; see
+// frame-codec.ts) to the sensor bridge, which runs Presage SmartSpectra and
+// answers with HOLD / BREATHE.
 // Keyboard mode (hold Shift) exists so the game is playable without a camera.
+
+import { HEADER_BYTES, JpegQuality, pickFrameFormat, writeFrameHeader, type FrameFormat } from './frame-codec';
 
 export type BreathMode = 'presage' | 'sim' | 'keyboard';
 
@@ -32,6 +35,17 @@ const SENSOR_URL =
   (import.meta.env.PROD
     ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/sensor`
     : `ws://${location.hostname || 'localhost'}:8787`);
+// JPEG everywhere except a dev build next to a local sensor; `?frames=raw|jpeg` overrides.
+const FRAME_FORMAT = pickFrameFormat({
+  override:
+    new URLSearchParams(location.search).get('frames') ?? (import.meta.env.VITE_FRAME_FORMAT as string | undefined),
+  dev: import.meta.env.DEV,
+  sensorUrl: SENSOR_URL,
+});
+// Skip frames while the socket still holds this much unsent data. Raw: 4 frames, as before.
+// JPEG: ~4 frames at the 25 kB budget, about 160 ms on a 5 Mbit/s uplink, so a slow uplink
+// skips frames (and JpegQuality lowers the quality) instead of building up lag.
+const MAX_BUFFERED: Record<FrameFormat, number> = { raw: 4 * FRAME_W * FRAME_H * 4, jpeg: 100_000 };
 
 export class BreathSource {
   state: BreathState = {
@@ -59,6 +73,10 @@ export class BreathSource {
   private listeners: ((s: BreathState) => void)[] = [];
   // Bumped on start/stop so a stale requestVideoFrameCallback loop exits instead of doubling up.
   private pumpGen = 0;
+  /** How frames go to the sensor; drops to raw if the sensor can't decode JPEG. */
+  frameFormat: FrameFormat = FRAME_FORMAT;
+  readonly jpegQuality = new JpegQuality();
+  private encoding = false;
 
   constructor(video: HTMLVideoElement) {
     this.video = video;
@@ -163,6 +181,11 @@ export class BreathSource {
   private onSensorError(msg: { code?: string; message?: string }) {
     const message = msg.message || 'Breath sensor error';
     console.warn(`[breath] ${message}`);
+    // A sensor that can't decode JPEG (sharp not installed): raw frames still work on a LAN.
+    if (msg.code === 'frames') {
+      this.frameFormat = 'raw';
+      return;
+    }
     if (msg.code === 'busy' && this.state.mode === 'presage') this.stopLive();
     this.state.error = message;
     this.emit();
@@ -189,27 +212,53 @@ export class BreathSource {
     const gen = ++this.pumpGen;
     const push = () => {
       if (gen !== this.pumpGen) return;
-      const ws = this.ws;
-      if (
-        this.state.mode === 'presage' &&
-        ws?.readyState === WebSocket.OPEN &&
-        ws.bufferedAmount < 4 * FRAME_W * FRAME_H * 4 &&
-        this.video.readyState >= 2
-      ) {
-        this.ctx.drawImage(this.video, 0, 0, FRAME_W, FRAME_H);
-        const img = this.ctx.getImageData(0, 0, FRAME_W, FRAME_H);
-        const buf = new ArrayBuffer(12 + img.data.byteLength);
-        const view = new DataView(buf);
-        view.setFloat64(0, performance.timeOrigin + performance.now(), true);
-        view.setUint16(8, FRAME_W, true);
-        view.setUint16(10, FRAME_H, true);
-        new Uint8Array(buf, 12).set(img.data);
-        ws.send(buf);
-      }
+      this.sendFrame(gen);
       if ('requestVideoFrameCallback' in this.video) this.video.requestVideoFrameCallback(push);
       else setTimeout(push, 33);
     };
     push();
+  }
+
+  private sendFrame(gen: number) {
+    const ws = this.ws;
+    if (this.state.mode !== 'presage' || ws?.readyState !== WebSocket.OPEN || this.video.readyState < 2) return;
+    const format = this.frameFormat;
+    if (ws.bufferedAmount >= MAX_BUFFERED[format]) {
+      if (format === 'jpeg') this.jpegQuality.skipped(performance.now());
+      return;
+    }
+    // One JPEG encode at a time keeps frames in order and stops a slow machine piling them up.
+    if (format === 'jpeg' && this.encoding) return;
+    this.ctx.drawImage(this.video, 0, 0, FRAME_W, FRAME_H);
+    const ts = performance.timeOrigin + performance.now();
+    if (format === 'raw') {
+      const img = this.ctx.getImageData(0, 0, FRAME_W, FRAME_H);
+      const buf = new ArrayBuffer(HEADER_BYTES + img.data.byteLength);
+      writeFrameHeader(new DataView(buf), ts, FRAME_W, FRAME_H, 'raw');
+      new Uint8Array(buf, HEADER_BYTES).set(img.data);
+      ws.send(buf);
+      return;
+    }
+    this.encoding = true;
+    this.canvas.toBlob(
+      (blob) => {
+        this.encoding = false;
+        if (gen !== this.pumpGen || ws !== this.ws || ws.readyState !== WebSocket.OPEN || this.frameFormat !== 'jpeg') {
+          return;
+        }
+        // toBlob quietly falls back to PNG for a type it can't encode.
+        if (!blob || blob.type !== 'image/jpeg') {
+          this.frameFormat = 'raw';
+          return;
+        }
+        const header = new ArrayBuffer(HEADER_BYTES);
+        writeFrameHeader(new DataView(header), ts, FRAME_W, FRAME_H, 'jpeg');
+        ws.send(new Blob([header, blob]));
+        this.jpegQuality.sent(blob.size, performance.now());
+      },
+      'image/jpeg',
+      this.jpegQuality.quality,
+    );
   }
 
   private tickKeyboard() {

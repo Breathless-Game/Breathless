@@ -117,7 +117,7 @@ curl -I http://127.0.0.1:8794/
 1. 用 Chrome 打开 `https://<你的子域名>`，按 Enter → **Start with camera**，允许摄像头。
 2. 左上角应显示 **Presage · live camera**，标签在 **BREATHING / HOLDING** 之间切换，波形在动；`journalctl -u breathless` 里能看到 `presage status: running`。
 3. 显示 "Server busy" 说明已经有另一个玩家在用实时检测（`MAX_LIVE_SESSIONS=1`），这时游戏会自动改用键盘。
-4. 如果一直停在 "Presage is warming up…"：实时模式每帧上传 1.23 MB（30 fps 时约 37 MB/s），大多数家庭网络上行跟不上；另外，隧道是否限制单条 WebSocket 消息的大小还没有验证过。第一次上线时专门测一下。
+4. 如果一直停在 "Presage is warming up…"：实时模式以 JPEG 上传，每帧约 10–35 kB，30 fps 约 3–6 Mbit/s。在一台不在局域网里的电脑上运行 `node sensor/stream-test.mjs wss://<你的子域名>/sensor`（需先 `npm --prefix sensor install`），它会打印实际上行速率和 Presage 接收的帧数，不用摄像头就能确认隧道这条路是通的；`journalctl -u breathless` 每分钟会记一行帧率、平均帧大小和解码耗时。
 
 ### 7. 安全须知
 
@@ -249,7 +249,7 @@ curl -I http://127.0.0.1:8794/
 1. Open `https://<your subdomain>` in Chrome, press Enter → **Start with camera**, allow the camera.
 2. The top-left should read **Presage · live camera**, the chip should switch between **BREATHING** and **HOLDING**, and the waveform should move; `journalctl -u breathless` shows `presage status: running`.
 3. "Server busy" means another player is already using live sensing (`MAX_LIVE_SESSIONS=1`); the game then switches to the keyboard by itself.
-4. If it stays on "Presage is warming up…": live mode uploads 1.23 MB per frame (about 37 MB/s at 30 fps), more than most home uplinks can send, and whether the tunnel limits the size of a single WebSocket message is still untested. Check this on the first day.
+4. If it stays on "Presage is warming up…": live mode uploads JPEG frames of about 10–35 kB, 3–6 Mbit/s at 30 fps. From a machine outside the LAN, `node sensor/stream-test.mjs wss://<your subdomain>/sensor` (after `npm --prefix sensor install`) prints the real upload rate and how many frames Presage accepted, so the tunnel path can be checked without a camera. `journalctl -u breathless` logs a line a minute with the frame rate, average frame size and decode time.
 
 ### 7. Security notes
 

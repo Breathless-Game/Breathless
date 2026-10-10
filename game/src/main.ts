@@ -582,9 +582,9 @@ let benchPan = 0;
 const workbench = new Workbench({
   progress: () => mapProgress,
   setUnlockAll: setDemoUnlock,
-  pan(u) {
+  pan(u, tableY) {
     benchPan = u;
-    titleScreen.setPan(u);
+    titleScreen.setPan(u, tableY);
   },
   dive(id, gear) {
     loadout = gear;
