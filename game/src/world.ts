@@ -1,25 +1,28 @@
 import * as THREE from 'three';
+import { disposeTree, flatMat, jitter } from './lowpoly';
+import { MAPS, mapDepth, type MapDef, type MapId } from './maps';
 import { Rng } from './rng';
 import { RENDER_QUALITY, type RenderQuality } from './render-quality';
+import { buildScenery, type Scenery } from './scenery';
 
 export const HALF_WIDTH = 70;
-export const SEABED_Y = -60;
 
-const WATER_COLORS: [number, THREE.Color][] = [
-  [0, new THREE.Color('#46c1d6')],
-  [12, new THREE.Color('#1f86a8')],
-  [30, new THREE.Color('#0d4d73')],
-  [45, new THREE.Color('#06213f')],
-  [60, new THREE.Color('#020a1a')],
-];
-const SKY = new THREE.Color('#a8e3f5');
+// Each map lays out its terrain from its own seed. The ocean keeps the seed the
+// single-sea version used, so its reef is where players remember it.
+const TERRAIN_SEED: Record<MapId, number> = { fjord: 0xf10d5ea, tianchi: 0x71a2c41, ocean: 20261010 };
+
+type Palette = [number, THREE.Color][];
+const toPalette = (map: MapDef): Palette => map.water.map(([d, c]) => [d, new THREE.Color(c)]);
+
+// Water colour by depth for the map currently loaded (see World.setMap).
+let waterColors = toPalette(MAPS.ocean);
 
 export function waterColorAt(depth: number, night = false): THREE.Color {
   const d = THREE.MathUtils.clamp(depth, 0, 60);
-  let c = WATER_COLORS[WATER_COLORS.length - 1][1].clone();
-  for (let i = 0; i < WATER_COLORS.length - 1; i++) {
-    const [d0, c0] = WATER_COLORS[i];
-    const [d1, c1] = WATER_COLORS[i + 1];
+  let c = waterColors[waterColors.length - 1][1].clone();
+  for (let i = 0; i < waterColors.length - 1; i++) {
+    const [d0, c0] = waterColors[i];
+    const [d1, c1] = waterColors[i + 1];
     if (d >= d0 && d <= d1) {
       c = c0.clone().lerp(c1, (d - d0) / (d1 - d0));
       break;
@@ -27,28 +30,6 @@ export function waterColorAt(depth: number, night = false): THREE.Color {
   }
   if (night) c.multiplyScalar(0.35);
   return c;
-}
-
-function flatMat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
-  return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.9, ...extra });
-}
-
-/** Jitter vertices of a non-indexed geometry so primitives read as rocks. */
-function jitter(geo: THREE.BufferGeometry, rng: Rng, amount: number) {
-  const g = geo.index ? geo.toNonIndexed() : geo;
-  const pos = g.attributes.position;
-  const seen = new Map<string, THREE.Vector3>();
-  for (let i = 0; i < pos.count; i++) {
-    const key = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`;
-    let off = seen.get(key);
-    if (!off) {
-      off = new THREE.Vector3(rng.range(-amount, amount), rng.range(-amount, amount), rng.range(-amount, amount));
-      seen.set(key, off);
-    }
-    pos.setXYZ(i, pos.getX(i) + off.x, pos.getY(i) + off.y, pos.getZ(i) + off.z);
-  }
-  g.computeVertexNormals();
-  return g;
 }
 
 interface Kelp {
@@ -69,29 +50,69 @@ export class World {
   private snow: THREE.Points;
   private quality: RenderQuality;
   private lastDecorationTime = 0;
+  // Everything on and near the bottom. Rebuilt when the map changes.
+  private terrain = new THREE.Group();
+  private scenery: Scenery | null = null;
+  private sky = new THREE.Color();
+  private nightSky = new THREE.Color();
+  map: MapDef;
+  /** World y of the seabed for the current map (negative). */
+  seabedY: number;
   night = false;
 
-  constructor(quality: RenderQuality = RENDER_QUALITY.high) {
+  constructor(quality: RenderQuality = RENDER_QUALITY.high, map: MapDef = MAPS.ocean) {
     this.quality = quality;
+    this.map = map;
+    this.seabedY = -mapDepth(map);
     const rng = new Rng(20261010);
-    this.scene.fog = new THREE.Fog(WATER_COLORS[0][1], 8, 70);
-    this.scene.background = WATER_COLORS[0][1].clone();
+    this.scene.fog = new THREE.Fog(waterColors[0][1], 8, 70);
+    this.scene.background = waterColors[0][1].clone();
 
     this.hemi = new THREE.HemisphereLight('#d6f4ff', '#0a2a40', 1.4);
     this.sun = new THREE.DirectionalLight('#fff6dd', 2.2);
     this.sun.position.set(20, 60, 30);
     this.scene.add(this.hemi, this.sun);
 
-    this.buildSeabed(rng);
-    this.buildRocks(rng);
-    this.buildCoral(rng);
-    this.buildKelp(rng);
+    this.scene.add(this.terrain);
     this.buildRays(rng);
     this.snow = this.buildSnow(rng);
     this.surface = this.buildSurface();
     this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
     this.boat = this.buildBoat();
-    this.setQuality(quality);
+    this.setMap(map);
+  }
+
+  /** Swap in another map: terrain, shoreline, water palette. Fish are the caller's job. */
+  setMap(map: MapDef) {
+    this.map = map;
+    this.seabedY = -mapDepth(map);
+    waterColors = toPalette(map);
+    this.sky.set(map.sky);
+    this.nightSky.set(map.nightSky);
+    (this.surface.material as THREE.MeshStandardMaterial).color.set(map.surface);
+
+    disposeTree(this.terrain);
+    this.terrain.clear();
+    this.kelps = [];
+    const rng = new Rng(TERRAIN_SEED[map.id]);
+    this.buildSeabed(rng);
+    this.buildRocks(rng);
+    if (map.life === 'coral') this.buildCoral(rng);
+    if (map.life === 'logs') this.buildLogs(rng);
+    this.buildKelp(rng);
+
+    // Marine snow was spread over the old depth; respread it over the new one.
+    const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < snowPos.count; i++) snowPos.setY(i, rng.range(this.seabedY, -0.5));
+    snowPos.needsUpdate = true;
+
+    if (this.scenery) {
+      this.scene.remove(this.scenery.group);
+      disposeTree(this.scenery.group);
+    }
+    this.scenery = buildScenery(map);
+    this.scene.add(this.scenery.group);
+    this.setQuality(this.quality);
   }
 
   private buildSeabed(rng: Rng) {
@@ -107,36 +128,36 @@ export class World {
     const g = geo.toNonIndexed();
     g.computeVertexNormals();
     const colors: number[] = [];
-    const sand = new THREE.Color('#c2a874');
+    const sand = new THREE.Color(this.map.sand);
     for (let i = 0; i < g.attributes.position.count; i += 3) {
       const c = sand.clone().multiplyScalar(rng.range(0.75, 1.05));
       for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
     }
     g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     const mesh = new THREE.Mesh(g, flatMat('#ffffff', { vertexColors: true }));
-    mesh.position.set(0, SEABED_Y, -25);
-    this.scene.add(mesh);
+    mesh.position.set(0, this.seabedY, -25);
+    this.terrain.add(mesh);
   }
 
   private buildRocks(rng: Rng) {
-    const palette = ['#5d6f7a', '#4a5b68', '#6b7d85', '#3e4c59'];
+    const palette = this.map.rocks;
     // Back cliff walls at different depths give the 2.5D parallax.
     for (let i = 0; i < 70; i++) {
       const r = rng.range(2.5, 9);
       const geo = jitter(new THREE.IcosahedronGeometry(r, rng.next() < 0.5 ? 0 : 1), rng, r * 0.18);
       const mesh = new THREE.Mesh(geo, flatMat(rng.pick(palette)));
-      const y = SEABED_Y + Math.pow(rng.next(), 1.6) * 50;
+      const y = this.seabedY + Math.pow(rng.next(), 1.6) * (-this.seabedY - 10);
       mesh.position.set(rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20), y, rng.range(-38, -14));
       mesh.rotation.set(rng.range(0, 6), rng.range(0, 6), rng.range(0, 6));
       mesh.scale.y = rng.range(0.6, 1.3);
-      this.scene.add(mesh);
+      this.terrain.add(mesh);
     }
     // A few foreground boulders on the seabed.
     for (let i = 0; i < 16; i++) {
       const r = rng.range(1.5, 4);
       const mesh = new THREE.Mesh(jitter(new THREE.IcosahedronGeometry(r, 0), rng, r * 0.2), flatMat(rng.pick(palette)));
-      mesh.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), SEABED_Y + r * 0.4, rng.range(-6, 6));
-      this.scene.add(mesh);
+      mesh.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), this.seabedY + r * 0.4, rng.range(-6, 6));
+      this.terrain.add(mesh);
     }
   }
 
@@ -166,22 +187,59 @@ export class World {
       }
       // Coral lives mostly in the reef band.
       const onFloor = rng.next() < 0.45;
-      const y = onFloor ? SEABED_Y + 1 : -rng.range(16, 42);
+      const y = onFloor ? this.seabedY + 1 : -rng.range(16, 42);
       group.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), y, onFloor ? rng.range(-12, 4) : rng.range(-16, -9));
       group.rotation.y = rng.range(0, Math.PI * 2);
-      this.scene.add(group);
+      this.terrain.add(group);
+    }
+  }
+
+  /** Heaven Lake's "sunken forest": drowned trunks on the bottom and rock shelves on the back wall. */
+  private buildLogs(rng: Rng) {
+    const bark = [flatMat('#4a3b2a'), flatMat('#5c4a36'), flatMat('#3a2e22')];
+    for (let i = 0; i < 30; i++) {
+      const len = rng.range(6, 16);
+      const r = rng.range(0.35, 0.9);
+      const mat = rng.pick(bark);
+      const log = new THREE.Group();
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r, len, 6), mat);
+      trunk.position.y = len / 2;
+      log.add(trunk);
+      for (let b = 0; b < rng.int(1, 3); b++) {
+        const bl = rng.range(1.2, 3.2);
+        const branch = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.12, r * 0.3, bl, 5), mat);
+        branch.position.set(0, len * rng.range(0.45, 0.9), 0);
+        branch.rotation.set(rng.range(-0.3, 0.3), rng.range(0, 6), rng.range(0.7, 1.2));
+        branch.translateY(bl / 2);
+        log.add(branch);
+      }
+      // Most lie fallen on the bottom; some still stand, leaning.
+      const standing = rng.next() < 0.3;
+      log.rotation.set(rng.range(-0.2, 0.2), rng.range(0, 6), standing ? rng.range(-0.35, 0.35) : Math.PI / 2 + rng.range(-0.15, 0.15));
+      log.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), this.seabedY + (standing ? 0 : r), rng.range(-14, 4));
+      this.terrain.add(log);
+    }
+    for (let i = 0; i < 16; i++) {
+      const w = rng.range(7, 16);
+      const shelf = new THREE.Mesh(jitter(new THREE.BoxGeometry(w, rng.range(0.9, 1.8), rng.range(4, 7)), rng, 0.5), flatMat(rng.pick(this.map.rocks)));
+      shelf.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), -rng.range(12, 36), rng.range(-17, -11));
+      shelf.rotation.z = rng.range(-0.08, 0.08);
+      this.terrain.add(shelf);
     }
   }
 
   private buildKelp(rng: Rng) {
-    for (let i = 0; i < 55; i++) {
+    const { count: plants, hue } = this.map.kelp;
+    for (let i = 0; i < plants; i++) {
       const root = new THREE.Group();
       const z = rng.next() < 0.25 ? rng.range(4, 8) : rng.range(-14, -4);
-      root.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), SEABED_Y + 0.5, z);
-      const color = new THREE.Color().setHSL(rng.range(0.22, 0.32), 0.55, rng.range(0.22, 0.35));
+      root.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), this.seabedY + 0.5, z);
+      const color = new THREE.Color().setHSL(rng.range(hue[0], hue[1]), 0.55, rng.range(0.22, 0.35));
       const mat = flatMat(color, { side: THREE.DoubleSide });
-      const count = rng.int(10, 26);
+      const tall = rng.int(10, 26);
       const segLen = rng.range(1.4, 2.0);
+      // Never taller than the water is deep.
+      const count = Math.min(tall, Math.floor((-this.seabedY - 6) / segLen));
       const segments: THREE.Object3D[] = [];
       let parent: THREE.Object3D = root;
       for (let s = 0; s < count; s++) {
@@ -203,7 +261,7 @@ export class World {
         parent = seg;
       }
       this.kelps.push({ root, segments, phase: rng.range(0, Math.PI * 2) });
-      this.scene.add(root);
+      this.terrain.add(root);
     }
   }
 
@@ -241,7 +299,7 @@ export class World {
     const pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       pos[i * 3] = rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20);
-      pos[i * 3 + 1] = rng.range(SEABED_Y, -0.5);
+      pos[i * 3 + 1] = rng.range(this.seabedY, -0.5);
       pos[i * 3 + 2] = rng.range(-18, 10);
     }
     const geo = new THREE.BufferGeometry();
@@ -284,8 +342,8 @@ export class World {
     this.kelps.forEach((kelp, i) => {
       kelp.root.visible = i < quality.kelpCount;
       // Hidden objects still receive Three.js matrix updates while in the scene.
-      if (kelp.root.visible) this.scene.add(kelp.root);
-      else this.scene.remove(kelp.root);
+      if (kelp.root.visible) this.terrain.add(kelp.root);
+      else this.terrain.remove(kelp.root);
     });
     this.rays.forEach((ray, i) => {
       ray.visible = i < quality.rayCount && !this.night && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
@@ -339,11 +397,10 @@ export class World {
     const depth = -cameraY;
     const fog = this.scene.fog as THREE.Fog;
     if (depth < 0) {
-      const sky = this.night ? new THREE.Color('#0b1430') : SKY;
+      const sky = this.night ? this.nightSky : this.sky;
       (this.scene.background as THREE.Color).copy(sky);
       fog.color.copy(sky);
-      fog.near = 40;
-      fog.far = 200;
+      [fog.near, fog.far] = this.map.haze;
     } else {
       const c = waterColorAt(depth, this.night);
       (this.scene.background as THREE.Color).copy(c);
@@ -354,6 +411,11 @@ export class World {
     const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1) * (this.night ? 0.35 : 1);
     this.hemi.intensity = 1.4 * light;
     this.sun.intensity = 2.2 * light * light;
+    if (this.scenery) {
+      // Nothing above the water is visible once the camera is under it.
+      this.scenery.group.visible = depth < 1;
+      if (this.scenery.group.visible) this.scenery.update(time, this.night);
+    }
     const rayOpacity = this.night ? 0 : 0.35 * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
     this.rays.forEach((ray, i) => {
       ray.visible = i < this.quality.rayCount && rayOpacity > 0;
@@ -365,16 +427,17 @@ export class World {
     // Waves.
     const pos = this.surface.geometry.attributes.position;
     const base = this.surfaceBase;
+    const waves = this.map.waves;
     for (let i = 0; i < pos.count; i++) {
       const x = base[i * 3];
       const z = base[i * 3 + 2];
-      pos.setY(i, Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25);
+      pos.setY(i, (Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25) * waves);
     }
     pos.needsUpdate = true;
     this.surface.geometry.computeVertexNormals();
 
-    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18;
-    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05;
+    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18 * waves;
+    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05 * waves;
 
     for (const k of this.kelps) {
       if (!k.root.visible) continue;
@@ -387,7 +450,7 @@ export class World {
     const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < this.quality.snowCount; i++) {
       let y = snowPos.getY(i) - 0.24 * dt;
-      if (y < SEABED_Y) y = -0.5;
+      if (y < this.seabedY) y = -0.5;
       snowPos.setY(i, y);
     }
     snowPos.addUpdateRange(0, this.quality.snowCount * 3);

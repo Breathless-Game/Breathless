@@ -45,22 +45,25 @@ Surface = fish banked ◀── reach the surface within 3.2 s ────┤
 - **Night mode** (`N`): every fish rolls its rarity twice and keeps the higher result. The sea-monster risk is still on the to-do list.
 - **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it.
 
-### Three maps (designed, not built yet)
+### Three maps
 
-The game currently has one sea, which is the base for Map 3. Maps 1 and 2 and the map picker are still on the to-do list. The full design is in [section 6 of the design doc](design/game-design-document.md#6-地图) (in Chinese). Summary:
+All three maps are in the game. You choose one on the start card before a dive: a row of three map cards sits above the "Start with camera / Play with keyboard" buttons. The chosen map is also what you see behind the title screen. The full design is in [section 6 of the design doc](design/game-design-document.md#6-地图) (in Chinese). What is built:
 
-| | Map 1 · Norway / Iceland fjord | Map 2 · Zhangjiajie / Changbai Mountain Heaven Lake | Map 3 · Open ocean |
+| | Fjord 峡湾 (Norway / Iceland) | Heaven Lake 天池 (Zhangjiajie / Changbai) | Open Ocean 汪洋 |
 | --- | --- | --- | --- |
 | Difficulty | Casual | Normal | Hard |
-| Setting | A fjord between snowy mountains, with cabins and pine forest on the shore and aurora at night | A mountain lake ringed by stone pillars, with fog at dawn and at night | Open sea, with storm clouds in the distance |
-| Time | Daytime 05:00–20:00; creatures appear after dark | Full day-night cycle | Full day-night cycle |
-| Diving depth | 0–18 m, shallows only | 0–38 m, adds the second zone | 0–58 m, the only map that reaches the Abyss |
-| Night creatures | Deer (only startles you), bear (if your heart is racing when you surface, it steals your most valuable fish) | Bear, giant (its stomp scatters the fish and pushes the diver toward the surface) | Waves, sea monster (patrols the Abyss; if it catches you, you lose your net) |
-| Cost of failure | The fish in your net | The fish in your net, plus boat durability | When boat durability reaches zero the boat sinks and all gear is lost for good |
-| Unlock | From the start | 150 total banked value | 1000 total banked value |
+| Open depth | 0–18 m, Shallows only (seabed at 20 m) | 0–38 m, Shallows + Sunken Forest (seabed at 40 m) | 0–58 m, Shallows + Coral Reef + The Abyss (seabed at 60 m) |
+| Above the water | Snow peaks, a pine shore, two fishing cabins and a pier, ice floes; aurora and lit windows at night | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
+| Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
+| Waves | Half the ocean's height | Calmest | Full |
+| Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
-- **Fishing from the boat** (all three maps): while you are on the boat and not holding your breath, the rod casts by itself. The steadier your heart rate, the faster the bite. No breath-holding needed. It fills the rest time between two dives.
-- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese).
+- **Depth zones**: "Sunken Forest" is the second depth zone on Heaven Lake. It uses the Coral Reef drop table; only the look and the gauge label differ. Fish only spawn in the zones a map opens, and the depth gauge on the right shows only those zones.
+- **Unlocking**: a map opens by the total value of banked fish (the `value` column of the rarity table in section 7: 1 / 3 / 10 / 35 / 150 / 800). The highest total ever reached is remembered, so losing fish later cannot re-lock a map. When a dive banks enough to open a new map, a message says so.
+- **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
+- **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
+- **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), the in-game clock (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
+- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying with Pearl is not wired up.
 
 ### Hackathon positioning
 
@@ -331,9 +334,14 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── main.ts         entry: scene, phase machine (menu/calibrating/play/blackout), main loop, input, banking
         ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
         ├── breathtest.ts   the 2.5-minute breath test on the title screen: prompts holds and breathing, labels them automatically
-        ├── world.ts        seabed, rocks, coral, kelp, light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── world.ts        underwater terrain built from the selected map (seabed, rocks, coral, kelp), light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── maps.ts         the three map definitions (depth, unlock value, palette) and the saved map progress
+        ├── scenery.ts      the above-water scenery for each map
+        ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
+        ├── mappicker.ts    the map cards on the start card
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
+        ├── upgrades.ts     the upgrade table and low-poly models for each upgrade level (not shown in the game yet)
         ├── fish.ts         rarity table, drop rates per zone, species names, rollFish(seed), fish meshes, swim and flee AI
         ├── rng.ts          mulberry32 seeded random numbers
         ├── portrait.ts     offscreen rendering: fishIcon (192 px) and fishCard (512 px, the NFT card)
@@ -435,6 +443,7 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
 | `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `showCamera`, `showHelp` |
+| `deepbreath.maps` | Map progress: the selected map, the best total banked value, the demo switch |
 
 To reset, run `localStorage.clear()` in the browser console.
 
@@ -481,15 +490,17 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 - NFT card art (determined by the seed, reproducible), collection panel
 - Solana minting: verified end to end on devnet (throwaway wallet → Irys upload of image and metadata → Metaplex Core + on-chain Attributes). Solana Explorer shows the card correctly. [Example asset](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - Health report (built on demand)
+- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, depth limits, map picker on the start card, unlock by total banked fish value
+- Low-poly models for the upgrade parts (code only, not in the game yet)
 
 ### 🔜 To do (say so in a PR or the group chat when you pick one up)
 
 - [ ] **Test Presage breath detection on real cameras** and tune the thresholds (section 5)
 - [ ] **Official game Collection**: every fish is a standalone asset right now, so Explorer shows Verified Collection as None. We need a Collection whose authority is held by a server, and to mint fish into it, so marketplaces can filter by Collection and fakes are prevented
-- [ ] **Gear economy**: buy air tanks, fins, a headlamp and a bigger net with SOL or Pearl (an SPL token); gear has durability
+- [ ] **Gear economy**: buy air tanks, fins, a headlamp and a bigger net with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
 - [ ] **NFT sinks**: sell to the market for Pearl, craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets. `burnFish` is already written
 - [ ] **Night sea monster**: high-value fish appear at night, together with the sea-monster risk
-- [ ] **Three maps**: one config per map (sky and water colors, shoreline models, maximum depth, creature table), and a map picker on the main screen. The design is in section 6 of the design doc
+- [ ] **Three maps, what remains**: night creatures per map, the in-game clock, boat durability and sinking on the ocean map. The design is in section 6 of the design doc
 - [ ] **Boat fishing and heart-rate gameplay**: the calm value sets the bite speed and how far away underwater fish notice you; rod, bait and boat upgrades. The design is in sections 4.2, 6.3 and 7 of the design doc
 - [ ] **Marketplace (the core of multiplayer)**: listings, purchases, a live feed of sales; players stay in separate worlds and interact only through trading
 - [ ] **Backend**: a service for listings and sales, plus a dashboard for economy and fairness data (Tiger Data / Timescale)
