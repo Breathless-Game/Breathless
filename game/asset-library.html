@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breathless · asset library</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #071a30; color: #e8f4ff; font: 14px/1.4 system-ui, sans-serif; }
+      body.light { background: #ffffff; color: #0d2a44; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      h2 { font-size: 15px; margin: 28px 0 12px; opacity: 0.8; }
+      p { margin: 0; opacity: 0.7; }
+      button { margin-left: 12px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+      #gear { grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
+      figure { margin: 0; padding: 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--rarity, #5b7a99) 60%, transparent); }
+      img { width: 100%; display: block; }
+      figcaption { display: flex; flex-direction: column; gap: 2px; }
+      figcaption span { opacity: 0.7; font-size: 12px; }
+      a { color: inherit; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Breathless · asset library</h1>
+    <p>
+      Every fish species and the fishing rod, drawn by the game's own builders. See assets/README.md.
+      <button onclick="document.body.classList.toggle('light')">light / dark</button>
+    </p>
+    <h2>Fish</h2>
+    <div id="fish" class="grid"></div>
+    <h2>Gear</h2>
+    <div id="gear" class="grid"></div>
+    <h2>NFT card</h2>
+    <div id="cards" class="grid"></div>
+    <script type="module" src="/src/asset-library.ts"></script>
+  </body>
+</html>
