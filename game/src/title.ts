@@ -91,7 +91,7 @@ const PAN_FRAC = 0.03; // how far the rope rides up when the camera pans down to
 // Over the workbench the rope is pulled taut, its ends lowered to this height (fraction of the screen).
 // Shortening the links alone can't do it: the fish stretch a long rope into a deep sag. So each rope
 // particle is also pulled toward a nearly straight line (a shallow BENCH_SAG in the middle).
-const BENCH_ROPE_Y = 0.32;
+const BENCH_ROPE_Y = 0.19; // high enough that the fish hang clear of the table's back edge
 const BENCH_SAG = 0.025;
 const BENCH_TAUT = 0.972; // rope length factor: ROPE_SLACK × this ≈ the span
 const BENCH_PULL = 0.35; // per step, how far a rope particle moves toward the taut line
