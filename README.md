@@ -155,6 +155,9 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 | `N` | Toggle day / night |
 | `K` | Cycle the breath input: presage → sim → keyboard |
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
+| `Enter` (main menu) | Same as clicking the START fish |
+
+**Main menu**: when it opens, a rope swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The golden **START** fish opens the start card (camera / keyboard / breath test), and the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
 
 **Pause details**: the game freezes completely while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
 
@@ -323,6 +326,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── health.ts       HealthLog: hold time, heart rate and recovery time for every dive
         ├── report.ts       health report: metric tiles, two charts, interpretation text, save as PDF, delete data
         ├── pause.ts        Esc pause menu: resume (3-second countdown underwater), settings, back to the main menu
+        ├── title.ts        main menu: a Verlet rope with fish hanging on fishing lines, mouse dragging and pushing; the START / SETTINGS fish are the buttons
         ├── settings.ts     player settings (render quality, camera preview, control hints), stored in localStorage
         ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
         └── style.css       dark glass-style HUD
