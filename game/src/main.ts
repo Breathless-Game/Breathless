@@ -120,7 +120,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) openStartCard();
+  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
+    // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
+    e.preventDefault();
+    openStartCard();
+  }
   keys.add(e.key.toLowerCase());
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
   if (phase !== 'play') return;
@@ -380,9 +384,9 @@ const pauseMenu = new PauseMenu(settings, {
 // ---- Title screen -------------------------------------------------------
 // Start opens the existing start card (camera / keyboard / breath test).
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, at: 0.27, label: 'START', onClick: openStartCard },
-  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.5 },
-  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, at: 0.73, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
+  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openStartCard },
+  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
+  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
 function showTitle(intro: boolean) {

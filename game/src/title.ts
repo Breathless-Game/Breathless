@@ -1,8 +1,10 @@
-// Title screen: a rope swings in from the left and catches on the right, then
-// fish drop onto it on fishing lines. The labeled fish are the menu buttons.
+// Title screen: a rope (anchored off-screen) swings in from the left and catches
+// on the right, then fish drop onto it on fishing lines. The labeled fish are the
+// menu buttons, with their name printed on the body; a long name hangs its fish
+// level on two lines (head and tail) so the name reads straight.
 // Plain 2D Verlet physics on a canvas overlay; the 3D sea keeps rendering behind.
 
-import { RARITY, rollFish, ZONES, type Rarity } from './fish';
+import { RARITY, rollFish, ZONES, type Archetype, type Rarity } from './fish';
 import { fishSprite } from './portrait';
 
 export interface TitleFish {
@@ -11,6 +13,8 @@ export interface TitleFish {
   hue: number;
   sat: number;
   light: number;
+  /** Body shape override; a deep body leaves room for a printed name. */
+  archetype?: Archetype;
   /** Where it hangs along the rope, 0..1. */
   at: number;
   label?: string;
@@ -33,19 +37,29 @@ interface Link {
   slack: boolean;
 }
 
-// Nose and tail tip in sprite pixels, so the drawn fish lines up with its particles.
+// Nose and tail ends of the body axis in sprite pixels, so the drawn fish lines
+// up with its particles; `c` is where the body's centre of mass sits along it (0..1).
 interface SpriteFit {
   nx: number;
   ny: number;
   tx: number;
   ty: number;
+  c: number;
+}
+
+interface Line {
+  attach: number; // rope particle
+  pts: number[];
+  end: number; // head or tail particle
+  links: Link[];
 }
 
 interface Hanging {
   def: TitleFish;
   img: HTMLImageElement;
   fit: SpriteFit | null;
-  attach: number;
+  sideways: boolean;
+  lines: Line[];
   head: number;
   tail: number;
   len: number;
@@ -59,7 +73,11 @@ const GRAVITY = 2200; // px/s²
 const STEP = 1 / 120;
 const ITERATIONS = 14;
 const DAMPING = 0.995;
-const ROPE_SEGS = 30;
+const ROPE_SEGS = 36;
+const SIDEWAYS_CHARS = 4; // names this long hang their fish level, on two lines
+const BODY_CENTRE = 0.56; // along tail->nose, where the printed name goes (until the sprite is measured)
+const LEVEL_RATE = 0.006; // how fast a sideways fish's lines even out its tilt
+const MIN_LINE_SEG = 2;
 const ROPE_SLACK = 1.035;
 const LINE_SEGS = 5;
 const SWING_S = 1.15;
@@ -70,24 +88,53 @@ const CLICK_MS = 450;
 
 const SPRITE_PX = 256;
 
-/** The render is a 3/4 view with padding: find the rightmost (nose) and leftmost (tail) opaque pixels. */
+/**
+ * The render is a tilted 3/4 view with padding. Take the body axis as the principal
+ * axis of the opaque pixels (tip-to-tip would follow the tail fin and tilt the fish),
+ * nose toward +x, and its ends at the extreme projections.
+ */
 function fitSprite(img: HTMLImageElement): SpriteFit {
   const cv = document.createElement('canvas');
   cv.width = cv.height = SPRITE_PX;
   const cx = cv.getContext('2d', { willReadFrequently: true })!;
   cx.drawImage(img, 0, 0, SPRITE_PX, SPRITE_PX);
   const a = cx.getImageData(0, 0, SPRITE_PX, SPRITE_PX).data;
-  const rowsAt = (x: number) => {
-    const ys: number[] = [];
-    for (let y = 0; y < SPRITE_PX; y++) if (a[(y * SPRITE_PX + x) * 4 + 3] > 60) ys.push(y);
-    return ys;
-  };
-  let minX = 0;
-  let maxX = SPRITE_PX - 1;
-  while (minX < maxX && !rowsAt(minX).length) minX++;
-  while (maxX > minX && !rowsAt(maxX).length) maxX--;
-  const mid = (ys: number[]) => (ys.length ? (ys[0] + ys[ys.length - 1]) / 2 : SPRITE_PX / 2);
-  return { nx: maxX, ny: mid(rowsAt(maxX)), tx: minX, ty: mid(rowsAt(minX)) };
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let y = 0; y < SPRITE_PX; y += 2)
+    for (let x = 0; x < SPRITE_PX; x += 2)
+      if (a[(y * SPRITE_PX + x) * 4 + 3] > 60) {
+        xs.push(x);
+        ys.push(y);
+      }
+  const n = xs.length || 1;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  let dx = Math.cos(th);
+  let dy = Math.sin(th);
+  if (dx < 0) {
+    dx = -dx;
+    dy = -dy;
+  }
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const p = (xs[i] - mx) * dx + (ys[i] - my) * dy;
+    lo = Math.min(lo, p);
+    hi = Math.max(hi, p);
+  }
+  return { nx: mx + dx * hi, ny: my + dy * hi, tx: mx + dx * lo, ty: my + dy * lo, c: -lo / (hi - lo || 1) };
 }
 
 const easeOutBack = (u: number) => {
@@ -106,6 +153,7 @@ export class TitleScreen {
   private ay = 0;
   private bx = 0;
   private by = 0;
+  private seg = 0;
   private t = 0;
   private swinging = false;
   private acc = 0;
@@ -129,7 +177,8 @@ export class TitleScreen {
         def,
         img,
         fit: null,
-        attach: 0,
+        sideways: (def.label?.length ?? 0) >= SIDEWAYS_CHARS,
+        lines: [],
         head: 0,
         tail: 0,
         len: 0,
@@ -139,7 +188,8 @@ export class TitleScreen {
         dropped: false,
       };
       img.onload = () => (f.fit = fitSprite(img));
-      img.src = fishSprite({ ...base, rarity: def.rarity, hue: def.hue, sat: def.sat, light: def.light }, SPRITE_PX);
+      const archetype = def.archetype ?? base.archetype;
+      img.src = fishSprite({ ...base, archetype, rarity: def.rarity, hue: def.hue, sat: def.sat, light: def.light }, SPRITE_PX);
       return f;
     });
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));
@@ -187,11 +237,13 @@ export class TitleScreen {
     this.canvas.height = Math.round(this.h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    this.ax = this.w * 0.05;
-    this.bx = this.w * 0.95;
-    this.ay = this.by = Math.max(56, this.h * 0.1);
+    // Both anchors sit off-screen: the rope just runs in from one edge and out the other.
+    this.ax = -this.w * 0.08;
+    this.bx = this.w * 1.08;
+    this.ay = this.by = Math.max(50, this.h * 0.1);
     const span = this.bx - this.ax;
     const seg = (span * ROPE_SLACK) / ROPE_SEGS;
+    this.seg = seg;
     this.ps = [];
     this.ropeLinks = [];
     this.held = null;
@@ -212,37 +264,83 @@ export class TitleScreen {
 
     const unit = Math.min(this.w, this.h);
     this.fish.forEach((f, k) => {
-      f.len = Math.max(80, Math.min(180, unit * 0.19)) * (f.def.label ? 1.1 : 0.85);
-      f.lineLen = this.h * (0.05 + 0.03 * ((k * 7) % 3));
-      f.attach = Math.round(f.def.at * ROPE_SEGS);
+      f.len = f.sideways ? Math.max(150, Math.min(260, unit * 0.3)) : Math.max(70, Math.min(155, unit * 0.16));
+      // Sideways fish are deep-bodied: hang them low enough that their fins clear the rope.
+      f.lineLen = f.sideways ? Math.max(this.h * 0.12, f.len * 0.42) : this.h * (0.05 + 0.03 * ((k * 7) % 3));
       f.dropped = false;
       f.links = [];
+      f.lines = [];
       if (!intro) this.drop(f, true);
     });
   }
 
-  /** Adds the fish's line + body particles. settled: already hanging; else falls from above. */
+  /** Adds the fish's body + line particles. settled: already hanging; else falls from above. */
   private drop(f: Hanging, settled: boolean) {
-    const anchor = this.ps[f.attach];
-    const x = anchor.x + (settled ? 0 : (Math.random() - 0.5) * 60);
-    const headY = settled ? anchor.y + f.lineLen : -f.len - 40;
-    // Unsettled: tail above the head, so the fish flips over as the line catches it.
-    const tailY = settled ? headY + f.len : headY - f.len * 0.9;
-    const add = (px: number, py: number) => {
-      this.ps.push({ x: px, y: py, px: px - (settled ? 0 : (Math.random() - 0.5) * 6), py, inv: 1 });
-      return this.ps.length - 1;
-    };
-    let prev = f.attach;
-    for (let i = 1; i <= LINE_SEGS; i++) {
-      const y = settled ? anchor.y + (f.lineLen * i) / LINE_SEGS : headY;
-      const idx = add(x, y);
-      f.links.push({ a: prev, b: idx, len: f.lineLen / LINE_SEGS, slack: true });
-      prev = idx;
+    const jitter = settled ? 0 : 6;
+    const centre = Math.round(f.def.at * ROPE_SEGS);
+    const fallY = -f.len - 40;
+    if (f.sideways) {
+      // Head right, tail left, each on its own line, so the body and its name hang level.
+      const half = Math.max(1, Math.round(f.len / this.seg / 2));
+      const right = Math.min(ROPE_SEGS - 1, centre + half);
+      const left = Math.max(1, centre - half);
+      const r = this.ps[right];
+      const l = this.ps[left];
+      f.head = this.add(r.x, settled ? r.y + f.lineLen : fallY, jitter);
+      f.tail = this.add(l.x, settled ? l.y + f.lineLen : fallY, jitter);
+      this.line(f, right, f.head, settled);
+      this.line(f, left, f.tail, settled);
+    } else {
+      const a = this.ps[centre];
+      const x = a.x + (settled ? 0 : (Math.random() - 0.5) * 60);
+      const headY = settled ? a.y + f.lineLen : fallY;
+      f.head = this.add(x, headY, jitter);
+      // Unsettled: tail above the head, so the fish flips over as the line catches it.
+      f.tail = this.add(x + 4, settled ? headY + f.len : headY - f.len * 0.9, jitter);
+      this.line(f, centre, f.head, settled);
     }
-    f.head = prev;
-    f.tail = add(x + 4, tailY);
     f.links.push({ a: f.head, b: f.tail, len: f.len, slack: false });
     f.dropped = true;
+  }
+
+  private add(x: number, y: number, jitter: number) {
+    this.ps.push({ x, y, px: x - (Math.random() - 0.5) * jitter, py: y, inv: 1 });
+    return this.ps.length - 1;
+  }
+
+  /** Fishing line from rope particle `attach` down to particle `end`. Slack links: it can go limp. */
+  private line(f: Hanging, attach: number, end: number, settled: boolean) {
+    const a = this.ps[attach];
+    const e = this.ps[end];
+    const len = f.lineLen / LINE_SEGS;
+    const pts: number[] = [];
+    const links: Link[] = [];
+    let prev = attach;
+    for (let i = 1; i <= LINE_SEGS; i++) {
+      const u = i / LINE_SEGS;
+      // Unsettled lines start bunched at the falling fish and pay out as it drops.
+      const idx = i === LINE_SEGS ? end : settled ? this.add(a.x + (e.x - a.x) * u, a.y + (e.y - a.y) * u, 0) : this.add(e.x, e.y, 0);
+      links.push({ a: prev, b: idx, len, slack: true });
+      if (idx !== end) pts.push(idx);
+      prev = idx;
+    }
+    f.links.push(...links);
+    f.lines.push({ attach, pts, end, links });
+  }
+
+  /**
+   * Sideways fish: the two lines behave like one line over a pulley (fixed total
+   * length), paying out on the high side, so the body and its name settle level
+   * even where the rope slopes.
+   */
+  private level(f: Hanging) {
+    if (f.lines.length !== 2 || this.held) return;
+    const [headLine, tailLine] = f.lines;
+    const err = this.ps[f.head].y - this.ps[f.tail].y; // > 0: head hangs lower
+    const d = Math.max(-0.5, Math.min(0.5, err * LEVEL_RATE)) / LINE_SEGS;
+    if (headLine.links[0].len - d < MIN_LINE_SEG || tailLine.links[0].len + d < MIN_LINE_SEG) return;
+    for (const l of headLine.links) l.len -= d;
+    for (const l of tailLine.links) l.len += d;
   }
 
   // ---- Physics ----------------------------------------------------------
@@ -290,6 +388,7 @@ export class TitleScreen {
       p.y += vy + g;
     }
 
+    for (const f of this.fish) if (f.dropped) this.level(f);
     for (let k = 0; k < ITERATIONS; k++) {
       for (const l of this.ropeLinks) this.solve(l);
       for (const f of this.fish) for (const l of f.links) this.solve(l);
@@ -425,11 +524,12 @@ export class TitleScreen {
     c.strokeStyle = 'rgba(234, 248, 255, 0.6)';
     c.lineWidth = 1.4;
     for (const f of this.fish) {
-      if (!f.dropped) continue;
-      c.beginPath();
-      c.moveTo(this.ps[f.attach].x, this.ps[f.attach].y);
-      for (const l of f.links) if (l.slack) c.lineTo(this.ps[l.b].x, this.ps[l.b].y);
-      c.stroke();
+      for (const line of f.lines) {
+        c.beginPath();
+        c.moveTo(this.ps[line.attach].x, this.ps[line.attach].y);
+        for (const i of [...line.pts, line.end]) c.lineTo(this.ps[i].x, this.ps[i].y);
+        c.stroke();
+      }
     }
 
     this.drawRope();
@@ -462,18 +562,6 @@ export class TitleScreen {
     c.lineWidth = 2;
     c.stroke();
     c.setLineDash([]);
-
-    const peg = (x: number, y: number) => {
-      c.beginPath();
-      c.arc(x, y, 8, 0, Math.PI * 2);
-      c.fillStyle = '#8a6a3e';
-      c.fill();
-      c.strokeStyle = '#2b1d0c';
-      c.lineWidth = 2;
-      c.stroke();
-    };
-    peg(this.ax, this.ay);
-    if (!this.swinging) peg(this.bx, this.by);
   }
 
   private drawFish(f: Hanging) {
@@ -481,8 +569,6 @@ export class TitleScreen {
     const h = this.ps[f.head];
     const t = this.ps[f.tail];
     const angle = Math.atan2(h.y - t.y, h.x - t.x);
-    const mx = (h.x + t.x) / 2;
-    const my = (h.y + t.y) / 2;
     const color = RARITY[f.def.rarity].color;
 
     const fit = f.fit;
@@ -502,34 +588,48 @@ export class TitleScreen {
       c.restore();
     }
 
-    // Hook in the fish's mouth.
-    c.beginPath();
-    c.arc(h.x, h.y + 3, 3.5, Math.PI * 1.1, Math.PI * 0.1, true);
+    // A hook wherever a line meets the fish (mouth, and tail on sideways fish).
     c.strokeStyle = '#cfd8dc';
     c.lineWidth = 1.6;
-    c.stroke();
+    for (const line of f.lines) {
+      const p = this.ps[line.end];
+      c.beginPath();
+      c.arc(p.x, p.y + 3, 3.5, Math.PI * 1.1, Math.PI * 0.1, true);
+      c.stroke();
+    }
 
-    if (!f.def.label) return;
-    // Label stays nearly upright, tilting with the swing.
+    if (f.def.label) this.drawName(f, h, t, angle);
+  }
+
+  /** The name printed on the body, kept upright whichever way the fish swings. */
+  private drawName(f: Hanging, h: P, t: P, angle: number) {
+    const c = this.ctx;
+    const label = f.def.label!;
+    // At the body's centre of mass: a little toward the nose, since the tail fin is thin.
+    const u = f.fit?.c ?? BODY_CENTRE;
+    const x = t.x + (h.x - t.x) * u;
+    const y = t.y + (h.y - t.y) * u;
+    const upright = Math.cos(angle) < 0 ? angle + Math.PI : angle;
     c.save();
-    c.translate(mx, my);
-    c.rotate(angle + Math.PI / 2);
-    c.font = '900 17px Inter, system-ui, sans-serif';
-    c.letterSpacing = '0.12em';
-    const tw = c.measureText(f.def.label).width;
-    const pw = tw + 26;
-    const ph = 32;
-    c.beginPath();
-    c.roundRect(-pw / 2, -ph / 2, pw, ph, 16);
-    c.fillStyle = 'rgba(4, 18, 34, 0.82)';
-    c.fill();
-    c.strokeStyle = color;
-    c.lineWidth = 2;
-    c.stroke();
-    c.fillStyle = color;
+    c.translate(x, y);
+    c.rotate(upright);
+    let size = Math.min(30, f.len * 0.13);
+    const font = () => `900 ${size.toFixed(1)}px Inter, system-ui, sans-serif`;
+    c.font = font();
+    c.letterSpacing = '0.08em';
+    const fit = (f.len * 0.5) / c.measureText(label).width;
+    if (fit < 1) {
+      size *= fit;
+      c.font = font();
+    }
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.fillText(f.def.label, 0, 1);
+    c.lineJoin = 'round';
+    c.lineWidth = Math.max(2, size * 0.2);
+    c.strokeStyle = 'rgba(8, 14, 30, 0.8)';
+    c.strokeText(label, 0, 1);
+    c.fillStyle = '#ffffff';
+    c.fillText(label, 0, 1);
     c.restore();
   }
 }
