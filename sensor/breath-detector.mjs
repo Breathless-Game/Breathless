@@ -7,15 +7,23 @@
 //   - HOLD when the trace has been flat (peak-to-peak << normal) for a short window
 //   - BREATHE again as soon as the trace moves away from where the hold started
 // Presage's apnea flag and talking flag are folded in as extra evidence.
+//
+// Every threshold is an option so sensor/analyze.mjs can replay a recording
+// with different settings.
 
-const HOLD_WINDOW_US = 1_300_000; // flat for this long => holding
-const AMP_WINDOW_US = 4_000_000; // window used to measure a normal breath's amplitude
-const FLAT_RATIO = 0.22; // window peak-to-peak below this * baseline => flat
-const RELEASE_RATIO = 0.4; // drift from hold reference above this * baseline => breathing
-const MIN_SAMPLES = 8;
+export const DEFAULTS = {
+  holdWindowUs: 2_000_000, // flat for this long => holding (longer than a normal pause between breaths)
+  ampWindowUs: 4_000_000, // window used to measure a normal breath's amplitude
+  flatRatio: 0.22, // window peak-to-peak below this * baseline => flat
+  releaseRatio: 0.4, // drift from hold reference above this * baseline => breathing
+  learnRatio: 0.5, // only learn the baseline while the short window shows clear motion
+  minSamples: 8,
+  useApnea: true,
+};
 
 export class BreathDetector {
-  constructor() {
+  constructor(opts = {}) {
+    this.o = { ...DEFAULTS, ...opts };
     this.samples = []; // {ts, v}, ts in microseconds
     this.lastTs = 0;
     this.baseline = null; // typical peak-to-peak of one breath
@@ -62,14 +70,16 @@ export class BreathDetector {
   }
 
   #update() {
-    const amp = this.#window(AMP_WINDOW_US);
-    const flat = this.#window(HOLD_WINDOW_US);
-    if (amp.n < MIN_SAMPLES || flat.n < MIN_SAMPLES / 2) return;
+    const o = this.o;
+    const amp = this.#window(o.ampWindowUs);
+    const flat = this.#window(o.holdWindowUs);
+    if (amp.n < o.minSamples || flat.n < o.minSamples / 2) return;
 
-    // Only learn the baseline while visibly breathing, so a long hold can't
-    // shrink "normal" down to "flat".
+    // Learn "normal" only while the short window is clearly moving. Otherwise
+    // the first seconds of a hold (before we call it) would drag it down.
     if (!this.holding && amp.p2p > 0) {
-      this.baseline = this.baseline == null ? amp.p2p : this.baseline * 0.9 + amp.p2p * 0.1;
+      if (this.baseline == null) this.baseline = amp.p2p;
+      else if (flat.p2p > o.learnRatio * this.baseline) this.baseline = this.baseline * 0.9 + amp.p2p * 0.1;
     }
     if (!this.baseline) return;
 
@@ -77,15 +87,15 @@ export class BreathDetector {
     const current = this.samples[this.samples.length - 1].v;
 
     if (!this.holding) {
-      const isFlat = flat.p2p < FLAT_RATIO * this.baseline;
-      if ((isFlat || this.apnea === true) && this.talking !== true) {
+      const isFlat = flat.p2p < o.flatRatio * this.baseline;
+      if ((isFlat || (o.useApnea && this.apnea === true)) && this.talking !== true) {
         this.holding = true;
-        this.holdStartTs = this.lastTs - HOLD_WINDOW_US;
+        this.holdStartTs = this.lastTs - o.holdWindowUs;
         this.holdRef = current;
       }
     } else {
       const drift = Math.abs(current - this.holdRef);
-      if (drift > RELEASE_RATIO * this.baseline || this.talking === true) {
+      if (drift > o.releaseRatio * this.baseline || this.talking === true) {
         this.holding = false;
       }
     }
