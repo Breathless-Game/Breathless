@@ -43,7 +43,7 @@
 ```
 
 - **憋气就是氧气瓶**：游戏没有氧气条，你的肺就是。
-- **贪心与风险**：深渊（38 m 以下）才有神话级鱼，但离水面越远，换气后越难赶回去。
+- **贪心与风险**：潜得越深，鱼越稀有、越值钱（神话级只在 50 m 以下出现，而海沟没有底），但离水面越远，换气后越难赶回去。
 - **夜晚**：自然循环入夜后，每条新生成的鱼稀有度掷两次取高的。`N` 可以渐变切换晨光 / 夜色。海怪风险还在待办里。
 - **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。每条入库的鱼都会在后台自动铸成 NFT；点 **Sell** 把鱼卖成 Pearls（见第 7 节）。
 - **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。卖鱼得到 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
@@ -55,18 +55,20 @@
 | | 峡湾 Fjord（挪威 / 冰岛） | 天池 Heaven Lake（张家界 / 长白山） | 汪洋 Open Ocean |
 | --- | --- | --- | --- |
 | 难度 | 休闲 | 普通 | 困难 |
-| 开放深度 | 0–18 m，只有 Shallows（海底在 20 m） | 0–38 m，Shallows + Sunken Forest（海底在 40 m） | 0–58 m，Shallows + Coral Reef + The Abyss（海底在 60 m） |
+| 大陆架上的区域 | 0–18 m，只有 Shallows | 0–38 m，Shallows + Sunken Forest | 0–60 m，Shallows + Coral Reef + The Abyss |
+| 大陆架（海底） | 20 m，往下是无底海沟 | 40 m，往下是无底海沟 | 62 m，往下是无底海沟 |
 | 水面以上 | 雪峰、松林岸、两间渔屋和一座栈桥、浮冰；夜里有极光，窗户亮灯 | 石柱、火山口边缘、湖边的亭子、飘动的雾（夜里更浓），夜里有一盏灯笼 | 带片状闪电的风暴锋面、海蚀柱、一座灯塔（夜里灯会转动） |
 | 水下 | 冷青色的水，灰色的砾石和岩石，海带，没有珊瑚 | 翡翠绿色的水，沉木和岩架，稀疏的水草 | 原来的珊瑚礁：珊瑚、海带、沙地 |
 | 海浪 | 汪洋的一半高 | 最平静 | 完整高度 |
 | 解锁 | 一开始就开放 | 累计入库鱼价值 150 | 累计入库鱼价值 1000 |
 
-- **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它沿用 Coral Reef 的掉率表，只有外观和深度计上的标签不同。鱼只在地图开放的区域里生成，右侧的深度计也只显示这些区域。
-- **解锁**：按历史上所有入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。卖鱼不会让它减少，所以地图不会重新上锁，进度也不会停滞。某次下潜入库的鱼够开一张新图时，会有一条提示。
+- **海沟**：每张图的海底都是一块大陆架，船正下方有一条没有底的海沟。所有地图都不限深度；潜得越深，鱼越稀有、捕获价值越高（见第 7 节）。地图在大陆架上没有开放的区域（比如峡湾 18 m 以下）只能顺着海沟下去。
+- **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它就是 Coral Reef 的深度范围，只有外观和深度计上的标签不同；掉率只看深度。大陆架上只在地图开放的区域里放鱼，大陆架以下有一群海沟鱼跟着潜水员往下走。右侧的深度计先显示地图开放的区域，再从大陆架往下显示一段 Trench。
+- **解锁**：按历史上所有入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。卖鱼不会让它减少，所以地图不会重新上锁，进度也不会停滞。每张图都能顺着海沟潜到任意深度，所以解锁开放的是新场景和更深、更宽的大陆架，而不是更大的深度。某次下潜入库的鱼够开一张新图时，会有一条提示。
 - **演示开关**：地图卡片下面有一个勾选框 "Unlock all maps (demo)"，勾上后所有地图一次全部开放。它是给演示和测试用的。
 - **保存的进度**：选中的地图、历史累计入库价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
 - **仍然只是设计，尚未实现**：夜间小怪（峡湾：野鹿、野熊；天池：野熊、巨人；汪洋：海浪、海怪）、各地图独立的白昼时段（峡湾白天 05:00–20:00）、由心率驱动的船上垂钓、船耐久，以及汪洋沉船后全部装备永久丢失。
-- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买也还没接上。
+- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买它们也还没接上。目前能玩的升级只有鱼竿 / 渔网等级（`G`，见第 7 节），它用的是自己的渔网模型。
 
 ### 比赛定位
 
@@ -382,7 +384,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
         ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
         ├── breathtest.ts   标题页的 2.5 分钟憋气测试：按提示憋气和呼吸，自动打标注
-        ├── world.ts        按所选地图生成的水下地形（海底、礁石、珊瑚、海带）、光束、雪、水面、船；按深度变化雾和颜色；昼夜
+        ├── world.ts        按所选地图生成的水下地形（船下带海沟裂口的海底大陆架、无限延伸的海沟岩壁、礁石、珊瑚、海带）、光束、雪、水面、船；按深度变化雾和颜色；昼夜
         ├── daylight.ts     连续 24 小时光照模型、12 分钟自然循环、上午/下午/夜晚的平滑预览
         ├── sky.ts          大气天空、随时间移动的太阳/月亮与分层云层
         ├── color-grade.ts  场景材质共享的晨间、午后、夜间调色
@@ -391,7 +393,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── water-geometry.ts 稳定且无裂缝的三角网格及折面反光属性
         ├── weather.ts      自然天气轮换、晴/云/雨/风暴的平滑过渡
         ├── rain.ts         单次绘制的 GPU 雨丝，按画质限制雨量
-        ├── maps.ts         三张地图的定义（深度、解锁价值、配色）和保存的地图进度
+        ├── maps.ts         三张地图的定义（开放区域和大陆架深度、解锁价值、配色）和保存的地图进度
         ├── scenery.ts      每张地图水面以上的场景
         ├── lowpoly.ts      共用的低多边形工具：flat 材质、顶点抖动、按面上色、把静态部件按材质合并成一个网格的 batcher
         ├── mappicker.ts    开始卡片上的地图卡片
@@ -400,7 +402,8 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── equipment.ts    鱼竿等级、Pearl 余额、本地存档和升级规则
         ├── gear-panel.ts   鱼竿 / 渔网升级面板
         ├── upgrades.ts     升级表和每个升级等级的低多边形模型（还没有在游戏里显示）
-        ├── fish.ts         稀有度表、区域掉率、物种名、rollFish(seed)、鱼的网格、游动和逃跑 AI
+        ├── fish.ts         稀有度表、区域名、物种名、rollFish(seed, depth)、按深度的捕获价值、鱼的网格、游动和逃跑 AI
+        ├── depth-odds.ts   按深度的掉率（RARITY_BY_DEPTH）、zoneName(depth)；没有依赖，测试在 tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
         ├── hud.ts          呼吸面板和波形、深度计、紧急条、网格槽、入库数、toast
@@ -428,15 +431,34 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 17 个鱼种和鱼竿的图片、每个鱼种的参数，见[素材库](assets/README.zh-CN.md)。
 
-### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
+### 深度分区与掉率（`depth-odds.ts` 中的 `RARITY_BY_DEPTH`）
 
-| 区域 | 深度 | 奖励倍率 | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | ×1.0 | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
+海没有底。每张图的海底都是一块大陆架（峡湾 20 m，天池 40 m，汪洋 62 m），船正下方有一条海沟一直往下。区域只是名字，不决定掉率：Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m 以下**。在具体地图上，深度计和 NFT 的 `Zone` 属性用这张图自己的区域标签，大陆架以下一律算 The Trench。掉率和捕获价值只看绝对深度：峡湾海沟里的 30 m 和汪洋珊瑚礁的 30 m 抽法完全一样。
 
-**捕获价值** = 稀有度的 `value`（见下表）× 所在区域的奖励倍率（`rewardMultiplier`），四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计，卖鱼时也按它支付 Pearls。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
+稀有度是抓到鱼时所在深度的平滑函数：下表是各锚点深度的百分比权重，锚点之间线性插值，350 m 以下保持不变。epic 只在 15 m 以下出现，legendary 在 30 m 以下，mythic 在 50 m 以下。锚点间距按实测游速约 7.75 m/s 设计：憋气 30 秒不抓鱼能下到约 115 m 再回来，60 秒约 230 m。
+
+| 深度 | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 m | 90 | 9.5 | 0.5 | – | – | – |
+| 15 m | 80 | 17 | 3 | – | – | – |
+| 30 m | 68 | 24 | 7 | 1 | – | – |
+| 50 m | 58 | 28 | 10.5 | 3 | 0.5 | – |
+| 80 m | 48 | 31 | 14 | 5.5 | 1.3 | 0.2 |
+| 120 m | 39 | 32 | 18 | 8 | 2.4 | 0.6 |
+| 200 m | 30 | 30 | 22 | 12 | 4.5 | 1.5 |
+| 350 m+ | 22 | 26 | 25 | 16.5 | 7.5 | 3 |
+
+夜晚每条鱼掷两次稀有度，取更稀有的那次（`main.ts` 中的 `rollFor`）。
+
+按一网 6 条鱼算（Lv1 渔网；白天，期望条数 = 6 × P(legendary 或 mythic)）：80 m 是 6 × 1.5% = 0.09，大约每 11 网出 1 条 legendary 及以上；120 m 是 6 × 3.0% = 0.18，大约每 5.6 网 1 条。
+
+### 捕获价值（`fish.ts` 中的 `rewardMultiplierAt`）
+
+| 深度 | 0–18 m | 18–38 m | 38–60 m | 60 m 以下（The Trench） |
+| --- | --- | --- | --- | --- |
+| 奖励倍率 | ×1.0 | ×1.6 | ×2.5 | ×2.5，60 m 以下每深 50 m 加 1，最高 ×6（235 m 达到） |
+
+**捕获价值** = 稀有度的 `value`（见下表）× 这条鱼生成时所在深度的奖励倍率，四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25，在 110 m 值 35，235 m 以下值 60。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计，卖鱼时也按它支付 Pearls。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
 
 ### 稀有度（`RARITY`）
 
@@ -453,7 +475,9 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ### 主循环常数（`main.ts`）
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `FISH_PER_ZONE [16, 16, 12]`（每个区域的鱼数，只放地图在大陆架上开放的区域）· `TRENCH_FISH 12`（海沟里跟着潜水员深度走的一群鱼，每条按它出生的深度抽稀有度）· `DEPTH_LIMIT Infinity`（每张图的海沟都没有底）
+
+网的容量和收网范围不再是 `main.ts` 里的常数，而是由下面装备的渔网等级决定。
 
 ### 鱼竿 / 渔网升级（`equipment.ts` 中的 `ROD_TIERS`）
 
@@ -482,8 +506,8 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - **铸造队列**（`nft-queue.ts`）：后台一次铸造一条，刷新页面后继续。钱包 SOL 不够时先试一次空投；水龙头拒绝的话，铸造暂停，收藏面板里提示 "needs devnet SOL"，之后每分钟或打开面板时再查一次余额。
 - **铸造流程**（`mintFish`）：
   1. `fishCard(spec)` 生成 PNG，用 `umi.uploader.upload` 传到 Irys devnet。
-  2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Depth / Length / Weight / Seed）。
-  3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / seed），方便以后的游戏逻辑直接在链上读稀有度。
+  2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Map / Depth / Length / Weight / Catch value / Seed）。
+  3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / value / seed），方便以后的游戏逻辑直接在链上读稀有度，市场也按收藏里显示的捕获价值付款。记录的深度是抓到鱼时的深度，最多记 1000 m（`fish.ts` 的 `MAX_RECORDED_DEPTH_M`）；HUD 仍显示真实深度。
   4. 资产地址写回 `FishSpec.assetId`，持久化到 bank。卡片会显示 "✓ On-chain"，链接到 Solana Explorer。
 - **卖鱼**（NFT 消耗）：`pearl.ts` 的 `sellToMarket` 把 NFT 卖给 PEARL 市场，市场销毁它并按捕获价值支付 PEARL（见下文「PEARL coin」）。
 - **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
@@ -496,7 +520,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - **合约模式**（设置了 `FISH_MARKET_PROGRAM_ID`）：PEARL 的 mint 归 Anchor 合约 `fish_market` 所有（PDA `pearl`）。一条 `sell_fish` 指令原子地烧掉鱼并给卖家铸 PEARL，同时强制执行 `config.max_value`。服务端只当**预言机**：`POST /api/market/quote` 检查卖家确实持有这条鱼、价值合理，然后返回一笔它已部分签名的 `sell_fish` 交易。玩家签名、发送，并支付手续费。
 - **服务端模式**（兜底）：市场钱包自己创建 PEARL mint 并持有铸币权。玩家把鱼转给市场钱包，`POST /api/market/sell` 在链上核验这笔转账，铸 PEARL，再烧掉鱼。`sensor/.market-state.json` 里的已售集合保证重试安全（不会重复付款）。
 - **消费**：两种模式下，`spendPearls` 都是从玩家的代币账户里烧掉 PEARL。
-- **定价**：价值取自鱼的链上 Attributes，没有就按「稀有度价值 × 区域倍率」重算。超过「稀有度价值 × 6」的直接拒绝。
+- **定价**：价值取自鱼的链上 Attributes（`value`），所以卖出时付的正好是收藏里显示的「Sell · N Pearls」。没有这个属性的鱼按「稀有度价值 × 深度倍率」重算（`fish.ts` 的 `rewardMultiplierAt`，`sensor/market-rules.mjs` 里有一份镜像：×1 / 1.6 / 2.5，60 m 以下每深 50 m 加 1，最高 ×6）。超过「稀有度价值 × 6」或深于 1000 m（`MAX_DEPTH_M`，与游戏的 `MAX_RECORDED_DEPTH_M` 相等，测试会检查）的直接拒绝。
 - **信任模型**：这是 devnet 黑客松版本。鱼由客户端钱包铸造，所以谁都能铸一条「神话」拿来卖。稀有度上限（合约模式下再加 `max_value`）只限制单笔金额，PEARL 没有真实价值。服务端密钥（`sensor/.market-oracle.json` 或 `MARKET_ORACLE_KEYPAIR`，以及 `sensor/.market-keypair.json`）权限 600，已加入 gitignore。它们不打日志，也不放进 `VITE_*`。
 - **开发**：
   - 在 `npm run dev` 旁边再跑 `npm run market`（端口 8795，可用 `MARKET_PORT` 改）。Vite 会把 `/api` 代理过去。`npm start` 自己就带市场（第 2 节「自托管」）。
@@ -629,7 +653,7 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 
 ### ✅ 已完成
 
-- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、3 个深度区）
+- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、掉率按深度、3 个有名字的深度区加一条无底海沟）
 - 憋气才能下潜、水下换气后紧急上浮、黑屏丢鱼、出水入库
 - Presage 管线：浏览器抓帧 → sensor → SDK → 憋气检测；键盘和模拟两种兜底
 - NFT 卡图（由 seed 决定、可复现）、收藏面板
@@ -637,7 +661,7 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 - 健康报告（按需生成）
 - 自然昼夜循环、水面反光、可保存的光照效果开关
 - 自然天气与晴 / 云 / 雨 / 风暴预设，云层和雨量按画质调整
-- 三张地图（峡湾、天池、汪洋）：水面以上的场景、深度上限、开始卡片上的地图选择、按累计入库鱼价值解锁
+- 三张地图（峡湾、天池、汪洋）：水面以上的场景、每张图深度不同的海底大陆架和船下的无底海沟、开始卡片上的地图选择、按累计入库鱼价值解锁
 - 升级部件的低多边形模型（只有代码，还没有进游戏）
 - 鱼竿 / 渔网升级 MVP：三档容量和收网范围、可见网圈缩放、本地持久化
 - 鱼经济：入库的鱼自动铸成 NFT，卖鱼时销毁 NFT 换 Pearls，地图进度按历史累计价值
@@ -665,7 +689,7 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 - **提 PR 前**：`npm --prefix game run build` 必须通过（strict TS，`noUnused` 已开启）。
 - **秘密**：`.env`、私钥、任何 API key 都不要进仓库。新的环境变量要同步加到 `.env.example`（只写变量名，不写值）。
 - **风格**：TypeScript strict；低多边形 + flat shading；颜色变量在 `style.css` 的 `:root`；注释只解释"为什么"。
-- **改参数**：玩法常数集中在 `main.ts` 顶部和 `fish.ts` 的 `RARITY` / `ZONES`，改了请在 PR 里说明。
+- **改参数**：玩法常数集中在 `main.ts` 顶部、`fish.ts` 的 `RARITY` / `ZONES`、`depth-odds.ts` 的 `RARITY_BY_DEPTH` 和 `maps.ts` 的 `MAPS`，改了请在 PR 里说明。
 - **README 有两份**：`README.md`（English）和 `README.zh-CN.md`（中文）。改其中一份时，请在同一个 PR 里把另一份也改了。
 
 ---

@@ -11,8 +11,9 @@ import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { RARITY, fishValue, zoneForDepth, type FishSpec } from './fish';
-import { MAPS, type MapId } from './maps';
+import { zoneName } from './depth-odds';
+import { RARITY, ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
+import { MAPS, mapDepth, type MapId } from './maps';
 import { fishCard } from './portrait';
 import { ownerAddress, ownerSigner, sessionSigner } from './wallet';
 
@@ -71,6 +72,15 @@ function dataUrlBytes(url: string): Uint8Array {
   return out;
 }
 
+/** The zone the HUD showed where the fish was caught: below the map's shelf that is the trench. */
+function zoneLabel(spec: FishSpec): string {
+  if (!spec.map || !(spec.map in MAPS)) return zoneName(spec.depthM);
+  const map = MAPS[spec.map as MapId];
+  if (spec.depthM >= mapDepth(map)) return 'The Trench';
+  // Just above the shelf (e.g. 18–20 m on the fjord) still counts as the last open zone.
+  return map.zoneLabels[Math.min(ZONES.indexOf(zoneForDepth(spec.depthM)), map.zoneLabels.length - 1)];
+}
+
 export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
 
 export interface MintResult {
@@ -83,6 +93,9 @@ export interface MintResult {
 export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): Promise<MintResult> {
   const u = getUmi();
   const rarity = RARITY[spec.rarity].label;
+  // Older bank entries may predate the cap; the market rejects anything deeper.
+  const depthM = recordedDepth(spec.depthM);
+  const catchValue = fishValue(spec);
 
   onStep?.('upload-image');
   const png = createGenericFile(dataUrlBytes(fishCard(spec)), `${spec.id}.png`, { contentType: 'image/png' });
@@ -92,18 +105,18 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const traits: [string, string][] = [
     ['Rarity', rarity],
     ['Species', spec.species],
-    ['Zone', zoneForDepth(spec.depthM).name],
+    ['Zone', zoneLabel(spec)],
     ...(spec.map && spec.map in MAPS ? [['Map', MAPS[spec.map as MapId].name] as [string, string]] : []),
-    ['Depth (m)', String(spec.depthM)],
+    ['Depth (m)', String(depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],
-    ['Catch value', String(fishValue(spec))],
+    ['Catch value', String(catchValue)],
     ['Seed', spec.id],
   ];
   const uri = await u.uploader.uploadJson({
     name: spec.name,
     symbol: SYMBOL,
-    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
+    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
     image,
     attributes: traits.map(([trait_type, value]) => ({ trait_type, value })),
     properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },
@@ -127,7 +140,9 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
         attributeList: [
           { key: 'rarity', value: spec.rarity },
           { key: 'species', value: spec.species },
-          { key: 'depth', value: String(spec.depthM) },
+          { key: 'depth', value: String(depthM) },
+          // The market pays this (bounded by rarity value x 6), so a sale pays what the collection showed.
+          { key: 'value', value: String(catchValue) },
           { key: 'seed', value: spec.id },
         ],
       },
