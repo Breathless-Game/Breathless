@@ -69,6 +69,8 @@ console.log(`camera fps        median ${f(median(fps), 0)}  (p10 ${f(pct(fps, 0.
 console.log(`metrics batches   ${metrics.length}, every ${f(median(gaps), 0)} ms (p90 ${f(pct(gaps, 0.9), 0)})`);
 console.log(`trace samples     up ${up.length}, lo ${lo.length}, every ${f(median(dts), 0)} ms ≈ ${f(1000 / median(dts), 1)} Hz`);
 console.log(`trace latency     median ${f(median(latency), 0)} ms, p90 ${f(pct(latency, 0.9), 0)} ms (receipt − newest sample)`);
+const firstStable = metrics.flatMap((m) => m.up ?? []).find((p) => p[2] === 1);
+if (up.length) console.log(`trace stable      ${firstStable ? `after ${f((firstStable[0] - up[0][0]) / 1e6, 1)} s` : 'never'} (Presage marks the trace stable once breathing rate confidence ≥ 45)`);
 if (Object.keys(hints).length) console.log(`presage hints     ${JSON.stringify(hints)}`);
 
 // ---- labels -------------------------------------------------------------

@@ -32,8 +32,9 @@ export class Recorder {
 
 const round = (v) => Math.round(v * 1e5) / 1e5;
 
-/** Presage Measurement[] -> [[timestampUs, value], ...] */
-export const points = (arr) => (arr?.length ? arr.map((p) => [Number(p.timestamp ?? 0), round(p.value ?? NaN)]) : undefined);
+/** Presage Measurement[] -> [[timestampUs, value, stable 0|1], ...] */
+export const points = (arr) =>
+  arr?.length ? arr.map((p) => [Number(p.timestamp ?? 0), round(p.value ?? NaN), p.stable ? 1 : 0]) : undefined;
 
 /** Presage DetectionStatus[] -> [[timestampUs, 0|1], ...] */
 export const flags = (arr) => (arr?.length ? arr.map((d) => [Number(d.timestamp ?? 0), d.detected ? 1 : 0]) : undefined);
