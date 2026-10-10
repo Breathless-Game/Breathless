@@ -11,6 +11,7 @@ import { PauseMenu } from './pause';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, SEABED_Y, World } from './world';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
+import type { TimeOfDay } from './daylight';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -54,7 +55,6 @@ const hud = new Hud();
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
-let night = false;
 
 function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
@@ -62,7 +62,7 @@ function randomSeed(): number {
 
 function rollFor(zone: Zone, depth: number): FishSpec {
   const a = rollFish(randomSeed(), zone, depth);
-  if (!night) return a;
+  if (!world.night) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
   const b = rollFish(randomSeed(), zone, depth);
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
@@ -128,7 +128,9 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
   } else if (e.key.toLowerCase() === 'n') {
-    setNight(!night);
+    const nightSelected = world.dayCycle.mode === 'night'
+      || (world.dayCycle.mode === 'cycle' && world.night);
+    setTimeOfDay(nightSelected ? 'morning' : 'night');
   } else if (e.key.toLowerCase() === 'k') {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
@@ -144,10 +146,10 @@ function setBreathMode(mode: BreathMode) {
   hud.message(`Breath input: ${mode}`);
 }
 
-function setNight(on: boolean) {
-  night = on;
-  world.setNight(on);
-  hud.message(on ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+function setTimeOfDay(mode: TimeOfDay) {
+  world.setTimeOfDay(mode);
+  const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
+  hud.message(labels[mode]);
 }
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
@@ -304,6 +306,7 @@ function updateCalibration() {
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
 let paused = false;
+let resetDayClock = false;
 
 function pause() {
   if (phase !== 'play' || paused) return;
@@ -369,19 +372,31 @@ const pauseMenu = new PauseMenu(settings, {
   breathModes,
   breathMode: () => breath.state.mode,
   setBreathMode,
-  night: () => night,
-  setNight,
+  timeOfDay: () => world.dayCycle.mode,
+  setTimeOfDay,
   applySettings,
 });
 
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
 document.addEventListener('visibilitychange', () => {
+  resetDayClock = true;
   if (document.hidden) pause();
 });
 
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
+const timeLabel = document.getElementById('time-of-day')!;
+let displayedMinute = -1;
+
+function updateTimeLabel() {
+  const minute = Math.round(world.dayCycle.hour * 60) % (24 * 60);
+  if (minute === displayedMinute) return;
+  displayedMinute = minute;
+  const hour = Math.floor(minute / 60);
+  const period = world.night ? 'Night' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Dusk';
+  timeLabel.textContent = `${period} · ${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+}
 
 function update(dt: number, time: number) {
   const s = breath.state;
@@ -467,10 +482,16 @@ function frame() {
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
+  // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  resetDayClock = false;
   if (!paused) {
     time += dt;
     update(dt, time);
+  } else {
+    world.updateLighting(time, camera.position.y);
   }
+  updateTimeLabel();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -484,9 +505,12 @@ Object.assign(window, {
   fishes,
   keys,
   renderQuality,
+  world,
+  setTimeOfDay,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;
+      world.advanceTime(1 / 30);
       update(1 / 30, time);
     }
     renderer.render(scene, camera);
