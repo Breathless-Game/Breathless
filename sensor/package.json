@@ -4,7 +4,9 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
+    "prestart": "node ../scripts/ensure-deps.mjs sensor",
     "start": "node index.mjs",
+    "presim": "node ../scripts/ensure-deps.mjs sensor",
     "sim": "node index.mjs --sim"
   },
   "dependencies": {

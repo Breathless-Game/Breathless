@@ -108,6 +108,8 @@ npm run game       # the game, http://localhost:5173
 
 (Or run `npm run dev` to start both at once. It works on macOS and Windows, and Ctrl+C stops both.)
 
+After a `git pull`, start them the same way. If the pull added a dependency, the game and the sensor notice it is missing when they start and install it first.
+
 ### Windows
 
 - **x64 machines**: follow the steps above as they are.
@@ -326,6 +328,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
 .
 ├── package.json            root scripts: setup / sensor / game / dev
 ├── scripts/dev.mjs         npm run dev: starts sensor and game together (cross-platform)
+├── scripts/ensure-deps.mjs runs before the game and the sensor start: installs dependencies that are missing
 ├── .env.example            PRESAGE_API_KEY, SENSOR_PORT
 ├── intro/HackRU26.md       hackathon intro and timeline (Chinese and English)
 ├── design/game-design-document.md  design doc (Chinese): three maps, creatures, upgrades, improvements
