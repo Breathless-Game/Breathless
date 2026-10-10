@@ -96,6 +96,18 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMat
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
         }
 
+        // Art-directed light scattering measured from the edge of a generous
+        // luminous disc. Every tier keeps its silhouette and two soft halos;
+        // extra tiers add a shoulder and a far veil without a bloom pass.
+        vec2 celestialHalo(float distanceToSource, float radius) {
+          float edgeDistance = max(0.0, distanceToSource - radius);
+          float corona = exp2(-edgeDistance * edgeDistance * 1800.0);
+          float aura = exp2(-edgeDistance * edgeDistance * 46.0);
+          if (uDetail > 0.5) corona += exp2(-edgeDistance * edgeDistance * 290.0) * 0.28;
+          if (uDetail > 1.5) aura += exp2(-edgeDistance * edgeDistance * 13.0) * 0.18;
+          return vec2(corona, aura);
+        }
+
         void main() {
           vec3 viewDirection = normalize(vSkyDirection);
           float height = pow(clamp((viewDirection.y + 0.025) / 0.6, 0.0, 1.0), 0.46);
@@ -107,20 +119,31 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMat
           float sunUp = smoothstep(-0.03, 0.045, uSunDirection.y);
           float moonUp = smoothstep(-0.025, 0.045, uMoonDirection.y);
           float horizonFade = smoothstep(-0.015, 0.035, viewDirection.y);
-          // Broad aerosol scattering gathers around the actual celestial
-          // source. A small core and diffuse halo avoid a flat painted disc.
+          // Oversized luminous sources suit the polygonal landscape. Their
+          // warm/cool aura stays legible even on low quality, while the fixed
+          // orbit also drives scene lighting and the water reflection path.
           float warmHorizon = (1.0 - smoothstep(0.02, 0.24, uSunDirection.y)) * sunUp;
-          sky += vec3(0.28, 0.065, 0.016) * exp(-sunDistance * 2.8) * warmHorizon;
+          sky += vec3(0.24, 0.055, 0.012) * exp(-sunDistance * 2.8) * warmHorizon;
           vec3 sunColor = mix(vec3(1.0, 0.44, 0.13), uLightColor, smoothstep(0.0, 0.2, uSunDirection.y));
-          float sunCore = 1.0 - smoothstep(0.0105, 0.0125, sunDistance);
-          float sunHalo = 0.16 * exp(-sunDistance * 22.0) + 0.035 * exp(-sunDistance * 4.5);
-          sky += sunColor * (sunCore * 3.0 + sunHalo) * sunUp * horizonFade;
+          float sunRadius = 0.064;
+          float sunCore = 1.0 - smoothstep(sunRadius - 0.0018, sunRadius + 0.0018, sunDistance);
+          vec2 sunHalo = celestialHalo(sunDistance, sunRadius);
+          vec3 sunAuraColor = mix(vec3(1.0, 0.33, 0.075), vec3(1.0, 0.67, 0.25),
+            smoothstep(0.0, 0.24, uSunDirection.y)) * mix(vec3(1.0), sunColor, 0.25);
+          vec3 sunGlow = vec3(1.0, 0.93, 0.76) * sunCore * 3.4;
+          sunGlow += vec3(1.0, 0.83, 0.48) * sunHalo.x * 0.90;
+          sunGlow += sunAuraColor * sunHalo.y * 0.42;
+          vec3 celestialLight = sunGlow * sunUp * horizonFade;
 
-          float moonRadius = moonDistance / 0.012;
-          float moonCore = 1.0 - smoothstep(0.0105, 0.012, moonDistance);
-          float moonRelief = mix(0.63, 1.0, sqrt(max(0.0, 1.0 - moonRadius * moonRadius)));
-          sky += vec3(0.65, 0.76, 0.95) * (moonCore * moonRelief * 1.5 + 0.025 * exp(-moonDistance * 22.0))
-            * moonUp * uNight * horizonFade;
+          float moonDiscRadius = 0.058;
+          float moonRadius = moonDistance / moonDiscRadius;
+          float moonCore = 1.0 - smoothstep(moonDiscRadius - 0.0025, moonDiscRadius + 0.0025, moonDistance);
+          float moonRelief = mix(0.78, 1.0, sqrt(max(0.0, 1.0 - moonRadius * moonRadius)));
+          vec2 moonHalo = celestialHalo(moonDistance, moonDiscRadius);
+          vec3 moonGlow = vec3(0.82, 0.91, 1.0) * moonCore * moonRelief * 2.6;
+          moonGlow += vec3(0.47, 0.65, 0.94) * moonHalo.x * 0.43;
+          moonGlow += vec3(0.19, 0.35, 0.64) * moonHalo.y * 0.18;
+          celestialLight += moonGlow * moonUp * uNight * horizonFade;
 
           if (uDetail > 0.5 && uNight > 0.05) {
             vec2 starPoint = viewDirection.xz / max(viewDirection.y + 0.5, 0.1) * 220.0;
@@ -143,14 +166,23 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMat
           vec3 cloudShade = mix(vec3(0.43, 0.51, 0.58), vec3(0.035, 0.055, 0.095), uNight);
           vec3 cloudLight = mix(vec3(0.90, 0.92, 0.93) * mix(vec3(1.0), uLightColor, 0.22), vec3(0.11, 0.15, 0.22), uNight);
           vec3 clouds = mix(cloudShade, cloudLight, silver) * (1.0 - uStorm * 0.46);
-          clouds += sunColor * exp(-sunDistance * 8.0) * density * (1.0 - density) * sunUp * 0.5;
+          // Thin edges catch the same gold/silver glow; dense weather still
+          // occludes both discs and their halos instead of glowing over them.
+          clouds += sunAuraColor * sunHalo.y * density * (1.0 - density) * sunUp * 0.8;
+          clouds += vec3(0.20, 0.32, 0.53) * moonHalo.y * density * (1.0 - density) * moonUp * uNight * 0.22;
           float cloudOpacity = density * mix(0.76, 0.97, uCloudCover) * horizonFade;
           sky = mix(sky, clouds, cloudOpacity);
+          // Attenuate bright source radiance separately so a cloud cannot
+          // leave an overexposed white cutout simply because the core is HDR.
+          float transmission = 1.0 - cloudOpacity;
+          celestialLight *= transmission * transmission;
           if (uDetail > 0.5) {
             float veil = texture2D(uCloudNoise, cloudUv * vec2(0.7, 2.4) + vec2(0.3, 0.17) - uCloudOffset * 0.35).b;
             veil = smoothstep(0.60, 0.91, veil) * (0.10 + uCloudCover * 0.12) * horizonFade;
             sky = mix(sky, cloudLight, veil);
+            celestialLight *= 1.0 - veil;
           }
+          sky += celestialLight;
           gl_FragColor = vec4(max(sky, vec3(0.0)), 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
