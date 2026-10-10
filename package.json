@@ -5,7 +5,7 @@
     "sensor": "npm --prefix sensor start",
     "sensor:sim": "npm --prefix sensor run sim",
     "game": "npm --prefix game run dev",
-    "dev": "npm run sensor & npm run game",
+    "dev": "node scripts/dev.mjs",
     "setup": "npm --prefix sensor install && npm --prefix game install"
   }
 }
