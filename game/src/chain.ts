@@ -12,7 +12,8 @@ import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { zoneName } from './depth-odds';
-import { RARITY, type FishSpec } from './fish';
+import { RARITY, ZONES, fishValue, zoneForDepth, type FishSpec } from './fish';
+import { MAPS, mapDepth, type MapId } from './maps';
 import { fishCard } from './portrait';
 
 // Everything here runs in the browser against Solana devnet. The player gets a
@@ -70,6 +71,15 @@ function dataUrlBytes(url: string): Uint8Array {
   return out;
 }
 
+/** The zone the HUD showed where the fish was caught: below the map's shelf that is the trench. */
+function zoneLabel(spec: FishSpec): string {
+  if (!spec.map || !(spec.map in MAPS)) return zoneName(spec.depthM);
+  const map = MAPS[spec.map as MapId];
+  if (spec.depthM >= mapDepth(map)) return 'The Trench';
+  // Just above the shelf (e.g. 18–20 m on the fjord) still counts as the last open zone.
+  return map.zoneLabels[Math.min(ZONES.indexOf(zoneForDepth(spec.depthM)), map.zoneLabels.length - 1)];
+}
+
 export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
 
 export interface MintResult {
@@ -91,10 +101,12 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const traits: [string, string][] = [
     ['Rarity', rarity],
     ['Species', spec.species],
-    ['Zone', zoneName(spec.depthM)],
+    ['Zone', zoneLabel(spec)],
+    ...(spec.map && spec.map in MAPS ? [['Map', MAPS[spec.map as MapId].name] as [string, string]] : []),
     ['Depth (m)', String(spec.depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],
+    ['Catch value', String(fishValue(spec))],
     ['Seed', spec.id],
   ];
   const uri = await u.uploader.uploadJson({

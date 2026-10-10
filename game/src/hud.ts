@@ -1,5 +1,5 @@
 import type { BreathState } from './breath';
-import { FishSpec, RARITY } from './fish';
+import { FishSpec, RARITY, fishValue } from './fish';
 import { fishIcon } from './portrait';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -16,12 +16,8 @@ const DEPTH_HALF_M = 60;
 /** Bar position (fraction from the top) for a depth in metres: 0 m → 0, 60 m → 0.5, 540 m → 0.9, ∞ → 1. */
 const depthPos = (d: number) => (Number.isFinite(d) ? Math.max(0, d) / (Math.max(0, d) + DEPTH_HALF_M) : 1);
 
-const DEPTH_BANDS = [
-  { name: 'Shallows', top: 0, bottom: 18, cls: '' },
-  { name: 'Reef', top: 18, bottom: 38, cls: 'reef' },
-  { name: 'Abyss', top: 38, bottom: 60, cls: 'abyss' },
-  { name: 'Trench', top: 60, bottom: Infinity, cls: 'trench' },
-];
+/** Band tint for each open zone, counted down from the surface (see setZones). */
+const ZONE_TINT = ['', 'reef', 'abyss'];
 const DEPTH_TICKS = [0, 20, 60, 100, 200, 500];
 /** Only mark a "best" depth once the player has actually dived. */
 const BEST_MIN_M = 5;
@@ -54,21 +50,12 @@ export class Hud {
   private msgTimer = 0;
 
   constructor() {
-    this.buildDepthScale();
+    this.buildDepthTicks();
   }
 
-  /** Zone bands (left) and tick marks (right), placed with the same scale as the marker. */
-  private buildDepthScale() {
+  /** Tick marks (right of the bar), placed with the same scale as the marker. */
+  private buildDepthTicks() {
     const frag = document.createDocumentFragment();
-    for (const b of DEPTH_BANDS) {
-      const top = depthPos(b.top);
-      const el = document.createElement('div');
-      el.className = b.cls ? `zone ${b.cls}` : 'zone';
-      el.textContent = b.name;
-      el.style.setProperty('--top', `${(top * 100).toFixed(2)}%`);
-      el.style.setProperty('--h', `${((depthPos(b.bottom) - top) * 100).toFixed(2)}%`);
-      frag.appendChild(el);
-    }
     for (const m of DEPTH_TICKS) {
       const el = document.createElement('div');
       el.className = 'tick';
@@ -78,6 +65,37 @@ export class Hud {
     }
     // Before the markers, so the best tick and the current marker draw on top.
     this.depthGauge.insertBefore(frag, this.depthBest);
+  }
+
+  /**
+   * Rebuild the zone bands (left of the bar) for a map: one per open zone with
+   * the map's labels, then the bottomless trench from the shelf down. The bar is
+   * tinted with the map's water, each colour at its depth on the same scale.
+   */
+  setZones(
+    zones: { label: string; top: number; bottom: number }[],
+    shelfM: number,
+    water: readonly (readonly [number, string])[],
+  ) {
+    const gauge = this.depthGauge;
+    gauge.querySelectorAll('.zone').forEach((el) => el.remove());
+    const stops = water.map(([d, c]) => `${c} ${(depthPos(d) * 100).toFixed(1)}%`);
+    gauge.style.background = `linear-gradient(${[...stops, '#000408'].join(', ')})`;
+    const bands = [
+      ...zones.map((z, i) => ({ ...z, cls: ZONE_TINT[i] ?? '' })),
+      { label: 'Trench', top: shelfM, bottom: Infinity, cls: 'trench' },
+    ];
+    const frag = document.createDocumentFragment();
+    for (const b of bands) {
+      const top = depthPos(b.top);
+      const el = document.createElement('div');
+      el.className = `zone ${b.cls}`.trim();
+      el.textContent = b.label;
+      el.style.setProperty('--top', `${(top * 100).toFixed(2)}%`);
+      el.style.setProperty('--h', `${((depthPos(b.bottom) - top) * 100).toFixed(2)}%`);
+      frag.appendChild(el);
+    }
+    gauge.insertBefore(frag, this.depthBest);
   }
 
   show() {
@@ -185,10 +203,12 @@ export class Hud {
   setBank(bank: FishSpec[]) {
     this.bankCount.textContent = `${bank.length} fish`;
     const best = bank.reduce<FishSpec | null>(
-      (a, f) => (!a || RARITY[f.rarity].value > RARITY[a.rarity].value ? f : a),
+      (a, f) => (!a || fishValue(f) > fishValue(a) ? f : a),
       null,
     );
-    this.bankValue.textContent = best ? `best: ${RARITY[best.rarity].label} ${best.species}` : 'surface to bank your net';
+    this.bankValue.textContent = best
+      ? `best: ${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} pts`
+      : 'surface to bank your net';
   }
 
   toast(spec: FishSpec, title?: string) {
@@ -199,7 +219,7 @@ export class Hud {
     el.style.setProperty('--c', r.color);
     el.innerHTML = `<img alt=""><div><div class="r">${title ?? r.label.toUpperCase()}</div><div class="n"></div></div>`;
     el.querySelector('img')!.src = fishIcon(spec);
-    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg`;
+    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
     this.toasts.prepend(el);
     setTimeout(() => el.remove(), 3100);
   }

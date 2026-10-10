@@ -19,12 +19,13 @@ export const RARITY: Record<
 export const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
 
 // Named depth bands near the surface. Rarity no longer comes from the band:
-// it is a smooth function of depth (see depth-odds.ts), and below 60 m the
-// sea keeps going as The Trench with no bottom.
+// it is a smooth function of depth (see depth-odds.ts). Below the shelf the
+// sea keeps going as The Trench with no bottom. Deeper fish are also worth
+// more: a fish's catch value is its rarity value times rewardMultiplierAt(depth).
 export const ZONES = [
-  { name: 'Shallows', top: 0, bottom: 18 },
-  { name: 'Coral Reef', top: 18, bottom: 38 },
-  { name: 'The Abyss', top: 38, bottom: 60 },
+  { name: 'Shallows', rewardMultiplier: 1, top: 0, bottom: 18 },
+  { name: 'Coral Reef', rewardMultiplier: 1.6, top: 18, bottom: 38 },
+  { name: 'The Abyss', rewardMultiplier: 2.5, top: 38, bottom: 60 },
 ] as const;
 
 export type Zone = (typeof ZONES)[number];
@@ -158,6 +159,10 @@ export interface FishSpec {
   accentHue: number;
   stripes: number;
   scale: number;
+  /** Catch value: rarity value × rewardMultiplierAt(depth). Fish banked before this field existed have none; read it with fishValue(). */
+  value?: number;
+  /** The map the fish was caught on (a MapId from maps.ts). Missing on fish banked before maps. */
+  map?: string;
   /** Metaplex Core asset address once minted on devnet. */
   assetId?: string;
 }
@@ -189,7 +194,27 @@ export function rollFish(seed: number, depthM: number, odds = rarityOdds(depthM)
     accentHue: (hue + rng.range(140, 220)) % 360,
     stripes: rng.next() < 0.55 ? rng.int(2, 5) : 0,
     scale,
+    value: Math.round(RARITY[rarity].value * rewardMultiplierAt(depthM)),
   };
+}
+
+/** Catch value of a fish, falling back to the plain rarity value for old saves. */
+export function fishValue(fish: FishSpec): number {
+  return fish.value ?? RARITY[fish.rarity].value;
+}
+
+// In the trench the multiplier keeps climbing past the Abyss's 2.5: +1 every 50 m, up to 6.
+const TRENCH_TOP = ZONES[ZONES.length - 1].bottom;
+
+/** Catch value multiplier for a fish caught at this depth. */
+export function rewardMultiplierAt(depthM: number): number {
+  if (depthM < TRENCH_TOP) return zoneForDepth(depthM).rewardMultiplier;
+  return Math.min(6, ZONES[ZONES.length - 1].rewardMultiplier + (depthM - TRENCH_TOP) / 50);
+}
+
+/** The depth zone a depth falls in, so callers do not repeat the cutoffs. */
+export function zoneForDepth(depthM: number): Zone {
+  return ZONES.find((zone) => depthM >= zone.top && depthM < zone.bottom) ?? ZONES[ZONES.length - 1];
 }
 
 // ---- Mesh ---------------------------------------------------------------
