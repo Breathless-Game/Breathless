@@ -15,6 +15,7 @@ import { zoneName } from './depth-odds';
 import { RARITY, ZONES, fishValue, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
 import { fishCard } from './portrait';
+import { ownerAddress, ownerSigner, sessionSigner } from './wallet';
 
 // Everything here runs in the browser against Solana devnet. The player gets a
 // burner wallet stored in localStorage; it pays for the Irys upload and the
@@ -120,8 +121,14 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 
   onStep?.('mint');
   const asset = generateSigner(u);
+  // The session key pays and holds update authority; the player owns the fish.
+  const session = sessionSigner(u);
   const { signature } = await create(u, {
     asset,
+    owner: publicKey(ownerAddress(u)),
+    payer: session,
+    authority: session,
+    updateAuthority: session.publicKey,
     name: spec.name,
     uri,
     plugins: [
@@ -135,7 +142,9 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
         ],
       },
     ],
-  }).sendAndConfirm(u);
+  })
+    .setFeePayer(session)
+    .sendAndConfirm(u);
 
   return { asset: asset.publicKey.toString(), signature: base58.deserialize(signature)[0], image, uri };
 }
@@ -144,6 +153,6 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 export async function burnFish(assetId: string): Promise<string> {
   const u = getUmi();
   const asset = await fetchAsset(u, publicKey(assetId));
-  const { signature } = await burn(u, { asset }).sendAndConfirm(u);
+  const { signature } = await burn(u, { asset, authority: ownerSigner(u) }).sendAndConfirm(u);
   return base58.deserialize(signature)[0];
 }
