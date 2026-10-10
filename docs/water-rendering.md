@@ -1,6 +1,6 @@
 # Water rendering
 
-The water is a continuous, gently rolling triangle mesh. Its flat face normals come from the displaced vertices. A face's color and sun/moon reflection therefore follow its slope and the view direction, rather than a random palette or a fixed polygon mask. The reflected sky is restrained to preserve the blue-green body color. Above water, the surface hides deep rock silhouettes that previously resembled enormous facets; crossing the waterline eases into a translucent underside.
+The water is a continuous, gently rolling triangle mesh. Its flat face normals come from the displaced vertices. A fixed spatial pigment field supplies blue, teal and green polygon colors; slope-based shading changes their brightness continuously. Sun/moon reflection follows the actual face normal and view direction. This preserves obvious geometric color blocks across the sea, including outside the bright reflection path, with no detached reflection masks. The reflected sky is restrained to preserve the blue-green body color. Above water, the surface hides deep rock silhouettes that previously resembled enormous facets; crossing the waterline eases into a translucent underside.
 
 ## Source references
 
@@ -22,7 +22,7 @@ This implementation was written for the existing Three.js material, time, weathe
 | Directional waves | 2 | 3 | 4 |
 | Vertex + index buffer size | 91 KiB | 203 KiB | 402 KiB |
 
-The grid is slightly denser toward the visible foreground, with small deterministic vertex offsets to avoid a rigid rectangular pattern. Indexed vertices replace duplicated triangles and the two old per-face attributes. High quality has finer faces while using fewer unique vertices than the prior 12,960-vertex surface. All index buffers fit in 16 bits.
+The grid varies its spacing across the visible area, with staggered rows, deterministic offsets and short diagonals. Large and small facets mix without gaps or a straight seam down the view. A flat shader varying derives each face pigment from existing coordinates, adding no vertex attributes. Indexed vertices replace duplicated triangles and the two old per-face attributes. High quality has finer faces while using fewer unique vertices than the prior 12,960-vertex surface. All index buffers fit in 16 bits.
 
 Waves run in the vertex shader. Flat normals are derived in the existing material shader; no water position/normal buffer is uploaded per frame. Water still uses one draw, with no new texture or render target. Existing pixel caps, antialias settings, weak-device defaults and automatic downgrades apply. These are workload budgets, not measured frame-rate guarantees for specific phones or integrated GPUs.
 

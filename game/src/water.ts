@@ -4,7 +4,7 @@ import type { RenderQuality } from './render-quality';
 import type { WeatherState } from './weather';
 import { WATER_WAVES_GLSL } from './water-waves';
 
-/** Continuous waves with flat face normals; light follows their actual slope. */
+/** Continuous waves with an illustrated, flat-face blue/green palette. */
 export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   private readonly dayWater = new THREE.Color('#287f96');
   private readonly nightWater = new THREE.Color('#133346');
@@ -33,6 +33,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           varying vec3 vWaterWorldPosition;
+          flat varying vec2 vWaterPigment;
           uniform float uWaterTime;
           uniform float uWaterWind;
           uniform float uWaterMapWaves;
@@ -40,6 +41,12 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           ${WATER_WAVES_GLSL}
         `)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
+          // Flat interpolation keeps the illustrated pigment within triangle
+          // edges while indexed neighboring faces can share a color patch.
+          // The spatial field is fixed, so wave motion never flickers colors.
+          vWaterPigment = vec2(
+            sin(dot(position.xz, vec2(0.71, 0.47))),
+            sin(dot(position.xz, vec2(-0.39, 0.63)) + 1.7));
           transformed.y += waterWaveHeight(position.xz, uWaterTime, uWaterDetail)
             * (1.0 + uWaterWind * 0.75) * uWaterMapWaves;
         `)
@@ -49,6 +56,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vWaterWorldPosition;
+          flat varying vec2 vWaterPigment;
           uniform float uWaterEffects;
           uniform float uWaterDetail;
           uniform float uWaterWind;
@@ -58,6 +66,29 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           uniform vec3 uWaterLightColor;
           uniform vec3 uWaterLightDirection;
           uniform float uWaterLightStrength;
+        `)
+        .replace('#include <lights_physical_fragment>', `
+          // The geometric face normal is constant across each triangle. Let
+          // that slope select a blue/green pigment before scene lighting, so
+          // facets remain legible away from the sun's narrow reflection path.
+          // Smooth palette transitions avoid colors popping as a wave turns.
+          vec3 facetNormal = inverseTransformDirection(normal, viewMatrix);
+          facetNormal *= facetNormal.y < 0.0 ? -1.0 : 1.0;
+          vec2 facetSlope = facetNormal.xz / max(facetNormal.y, 0.2);
+          float facetTone = smoothstep(-0.07, 0.07,
+            dot(facetSlope, vec2(-0.65, 0.76)));
+          float facetHue = smoothstep(-0.065, 0.065,
+            dot(facetSlope, vec2(0.76, 0.65)));
+          vec3 facetShade = mix(vec3(0.54, 0.68, 0.86),
+            vec3(1.36, 1.31, 1.07), facetTone);
+          facetShade *= mix(vec3(0.85, 1.04, 1.03),
+            vec3(1.09, 1.01, 0.93), facetHue);
+          facetShade *= 1.0 + vWaterPigment.x * 0.30;
+          facetShade *= mix(vec3(0.79, 1.01, 1.10),
+            vec3(1.16, 1.07, 0.91), vWaterPigment.y * 0.5 + 0.5);
+          diffuseColor.rgb *= mix(vec3(1.0), facetShade,
+            mix(0.5, 1.0, uWaterAbove));
+          #include <lights_physical_fragment>
         `)
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
           // One celestial lobe below. Diffuse/hemisphere light still uses
@@ -97,7 +128,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   }
 
   customProgramCacheKey(): string {
-    return 'deepbreath-water-slopes-v2';
+    return 'deepbreath-water-facet-palette-v3';
   }
 
   setEffectsEnabled(enabled: boolean): void {
