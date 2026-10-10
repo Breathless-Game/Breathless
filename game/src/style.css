@@ -158,7 +158,8 @@ body {
   position: absolute;
   right: 26px;
   top: 170px;
-  bottom: 120px;
+  /* clear the bank panel below it (count, best fish, gear line, two buttons ≈ 190px) */
+  bottom: 206px;
   width: 16px;
   border-radius: 8px;
   /* non-linear scale: 50% = 60 m, so the bar is already deep blue by the middle */
@@ -360,6 +361,18 @@ body {
 #bank-count {
   font-weight: 800;
   font-size: 20px;
+}
+
+#gear-summary {
+  color: var(--hold);
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+#bank button {
+  margin-top: 8px;
+  display: block;
+  margin-left: auto;
 }
 
 #help {
@@ -764,6 +777,103 @@ button:disabled {
   color: var(--danger);
 }
 
+/* ---- gear workshop ---- */
+#gear-panel {
+  position: fixed;
+  inset: 12vh auto auto 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  width: min(520px, calc(100vw - 32px));
+  background: rgba(3, 12, 24, 0.97);
+  border: 1px solid rgba(62, 240, 168, 0.35);
+  border-radius: 20px;
+  padding: 22px 24px;
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.45), 0 0 40px rgba(62, 240, 168, 0.08);
+}
+
+.gear-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.gear-head h2 {
+  margin: 4px 0;
+}
+
+#gear-level {
+  color: var(--hold);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.gear-card,
+.gear-upgrade-card {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.gear-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.gear-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--gold);
+  border: 2px solid var(--gold);
+  font-size: 34px;
+  line-height: 1;
+}
+
+.gear-effect {
+  font-weight: 800;
+  margin-top: 4px;
+}
+
+.gear-pearls {
+  color: var(--gold);
+  margin-top: 6px;
+  font-weight: 800;
+}
+
+.gear-next {
+  margin-top: 5px;
+  font-weight: 800;
+}
+
+#gear-progress {
+  width: 100%;
+  height: 10px;
+  margin: 14px 0;
+  accent-color: var(--hold);
+}
+
+#gear-upgrade {
+  width: 100%;
+}
+
+.gear-notice {
+  color: var(--gold);
+  text-align: center;
+  margin-top: 10px;
+}
+
+.gear-footnote {
+  line-height: 1.5;
+  margin: 16px 0 0;
+}
+
 /* ---- health report ---- */
 #report-btn {
   margin-top: 8px;
@@ -990,7 +1100,7 @@ button:disabled {
 #map-picker {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 8px;
   margin: 4px 0 8px;
 }
 
@@ -1003,8 +1113,13 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Three columns leave ~142px of text per card: every line below is sized to fit on one row. */
 .map-card > :not(.map-swatch) {
-  padding: 0 10px;
+  padding: 0 7px;
+}
+
+.map-place {
+  letter-spacing: 0.02em;
 }
 
 .map-swatch {
@@ -1022,8 +1137,23 @@ button:disabled {
   margin-top: 4px;
 }
 
+.map-lock,
+.map-trench {
+  font-size: 11px;
+  line-height: 15px;
+}
+
 .map-lock {
   margin-top: 2px;
+  color: var(--muted);
+}
+
+/* same teal as the Trench band on the depth gauge */
+.map-trench {
+  color: #5fe0d0;
+}
+
+.map-card.locked .map-trench {
   color: var(--muted);
 }
 

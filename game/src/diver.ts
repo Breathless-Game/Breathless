@@ -87,6 +87,12 @@ export class Diver {
     return this.netPointWorld.clone();
   }
 
+  /** Make the visible hoop grow with the equipped net tier. */
+  setNetLevel(level: number) {
+    const scale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.12;
+    this.netArm.scale.setScalar(scale);
+  }
+
   swing() {
     if (this.netSwing <= 0) this.netSwing = 1;
   }

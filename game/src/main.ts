@@ -14,6 +14,8 @@ import { HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
+import { GearPanel } from './gear-panel';
+import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -22,8 +24,6 @@ const MAX_SPEED = 7.5;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
 const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
-const NET_CAPACITY = 6;
-const CATCH_RADIUS = 2.4;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 const FISH_PER_ZONE = [16, 16, 12];
 // Every map's seabed is a shelf; under the boat a trench drops away with no
@@ -155,6 +155,7 @@ let outOfAir = false;
 let emergency = 1;
 let net: FishSpec[] = [];
 const bank: FishSpec[] = loadBank();
+const equipment: EquipmentState = loadEquipment();
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
@@ -172,12 +173,44 @@ function saveBank() {
   } catch {}
 }
 
-hud.setNet(net, NET_CAPACITY);
+const currentTier = () => rodTier(equipment);
+hud.setNet(net, currentTier().capacity);
 hud.setBank(bank);
 const vault = new Vault(bank, saveBank);
 const health = new HealthLog();
 const report = new Report(health);
+const gear = new GearPanel(() => buyNextRod());
+gear.render(equipment);
+hud.setEquipment(equipment, currentTier());
+diver.setNetLevel(currentTier().level);
 let nowMs = 0;
+
+function refreshEquipment() {
+  const tier = currentTier();
+  saveEquipment(equipment);
+  hud.setEquipment(equipment, tier);
+  hud.setNet(net, tier.capacity);
+  gear.render(equipment);
+  diver.setNetLevel(tier.level);
+}
+
+function buyNextRod() {
+  const next = nextRodTier(equipment);
+  if (!next) {
+    gear.showNotice('The net is already at maximum level.');
+    return;
+  }
+  const upgraded = upgrade(equipment);
+  if (!upgraded) {
+    gear.showNotice(`Need ${next.cost - equipment.pearls} more Pearls.`);
+    hud.message(`Need ${next.cost - equipment.pearls} more Pearls`, 1500);
+    return;
+  }
+  equipment.rodLevel = upgraded.rodLevel;
+  equipment.pearls = upgraded.pearls;
+  refreshEquipment();
+  hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+}
 
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
@@ -200,6 +233,8 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+  } else if (e.key.toLowerCase() === 'g') {
+    gear.toggle();
   } else if (e.key.toLowerCase() === 'n') {
     setNight(!night);
   } else if (e.key.toLowerCase() === 'k') {
@@ -224,6 +259,7 @@ function setNight(on: boolean) {
 }
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
+document.getElementById('gear-open')!.addEventListener('click', () => gear.toggle(true));
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
 
 function axis(neg: string[], pos: string[]) {
@@ -234,13 +270,14 @@ function axis(neg: string[], pos: string[]) {
 function tryCatch() {
   diver.swing();
   if (diver.pos.y > -SURFACE_DEPTH) return;
-  if (net.length >= NET_CAPACITY) {
+  const tier = currentTier();
+  if (net.length >= tier.capacity) {
     hud.message('Net full! Surface to bank it.');
     return;
   }
   const p = diver.netPoint();
   let best: Fish | null = null;
-  let bestD = CATCH_RADIUS;
+  let bestD = tier.catchRadius;
   for (const f of fishes) {
     const d = Math.hypot(f.pos.x - p.x, f.pos.y - p.y);
     if (d < bestD) {
@@ -253,7 +290,7 @@ function tryCatch() {
   removeFish(best);
   const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
   net.push(caught);
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, tier.capacity);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
   if (!inTrench) {
@@ -266,13 +303,16 @@ function tryCatch() {
 
 function bankNet() {
   if (!net.length) return;
+  const reward = net.reduce((sum, f) => sum + fishValue(f), 0);
   bank.push(...net);
   saveBank();
+  equipment.pearls += reward;
+  refreshEquipment();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
-  hud.message(`Banked ${net.length} fish!`);
+  hud.message(`Banked ${net.length} fish · +${reward} Pearls`);
   hud.toast(rarest, 'BANKED');
   net = [];
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, currentTier().capacity);
   hud.setBank(bank);
   noteBankValue(true);
 }
@@ -326,7 +366,7 @@ function blackout() {
   const lost = net.length;
   health.end(nowMs, 'blackout', lost);
   net = [];
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, currentTier().capacity);
   hud.message(lost ? `BLACKOUT · ${lost} fish lost` : 'BLACKOUT', 2200);
   hud.setEmergency(null);
   setTimeout(() => {
@@ -433,6 +473,7 @@ function pause() {
   paused = true;
   keys.clear();
   vault.toggle(false);
+  gear.toggle(false);
   report.toggle(false);
   pauseMenu.show();
 }
@@ -441,6 +482,7 @@ function onEscape() {
   if (pauseMenu.open) pauseMenu.back();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
+  else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
@@ -451,7 +493,7 @@ function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   net = [];
-  hud.setNet(net, NET_CAPACITY);
+  hud.setNet(net, currentTier().capacity);
   hud.setEmergency(null);
   outOfAir = false;
   breathSince = null;
@@ -462,6 +504,7 @@ function goToMenu() {
   phase = 'menu';
   pauseMenu.close();
   vault.toggle(false);
+  gear.toggle(false);
   report.toggle(false);
   breath.stopLive();
   sawHold = false;

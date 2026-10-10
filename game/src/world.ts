@@ -96,6 +96,22 @@ function wallDensity(quality: RenderQuality) {
   return 0.45 + 0.55 * Math.min(1, quality.kelpCount / RENDER_QUALITY.high.kelpCount);
 }
 
+/** Underwater fog reach (m) once the camera is inside the trench: far enough that the side and back walls read as a slot in the rock. */
+const TRENCH_FOG_FAR = 50;
+/** Metres below the shelf over which the fog eases out to TRENCH_FOG_FAR. */
+const TRENCH_FOG_EASE = 10;
+
+/**
+ * Fog far distance for a camera `depth` m under water. Open water closes in from 70 m to 34 m
+ * by 60 m deep. The camera only drops below the shelf inside the trench (over the shelf it stays
+ * 9 m above the sand), and there the fog pulls back so the walls don't vanish into it.
+ */
+function underwaterFogFar(depth: number, shelfDepth: number) {
+  const open = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
+  const inTrench = THREE.MathUtils.smoothstep(depth, shelfDepth, shelfDepth + TRENCH_FOG_EASE);
+  return Math.max(open, THREE.MathUtils.lerp(open, TRENCH_FOG_FAR, inTrench));
+}
+
 /** Marine snow drifts in a band from 45 m below the camera to 35 m above it, never above the surface. */
 function snowBand(cameraY: number): [number, number] {
   const hi = Math.min(-0.5, cameraY + 35);
@@ -596,23 +612,130 @@ export class World {
 
   private buildBoat() {
     const boat = new THREE.Group();
-    const hullGeo = new THREE.CylinderGeometry(1.6, 0.9, 1.2, 6, 1);
-    hullGeo.rotateZ(Math.PI / 2);
-    hullGeo.scale(2.4, 1, 1);
-    const hull = new THREE.Mesh(hullGeo, flatMat('#c0573e'));
-    hull.scale.set(1, 0.9, 0.55);
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.2, 1.6), flatMat('#e8d5b0'));
+
+    const hullMat = flatMat('#b8483e');
+    const hullDarkMat = flatMat('#742f37');
+    const trimMat = flatMat('#f0bf72');
+    const deckMat = flatMat('#d7bb88');
+    const cabinMat = flatMat('#e9eee7');
+    const glassMat = flatMat('#16475d', { metalness: 0.35, roughness: 0.25 });
+    const blueMat = flatMat('#2f6f8f');
+    const metalMat = flatMat('#4c6570', { metalness: 0.7, roughness: 0.32 });
+    const woodMat = flatMat('#624431');
+    const ropeMat = flatMat('#8c7353');
+    const lampMat = flatMat('#ffcc4d', { emissive: '#ff9e3d', emissiveIntensity: 1.8 });
+    const redLampMat = flatMat('#ef5b52', { emissive: '#ef3028', emissiveIntensity: 1.2 });
+
+    // A side-profile extrusion gives the hull a readable pointed bow and a
+    // deep keel, while keeping the same flat-shaded low-poly language.
+    const hullShape = new THREE.Shape();
+    hullShape.moveTo(-3.35, 0.38);
+    hullShape.lineTo(2.05, 0.38);
+    hullShape.lineTo(3.45, 0.12);
+    hullShape.lineTo(2.62, -0.45);
+    hullShape.lineTo(-2.38, -0.62);
+    hullShape.lineTo(-3.45, -0.08);
+    hullShape.closePath();
+    const hullGeo = new THREE.ExtrudeGeometry(hullShape, { depth: 1.72, bevelEnabled: false, steps: 1 });
+    hullGeo.translate(0, 0, -0.86);
+    const hull = new THREE.Mesh(hullGeo, hullMat);
+
+    const stripeShape = new THREE.Shape();
+    stripeShape.moveTo(-3.2, -0.05);
+    stripeShape.lineTo(2.62, 0.0);
+    stripeShape.lineTo(2.35, -0.2);
+    stripeShape.lineTo(-2.55, -0.28);
+    stripeShape.closePath();
+    const stripeGeo = new THREE.ExtrudeGeometry(stripeShape, { depth: 0.035, bevelEnabled: false });
+    stripeGeo.translate(0, 0, 0.85);
+    const stripe = new THREE.Mesh(stripeGeo, trimMat);
+
+    const keel = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.22, 1.05), hullDarkMat);
+    keel.position.set(-0.15, -0.53, 0);
+    keel.rotation.z = -0.035;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(6.25, 0.18, 1.58), deckMat);
     deck.position.y = 0.55;
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2, 1.4, 1.3), flatMat('#f3efe6'));
-    cabin.position.set(-0.8, 1.35, 0);
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(1.4, 0.6, 4), flatMat('#2f6f8f'));
-    roof.position.set(-0.8, 2.35, 0);
-    roof.rotation.y = Math.PI / 4;
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), flatMat('#ffcc4d', { side: THREE.DoubleSide }));
-    flag.position.set(2.2, 2.2, 0);
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 4), flatMat('#6b4f3a'));
-    mast.position.set(1.8, 1.6, 0);
-    boat.add(hull, deck, cabin, roof, mast, flag);
+    const bowDeck = new THREE.Mesh(new THREE.ConeGeometry(1.05, 1.4, 4), deckMat);
+    bowDeck.position.set(2.6, 0.61, 0);
+    bowDeck.rotation.z = Math.PI / 2;
+    bowDeck.scale.set(0.6, 1, 1);
+
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.05, 1.35, 1.28), cabinMat);
+    cabin.position.set(-0.82, 1.34, 0);
+    const cabinFront = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.46, 0.035), glassMat);
+    cabinFront.position.set(0.12, 1.58, 0.66);
+    const cabinSide = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.45, 0.035), glassMat);
+    cabinSide.position.set(-0.95, 1.58, 0.66);
+    const cabinBackWindow = cabinSide.clone();
+    cabinBackWindow.position.z = -0.66;
+    const cabinFrontFrame = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.58, 0.05), trimMat);
+    cabinFrontFrame.position.set(0.12, 1.57, 0.7);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.16, 1.55), blueMat);
+    roof.position.set(-0.82, 2.08, 0);
+    const roofTrim = new THREE.Mesh(new THREE.BoxGeometry(2.68, 0.08, 1.68), trimMat);
+    roofTrim.position.set(-0.82, 1.99, 0);
+
+    // Small structural parts make the boat read as working equipment instead
+    // of a single block when it is seen from the surface.
+    const rod = (a: THREE.Vector3, b: THREE.Vector3, radius: number, mat: THREE.Material) => {
+      const direction = new THREE.Vector3().subVectors(b, a);
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, direction.length(), 6), mat);
+      mesh.position.copy(a).add(b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+      return mesh;
+    };
+
+    const railPosts = [-2.65, -2.0, 1.65, 2.32].map((x) => rod(new THREE.Vector3(x, 0.61, 0.64), new THREE.Vector3(x, 1.02, 0.64), 0.035, metalMat));
+    const sideRail = rod(new THREE.Vector3(-2.65, 1.02, 0.64), new THREE.Vector3(2.32, 1.02, 0.64), 0.04, metalMat);
+    const bowRail = rod(new THREE.Vector3(2.32, 1.02, 0.64), new THREE.Vector3(3.18, 0.7, 0.48), 0.04, metalMat);
+
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 2.75, 6), woodMat);
+    mast.position.set(2.3, 1.95, 0);
+    const mastBrace = rod(new THREE.Vector3(1.72, 0.66, 0), new THREE.Vector3(2.3, 3.28, 0), 0.035, metalMat);
+    const boom = rod(new THREE.Vector3(1.48, 2.77, 0), new THREE.Vector3(2.68, 2.77, 0), 0.04, woodMat);
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.78, 5), metalMat);
+    antenna.position.set(-0.84, 2.54, 0);
+    const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), lampMat);
+    antennaTip.position.set(-0.84, 2.96, 0);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.52), flatMat('#ffcc4d', { side: THREE.DoubleSide }));
+    flag.position.set(2.68, 3.04, 0);
+    flag.rotation.y = Math.PI / 2;
+
+    const searchLight = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.21, 0.18, 6), lampMat);
+    searchLight.position.set(0.13, 2.28, 0.1);
+    searchLight.rotation.z = Math.PI / 2;
+    const engineVent = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.26, 0.72), metalMat);
+    engineVent.position.set(-2.18, 0.78, 0);
+    const ventSlat = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.78), trimMat);
+    ventSlat.position.set(-2.18, 0.78, 0.38);
+
+    const reel = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.16, 10), metalMat);
+    reel.position.set(1.45, 0.89, 0.28);
+    reel.rotation.x = Math.PI / 2;
+    const reelDrum = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.24, 8), ropeMat);
+    reelDrum.position.set(1.45, 0.89, 0.28);
+    reelDrum.rotation.x = Math.PI / 2;
+    const reelArm = rod(new THREE.Vector3(1.45, 0.89, 0.28), new THREE.Vector3(1.45, 1.36, 0.28), 0.045, metalMat);
+
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.55, 0.7), woodMat);
+    crate.position.set(-2.55, 0.82, 0.15);
+    const crateBand = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.58, 0.73), trimMat);
+    crateBand.position.set(-2.55, 0.82, 0.15);
+    const lifeRing = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.065, 5, 10), flatMat('#f2714b'));
+    lifeRing.position.set(-1.92, 0.98, 0.9);
+    lifeRing.rotation.x = Math.PI / 2;
+
+    const bowLamp = new THREE.Mesh(new THREE.SphereGeometry(0.095, 6, 4), lampMat);
+    bowLamp.position.set(3.18, 0.74, 0.43);
+    const sternLamp = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), redLampMat);
+    sternLamp.position.set(-3.05, 0.74, 0.15);
+    const propeller = new THREE.Mesh(new THREE.TorusGeometry(0.23, 0.045, 4, 8), metalMat);
+    propeller.position.set(-2.72, -0.62, 0);
+    propeller.rotation.y = Math.PI / 2;
+
+    boat.add(hull, stripe, keel, deck, bowDeck, cabin, cabinFront, cabinSide, cabinBackWindow, cabinFrontFrame, roof, roofTrim);
+    boat.add(...railPosts, sideRail, bowRail, mast, mastBrace, boom, antenna, antennaTip, flag);
+    boat.add(searchLight, engineVent, ventSlat, reel, reelDrum, reelArm, crate, crateBand, lifeRing, bowLamp, sternLamp, propeller);
     boat.position.set(0, 0.2, 0);
     this.scene.add(boat);
     return boat;
@@ -645,7 +768,7 @@ export class World {
       (this.scene.background as THREE.Color).copy(c);
       fog.color.copy(c);
       fog.near = 6;
-      fog.far = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
+      fog.far = underwaterFogFar(depth, -this.seabedY);
     }
     const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1) * (this.night ? 0.35 : 1);
     this.hemi.intensity = 1.4 * light;
