@@ -103,7 +103,7 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const uri = await u.uploader.uploadJson({
     name: spec.name,
     symbol: SYMBOL,
-    description: `A ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Deep Breath. The art is a pure function of seed ${spec.id}.`,
+    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Deep Breath. The art is a pure function of seed ${spec.id}.`,
     image,
     attributes: traits.map(([trait_type, value]) => ({ trait_type, value })),
     properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },

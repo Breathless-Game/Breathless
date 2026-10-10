@@ -341,13 +341,13 @@ npm run game       # 游戏，http://localhost:5173
 - 憋气才能下潜、水下换气后紧急上浮、黑屏丢鱼、出水入库
 - Presage 管线：浏览器抓帧 → sensor → SDK → 憋气检测；键盘和模拟两种兜底
 - NFT 卡图（由 seed 决定、可复现）、收藏面板
-- Solana 铸造代码（临时钱包、Irys、Metaplex Core + Attributes）
+- Solana 铸造：已在 devnet 端到端验证（临时钱包 → Irys 上传图片和元数据 → Metaplex Core + 链上 Attributes），Solana Explorer 能正常显示卡图。[示例资产](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - 健康报告（按需生成）
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 
 - [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
-- [ ] **端到端验证 NFT 铸造**：需要先给钱包充 devnet SOL，再在 Explorer 里确认图片能正常显示（另外要确认 Irys devnet 的 gateway URL 能访问）
+- [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
 - [ ] **装备经济**：用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯、更大的网；装备有耐久度
 - [ ] **NFT 消耗（sink）**：卖给市场换 Pearl、用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换。`burnFish` 已经写好
 - [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
