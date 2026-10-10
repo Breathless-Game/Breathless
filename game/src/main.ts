@@ -353,6 +353,7 @@ function goToMenu() {
 
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
+  world.setLightingEffects(s.lightingEffects);
   world.setQuality(renderQuality.settings);
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
