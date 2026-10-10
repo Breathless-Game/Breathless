@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildFishingNetMesh } from './gear';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
   return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.7, ...extra });
@@ -15,6 +16,8 @@ export class Diver {
   private legL: THREE.Group;
   private legR: THREE.Group;
   private netArm: THREE.Group;
+  private netTip: THREE.Object3D;
+  private netPointWorld = new THREE.Vector3();
   private netSwing = 0;
   private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
   private bubbleGeo = new THREE.IcosahedronGeometry(0.12, 0);
@@ -51,24 +54,13 @@ export class Diver {
     this.legR = this.makeLeg(suit, accent, -0.16);
     this.body.add(this.legL, this.legR);
 
-    // Arm holding the net, pivoting at the shoulder.
-    this.netArm = new THREE.Group();
+    // The old design called this item a fishing rod; the fused game design
+    // uses its shaft and hoop as an underwater net. Keep the model pivot at
+    // the shoulder so the whole tool follows the swing animation.
+    const net = buildFishingNetMesh();
+    this.netArm = net.group;
     this.netArm.position.set(0.6, 0, 0.3);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.14, 0.14), suit);
-    arm.position.x = 0.35;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.4, 4), mat('#c9c9c9'));
-    pole.rotation.z = Math.PI / 2;
-    pole.position.x = 1.3;
-    const hoop = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.04, 4, 8), mat('#ffd166'));
-    hoop.position.x = 2.4;
-    hoop.rotation.y = Math.PI / 2;
-    const mesh = new THREE.Mesh(
-      new THREE.ConeGeometry(0.42, 0.7, 8, 1, true),
-      mat('#f5f5f5', { transparent: true, opacity: 0.45, side: THREE.DoubleSide, wireframe: true }),
-    );
-    mesh.rotation.z = Math.PI / 2;
-    mesh.position.x = 2.05;
-    this.netArm.add(arm, pole, hoop, mesh);
+    this.netTip = net.tip;
     this.body.add(this.netArm);
 
     this.group.add(this.body);
@@ -91,7 +83,8 @@ export class Diver {
 
   /** Point of the net hoop in world space: where catches happen. */
   netPoint(): THREE.Vector3 {
-    return new THREE.Vector3(this.pos.x + this.facing * 2.6, this.pos.y, 0);
+    this.netTip.getWorldPosition(this.netPointWorld);
+    return this.netPointWorld.clone();
   }
 
   swing() {
