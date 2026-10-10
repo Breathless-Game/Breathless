@@ -26,24 +26,26 @@ export interface WorkbenchHooks {
 
 const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'bait'];
 /** Where each piece lands, in table units (x right, z toward the camera). */
+// Kept off the back strip of the table: the title fish hang over it and would take the clicks.
 const SPOTS: [number, number][] = [
-  [-3.9, -1.2],
-  [-3.6, 1.35],
-  [-1.4, -1.85],
-  [1.45, -1.3],
-  [1.5, 1.3],
+  [-3.9, -0.85],
+  [-3.9, 0.45],
+  [-3.6, 1.8],
+  [1.5, -0.65],
+  [1.55, 0.8],
   [-0.9, 1.95],
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
 const TRAY = { x0: 2.55, x1: 4.85, z0: -2.5, z1: 2.5 };
+// Toward the front of the tray: the SETTINGS fish hangs over its back.
 const SLOTS: [number, number][] = [
-  [3.15, -1.15],
-  [4.25, -1.15],
-  [3.15, 0.3],
-  [4.25, 0.3],
-  [3.15, 1.75],
-  [4.25, 1.75],
+  [3.15, -0.5],
+  [4.25, -0.5],
+  [3.15, 0.6],
+  [4.25, 0.6],
+  [3.15, 1.7],
+  [4.25, 1.7],
 ];
 const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
 const MAP_W = 2.9;
@@ -331,7 +333,7 @@ export class Workbench {
     s.add(felt);
     for (const [x, z] of SLOTS) {
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.42, 0.5, 40),
+        new THREE.RingGeometry(0.38, 0.45, 40),
         new THREE.MeshBasicMaterial({ color: '#fff0d2', transparent: true, opacity: 0.18, depthWrite: false }),
       );
       ring.rotation.x = -Math.PI / 2;
@@ -752,7 +754,8 @@ export class Workbench {
   }
 
   private onDown(e: PointerEvent) {
-    if (this.state !== 'idle' || !this.ours(e)) return;
+    // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
+    if (this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
     this.press = { piece: hit && hit !== 'map' ? hit : null, map: hit === 'map', x: e.clientX, y: e.clientY, t: performance.now() };
   }
@@ -781,7 +784,7 @@ export class Workbench {
       this.onMove(e);
       return;
     }
-    if (this.state !== 'idle' || !this.ours(e)) {
+    if (this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) {
       this.setHover(null, e);
       return;
     }
@@ -1093,6 +1096,6 @@ function drawTray(w: number, d: number): HTMLCanvasElement {
   c.textAlign = 'center';
   c.font = '800 22px Inter, system-ui, sans-serif';
   // Along the front edge: the title fish hang over the back of the table.
-  c.fillText('READY · 准备区', cv.width / 2, cv.height - 26);
+  c.fillText('READY · 准备区', cv.width / 2, cv.height - 16);
   return cv;
 }
