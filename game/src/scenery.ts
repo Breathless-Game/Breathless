@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Batch, flatMat, jitter, paintFaces, pyramid } from './lowpoly';
 import type { MapDef, MapId } from './maps';
+import type { WeatherState } from './weather';
 import { Rng } from './rng';
 
 // What you see above the water on each map: the fjord's snow peaks and cabins,
@@ -11,7 +12,7 @@ import { Rng } from './rng';
 export interface Scenery {
   group: THREE.Group;
   /** Animate the living parts (aurora, mist, lamps, lightning). */
-  update(time: number, night: boolean): void;
+  update(time: number, night: boolean, weather?: WeatherState, lightingEffects?: boolean): void;
 }
 
 const BUILDERS: Record<MapId, () => Scenery> = { fjord: buildFjord, tianchi: buildTianchi, ocean: buildOcean };
@@ -131,12 +132,13 @@ function buildFjord(): Scenery {
 
   return {
     group,
-    update(time, night) {
-      windows.emissiveIntensity = night ? 1.8 : 0;
+    update(time, night, weather, lightingEffects = true) {
+      windows.emissiveIntensity = night && lightingEffects ? 1.8 : 0;
+      const auroraVisibility = night && lightingEffects ? 1 - (weather?.cloud ?? 0) : 0;
       for (const r of ribbons) {
-        r.mesh.visible = night;
-        if (!night) continue;
-        (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.42 + Math.sin(time * 0.35 + r.phase) * 0.14;
+        r.mesh.visible = auroraVisibility > 0.01;
+        if (!r.mesh.visible) continue;
+        (r.mesh.material as THREE.MeshBasicMaterial).opacity = (0.42 + Math.sin(time * 0.35 + r.phase) * 0.14) * auroraVisibility;
         const pos = r.mesh.geometry.attributes.position;
         for (let v = 0; v < pos.count; v++) {
           const x = r.base[v * 3];
@@ -223,10 +225,10 @@ function buildTianchi(): Scenery {
   let last = 0;
   return {
     group,
-    update(time, night) {
+    update(time, night, _weather, lightingEffects = true) {
       const dt = Math.min(Math.max(time - last, 0), 0.1);
       last = time;
-      lantern.emissiveIntensity = night ? 2 : 0;
+      lantern.emissiveIntensity = night && lightingEffects ? 2 : 0;
       mistMat.opacity = night ? 0.3 : 0.18;
       for (const m of mist) {
         m.mesh.position.x += m.speed * dt;
@@ -243,27 +245,6 @@ function buildOcean(): Scenery {
   const rng = new Rng(0x0cea17);
   const batch = new Batch();
   const group = new THREE.Group();
-
-  // Clouds sit beyond the fog range, so they opt out of fog to stay visible. They are
-  // seen from below, where only the dim ground light reaches, so they glow slightly.
-  const storm = [
-    flatMat('#56616f', { fog: false, emissive: '#dfeaff', emissiveIntensity: 0 }),
-    flatMat('#6c7888', { fog: false, emissive: '#dfeaff', emissiveIntensity: 0 }),
-  ];
-  const fair = flatMat('#f3f9fc', { fog: false, emissive: '#f3f9fc', emissiveIntensity: 0.5 });
-  const cloud = (x: number, y: number, z: number, blobs: number, size: [number, number], mats: THREE.Material[]) => {
-    for (let i = 0; i < blobs; i++) {
-      const r = rng.range(size[0], size[1]);
-      const geo = jitter(new THREE.IcosahedronGeometry(r, 1), rng, r * 0.14);
-      batch.add(geo, rng.pick(mats), x + rng.range(-38, 38), y + rng.range(-5, 5), z + rng.range(-8, 8), { sy: 0.45 });
-    }
-  };
-  // The storm front fills the left of the sky; the right is still clear.
-  cloud(-160, 52, -168, 9, [16, 28], storm);
-  cloud(-80, 60, -176, 9, [16, 28], storm);
-  cloud(-10, 52, -170, 7, [14, 24], storm);
-  cloud(110, 60, -172, 4, [9, 15], [fair]);
-  cloud(190, 52, -168, 3, [8, 13], [fair]);
 
   const stack = flatMat('#3f4a55');
   for (const [x, z] of [[-118, -92], [-64, -98], [38, -106], [128, -88]]) {
@@ -287,17 +268,46 @@ function buildOcean(): Scenery {
   lampRoom.position.set(lx, 18.2, lz);
   group.add(lampRoom);
 
+  // Atmospheric clouds are shared by every map. Keep occasional ocean sheet
+  // lightning as a soft localized glow, without another polygon cloud layer.
+  const flashCanvas = document.createElement('canvas');
+  flashCanvas.width = flashCanvas.height = 64;
+  const ctx = flashCanvas.getContext('2d')!;
+  const glow = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  glow.addColorStop(0, 'rgba(215,230,255,1)');
+  glow.addColorStop(0.35, 'rgba(190,215,255,0.45)');
+  glow.addColorStop(1, 'rgba(170,205,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, 64, 64);
+  const flashTexture = new THREE.CanvasTexture(flashCanvas);
+  flashTexture.colorSpace = THREE.SRGBColorSpace;
+  const flashMaterial = new THREE.MeshBasicMaterial({
+    map: flashTexture, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+    depthWrite: false, fog: false,
+  });
+  const flashSheet = new THREE.Mesh(new THREE.PlaneGeometry(170, 75), flashMaterial);
+  flashSheet.position.set(-55, 38, -140);
+  flashSheet.visible = false;
+  group.add(flashSheet);
+
   let flash = 0;
+  let lastTime = 0;
+  let lastSlot = -1;
   return {
     group,
-    update(time, night) {
+    update(time, night, weather, lightingEffects = true) {
       // Sheet lightning: a rare deterministic strike that decays over a few frames.
       const slot = Math.floor(time * 4);
       const roll = Math.abs(Math.sin(slot * 12.9898) * 43758.5453) % 1;
-      flash = Math.max(flash * 0.85, roll > 0.965 ? 1 : 0);
-      for (const m of storm) m.emissiveIntensity = 0.14 + flash * 0.9;
+      const dt = Math.min(Math.max(time - lastTime, 0), 0.1);
+      if (dt > 0) flash = Math.max(flash * Math.exp(-8 * dt), slot !== lastSlot && roll > 0.965 ? 1 : 0);
+      lastTime = time;
+      lastSlot = slot;
+      const stormStrength = lightingEffects ? weather?.storm ?? 1 : 0;
+      flashMaterial.opacity = flash * stormStrength * 0.22;
+      flashSheet.visible = flashMaterial.opacity > 0.005;
       // The lamp turns: bright when it sweeps past the viewer.
-      beacon.emissiveIntensity = night ? 0.6 + Math.max(0, Math.sin(time * 1.6)) * 2.4 : 0;
+      beacon.emissiveIntensity = night && lightingEffects ? 0.6 + Math.max(0, Math.sin(time * 1.6)) * 2.4 : 0;
     },
   };
 }

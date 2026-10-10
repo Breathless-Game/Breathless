@@ -12,6 +12,7 @@
     <canvas id="scene"></canvas>
 
     <div id="hud" class="hidden">
+      <div id="time-of-day" class="panel">Morning · 09:00</div>
       <section id="breath" class="panel">
         <div class="row">
           <span id="breath-chip" class="chip breathing">BREATHING</span>
@@ -144,7 +145,26 @@
         <div id="settings" class="hidden">
           <h2>Settings</h2>
           <label class="setting" id="set-input-row"><span>Breath input</span><select id="set-input"></select></label>
-          <label class="setting"><span>Night mode</span><input type="checkbox" id="set-night" /></label>
+          <label class="setting">
+            <span>Time of day</span>
+            <select id="set-time">
+              <option value="cycle">Natural cycle</option>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="night">Night</option>
+            </select>
+          </label>
+          <label class="setting"><span>Lighting effects</span><input type="checkbox" id="set-lighting" /></label>
+          <label class="setting">
+            <span>Weather</span>
+            <select id="set-weather">
+              <option value="auto">Natural weather</option>
+              <option value="clear">Clear</option>
+              <option value="cloudy">Cloudy</option>
+              <option value="rain">Rain</option>
+              <option value="storm">Storm</option>
+            </select>
+          </label>
           <label class="setting">
             <span>Render quality</span>
             <select id="set-quality">
