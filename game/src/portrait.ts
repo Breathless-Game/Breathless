@@ -47,6 +47,11 @@ function renderFish(spec: FishSpec, size: number): HTMLCanvasElement {
   return r.domElement;
 }
 
+/** Transparent render at any size, for UI sprites. Not cached: call once and keep the result. */
+export function fishSprite(spec: FishSpec, size: number): string {
+  return renderFish(spec, size).toDataURL('image/png');
+}
+
 const iconCache = new Map<string, string>();
 
 export function fishIcon(spec: FishSpec): string {

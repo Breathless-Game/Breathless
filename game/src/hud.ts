@@ -81,6 +81,22 @@ export class Hud {
     ctx.stroke();
   }
 
+  /** Rebuild the depth gauge for a map: one label per open zone, tinted with that map's water. */
+  setZones(zones: { label: string; top: number; bottom: number }[], maxDepth: number, water: string[]) {
+    const gauge = $('depth');
+    gauge.querySelectorAll('.zone').forEach((el) => el.remove());
+    gauge.style.background = `linear-gradient(${water.join(', ')})`;
+    const tint = ['', 'reef', 'abyss'];
+    zones.forEach((z, i) => {
+      const el = document.createElement('div');
+      el.className = `zone ${tint[i] ?? ''}`.trim();
+      el.style.setProperty('--top', `${(z.top / maxDepth) * 100}%`);
+      el.style.setProperty('--h', `${((z.bottom - z.top) / maxDepth) * 100}%`);
+      el.textContent = z.label;
+      gauge.insertBefore(el, this.depthMarker);
+    });
+  }
+
   setDepth(depth: number, maxDepth: number) {
     const d = Math.max(0, depth);
     this.depthMarker.style.top = `${Math.min(100, (d / maxDepth) * 100)}%`;
