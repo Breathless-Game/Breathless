@@ -3,7 +3,7 @@
   "private": true,
   "license": "ISC",
   "scripts": {
-    "fixtures": "solana program dump -u devnet CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d tests/fixtures/mpl_core.so && solana program dump -u devnet metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s tests/fixtures/mpl_token_metadata.so",
+    "fixtures": "mkdir -p tests/fixtures && solana program dump -u devnet CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d tests/fixtures/mpl_core.so && solana program dump -u devnet metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s tests/fixtures/mpl_token_metadata.so",
     "test": "anchor test",
     "init:devnet": "tsx scripts/init-devnet.ts",
     "e2e:devnet": "tsx scripts/e2e-devnet.ts",
