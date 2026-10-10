@@ -354,6 +354,7 @@ function goToMenu() {
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
   world.setLightingEffects(s.lightingEffects);
+  world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -389,14 +390,18 @@ const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
 const timeLabel = document.getElementById('time-of-day')!;
 let displayedMinute = -1;
+let displayedWeather = '';
 
 function updateTimeLabel() {
   const minute = Math.round(world.dayCycle.hour * 60) % (24 * 60);
-  if (minute === displayedMinute) return;
+  const weather = world.weather.state.kind;
+  if (minute === displayedMinute && weather === displayedWeather) return;
   displayedMinute = minute;
+  displayedWeather = weather;
   const hour = Math.floor(minute / 60);
   const period = world.night ? 'Night' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Dusk';
-  timeLabel.textContent = `${period} · ${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+  const weatherLabels = { clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain', storm: 'Storm' };
+  timeLabel.textContent = `${period} · ${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')} · ${weatherLabels[weather]}`;
 }
 
 function update(dt: number, time: number) {
@@ -460,7 +465,7 @@ function update(dt: number, time: number) {
 
   diver.update(dt, time, -diver.pos.y);
   for (const f of fishes) f.update(dt, time, diver.pos);
-  world.update(time, camera.position.y);
+  world.update(time, camera.position.y, camera.position.x);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
@@ -490,7 +495,7 @@ function frame() {
     time += dt;
     update(dt, time);
   } else {
-    world.updateLighting(time, camera.position.y);
+    world.updateLighting(time, camera.position.y, camera.position.x);
   }
   updateTimeLabel();
   renderer.render(scene, camera);

@@ -17,6 +17,8 @@ export interface RenderQuality {
   decorationHz: number;
   waterDetail: 0 | 1 | 2;
   skyRefreshHz: number;
+  skyWidth: number;
+  rainCount: number;
 }
 
 export const RENDER_QUALITY: Record<QualityLevel, RenderQuality> = {
@@ -24,16 +26,19 @@ export const RENDER_QUALITY: Record<QualityLevel, RenderQuality> = {
     maxPixelRatio: 1, maxPixels: 1280 * 720, antialias: false,
     kelpCount: 12, rayCount: 4, snowCount: 300,
     surfaceSegments: [30, 8], decorationHz: 20, waterDetail: 0, skyRefreshHz: 5,
+    skyWidth: 128, rainCount: 160,
   },
   medium: {
     maxPixelRatio: 1.5, maxPixels: 1920 * 1080, antialias: true,
     kelpCount: 30, rayCount: 8, snowCount: 700,
     surfaceSegments: [60, 16], decorationHz: 30, waterDetail: 1, skyRefreshHz: 10,
+    skyWidth: 192, rainCount: 420,
   },
   high: {
     maxPixelRatio: 2, maxPixels: 3840 * 2160, antialias: true,
     kelpCount: 55, rayCount: 14, snowCount: 1400,
     surfaceSegments: [90, 24], decorationHz: 60, waterDetail: 2, skyRefreshHz: 15,
+    skyWidth: 256, rainCount: 800,
   },
 };
 
