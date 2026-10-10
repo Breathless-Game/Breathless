@@ -16,6 +16,7 @@ export class Diver {
   private legL: THREE.Group;
   private legR: THREE.Group;
   private netArm: THREE.Group;
+  private netMouth: THREE.Group;
   private netTip: THREE.Object3D;
   private netPointWorld = new THREE.Vector3();
   private netSwing = 0;
@@ -59,6 +60,7 @@ export class Diver {
     // the shoulder so the whole tool follows the swing animation.
     const net = buildFishingNetMesh();
     this.netArm = net.group;
+    this.netMouth = net.mouth;
     this.netArm.position.set(0.6, 0, 0.3);
     this.netTip = net.tip;
     this.body.add(this.netArm);
@@ -89,8 +91,8 @@ export class Diver {
 
   /** Make the visible hoop grow with the equipped net tier. */
   setNetLevel(level: number) {
-    const scale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.12;
-    this.netArm.scale.setScalar(scale);
+    const scale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.15;
+    this.netMouth.scale.setScalar(scale);
   }
 
   swing() {

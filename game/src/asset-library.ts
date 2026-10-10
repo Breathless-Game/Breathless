@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import fishingNetGlbUrl from '../../assets/gear/fishing-net-faceted.glb?url';
+import fishingNetPreviewUrl from '../../assets/gear/fishing-net-faceted-preview.png?url';
 import { RARITY, RARITY_ORDER, ZONES, rollFish, speciesProfile, type FishSpec, type SpeciesProfile } from './fish';
 import { buildFishingNetMesh } from './gear';
 import { fishCard, fishSprite } from './portrait';
@@ -64,7 +67,12 @@ function netSprite(width: number, height: number, backdrop: boolean): string {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(1);
   renderer.setSize(width, height, false);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
   const scene = new THREE.Scene();
+  const environment = new RoomEnvironment();
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envTarget = pmrem.fromScene(environment);
+  scene.environment = envTarget.texture;
   scene.add(new THREE.HemisphereLight('#ffffff', '#33415c', 1.6));
   const key = new THREE.DirectionalLight('#ffffff', 2.6);
   key.position.set(2, 3, 4);
@@ -96,6 +104,16 @@ function netSprite(width: number, height: number, backdrop: boolean): string {
     ctx.fillRect(0, 0, width, height);
   }
   ctx.drawImage(renderer.domElement, 0, 0);
+  envTarget.dispose();
+  environment.dispose();
+  pmrem.dispose();
+  net.traverse((object) => {
+    if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) {
+      object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => material.dispose());
+    }
+  });
   renderer.dispose();
   return out.toDataURL('image/png');
 }
@@ -143,6 +161,16 @@ async function main() {
     tile('Fishing rod', ['buildFishingNetMesh()', 'transparent'], netSprite(1024, 512, false), 'fishing-net.png'),
     tile('Fishing rod', ['buildFishingNetMesh()', 'on dark water'], netSprite(1024, 512, true), 'fishing-net-dark.png'),
   );
+  const faceted = tile('Faceted 3D fishing net', ['Lv1 · PBR · per-face normals', 'Reusable GLB model and rendered review'], fishingNetPreviewUrl, 'fishing-net-faceted-preview.png');
+  const glbLink = document.createElement('a');
+  glbLink.href = fishingNetGlbUrl;
+  glbLink.download = 'fishing-net-faceted.glb';
+  glbLink.textContent = '↓ fishing-net-faceted.glb';
+  const previewLink = document.createElement('a');
+  previewLink.href = './gear-preview.html';
+  previewLink.textContent = 'Rotate model / preview Lv1–Lv3';
+  faceted.querySelector('figcaption')!.append(glbLink, previewLink);
+  document.getElementById('gear')!.append(faceted);
 
   const example = specimens.find((s) => s.slug === CARD_EXAMPLE);
   if (example) {
