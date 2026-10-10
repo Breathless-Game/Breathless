@@ -57,6 +57,7 @@ class Session {
     this.sim = FORCE_SIM || !API_KEY;
     this.simHolding = false;
     this.sdk = null;
+    this.restarting = null;
     this.status = 'idle';
     this.hint = '';
     this.rate = null;
@@ -72,7 +73,7 @@ class Session {
   // ---- Presage ----------------------------------------------------------
 
   #ensureSdk() {
-    if (this.sdk || this.sim) return;
+    if (this.sdk || this.sim || this.restarting) return;
     this.status = 'starting';
     const sdk = new SmartSpectraSDK({
       apiKey: API_KEY,
@@ -97,16 +98,24 @@ class Session {
     this.sdk = sdk;
   }
 
-  async #restartSdk() {
+  // Native SDK state is process-global: a new session built while the old one is
+  // still tearing down gets its model download cancelled (error 8). Frames that
+  // arrive during teardown are dropped; the next one after it builds a fresh SDK.
+  #restartSdk() {
+    if (this.restarting) return this.restarting;
     const old = this.sdk;
     this.sdk = null;
     this.lastFrameUs = 0;
-    if (old) {
+    this.restarting = (async () => {
+      if (!old) return;
       try {
         await old.stopAsync();
         await old.destroy();
       } catch {}
-    }
+    })().finally(() => {
+      this.restarting = null;
+    });
+    return this.restarting;
   }
 
   #onMetrics(buf) {
