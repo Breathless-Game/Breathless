@@ -42,7 +42,7 @@ export const ZONES = [
 
 export type Zone = (typeof ZONES)[number];
 
-type Archetype = 'slim' | 'perch' | 'disc' | 'long' | 'bulky';
+export type Archetype = 'slim' | 'perch' | 'disc' | 'long' | 'bulky';
 
 const SHAPES: Record<Archetype, { len: number; height: number; width: number; tail: number; dorsal: number }> = {
   slim: { len: 1.5, height: 0.42, width: 0.28, tail: 0.45, dorsal: 0.25 },
@@ -52,14 +52,83 @@ const SHAPES: Record<Archetype, { len: number; height: number; width: number; ta
   bulky: { len: 1.8, height: 1.1, width: 0.6, tail: 0.75, dorsal: 0.4 },
 };
 
-const SPECIES: Record<Rarity, [string, Archetype][]> = {
-  common: [['Sand Minnow', 'slim'], ['Grey Perch', 'perch'], ['Mud Goby', 'slim']],
-  uncommon: [['Striped Wrasse', 'slim'], ['Coral Chromis', 'perch'], ['Silver Snapper', 'perch']],
-  rare: [['Azure Tang', 'disc'], ['Neon Cardinal', 'slim'], ['Spotted Grouper', 'bulky']],
-  epic: [['Violet Lionfish', 'perch'], ['Ember Triggerfish', 'disc'], ['Ghost Angelfish', 'disc']],
-  legendary: [['Golden Koi Dragon', 'long'], ['Abyssal Sunfish', 'bulky'], ['Crowned Sailfish', 'long']],
-  mythic: [['Moonfin Leviathan', 'long'], ['Prism Coelacanth', 'bulky']],
+export type FishPattern = 'solid' | 'stripes' | 'spots' | 'mask' | 'glow';
+
+/**
+ * Species-level traits are deliberately data, rather than branches in the
+ * mesh builder. This keeps new species cheap to add and makes every fish
+ * visually and behaviourally distinct while preserving seed determinism.
+ */
+export interface SpeciesProfile {
+  species: string;
+  archetype: Archetype;
+  /** Multipliers applied to the archetype body at the tail and head. */
+  tailTaper: number;
+  headVolume: number;
+  bodyWidth: number;
+  dorsal: number;
+  pectoral: number;
+  tailSpread: number;
+  pattern: FishPattern;
+  /** Movement multipliers relative to rarity defaults. */
+  swimSpeed: number;
+  turnRate: number;
+  fleeRadius: number;
+}
+
+const SPECIES_BY_RARITY: Record<Rarity, SpeciesProfile[]> = {
+  common: [
+    { species: 'Sand Minnow', archetype: 'slim', tailTaper: 0.58, headVolume: 0.82, bodyWidth: 0.82, dorsal: 0.7, pectoral: 0.75, tailSpread: 0.9, pattern: 'solid', swimSpeed: 1.18, turnRate: 3.4, fleeRadius: 0.95 },
+    { species: 'Grey Perch', archetype: 'perch', tailTaper: 0.72, headVolume: 1.08, bodyWidth: 1.0, dorsal: 1.1, pectoral: 1.0, tailSpread: 1.0, pattern: 'stripes', swimSpeed: 0.94, turnRate: 2.5, fleeRadius: 1.0 },
+    { species: 'Mud Goby', archetype: 'slim', tailTaper: 0.8, headVolume: 1.2, bodyWidth: 1.15, dorsal: 0.5, pectoral: 1.3, tailSpread: 0.8, pattern: 'spots', swimSpeed: 0.78, turnRate: 2.1, fleeRadius: 0.9 },
+  ],
+  uncommon: [
+    { species: 'Striped Wrasse', archetype: 'slim', tailTaper: 0.62, headVolume: 0.98, bodyWidth: 0.9, dorsal: 1.2, pectoral: 0.9, tailSpread: 1.05, pattern: 'stripes', swimSpeed: 1.12, turnRate: 3.2, fleeRadius: 1.05 },
+    { species: 'Coral Chromis', archetype: 'perch', tailTaper: 0.7, headVolume: 0.92, bodyWidth: 0.86, dorsal: 1.0, pectoral: 0.85, tailSpread: 1.1, pattern: 'glow', swimSpeed: 1.08, turnRate: 3.0, fleeRadius: 1.1 },
+    { species: 'Silver Snapper', archetype: 'perch', tailTaper: 0.65, headVolume: 1.14, bodyWidth: 1.05, dorsal: 0.85, pectoral: 1.05, tailSpread: 0.95, pattern: 'mask', swimSpeed: 0.98, turnRate: 2.7, fleeRadius: 1.02 },
+  ],
+  rare: [
+    { species: 'Azure Tang', archetype: 'disc', tailTaper: 0.7, headVolume: 0.9, bodyWidth: 1.0, dorsal: 1.2, pectoral: 0.85, tailSpread: 1.2, pattern: 'mask', swimSpeed: 1.06, turnRate: 2.8, fleeRadius: 1.05 },
+    { species: 'Neon Cardinal', archetype: 'slim', tailTaper: 0.56, headVolume: 0.85, bodyWidth: 0.78, dorsal: 0.8, pectoral: 0.8, tailSpread: 1.25, pattern: 'stripes', swimSpeed: 1.25, turnRate: 3.7, fleeRadius: 1.14 },
+    { species: 'Spotted Grouper', archetype: 'bulky', tailTaper: 0.82, headVolume: 1.22, bodyWidth: 1.08, dorsal: 0.8, pectoral: 1.1, tailSpread: 0.85, pattern: 'spots', swimSpeed: 0.82, turnRate: 2.0, fleeRadius: 0.96 },
+  ],
+  epic: [
+    { species: 'Violet Lionfish', archetype: 'perch', tailTaper: 0.72, headVolume: 0.96, bodyWidth: 0.95, dorsal: 1.9, pectoral: 1.45, tailSpread: 1.0, pattern: 'stripes', swimSpeed: 0.9, turnRate: 2.4, fleeRadius: 1.15 },
+    { species: 'Ember Triggerfish', archetype: 'disc', tailTaper: 0.74, headVolume: 1.18, bodyWidth: 1.12, dorsal: 1.0, pectoral: 0.9, tailSpread: 0.9, pattern: 'mask', swimSpeed: 0.88, turnRate: 2.2, fleeRadius: 1.1 },
+    { species: 'Ghost Angelfish', archetype: 'disc', tailTaper: 0.64, headVolume: 0.88, bodyWidth: 0.92, dorsal: 1.45, pectoral: 1.25, tailSpread: 1.08, pattern: 'glow', swimSpeed: 1.0, turnRate: 2.6, fleeRadius: 1.2 },
+  ],
+  legendary: [
+    { species: 'Golden Koi Dragon', archetype: 'long', tailTaper: 0.5, headVolume: 1.14, bodyWidth: 0.9, dorsal: 0.7, pectoral: 1.1, tailSpread: 1.35, pattern: 'stripes', swimSpeed: 0.94, turnRate: 2.0, fleeRadius: 1.12 },
+    { species: 'Abyssal Sunfish', archetype: 'bulky', tailTaper: 0.9, headVolume: 1.28, bodyWidth: 1.2, dorsal: 0.65, pectoral: 0.8, tailSpread: 0.72, pattern: 'glow', swimSpeed: 0.7, turnRate: 1.6, fleeRadius: 1.25 },
+    { species: 'Crowned Sailfish', archetype: 'long', tailTaper: 0.46, headVolume: 0.82, bodyWidth: 0.72, dorsal: 2.1, pectoral: 0.85, tailSpread: 1.5, pattern: 'mask', swimSpeed: 1.2, turnRate: 2.3, fleeRadius: 1.3 },
+  ],
+  mythic: [
+    { species: 'Moonfin Leviathan', archetype: 'long', tailTaper: 0.42, headVolume: 1.2, bodyWidth: 0.88, dorsal: 1.35, pectoral: 1.2, tailSpread: 1.55, pattern: 'glow', swimSpeed: 0.88, turnRate: 1.8, fleeRadius: 1.35 },
+    { species: 'Prism Coelacanth', archetype: 'bulky', tailTaper: 0.78, headVolume: 1.12, bodyWidth: 1.08, dorsal: 1.15, pectoral: 1.35, tailSpread: 1.05, pattern: 'spots', swimSpeed: 0.76, turnRate: 1.9, fleeRadius: 1.3 },
+  ],
 };
+
+const SPECIES_BY_NAME = new Map(
+  Object.values(SPECIES_BY_RARITY).flat().map((profile) => [profile.species, profile]),
+);
+
+/** Resolve old saved fish that only contain the original species/archetype fields. */
+export function speciesProfile(spec: Pick<FishSpec, 'species' | 'archetype'>): SpeciesProfile {
+  return SPECIES_BY_NAME.get(spec.species) ?? {
+    species: spec.species,
+    archetype: spec.archetype,
+    tailTaper: 0.7,
+    headVolume: 1,
+    bodyWidth: 1,
+    dorsal: 1,
+    pectoral: 1,
+    tailSpread: 1,
+    pattern: 'solid',
+    swimSpeed: 1,
+    turnRate: 2.5,
+    fleeRadius: 1,
+  };
+}
 
 const EPITHETS: Record<Rarity, string[]> = {
   common: ['Plain', 'Dusty', 'Little', 'Shy'],
@@ -103,7 +172,8 @@ export interface FishSpec {
 export function rollFish(seed: number, zone: Zone, depthM: number): FishSpec {
   const rng = new Rng(seed);
   const rarity = rng.weighted(zone.odds);
-  const [species, archetype] = rng.pick(SPECIES[rarity]);
+  const profile = rng.pick(SPECIES_BY_RARITY[rarity]);
+  const { species, archetype } = profile;
   const pal = PALETTE[rarity];
   const hue = rng.range(...pal.hues);
   const rarityIdx = RARITY_ORDER.indexOf(rarity);
@@ -162,6 +232,7 @@ export interface FishMesh {
 
 export function buildFishMesh(spec: FishSpec): FishMesh {
   const shape = SHAPES[spec.archetype];
+  const profile = speciesProfile(spec);
   const L = shape.len;
   const body = hsl(spec.hue, spec.sat, spec.light);
   const back = hsl(spec.hue, spec.sat, spec.light * 0.7);
@@ -176,17 +247,22 @@ export function buildFishMesh(spec: FishSpec): FishMesh {
   for (let i = 0; i <= RINGS; i++) {
     const t = i / RINGS;
     const x = -L / 2 + t * L;
-    const profile = Math.sin(Math.PI * Math.pow(t, 0.75)) * 0.92 + 0.08;
+    const baseProfile = Math.sin(Math.PI * Math.pow(t, 0.75)) * 0.92 + 0.08;
+    const tailTaper = THREE.MathUtils.lerp(profile.tailTaper, 1, Math.min(1, t / 0.35));
+    const headVolume = t < 0.58 ? 1 : THREE.MathUtils.lerp(1, profile.headVolume, (t - 0.58) / 0.42);
     const ring: THREE.Vector3[] = [];
     for (let j = 0; j < SIDES; j++) {
       const a = (j / SIDES) * Math.PI * 2 + Math.PI / 2;
-      ring.push(new THREE.Vector3(x, Math.sin(a) * shape.height * 0.5 * profile, Math.cos(a) * shape.width * 0.5 * profile));
+      ring.push(new THREE.Vector3(
+        x,
+        Math.sin(a) * shape.height * 0.5 * baseProfile * tailTaper * headVolume,
+        Math.cos(a) * shape.width * profile.bodyWidth * 0.5 * baseProfile * tailTaper * headVolume,
+      ));
     }
     rings.push(ring);
   }
   const fb = new FaceBuilder();
   for (let i = 0; i < RINGS; i++) {
-    const striped = spec.stripes > 0 && i > 0 && i < RINGS - 1 && i % 2 === (spec.stripes % 2);
     for (let j = 0; j < SIDES; j++) {
       const a = rings[i][j];
       const b = rings[i][(j + 1) % SIDES];
@@ -194,7 +270,23 @@ export function buildFishMesh(spec: FishSpec): FishMesh {
       const d = rings[i + 1][j];
       const midY = (a.y + b.y + c.y + d.y) / 4;
       let color = midY > shape.height * 0.12 ? back : midY < -shape.height * 0.12 ? belly : body;
-      if (striped && midY > -shape.height * 0.2) color = accent;
+      const t = (i + 0.5) / RINGS;
+      const upperBody = midY > -shape.height * 0.2;
+      const patterned = (() => {
+        switch (profile.pattern) {
+          case 'stripes':
+            return spec.stripes > 0 && i > 0 && i < RINGS - 1 && i % 2 === (spec.stripes % 2);
+          case 'spots':
+            return upperBody && ((i * 7 + j * 3 + Math.floor(spec.hue)) % 11 < 3);
+          case 'mask':
+            return upperBody && t > 0.64;
+          case 'glow':
+            return upperBody && (i + j) % 3 === 0;
+          default:
+            return false;
+        }
+      })();
+      if (patterned) color = accent;
       fb.tri(a, c, b, color);
       fb.tri(a, d, c, color);
     }
@@ -210,13 +302,13 @@ export function buildFishMesh(spec: FishSpec): FishMesh {
   const dorsalBase = rings[3][0].y;
   const d1 = new THREE.Vector3(-L * 0.15, dorsalBase - 0.02, 0);
   const d2 = new THREE.Vector3(L * 0.2, dorsalBase - 0.02, 0);
-  const d3 = new THREE.Vector3(-L * 0.12, dorsalBase + shape.dorsal, 0);
-  fb.tri(d1, d2, d3, spec.stripes ? accent : fin);
-  fb.tri(d2, d1, d3, spec.stripes ? accent : fin);
+  const d3 = new THREE.Vector3(-L * 0.12, dorsalBase + shape.dorsal * profile.dorsal, 0);
+  fb.tri(d1, d2, d3, profile.pattern === 'stripes' ? accent : fin);
+  fb.tri(d2, d1, d3, profile.pattern === 'stripes' ? accent : fin);
   // Pectoral fins.
   for (const side of [1, -1]) {
     const p1 = new THREE.Vector3(L * 0.15, -shape.height * 0.1, side * shape.width * 0.45);
-    const p2 = new THREE.Vector3(L * 0.0, -shape.height * 0.25, side * (shape.width * 0.45 + 0.22));
+    const p2 = new THREE.Vector3(L * 0.0, -shape.height * 0.25, side * (shape.width * 0.45 + 0.22 * profile.pectoral));
     const p3 = new THREE.Vector3(-L * 0.05, -shape.height * 0.05, side * shape.width * 0.45);
     fb.tri(p1, p2, p3, fin);
     fb.tri(p2, p1, p3, fin);
@@ -229,19 +321,19 @@ export function buildFishMesh(spec: FishSpec): FishMesh {
     roughness: 0.55,
     metalness: spec.rarity === 'legendary' ? 0.45 : 0.1,
     emissive: hsl(spec.hue, 1, 0.5),
-    emissiveIntensity: emissive,
+    emissiveIntensity: Math.max(emissive, profile.pattern === 'glow' ? 0.18 : 0),
     side: THREE.DoubleSide,
   });
   const bodyMesh = new THREE.Mesh(fb.build(), material);
 
   // Tail on its own pivot so it can wag.
   const tb = new FaceBuilder();
-  const tl = shape.tail;
+  const tl = shape.tail * profile.tailSpread;
   const t0 = new THREE.Vector3(0, 0, 0);
-  const tUp = new THREE.Vector3(-tl, tl * 0.75, 0);
+  const tUp = new THREE.Vector3(-tl, tl * (0.7 + profile.tailSpread * 0.08), 0);
   const tMid = new THREE.Vector3(-tl * 0.6, 0, 0);
-  const tDown = new THREE.Vector3(-tl, -tl * 0.75, 0);
-  const tailColor = spec.stripes ? accent : fin;
+  const tDown = new THREE.Vector3(-tl, -tl * (0.7 + profile.tailSpread * 0.08), 0);
+  const tailColor = profile.pattern === 'stripes' || profile.pattern === 'mask' ? accent : fin;
   tb.tri(t0, tMid, tUp, tailColor);
   tb.tri(t0, tUp, tMid, tailColor);
   tb.tri(t0, tDown, tMid, tailColor);
@@ -278,6 +370,7 @@ export class Fish {
 
   constructor(spec: FishSpec, zone: Zone, x: number, y: number, worldHalfWidth: number) {
     this.spec = spec;
+    this.profile = speciesProfile(spec);
     this.zone = zone;
     this.mesh = buildFishMesh(spec);
     this.rng = new Rng(spec.seed ^ 0xabcdef);
@@ -289,6 +382,10 @@ export class Fish {
   }
 
   private halfWidth: number;
+  private readonly profile: SpeciesProfile;
+  private readonly toDiver = new THREE.Vector3();
+  private readonly toTarget = new THREE.Vector3();
+  private readonly desired = new THREE.Vector3();
 
   private pickTarget() {
     const span = 18;
@@ -301,20 +398,24 @@ export class Fish {
 
   update(dt: number, time: number, diverPos: THREE.Vector3) {
     const r = RARITY[this.spec.rarity];
-    const toDiver = this.pos.clone().sub(diverPos);
+    const toDiver = this.toDiver.copy(this.pos).sub(diverPos);
     toDiver.z = 0;
     const dist = toDiver.length();
-    let speed = r.speed;
-    const desired = new THREE.Vector3();
-    if (dist < r.flee) {
+    const fleeRadius = r.flee * this.profile.fleeRadius;
+    const speed = r.speed * this.profile.swimSpeed;
+    const desired = this.desired;
+    if (dist < fleeRadius) {
       // Flee, harder the closer the diver gets.
-      desired.copy(toDiver.normalize()).multiplyScalar(speed * (1.6 + (r.flee - dist) / r.flee));
+      desired.copy(toDiver.normalize()).multiplyScalar(speed * (1.6 + (fleeRadius - dist) / fleeRadius));
     } else {
-      const toTarget = this.target.clone().sub(this.pos);
-      if (toTarget.length() < 1.5) this.pickTarget();
+      const toTarget = this.toTarget.copy(this.target).sub(this.pos);
+      if (toTarget.length() < 1.5) {
+        this.pickTarget();
+        toTarget.copy(this.target).sub(this.pos);
+      }
       desired.copy(toTarget.normalize()).multiplyScalar(speed * 0.55);
     }
-    this.vel.lerp(desired, Math.min(1, dt * 2.5));
+    this.vel.lerp(desired, Math.min(1, dt * this.profile.turnRate));
     this.pos.addScaledVector(this.vel, dt);
     // Stay inside the zone band (fish can be chased a little out of it).
     const top = -(this.zone.top + 0.5);
@@ -328,7 +429,7 @@ export class Fish {
     const targetYaw = this.facing > 0 ? 0 : Math.PI;
     g.rotation.y += (targetYaw - g.rotation.y) * Math.min(1, dt * 6);
     g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5) * this.facing;
-    const wag = 6 + this.vel.length() * 2.5;
+    const wag = (6 + this.vel.length() * 2.5) * (0.85 + this.profile.swimSpeed * 0.15);
     this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * 0.5;
     if (this.spec.rarity === 'mythic') {
       this.mesh.material.emissive.setHSL((time * 0.15 + this.phase) % 1, 1, 0.5);
