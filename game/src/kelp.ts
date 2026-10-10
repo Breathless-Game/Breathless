@@ -37,7 +37,15 @@ interface Frond {
 /** Most growth stays long and narrow; broad fronds are accents within a bed. */
 export function kelpTypeForSeed(seed: number): KelpType {
   const sample = new Rng(seed ^ 0x6b656c70).next();
-  return sample < 0.55 ? 'ribbon' : sample < 0.85 ? 'legacy' : 'frond';
+  return sample < 0.30 ? 'ribbon' : sample < 0.85 ? 'legacy' : 'frond';
+}
+
+/** Habitat generation applies this once, then clamps to the available water
+ * depth. Geometry receives that final height; it never stretches it again. */
+export function kelpHeightScale(seed: number, type: KelpType = kelpTypeForSeed(seed)): number {
+  const growth = new Rng(seed ^ 0x67726f77);
+  return type === 'legacy' ? growth.range(1.55, 1.85)
+    : type === 'ribbon' ? growth.range(1.18, 1.36) : 1;
 }
 
 /** All three forms share a single GPU-deformed mesh, including the older
@@ -113,6 +121,8 @@ export function buildKelpGeometry(
     const rng = new Rng(plant.seed);
     const pigmentRng = new Rng(plant.seed ^ 0x7069676d);
     const h = plant.height;
+    // Taller straps gain length while retaining thin blades and small leaves.
+    const bladeHeight = h / Math.pow(kelpHeightScale(plant.seed, type), 0.85);
     tallest = Math.max(tallest, h);
     const pigment = palette?.length
       ? new THREE.Color(pigmentRng.pick(palette))
@@ -125,14 +135,14 @@ export function buildKelpGeometry(
     const facing = rng.range(-0.75, 0.75);
     const primary: Frond = {
       base: new THREE.Vector3(), height: h,
-      width: h * rng.range(type === 'frond' ? 0.065 : 0.024, type === 'frond' ? 0.09 : 0.037),
+      width: bladeHeight * rng.range(type === 'frond' ? 0.065 : 0.024, type === 'frond' ? 0.09 : 0.037),
       reach: h * rng.range(-0.075, 0.075), angle: facing,
       curl: rng.range(0.035, 0.065) * h * (rng.next() < 0.5 ? -1 : 1), arc: 0,
       twist: rng.range(-0.5, 0.5), shade: 1, strap: type !== 'frond',
     };
     const center = (frond: Frond, t: number) => {
       const reach = frond.reach * (frond.arc > 1 ? t * (0.72 + 0.28 * t) : t * t);
-      const ribbonCurve = Math.sin(t * Math.PI * 1.65) * t * frond.curl;
+      const ribbonCurve = Math.sin(t * Math.PI * (type === 'legacy' ? 2 : 1.65)) * t * frond.curl;
       const lift = frond.arc > 0 ? Math.sin(t * frond.arc) / Math.sin(frond.arc) : t;
       return new THREE.Vector3(
         frond.base.x + Math.cos(frond.angle) * (reach + ribbonCurve),
@@ -217,7 +227,7 @@ export function buildKelpGeometry(
       // joints instead of individually rotating planes and detached hinges.
       const attachments = Array.from({ length: 6 }, (_, f) => 0.18 + f * 0.115 + rng.range(-0.018, 0.018));
       const leaves = attachments.map((t, f) => ({
-        t, side: f % 2 ? 1 : -1, length: h * rng.range(0.036, 0.057),
+        t, side: f % 2 ? 1 : -1, length: bladeHeight * rng.range(0.036, 0.057),
         angle: facing + rng.range(-0.25, 0.25), lift: rng.range(0.15, 0.5),
       }));
       const joints = leaves.flatMap(leaf => [leaf.t, leaf.t + leaf.length * 0.60 / h]);

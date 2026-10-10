@@ -15,7 +15,7 @@ async function sourceUrl(file, imports = {}) {
 const three = import.meta.resolve('three');
 const motionUrl = await sourceUrl('../src/kelp-motion.ts');
 const { kelpDisplacement } = await import(motionUrl);
-const { KelpField, buildKelpGeometry, kelpTypeForSeed } = await import(await sourceUrl('../src/kelp.ts', {
+const { KelpField, buildKelpGeometry, kelpTypeForSeed, kelpHeightScale } = await import(await sourceUrl('../src/kelp.ts', {
   three, './rng': await sourceUrl('../src/rng.ts'), './kelp-motion': motionUrl,
 }));
 const { SceneColorGrade } = await import(await sourceUrl('../src/color-grade.ts', { three }));
@@ -90,16 +90,37 @@ test('kelp current fixes roots, bends tips smoothly and remains bounded through 
   }
 });
 
-test('seeded beds contain all three stable forms with mostly narrow blades', () => {
+test('seeded beds favor legacy straps and retain the other two stable forms', () => {
   const totals = { ribbon: 0, legacy: 0, frond: 0 };
   for (let seed = 1; seed <= 300; seed++) {
     const type = kelpTypeForSeed(seed);
     assert.equal(type, kelpTypeForSeed(seed));
     totals[type]++;
   }
-  assert.ok(totals.ribbon > 120 && totals.ribbon < 200);
-  assert.ok(totals.legacy > 55 && totals.legacy < 120);
+  assert.ok(totals.ribbon > 55 && totals.ribbon < 120);
+  assert.ok(totals.legacy > 120 && totals.legacy < 200);
   assert.ok(totals.frond > 25 && totals.frond < 75);
+});
+
+test('seeded growth favors long legacy straps without stretching final geometry twice', () => {
+  for (const [type, min, max] of [['legacy', 1.55, 1.85], ['ribbon', 1.18, 1.36], ['frond', 1, 1]]) {
+    const scales = new Set();
+    for (let seed = 1; seed <= 30; seed++) {
+      const scale = kelpHeightScale(seed, type);
+      assert.ok(scale >= min && scale <= max);
+      assert.equal(scale, kelpHeightScale(seed, type));
+      scales.add(scale);
+      const height = 12 * scale;
+      const geometry = buildKelpGeometry([{ x: 0, y: -40, z: 0, height, seed, type }], hue, 1);
+      assert.ok(Math.abs(Math.max(...geometry.attributes.position.array.filter((_, i) => i % 3 === 1)) - (-40 + height)) < 1e-5,
+        'the supplied height remains the actual tip height');
+      geometry.dispose();
+    }
+    assert.equal(scales.size > 1, type !== 'frond');
+  }
+  for (let seed = 1; seed <= 30; seed++) {
+    assert.equal(kelpHeightScale(seed), kelpHeightScale(seed, kelpTypeForSeed(seed)));
+  }
 });
 
 test('quality changes preserve plant forms, tips, branch joins and seeded traits', () => {
