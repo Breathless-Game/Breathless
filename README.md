@@ -1,4 +1,4 @@
-# HackRU26 · 屏息 Breathless 🫁
+# HackRU26 · 屏息 Breathless 
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -185,7 +185,13 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
-**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. The golden **START** fish opens the start card (camera / keyboard / breath test), and the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+**Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) cuts its lines, drops it, and opens the workbench; the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
+
+**Workbench** (`workbench.ts`): a top-down wooden table. Everything drops onto it from above and collides (matter-js, table-plane physics with no gravity). The START fish is top left, the three map cards top right (chapters I / II / III, face down; a map's difficulty is the game difficulty), accessories bottom left (fins, emergency tank, headlamp), and catching gear bottom right (rod, net, bait).
+- Everything can be dragged and flung. Click a piece of gear: it zooms to the centre, the background blurs, and its description shows on the left (placeholder text for now). Click again or press any key to set it in the PACK ring in the middle (green glow = packed); do it again on packed gear to put it back in its corner. Esc cancels.
+- Click a map: the card drops into the middle, sucks in the packed gear and flips face up. Click the map itself to suck in everything on the table; the card grows to cover the screen and cuts to that map, then the start card (camera / keyboard / breath test). Click outside the map to spit the gear back out; the card flips back and returns to the top right.
+- A locked map rattles and says what it needs; the "Unlock all maps (demo)" switch is at the bottom left.
+- The packed gear is passed to the game (`loadout`), but the upgrade effects aren't wired into the dive yet.
 
 **Pause details**: the game freezes completely while paused, and switching to another tab pauses it too. If you resume underwater, there is a 3-second countdown first so you can take a breath and hold it again; otherwise the breathing you did while paused would count as "breathing underwater". Going back to the main menu releases the camera and the sensor connection. If there are fish in your net, you are asked to confirm first: the fish are lost, but the hold still goes into your health data.
 
@@ -384,6 +390,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── report.ts       health report: metric tiles, two charts, interpretation text, save as PDF, delete data
         ├── pause.ts        Esc pause menu: resume (3-second countdown underwater), settings, back to the main menu
         ├── title.ts        main menu: a Verlet rope with fish hanging on fishing lines, mouse dragging and pushing; the START / SETTINGS fish are the buttons
+        ├── workbench.ts    workbench: table physics (matter-js), inspect / pack gear, map cards that suck in, spit out, flip and transition
         ├── settings.ts     player settings (render quality, camera preview, control hints), stored in localStorage
         ├── render-quality.ts  automatic render quality: picks a starting level from the device, steps down on sustained low frame rate
         └── style.css       dark glass-style HUD
