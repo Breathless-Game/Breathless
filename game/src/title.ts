@@ -4,7 +4,11 @@
 // level on two lines (head and tail) so the name reads straight.
 // Plain 2D Verlet physics on a canvas overlay; the 3D sea keeps rendering behind.
 
-import { RARITY, rollFish, ZONES, type Archetype, type Rarity } from './fish';
+import { RARITY, rollFish, type Archetype, type Rarity } from './fish';
+
+// The title fish were picked by look under the old Abyss drop table. Keep rolling
+// them with it so retuning the in-game odds (depth-odds.ts) doesn't reshape them.
+export const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
 import { fishSprite } from './portrait';
 
 export interface TitleFish {
@@ -177,7 +181,7 @@ export class TitleScreen {
     this.name = canvas.parentElement!.querySelector('#title-name')!;
     this.fish = defs.map((def, i) => {
       const img = new Image();
-      const base = rollFish(def.seed, ZONES[2], 40);
+      const base = rollFish(def.seed, 40, TITLE_ODDS);
       const f: Hanging = {
         def,
         img,

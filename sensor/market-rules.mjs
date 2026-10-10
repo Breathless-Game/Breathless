@@ -3,8 +3,8 @@
 // check and the ledger that makes a sale idempotent. No chain or file imports,
 // so `node --test` covers all of it.
 
-// Mirror of RARITY[*].value and ZONES in game/src/fish.ts (market-rules.test.mjs
-// fails if the two drift apart).
+// Mirror of RARITY[*].value, ZONES and rewardMultiplierAt() in game/src/fish.ts
+// (market-rules.test.mjs fails if the two drift apart).
 export const RARITY_VALUE = Object.freeze({
   common: 1,
   uncommon: 3,
@@ -17,12 +17,18 @@ export const RARITY_VALUE = Object.freeze({
 export const ZONES = Object.freeze([
   { name: 'Shallows', top: 0, bottom: 18, rewardMultiplier: 1 },
   { name: 'Coral Reef', top: 18, bottom: 38, rewardMultiplier: 1.6 },
-  { name: 'The Abyss', top: 38, bottom: 58, rewardMultiplier: 2.5 },
+  { name: 'The Abyss', top: 38, bottom: 60, rewardMultiplier: 2.5 },
 ]);
 
-/** Headroom over the real 2.5x so future multipliers still sell; anything above is rejected. */
+/** Where the trench multiplier stops growing (reached at 235 m); a claimed catch value above rarity value x this is rejected. */
 export const MAX_MULTIPLIER = 6;
-/** The deepest map floor is ~60 m. Depth only picks a zone, so this is just a sanity bound. */
+/** Below the last zone (The Trench) the multiplier gains 1 every this many metres. */
+export const TRENCH_STEP_M = 50;
+/**
+ * The sea has no bottom, so the game clamps the depth it records on a fish (and writes
+ * on-chain) to this: MAX_RECORDED_DEPTH_M in game/src/fish.ts, kept equal by the tests.
+ * Odds and value stop changing well above it (350 m and 235 m).
+ */
 export const MAX_DEPTH_M = 1000;
 
 export const MPL_CORE_PROGRAM = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
@@ -43,18 +49,25 @@ export function zoneForDepth(depthM) {
   return ZONES.find((z) => depthM >= z.top && depthM < z.bottom) ?? ZONES[ZONES.length - 1];
 }
 
-/** Same formula as rollFish(): rarity value x the zone's reward multiplier. */
+/** Same as rewardMultiplierAt() in fish.ts: the zone's multiplier, then +1 per TRENCH_STEP_M below the last zone, capped. */
+export function rewardMultiplierAt(depthM) {
+  const last = ZONES[ZONES.length - 1];
+  if (depthM < last.bottom) return zoneForDepth(depthM).rewardMultiplier;
+  return Math.min(MAX_MULTIPLIER, last.rewardMultiplier + (depthM - last.bottom) / TRENCH_STEP_M);
+}
+
+/** Same formula as rollFish(): rarity value x the depth's reward multiplier. */
 export function catchValue(rarity, depthM) {
-  return Math.round(RARITY_VALUE[rarity] * zoneForDepth(depthM).rewardMultiplier);
+  return Math.round(RARITY_VALUE[rarity] * rewardMultiplierAt(depthM));
 }
 
 const normKey = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
  * Price a fish from its on-chain Core Attributes ([{ key, value }]).
- * chain.ts writes rarity / species / depth / seed. If a catch value is on-chain
- * too ("Catch value" or "value") it is used, else it is recomputed from rarity
- * and depth. It must be a whole number in [1, rarity value x 6], or the fish is
+ * chain.ts writes rarity / species / depth / value / seed. The on-chain catch value
+ * ("Catch value" or "value") is used, so the sale pays what the game showed; fish
+ * minted without one are recomputed from rarity and depth. It must be a whole number in [1, rarity value x 6], or the fish is
  * rejected. `maxValue` (the program's config.max_value) then clamps the price.
  */
 export function appraise(attributeList, { maxValue } = {}) {
