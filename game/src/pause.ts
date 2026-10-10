@@ -42,6 +42,8 @@ export class PauseMenu {
   };
   private view: View = 'main';
   private countTimer: number | undefined;
+  // Settings opened from the title screen: Back closes the menu instead of showing "Paused".
+  private standalone = false;
 
   private input = $<HTMLSelectElement>('set-input');
   private night = $<HTMLInputElement>('set-night');
@@ -56,7 +58,7 @@ export class PauseMenu {
     $('pause-resume').addEventListener('click', () => this.requestResume());
     $('pause-settings').addEventListener('click', () => this.showSettings());
     $('pause-menu').addEventListener('click', () => this.requestQuit());
-    $('settings-back').addEventListener('click', () => this.show('main'));
+    $('settings-back').addEventListener('click', () => this.back());
     $('confirm-leave').addEventListener('click', () => this.quit());
     $('confirm-stay').addEventListener('click', () => this.show('main'));
 
@@ -74,6 +76,7 @@ export class PauseMenu {
 
   show(view: View = 'main') {
     clearInterval(this.countTimer);
+    if (view !== 'settings') this.standalone = false;
     this.view = view;
     this.root.classList.remove('hidden');
     for (const [name, el] of Object.entries(this.views)) el.classList.toggle('hidden', name !== view);
@@ -81,8 +84,16 @@ export class PauseMenu {
 
   /** Esc inside the menu: step back one level, or resume from the top. */
   back() {
-    if (this.view === 'main') this.requestResume();
+    if (this.standalone) this.close();
+    else if (this.view === 'main') this.requestResume();
     else this.show('main');
+  }
+
+  /** Settings on their own, from the title screen. Breath input is picked when starting, so it's hidden. */
+  openSettings() {
+    this.showSettings();
+    this.standalone = true;
+    $('set-input-row').classList.add('hidden');
   }
 
   close() {
@@ -128,6 +139,7 @@ export class PauseMenu {
     this.quality.value = this.settings.quality;
     this.camera.checked = this.settings.showCamera;
     this.help.checked = this.settings.showHelp;
+    $('set-input-row').classList.remove('hidden');
     this.show('settings');
   }
 
