@@ -17,6 +17,8 @@ export interface BreathState {
   flatness: number;
   rate: number | null;
   pulse: number | null;
+  /** Presage mode: player is holding Shift to mark a real breath hold (ground truth for tuning). */
+  label: boolean;
 }
 
 const FRAME_W = 640;
@@ -36,6 +38,7 @@ export class BreathSource {
     flatness: 0,
     rate: null,
     pulse: null,
+    label: false,
   };
   video: HTMLVideoElement;
   private ws: WebSocket | null = null;
@@ -55,12 +58,14 @@ export class BreathSource {
         this.keyHeld = true;
         this.keyHoldStart = performance.now();
         if (this.state.mode === 'sim') this.send({ t: 'simHold', holding: true });
+        if (this.state.mode === 'presage') this.sendLabel(true);
       }
     });
     window.addEventListener('keyup', (e) => {
       if (e.key === 'Shift') {
         this.keyHeld = false;
         if (this.state.mode === 'sim') this.send({ t: 'simHold', holding: false });
+        if (this.state.mode === 'presage') this.sendLabel(false);
       }
     });
     setInterval(() => this.tickKeyboard(), 50);
@@ -126,6 +131,17 @@ export class BreathSource {
       this.emit();
     };
     this.ws = ws;
+  }
+
+  private sendLabel(holding: boolean) {
+    this.state.label = holding;
+    this.send({ t: 'label', holding, ts: performance.timeOrigin + performance.now() });
+    this.emit();
+  }
+
+  /** Marks guided-calibration phases in the sensor's recording. */
+  sendCalib(phase: string) {
+    this.send({ t: 'calib', phase, ts: performance.timeOrigin + performance.now() });
   }
 
   private send(obj: unknown) {

@@ -22,6 +22,7 @@ import {
 } from '@smartspectra/node-sdk';
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector } from './breath-detector.mjs';
+import { Recorder, flags, points } from './recorder.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
@@ -65,6 +66,13 @@ class Session {
     this.frames = 0;
     this.metricsEvents = 0;
     this.tick = setInterval(() => this.#broadcast(), 80);
+    this.rec = new Recorder((path) => log(`recording to ${path}`));
+    this.framesAtLastSecond = 0;
+    this.fpsTick = setInterval(() => {
+      const n = this.frames - this.framesAtLastSecond;
+      this.framesAtLastSecond = this.frames;
+      if (n && !this.sim) this.rec.write({ k: 'fps', n });
+    }, 1000);
     this.simTimer = null;
     if (this.sim) this.#startSim();
   }
@@ -82,9 +90,12 @@ class Session {
     sdk.on('processingStatus', (s) => {
       this.status = STATUS_NAMES[s] ?? String(s);
       log(`presage status: ${this.status}`);
+      this.rec.write({ k: 'status', s: this.status });
     });
     sdk.on('validationStatus', (code) => {
-      this.hint = HINTS[code] ?? `validation ${code}`;
+      const hint = HINTS[code] ?? `validation ${code}`;
+      if (hint !== this.hint) this.rec.write({ k: 'hint', code, hint });
+      this.hint = hint;
     });
     sdk.on('error', (code, message, retryable) => {
       log(`presage error ${code}: ${message} (retryable=${retryable})`);
@@ -123,6 +134,19 @@ class Session {
     if (rate) this.rate = { value: rate.value, confidence: rate.confidence };
     const pulse = m.cardio?.pulseRate?.at(-1);
     if (pulse) this.pulse = { value: pulse.value, confidence: pulse.confidence };
+    this.rec.write({
+      k: 'm',
+      up: points(b.upperTrace),
+      lo: points(b.lowerTrace),
+      amp: points(b.amplitude),
+      rll: points(b.respiratoryLineLength),
+      apnea: flags(b.apnea),
+      talking: flags(m.face?.talking),
+      rate: rate ? [rate.value, rate.confidence] : undefined,
+      pulse: pulse ? [pulse.value, pulse.confidence] : undefined,
+      holding: this.detector.holding,
+      baseline: this.detector.baseline,
+    });
   }
 
   onFrame(data) {
@@ -206,6 +230,11 @@ class Session {
       }
     } else if (msg.t === 'simHold') {
       this.simHolding = Boolean(msg.holding);
+    } else if (msg.t === 'label' && !this.sim) {
+      // Ground truth from the player (Shift held while really holding breath).
+      this.rec.write({ k: 'label', ts: msg.ts, holding: Boolean(msg.holding) });
+    } else if (msg.t === 'calib' && !this.sim) {
+      this.rec.write({ k: 'calib', ts: msg.ts, phase: msg.phase });
     }
   }
 
@@ -230,6 +259,8 @@ class Session {
 
   async close() {
     clearInterval(this.tick);
+    clearInterval(this.fpsTick);
+    this.rec.close();
     this.#stopSim();
     await this.#restartSdk();
   }

@@ -17,6 +17,7 @@ const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
 const NET_CAPACITY = 6;
 const CATCH_RADIUS = 2.4;
+const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 const FISH_PER_ZONE = [16, 16, 12];
 const MAX_DEPTH = -SEABED_Y;
 
@@ -78,6 +79,7 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: FishSpec[] = loadBank();
 let lastHolding = false;
+let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 function loadBank(): FishSpec[] {
   try {
@@ -193,6 +195,13 @@ const calib = document.getElementById('calib')!;
 const calibStep = document.getElementById('calib-step')!;
 const calibSub = document.getElementById('calib-sub')!;
 let sawHold = false;
+let calibPhase = '';
+
+function markCalib(phase: string) {
+  if (phase === calibPhase) return;
+  calibPhase = phase;
+  breath.sendCalib(phase);
+}
 
 function startGame() {
   phase = 'play';
@@ -231,12 +240,15 @@ function updateCalibration() {
     calibSub.textContent = s.hint || 'Sit still, face and chest in view';
   } else if (!s.calibrated) {
     calibStep.textContent = 'Breathe normally…';
+    markCalib('breathe');
     calibSub.textContent = s.hint || 'Learning your breathing rhythm';
   } else if (!sawHold) {
     calibStep.textContent = 'Now hold your breath!';
+    markCalib('hold');
     calibSub.textContent = 'We will dive the moment we see it';
     if (s.holding) {
       sawHold = true;
+      markCalib('done');
       calibStep.textContent = 'Got it. Dive!';
       setTimeout(startGame, 900);
     }
@@ -257,7 +269,9 @@ function update(dt: number, time: number) {
 
   if (playing) {
     // Breathing underwater = out of air. You must make it up before it runs out.
-    if (underwater && !s.holding && !outOfAir) {
+    // A single noisy "breathing" frame shouldn't cost the net: it must persist.
+    breathSince = underwater && !s.holding ? (breathSince ?? nowMs) : null;
+    if (breathSince != null && nowMs - breathSince >= RELEASE_DEBOUNCE_MS && !outOfAir) {
       outOfAir = true;
       emergency = 1;
       diver.exhale(22);
