@@ -173,7 +173,9 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 
 - **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
 - **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
-- **带宽。** 实时模式上传的是原始 640×480 RGBA 帧：每帧 1.23 MB，30 fps 时每个玩家约 37 MB/s（≈295 Mbit/s）上行。局域网没问题；走公网时大多数玩家传不了这么快，帧数会掉，低于约 15 fps 时 Presage 的波形会变差。键盘和模拟模式不发帧。
+- **带宽。** 实时模式把每一帧 640×480 画面压成 JPEG 上传，30 fps，**每个玩家约 3–6 Mbit/s 上行**（Chrome 质量 0.7：画面简单时每帧 16–20 kB，画面杂乱时 30–35 kB）。Presage 要约 25 fps 以上，低于约 15 fps 波形会变差，所以游戏优先保帧率、牺牲画质：目标每帧 25 kB（30 fps 即 6 Mbit/s），帧偏大或上行太慢导致跳帧时，JPEG 质量在 0.8 到 0.4 之间自动下调。约 5 Mbit/s 的上行在一般画面下能保持 30 fps；更慢就会跳帧。sensor 用 [sharp](https://sharp.pixelplumbing.com/)（libvips）解码：每帧约 2 ms，在独立线程上跑，比原始帧多占约 3% 的单核。键盘和模拟模式不发帧。
+  - 开发构建连本机 sensor 时仍默认发原始 RGBA（每帧 1.23 MB，30 fps 约 295 Mbit/s，只在同一台机器上用）。在页面 URL 后加 `?frames=raw` 或 `?frames=jpeg`（或构建时设置 `VITE_FRAME_FORMAT`）可以强制使用其中一种。
+  - 不用摄像头检查某个部署的上行链路：在玩家的网络里运行 `node sensor/stream-test.mjs wss://<你的域名>/sensor`，它会连续 20 秒发送合成的 JPEG 帧，打印上行速率、跳过的帧数和 Presage 接收的帧数（可选 `--raw`、`--fps`、`--quality`、`--image face.jpg`）。
 
 ---
 
@@ -236,14 +238,15 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 
 **浏览器 → sensor**
 
-- **二进制帧**：12 字节头 + RGBA 像素，全部小端序。
+- **二进制帧**：12 字节头 + 图像，全部小端序。`game/src/frame-codec.ts` 负责写，`sensor/frames.mjs` 负责读；`game/tests/frame-protocol.test.mjs` 把两端放在一起测试。
   | 偏移 | 类型 | 含义 |
   | --- | --- | --- |
   | 0 | f64 | 时间戳（ms，必须单调递增；间隔超过 2 s 时 SDK 会重启） |
-  | 8 | u16 | 宽（640） |
+  | 8 | u16 | 第 0–11 位：宽（640）。第 12–15 位：格式，`0` = 原始 RGBA，`1` = JPEG |
   | 10 | u16 | 高（480） |
-  | 12… | u8[] | RGBA，宽 × 高 × 4 |
-  - 背压：浏览器在 `ws.bufferedAmount` 过大时跳过帧。
+  | 12… | u8[] | 原始：RGBA，宽 × 高 × 4。JPEG：一张宽 × 高的 JPEG 图像 |
+  - 格式 0 的宽字段和以前完全一样，所以原始帧与旧协议逐字节相同。sensor 把 JPEG 解码成 RGBA，交给 Presage 的数据和原始帧完全一致。解码一次只做一帧，另外最多有一帧排队；排队时又来新帧就替换掉旧的，所以服务器跟不上时丢帧，而不是无限排队。
+  - 背压：`ws.bufferedAmount` 超过 100 kB（JPEG）或 4 帧（原始）时浏览器跳过帧；JPEG 一次只编码一帧。
 - **JSON 命令**：`{ "t": "sim", "on": true }` 开关模拟；`{ "t": "simHold", "holding": true }` 设置模拟憋气。
 
 **sensor → 浏览器**（每 80 ms 一次）
@@ -262,7 +265,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 }
 ```
 
-错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。
+错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。`"code": "frames"` 表示 sensor 解不了 JPEG（没装 sharp）：游戏改发原始帧。
 
 ---
 
