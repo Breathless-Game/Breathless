@@ -26,6 +26,7 @@ for (const [tier, quality] of Object.entries(RENDER_QUALITY)) {
     assert.equal(indices.count / 3, quality.surfaceSegments[0] * quality.surfaceSegments[1] * 2);
     assert.equal(p.count, (quality.surfaceSegments[0] + 1) * (quality.surfaceSegments[1] + 1));
     const edges = new Map();
+    const visibleAreas = [];
     let totalArea = 0;
     for (let i = 0; i < indices.count; i += 3) {
       const corners = [0, 1, 2].map(j => indices.getX(i + j));
@@ -41,6 +42,9 @@ for (const [tier, quality] of Object.entries(RENDER_QUALITY)) {
       const shapeQuality = 2 * Math.sqrt(3) * twiceArea / squaredEdges;
       assert.ok(shapeQuality > 0.45, 'avoid long thin facets that produce needle-shaped highlights');
       totalArea += twiceArea / 2;
+      const centerX = (a[0] + b[0] + c[0]) / 3;
+      const centerZ = (a[1] + b[1] + c[1]) / 3;
+      if (Math.abs(centerX) < 25 && centerZ > 10 && centerZ < 55) visibleAreas.push(twiceArea / 2);
       for (let j = 0; j < 3; j++) {
         const left = points[j], right = points[(j + 1) % 3];
         const keys = [left.join(','), right.join(',')].sort();
@@ -56,6 +60,10 @@ for (const [tier, quality] of Object.entries(RENDER_QUALITY)) {
       }
     }
     assert.ok(Math.abs(totalArea - 36000) < 0.05, 'facets cover the full water plane');
+    visibleAreas.sort((a, b) => a - b);
+    assert.ok(visibleAreas[Math.floor(visibleAreas.length * 0.9)]
+      / visibleAreas[Math.floor(visibleAreas.length * 0.1)] > 1.5,
+    'the visible wave field needs a mixture of broad and small facets at every quality');
     for (const { count, balance, points: [a, b] } of edges.values()) {
       const boundary = (Math.abs(a[0]) === 150 && a[0] === b[0]) || (Math.abs(a[1]) === 60 && a[1] === b[1]);
       assert.equal(count, boundary ? 1 : 2, 'only the perimeter may have an open edge');
