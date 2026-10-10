@@ -135,6 +135,9 @@ npm run game       # 游戏，http://localhost:5173
 | `H` | 健康报告（只在你按的时候生成） |
 | `N` | 切换白天 / 夜晚 |
 | `K` | 切换呼吸输入：presage → sim → keyboard |
+| `Esc` | 暂停菜单：继续、设置、回到主页面。先关闭打开的面板；在设置里按是返回上一层；校准时按直接回主页面 |
+
+**暂停的细节**：暂停时游戏完全冻结，切走标签页也会自动暂停。在水下点"继续"会先倒数 3 秒，让玩家吸一口气再憋住，否则暂停时的换气会被直接判成"水下呼吸"。回到主页面会释放摄像头和 sensor 连接；网里有鱼时会先弹确认，鱼会丢失，但这次憋气仍然记进健康数据。
 
 ---
 
@@ -281,6 +284,8 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
         ├── polyfills.ts    Buffer 和 global 全局变量
         ├── health.ts       HealthLog：每次潜水记录憋气时长、心率、恢复时间
         ├── report.ts       健康报告：指标卡、两张图、解读文字、存 PDF、删除数据
+        ├── pause.ts        Esc 暂停菜单：继续（水下 3 秒倒数）、设置、回到主页面
+        ├── settings.ts     玩家设置（画质、摄像头小窗、操作提示），存 localStorage
         └── style.css       深色玻璃风 HUD
 ```
 
@@ -368,6 +373,7 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 | `deepbreath.bank` | 入库的鱼（`FishSpec[]`，铸造后带 `assetId`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
+| `deepbreath.settings` | 玩家设置：`quality`（high / medium / low）、`showCamera`、`showHelp` |
 
 重置：在浏览器控制台执行 `localStorage.clear()`。
 
