@@ -8,6 +8,7 @@
     "dev": "node scripts/dev.mjs",
     "setup": "npm --prefix sensor install && npm --prefix game install",
     "build": "npm --prefix game run build",
+    "test": "npm --prefix game test && npm --prefix sensor test",
     "start": "node sensor/index.mjs --serve game/dist"
   }
 }

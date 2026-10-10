@@ -40,6 +40,8 @@ jobs:
         run: |
           node --check sensor/index.mjs
           node --check sensor/static.mjs
+          node --check sensor/frames.mjs
+          node --check sensor/decode.mjs
 
       - uses: actions/upload-artifact@v4
         with:
