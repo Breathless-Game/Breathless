@@ -246,7 +246,7 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.key.toLowerCase());
   // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
-  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating' && !workbench.visible) {
+  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
     e.preventDefault();
     gear.toggle();
     return;

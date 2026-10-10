@@ -206,7 +206,10 @@ export class LoadoutWheel {
       button.classList.toggle('highlighted', index === this.highlightedIndex && this.open);
       button.classList.toggle('active', index === this.activeIndex);
       button.classList.toggle('unavailable', !available);
-      button.disabled = !available;
+      // Keep unavailable slots clickable so mouse and keyboard inputs share
+      // the same explanatory feedback instead of silently doing nothing.
+      button.disabled = false;
+      button.setAttribute('aria-disabled', String(!available));
     }
   }
 }
