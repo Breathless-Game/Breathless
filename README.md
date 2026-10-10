@@ -44,6 +44,7 @@ Surface = fish banked ◀── reach the surface within 3.2 s ────┤
 - **Greed against risk**: the deeper you dive, the rarer the fish and the more they are worth (mythic only below 50 m, and the trench has no bottom), but the farther you are from the surface, the harder it is to get back after you breathe.
 - **Night mode** (`N`): every fish rolls its rarity twice and keeps the higher result. The sea-monster risk is still on the to-do list.
 - **Collection** (`C`): banked fish are rendered as 512×512 cards, and that card is the NFT image. The card is fully determined by the fish's seed, so anyone can render it again and check it.
+- **Rod upgrades** (`G`): in this game the fishing rod is the diver's hand net. Banked fish earn Pearls; Pearls buy a bigger net with more capacity and a longer catch reach.
 
 ### Three maps
 
@@ -65,7 +66,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
 - **Saved progress**: the selected map, the best value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
 - **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), the in-game clock (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
-- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying with Pearl is not wired up.
+- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying them with Pearl is not wired up. The one upgrade that is playable is the rod / net tier (`G`, section 7), which uses its own net model.
 
 ### Hackathon positioning
 
@@ -156,6 +157,7 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 | `Space` | Swing the net to catch fish |
 | `Shift` (hold) | Hold your breath (keyboard and simulation modes) |
 | `C` | Collection and NFT panel |
+| `G` | Rod / net upgrade panel |
 | `H` | Health report (built only when you press it) |
 | `N` | Toggle day / night |
 | `K` | Cycle the breath input: presage → sim → keyboard |
@@ -345,6 +347,8 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── mappicker.ts    the map cards on the start card
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
+        ├── equipment.ts    rod level, Pearl balance, saved state and the upgrade rule
+        ├── gear-panel.ts   the rod / net upgrade panel
         ├── upgrades.ts     the upgrade table and low-poly models for each upgrade level (not shown in the game yet)
         ├── fish.ts         rarity table, zone names, species names, rollFish(seed, depth), catch value by depth, fish meshes, swim and flee AI
         ├── depth-odds.ts   drop rates by depth (RARITY_BY_DEPTH), zoneName(depth); no imports, tested in tests/depth-odds.test.mjs
@@ -388,7 +392,7 @@ Rarity is a smooth function of the depth a fish is caught at: percent weights at
 
 At night every fish rolls twice and keeps the rarer result (`rollFor` in `main.ts`).
 
-Per net of 6 fish (day, expected count = 6 × P(legendary or mythic)): at 80 m that is 6 × 1.5% = 0.09, about 1 legendary-or-better per ~11 nets; at 120 m 6 × 3.0% = 0.18, about 1 per ~5.6 nets.
+Per net of 6 fish (the Lv1 net; day, expected count = 6 × P(legendary or mythic)): at 80 m that is 6 × 1.5% = 0.09, about 1 legendary-or-better per ~11 nets; at 120 m 6 × 3.0% = 0.18, about 1 per ~5.6 nets.
 
 ### Catch value (`rewardMultiplierAt` in `fish.ts`)
 
@@ -413,7 +417,23 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 ### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (the trench is bottomless on every map)
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [16, 16, 12]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (the trench is bottomless on every map)
+
+Net capacity and catch radius are no longer constants in `main.ts`: they come from the equipped net tier below.
+
+### Rod / net upgrades (`ROD_TIERS` in `equipment.ts`)
+
+The fishing rod is the diver's hand net. Upgrades change only the gear; they never extend breath time.
+
+| Level | Name | Capacity | Catch radius | Upgrade cost |
+| --- | --- | ---: | ---: | ---: |
+| Lv1 | Basic Net | 6 | 2.4 m | starting gear |
+| Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
+| Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
+
+Every fish that is banked earns its catch value in Pearls; fish lost in a blackout earn nothing. The upgrade state is saved in `deepbreath.equipment` and never deletes or spends collected fish.
+
+![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
 
 ---
 
@@ -470,6 +490,7 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 | `deepbreath.bank` | Banked fish (`FishSpec[]`, with the catch `value` and `map`, and an `assetId` once minted) |
 | `deepbreath.health` | Dive records (`DiveRecord[]`, 300 at most) |
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
+| `deepbreath.equipment` | Rod level and Pearl balance (`rodLevel`, `pearls`) |
 | `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `showCamera`, `showHelp` |
 | `deepbreath.maps` | Map progress: the selected map, the best total banked value, the demo switch |
 
@@ -512,20 +533,21 @@ Antialiasing is off when the game starts at low. A drop during play keeps the an
 
 ### ✅ Done
 
-- Low-poly 2.5D underwater world, diver, procedurally generated fish (6 rarities, 3 depth zones)
+- Low-poly 2.5D underwater world, diver, procedurally generated fish (6 rarities, odds set by depth, 3 named zones and a bottomless trench)
 - Diving only while you hold your breath, emergency ascent after breathing underwater, blackout that loses the fish, banking on surfacing
 - Presage pipeline: browser captures frames → sensor → SDK → breath-hold detection; keyboard and simulation as fallbacks
 - NFT card art (determined by the seed, reproducible), collection panel
 - Solana minting: verified end to end on devnet (throwaway wallet → Irys upload of image and metadata → Metaplex Core + on-chain Attributes). Solana Explorer shows the card correctly. [Example asset](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - Health report (built on demand)
-- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, depth limits, map picker on the start card, unlock by total banked fish value
+- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, a seabed shelf of a different depth on each map with a bottomless trench under the boat, map picker on the start card, unlock by total banked fish value
 - Low-poly models for the upgrade parts (code only, not in the game yet)
+- Rod / net upgrade MVP: three tiers of capacity and catch radius, Pearl rewards, a visibly bigger hoop, saved locally
 
 ### 🔜 To do (say so in a PR or the group chat when you pick one up)
 
 - [ ] **Test Presage breath detection on real cameras** and tune the thresholds (section 5)
 - [ ] **Official game Collection**: every fish is a standalone asset right now, so Explorer shows Verified Collection as None. We need a Collection whose authority is held by a server, and to mint fish into it, so marketplaces can filter by Collection and fakes are prevented
-- [ ] **Gear economy**: buy air tanks, fins, a headlamp and a bigger net with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
+- [ ] **Full gear economy**: beyond the rod / net upgrade MVP, buy air tanks, fins and a headlamp with SOL or Pearl (an SPL token); gear has durability. The low-poly models exist; what remains is showing the models in the game, buying, and applying the effects
 - [ ] **NFT sinks**: sell to the market for Pearl, craft bait or items from fish, sacrifice fish to the sea monster, evolve them, redeem complete sets. `burnFish` is already written
 - [ ] **Night sea monster**: high-value fish appear at night, together with the sea-monster risk
 - [ ] **Three maps, what remains**: night creatures per map, the in-game clock, boat durability and sinking on the ocean map. The design is in section 6 of the design doc

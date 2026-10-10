@@ -44,6 +44,7 @@
 - **贪心与风险**：潜得越深，鱼越稀有、越值钱（神话级只在 50 m 以下出现，而海沟没有底），但离水面越远，换气后越难赶回去。
 - **夜晚模式**（`N`）：每条鱼稀有度掷两次取高的。海怪风险还在待办里。
 - **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。
+- **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。入库鱼换算成 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
 
 ### 三张地图
 
@@ -65,7 +66,7 @@
 - **演示开关**：地图卡片下面有一个勾选框 "Unlock all maps (demo)"，勾上后所有地图一次全部开放。它是给演示和测试用的。
 - **保存的进度**：选中的地图、最高累计价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
 - **仍然只是设计，尚未实现**：夜间小怪（峡湾：野鹿、野熊；天池：野熊、巨人；汪洋：海浪、海怪）、游戏内时钟（峡湾白天 05:00–20:00）、由心率驱动的船上垂钓、船耐久，以及汪洋沉船后全部装备永久丢失。
-- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买也还没接上。
+- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买它们也还没接上。目前能玩的升级只有鱼竿 / 渔网等级（`G`，见第 7 节），它用的是自己的渔网模型。
 
 ### 比赛定位
 
@@ -156,6 +157,7 @@ npm run game       # 游戏，http://localhost:5173
 | `Space` | 挥网抓鱼 |
 | `Shift`（按住） | 憋气（键盘模式和模拟模式） |
 | `C` | 收藏和 NFT 面板 |
+| `G` | 鱼竿 / 渔网升级面板 |
 | `H` | 健康报告（只在你按的时候生成） |
 | `N` | 切换白天 / 夜晚 |
 | `K` | 切换呼吸输入：presage → sim → keyboard |
@@ -345,6 +347,8 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── mappicker.ts    开始卡片上的地图卡片
         ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
         ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
+        ├── equipment.ts    鱼竿等级、Pearl 余额、本地存档和升级规则
+        ├── gear-panel.ts   鱼竿 / 渔网升级面板
         ├── upgrades.ts     升级表和每个升级等级的低多边形模型（还没有在游戏里显示）
         ├── fish.ts         稀有度表、区域名、物种名、rollFish(seed, depth)、按深度的捕获价值、鱼的网格、游动和逃跑 AI
         ├── depth-odds.ts   按深度的掉率（RARITY_BY_DEPTH）、zoneName(depth)；没有依赖，测试在 tests/depth-odds.test.mjs
@@ -388,7 +392,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 夜晚每条鱼掷两次稀有度，取更稀有的那次（`main.ts` 中的 `rollFor`）。
 
-按一网 6 条鱼算（白天，期望条数 = 6 × P(legendary 或 mythic)）：80 m 是 6 × 1.5% = 0.09，大约每 11 网出 1 条 legendary 及以上；120 m 是 6 × 3.0% = 0.18，大约每 5.6 网 1 条。
+按一网 6 条鱼算（Lv1 渔网；白天，期望条数 = 6 × P(legendary 或 mythic)）：80 m 是 6 × 1.5% = 0.09，大约每 11 网出 1 条 legendary 及以上；120 m 是 6 × 3.0% = 0.18，大约每 5.6 网 1 条。
 
 ### 捕获价值（`fish.ts` 中的 `rewardMultiplierAt`）
 
@@ -413,7 +417,23 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ### 主循环常数（`main.ts`）
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `NET_CAPACITY 6` · `CATCH_RADIUS 2.4` · `FISH_PER_ZONE [16, 16, 12]`（每个区域的鱼数，只放地图在大陆架上开放的区域）· `TRENCH_FISH 12`（海沟里跟着潜水员深度走的一群鱼，每条按它出生的深度抽稀有度）· `DEPTH_LIMIT Infinity`（每张图的海沟都没有底）
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `FISH_PER_ZONE [16, 16, 12]`（每个区域的鱼数，只放地图在大陆架上开放的区域）· `TRENCH_FISH 12`（海沟里跟着潜水员深度走的一群鱼，每条按它出生的深度抽稀有度）· `DEPTH_LIMIT Infinity`（每张图的海沟都没有底）
+
+网的容量和收网范围不再是 `main.ts` 里的常数，而是由下面装备的渔网等级决定。
+
+### 鱼竿 / 渔网升级（`equipment.ts` 中的 `ROD_TIERS`）
+
+鱼竿概念在当前融合版中落地为潜水员手持的渔网。升级只影响装备，不会延长憋气时间。
+
+| 等级 | 名称 | 容量 | 收网范围 | 升级消耗 |
+| --- | --- | ---: | ---: | ---: |
+| Lv1 | Basic Net | 6 | 2.4 m | 初始 |
+| Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
+| Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
+
+每条成功入库的鱼按捕获价值奖励 Pearls；黑屏丢网不奖励。升级状态保存在 `deepbreath.equipment`，不会删除或消费收藏鱼。
+
+![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
 
 ---
 
@@ -470,6 +490,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value` 和地图 `map`，铸造后带 `assetId`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
+| `deepbreath.equipment` | 鱼竿等级和 Pearls 余额（`rodLevel`、`pearls`） |
 | `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`showCamera`、`showHelp` |
 | `deepbreath.maps` | 地图进度：选中的地图、最高累计入库价值、演示开关 |
 
@@ -512,20 +533,21 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ### ✅ 已完成
 
-- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、3 个深度区）
+- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、掉率按深度、3 个有名字的深度区加一条无底海沟）
 - 憋气才能下潜、水下换气后紧急上浮、黑屏丢鱼、出水入库
 - Presage 管线：浏览器抓帧 → sensor → SDK → 憋气检测；键盘和模拟两种兜底
 - NFT 卡图（由 seed 决定、可复现）、收藏面板
 - Solana 铸造：已在 devnet 端到端验证（临时钱包 → Irys 上传图片和元数据 → Metaplex Core + 链上 Attributes），Solana Explorer 能正常显示卡图。[示例资产](https://explorer.solana.com/address/GHBBzZ7UTJPKVXWM5bryTsyM14x4Bv23MoQsfTN5tt13?cluster=devnet)
 - 健康报告（按需生成）
-- 三张地图（峡湾、天池、汪洋）：水面以上的场景、深度上限、开始卡片上的地图选择、按累计入库鱼价值解锁
+- 三张地图（峡湾、天池、汪洋）：水面以上的场景、每张图深度不同的海底大陆架和船下的无底海沟、开始卡片上的地图选择、按累计入库鱼价值解锁
 - 升级部件的低多边形模型（只有代码，还没有进游戏）
+- 鱼竿 / 渔网升级 MVP：三档容量和收网范围、Pearl 奖励、可见网圈缩放、本地持久化
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 
 - [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
 - [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
-- [ ] **装备经济**：用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯、更大的网；装备有耐久度。低多边形模型已经有了，剩下的是在游戏里显示模型、购买和让效果生效
+- [ ] **完整装备经济**：在鱼竿 / 渔网升级 MVP 之外，用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯；装备有耐久度。低多边形模型已经有了，剩下的是在游戏里显示模型、购买和让效果生效
 - [ ] **NFT 消耗（sink）**：卖给市场换 Pearl、用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换。`burnFish` 已经写好
 - [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
 - [ ] **三张地图的剩余部分**：每张图的夜间小怪、游戏内时钟、汪洋图的船耐久和沉船。设计见策划案第 6 节
