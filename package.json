@@ -4,6 +4,7 @@
   "scripts": {
     "sensor": "npm --prefix sensor start",
     "sensor:sim": "npm --prefix sensor run sim",
+    "market": "npm --prefix sensor run market",
     "game": "npm --prefix game run dev",
     "dev": "node scripts/dev.mjs",
     "showcase:gif": "node scripts/capture-showcase.mjs",
