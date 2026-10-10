@@ -7,11 +7,14 @@
 //
 //   node index.mjs                 live Presage mode (dev: ws://<host>:8787, next to Vite)
 //   node index.mjs --sim           no camera, synthetic breathing (hold via the game's debug key)
-//   node index.mjs --serve <dir>   production: serves the built game from <dir> and the
-//                                  sensor at /sensor on one port (PORT, default 8794)
+//   node index.mjs --serve <dir>   production: serves the built game from <dir>, the sensor
+//                                  at /sensor and the PEARL market at /api/market on one
+//                                  port (PORT, default 8794)
 
 import { config } from 'dotenv';
+import { mkdirSync } from 'node:fs';
 import { createServer, STATUS_CODES } from 'node:http';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
@@ -398,6 +401,36 @@ function refuse(socket, code) {
   socket.end(`HTTP/1.1 ${code} ${STATUS_CODES[code]}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(obj));
+}
+
+// Serve mode's PEARL market (market.mjs, the same one `npm run market` runs in dev). Imported
+// lazily and fenced off: if it cannot start (missing dependency, bad config), the game and the
+// sensor still serve and /api/market answers 503. Its keys and state live in MARKET_DIR
+// (relative to the repo root), default sensor/.
+let market = null;
+let marketDown = 'PEARL market is starting, try again in a moment';
+async function startMarket() {
+  try {
+    const dir = process.env.MARKET_DIR
+      ? resolve(fileURLToPath(new URL('..', import.meta.url)), process.env.MARKET_DIR)
+      : fileURLToPath(new URL('.', import.meta.url));
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const { createMarket } = await import('./market.mjs');
+    market = await createMarket({
+      rpc: process.env.SOLANA_RPC || process.env.VITE_SOLANA_RPC || 'https://api.devnet.solana.com',
+      dir,
+      clientIp,
+    });
+    Promise.resolve(market.ready).catch((e) => log(`PEARL market start-up task failed: ${e?.message ?? e}`));
+  } catch (e) {
+    marketDown = 'PEARL market is unavailable on this server';
+    log(`PEARL market unavailable, /api/market answers 503: ${e?.message ?? e}`);
+  }
+}
+
 const mode = FORCE_SIM || !API_KEY ? 'simulator' : `Presage live, max ${MAX_LIVE} at a time`;
 let wss;
 if (SERVE) {
@@ -405,7 +438,27 @@ if (SERVE) {
   wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
   wss.on('connection', onConnection);
   const perIp = new Map();
-  const server = createServer(staticHandler(SERVE_DIR));
+  const serveStatic = staticHandler(SERVE_DIR);
+  void startMarket();
+  const server = createServer(async (req, res) => {
+    try {
+      let pathname = '';
+      try {
+        pathname = new URL(req.url ?? '/', 'http://x').pathname;
+      } catch {} // the static handler answers 400
+      if (pathname.startsWith('/api/')) {
+        if (market && (await market.handle(req, res))) return;
+        // Never fall through to the index.html fallback: the game would read that as a market answer.
+        if (pathname.startsWith('/api/market/')) return sendJson(res, 503, { error: marketDown });
+        return sendJson(res, 404, { error: 'Not found' });
+      }
+      await serveStatic(req, res);
+    } catch (e) {
+      log(`${req.method} ${req.url} failed: ${e?.message ?? e}`);
+      if (!res.headersSent) sendJson(res, 500, { error: 'Internal error' });
+      else res.destroy();
+    }
+  });
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => {});
     // A malformed request line must not crash the server: new URL throws on it.
@@ -436,7 +489,7 @@ if (SERVE) {
     process.exit(1);
   });
   server.listen(PORT, HOST, () => {
-    log(`serving ${SERVE_DIR} on http://${HOST}:${PORT}, sensor at /sensor (${mode})`);
+    log(`serving ${SERVE_DIR} on http://${HOST}:${PORT}, sensor at /sensor (${mode}), PEARL market at /api/market`);
     log(`recordings ${RECORD ? 'ON (SENSOR_RECORD=1): sensor/recordings/' : 'off'}`);
   });
 } else {
