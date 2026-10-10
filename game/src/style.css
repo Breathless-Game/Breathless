@@ -680,26 +680,6 @@ button.link {
   margin-top: 6px;
 }
 
-#wb-toast {
-  position: absolute;
-  z-index: 2;
-  top: 6%;
-  left: 50%;
-  transform: translate(-50%, -10px);
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-weight: 700;
-  opacity: 0;
-  transition: opacity 0.25s, transform 0.25s;
-}
-
-#wb-toast.show {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-
 /* The open chart: the 3D sheet (#wb-chart-gl) is drawn over a blurred, dimmed
    table (#wb-chart-bg) and under the place pins and the panel (.wb-ctl).
    .open fades the backdrop in while the sheet is carried up; .ready shows the
@@ -774,16 +754,29 @@ button.link {
   pointer-events: none; /* only the pins themselves take clicks */
 }
 
-#wb-chart-gl,
-#wb-pins {
-  transition: transform 0.65s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.65s;
+/* Diving: the place's preview grows over everything (#wb-reveal); the chart fades under it. */
+#wb-chart-gl {
+  transition: opacity 0.5s;
 }
 
-/* Diving: zoom into the chosen place. */
-#wb-chart.zooming #wb-chart-gl,
-#wb-chart.zooming #wb-pins {
-  transform: scale(4);
+#wb-chart.revealing #wb-chart-gl {
   opacity: 0;
+}
+
+#wb-reveal {
+  position: fixed;
+  z-index: 60;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+#wb-reveal canvas,
+#wb-place-preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .wb-pin {
@@ -874,8 +867,20 @@ button.link {
   backdrop-filter: blur(10px);
 }
 
-#wb-chart:not(.pre) #wb-place {
+#wb-chart.ready #wb-place {
   animation: wb-place-in 0.4s ease-out;
+}
+
+#wb-place-preview {
+  aspect-ratio: 16 / 10;
+  margin: -6px -8px 14px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b2233;
+}
+
+#wb-place-preview:empty {
+  display: none;
 }
 
 #wb-place-title {
@@ -912,17 +917,6 @@ button.link {
     opacity: 0;
     transform: translateX(24px);
   }
-}
-
-#wb-demo {
-  position: absolute;
-  left: 16px;
-  bottom: 18px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: rgba(255, 240, 210, 0.8);
-  cursor: pointer;
 }
 
 #wb-chart-hint {
