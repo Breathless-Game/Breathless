@@ -16,6 +16,7 @@ import { HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
+import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
 
@@ -64,11 +65,11 @@ window.addEventListener('resize', resize);
 resize();
 
 const diver = new Diver(scene);
+world.colorGrade.apply(diver.group);
 const hud = new Hud();
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
-let night = false;
 
 function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
@@ -76,7 +77,7 @@ function randomSeed(): number {
 
 function rollFor(depth: number): FishSpec {
   const a = rollFish(randomSeed(), depth);
-  if (!night) return a;
+  if (!world.night) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
   const b = rollFish(randomSeed(), depth);
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
@@ -86,6 +87,7 @@ function addFish(band: Band, depth: number, halfWidth: number) {
   const fish = new Fish(rollFor(depth), band, THREE.MathUtils.randFloat(-halfWidth, halfWidth), -depth, halfWidth);
   fishes.push(fish);
   scene.add(fish.mesh.group);
+  world.colorGrade.apply(fish.mesh.group);
   return fish;
 }
 
@@ -280,7 +282,9 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
   } else if (e.key.toLowerCase() === 'n') {
-    setNight(!night);
+    const nightSelected = world.dayCycle.mode === 'night'
+      || (world.dayCycle.mode === 'cycle' && world.night);
+    setTimeOfDay(nightSelected ? 'morning' : 'night');
   } else if (e.key.toLowerCase() === 'k') {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
@@ -296,10 +300,10 @@ function setBreathMode(mode: BreathMode) {
   hud.message(`Breath input: ${mode}`);
 }
 
-function setNight(on: boolean) {
-  night = on;
-  world.setNight(on);
-  hud.message(on ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+function setTimeOfDay(mode: TimeOfDay) {
+  world.setTimeOfDay(mode);
+  const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
+  hud.message(labels[mode]);
 }
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
@@ -522,6 +526,7 @@ function updateCalibration() {
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
 let paused = false;
+let resetDayClock = false;
 
 function pause() {
   if (phase !== 'play' || paused) return;
@@ -575,6 +580,8 @@ function goToMenu() {
 
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
+  world.setLightingEffects(s.lightingEffects);
+  world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -594,8 +601,8 @@ const pauseMenu = new PauseMenu(settings, {
   breathModes,
   breathMode: () => breath.state.mode,
   setBreathMode,
-  night: () => night,
-  setNight,
+  timeOfDay: () => world.dayCycle.mode,
+  setTimeOfDay,
   applySettings,
 });
 
@@ -662,12 +669,28 @@ showTitle(true);
 
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
 document.addEventListener('visibilitychange', () => {
+  resetDayClock = true;
   if (document.hidden) pause();
 });
 
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
+const timeLabel = document.getElementById('time-of-day')!;
+let displayedMinute = -1;
+let displayedWeather = '';
+
+function updateTimeLabel() {
+  const minute = Math.round(world.dayCycle.hour * 60) % (24 * 60);
+  const weather = world.weather.state.kind;
+  if (minute === displayedMinute && weather === displayedWeather) return;
+  displayedMinute = minute;
+  displayedWeather = weather;
+  const hour = Math.floor(minute / 60);
+  const period = world.night ? 'Night' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Dusk';
+  const weatherLabels = { clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain', storm: 'Storm' };
+  timeLabel.textContent = `${period} · ${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')} · ${weatherLabels[weather]}`;
+}
 
 function update(dt: number, time: number) {
   const s = breath.state;
@@ -739,7 +762,7 @@ function update(dt: number, time: number) {
   diver.update(dt, time, -diver.pos.y);
   tendTrench(-diver.pos.y);
   for (const f of fishes) f.update(dt, time, diver.pos);
-  world.update(time, camera.position.y);
+  world.update(time, camera.position.y, camera.position.x);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
@@ -768,10 +791,16 @@ function frame() {
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
+  // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  resetDayClock = false;
   if (!paused) {
     time += dt;
     update(dt, time);
+  } else {
+    world.updateLighting(time, camera.position.y, camera.position.x);
   }
+  updateTimeLabel();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -790,9 +819,11 @@ Object.assign(window, {
   fishes,
   keys,
   renderQuality,
+  setTimeOfDay,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;
+      world.advanceTime(1 / 30);
       update(1 / 30, time);
     }
     renderer.render(scene, camera);
