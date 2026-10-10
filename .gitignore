@@ -2,6 +2,11 @@
 .env
 *.env.local
 
+# solana / anchor keypairs (secret keys, never commit)
+contracts/.keys/
+contracts/target/deploy/*-keypair.json
+*-keypair.json
+
 # node
 node_modules/
 dist/
