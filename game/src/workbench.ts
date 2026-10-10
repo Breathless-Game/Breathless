@@ -140,7 +140,7 @@ export class Workbench {
     this.inspectLayer.addEventListener('click', () => this.state === 'inspect' && this.place());
     window.addEventListener('keydown', (e) => {
       // Esc is routed through main.ts (escape()); any other key packs the inspected piece.
-      if (this.state === 'inspect' && e.key !== 'Escape') {
+      if (this.state === 'inspect' && e.key !== 'Escape' && e.key.toLowerCase() !== 'g') {
         e.preventDefault();
         this.place();
       }
@@ -163,6 +163,11 @@ export class Workbench {
 
   show(intro: boolean) {
     if (!this.pieces.length) this.buildPieces();
+    // Re-opening the table (for example after backing out of the start card)
+    // must not silently unpack the player's chosen dive kit.
+    const previousPacked = new Set(
+      this.pieces.filter((piece) => piece.kind === 'gear' && piece.packed).map((piece) => piece.key),
+    );
     this.root.classList.remove('hidden');
     this.demoBox.checked = this.hooks.progress().unlockAll;
     this.renderCards();
@@ -170,11 +175,23 @@ export class Workbench {
     this.layout(false);
     const order = this.pieces.map((p, i) => ({ p, i }));
     for (const { p, i } of order) {
+      p.packed = !intro && previousPacked.has(p.key);
       if (intro) {
         // START fish first, then the maps, then the gear.
         p.dropAt = p.kind === 'fish' ? 0.05 : p.kind === 'map' ? 0.35 + i * 0.08 : 0.6 + i * 0.07;
       } else {
-        this.addBody(p, this.homePose(p));
+        const home = this.homePose(p);
+        const packedIndex = this.pieces.filter((piece) => piece.kind === 'gear' && piece.packed).indexOf(p);
+        const packedCount = previousPacked.size;
+        const pose = p.packed && packedCount
+          ? {
+            x: this.centre.x + Math.cos((packedIndex / Math.max(1, packedCount)) * Math.PI * 2) * this.packRadius * 0.38,
+            y: this.centre.y + Math.sin((packedIndex / Math.max(1, packedCount)) * Math.PI * 2) * this.packRadius * 0.38,
+            a: (packedIndex - packedCount / 2) * 0.18,
+            s: 1,
+          }
+          : home;
+        this.addBody(p, pose);
         p.dropAt = -1;
       }
     }

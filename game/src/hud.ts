@@ -30,6 +30,7 @@ export class Hud {
   private bankValue = $('bank-value');
   private gearSummary = $('gear-summary');
   private activeGear = $('active-gear');
+  private activeNumber = $('active-gear-number');
   private activeGearLabel = $('active-gear-label');
   private activeGearHint = $('active-gear-hint');
   private toasts = $('toasts');
@@ -149,7 +150,7 @@ export class Hud {
   }
 
   setEquipment(state: EquipmentState, tier: RodTier) {
-    this.gearSummary.textContent = `NET Lv${tier.level} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${state.pearls} ◇`;
+    this.gearSummary.textContent = `NET Lv${tier.level} · 杆身 ${state.rodGearLevel} · 线轮 ${state.reelLevel} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${state.pearls} ◇`;
   }
 
   /** Show the currently selected quick slot beside the net inventory. */
@@ -164,6 +165,7 @@ export class Hud {
     };
     const keys: Record<EquipmentSlot, number> = { net: 1, rod: 2, reel: 3, fins: 4, tank: 5, lamp: 6 };
     this.activeGear.classList.toggle('unavailable', !packed);
+    this.activeNumber.textContent = String(keys[slot]);
     this.activeGearLabel.textContent = packed ? labels[slot] : `${labels[slot]} · 未装配`;
     this.activeGearHint.textContent = `按 ${keys[slot]} 快速切换 · Tab 轮盘`;
   }
