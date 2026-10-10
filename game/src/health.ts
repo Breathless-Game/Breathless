@@ -1,8 +1,9 @@
 import type { BreathMode, BreathState } from './breath';
+import { storageKey } from './wallet';
 
 // Quietly records every dive: how long you held your breath, how your heart
 // rate moved while you did, and how fast it came back afterwards. Nothing is
-// shown until the player asks for a report. Data stays in this browser.
+// shown until the player asks for a report. Data stays in this browser, per wallet.
 
 export type DiveOutcome = 'banked' | 'surfaced' | 'blackout';
 
@@ -124,20 +125,27 @@ export class HealthLog {
     this.current = null;
     this.recovering = null;
     try {
-      localStorage.removeItem(KEY);
+      localStorage.removeItem(storageKey(KEY));
     } catch {}
+  }
+
+  /** Swap in the connected wallet's records. */
+  reload() {
+    this.dives.splice(0, this.dives.length, ...load());
+    this.current = null;
+    this.recovering = null;
   }
 
   private save() {
     try {
-      localStorage.setItem(KEY, JSON.stringify(this.dives));
+      localStorage.setItem(storageKey(KEY), JSON.stringify(this.dives));
     } catch {}
   }
 }
 
 function load(): DiveRecord[] {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]');
+    return JSON.parse(localStorage.getItem(storageKey(KEY)) ?? '[]');
   } catch {
     return [];
   }
