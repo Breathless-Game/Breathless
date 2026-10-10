@@ -30,7 +30,8 @@ const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
 const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
-const FISH_PER_ZONE = [16, 16, 12];
+// Keep encounter density stable as the playable width doubles.
+const FISH_PER_ZONE = [32, 32, 24];
 
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -61,6 +62,7 @@ window.addEventListener('resize', resize);
 resize();
 
 const diver = new Diver(scene);
+diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
 const hud = new Hud();
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
@@ -534,6 +536,7 @@ function goToMenu() {
 
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
+  diver.setQuality(renderQuality.settings);
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
@@ -727,6 +730,7 @@ let time = 0;
 function frame() {
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+    diver.setQuality(renderQuality.settings);
     world.setQuality(renderQuality.settings);
     resize();
   }
