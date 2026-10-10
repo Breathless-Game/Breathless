@@ -3,7 +3,14 @@ import { disposeTree, flatMat, jitter } from './lowpoly';
 import { MAPS, mapDepth, type MapDef, type MapId } from './maps';
 import { Rng } from './rng';
 import { RENDER_QUALITY, type RenderQuality } from './render-quality';
-import { buildScenery, type Scenery } from './scenery';
+import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
+import { WaterSurfaceMaterial } from './water';
+import { WeatherCycle, type WeatherMode } from './weather';
+import { RainEffect } from './rain';
+import { Atmosphere } from './sky';
+import { SunShafts } from './sunshafts';
+import { SceneColorGrade } from './color-grade';
+import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
 
 export const HALF_WIDTH = 70;
 
@@ -46,19 +53,37 @@ export class World {
   boat: THREE.Group;
   private surfaceBase: Float32Array;
   private kelps: Kelp[] = [];
-  private rays: THREE.Mesh[] = [];
+  readonly shafts = new SunShafts();
+  readonly atmosphere = new Atmosphere();
+  readonly colorGrade = new SceneColorGrade();
   private snow: THREE.Points;
   private quality: RenderQuality;
+  private lightingEffects = true;
   private lastDecorationTime = 0;
+  readonly dayCycle = new DayCycle();
+  readonly weather = new WeatherCycle();
+  readonly rain = new RainEffect();
+  private weatherTime = 0;
+  private cloudTime = 0;
+  private waveTime = 0;
+  private lighting: LightingState = this.dayCycle.state;
+  private skyColor = new THREE.Color();
+  private horizonColor = new THREE.Color();
+  private waterBackground = new THREE.Color();
   // Everything on and near the bottom. Rebuilt when the map changes.
   private terrain = new THREE.Group();
   private scenery: Scenery | null = null;
-  private sky = new THREE.Color();
-  private nightSky = new THREE.Color();
+  // Reused on every tick so animating the shore allocates nothing.
+  private sceneryEnv: SceneryEnv = {};
+  private daySkyTint: [number, number, number] = [1, 1, 1];
+  private nightSkyTint: [number, number, number] = [1, 1, 1];
+  private surfaceTint = new THREE.Color(1, 1, 1);
+  private lastSceneTime = 0;
+  private lastCameraY = 1.5;
+  private lastCameraX = 0;
   map: MapDef;
   /** World y of the seabed for the current map (negative). */
   seabedY: number;
-  night = false;
 
   constructor(quality: RenderQuality = RENDER_QUALITY.high, map: MapDef = MAPS.ocean) {
     this.quality = quality;
@@ -72,9 +97,9 @@ export class World {
     this.sun = new THREE.DirectionalLight('#fff6dd', 2.2);
     this.sun.position.set(20, 60, 30);
     this.scene.add(this.hemi, this.sun);
+    this.scene.add(this.rain, this.atmosphere, this.shafts.group);
 
     this.scene.add(this.terrain);
-    this.buildRays(rng);
     this.snow = this.buildSnow(rng);
     this.surface = this.buildSurface();
     this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
@@ -87,10 +112,22 @@ export class World {
     this.map = map;
     this.seabedY = -mapDepth(map);
     waterColors = toPalette(map);
-    this.sky.set(map.sky);
-    this.nightSky.set(map.nightSky);
-    (this.surface.material as THREE.MeshStandardMaterial).color.set(map.surface);
+    // Apply each map's palette relative to the open-ocean reference while
+    // preserving the continuous dawn/dusk colors and the weather transition.
+    const skyTint = (color: string, reference: string): [number, number, number] => {
+      const tint = new THREE.Color(color).convertLinearToSRGB();
+      const base = new THREE.Color(reference).convertLinearToSRGB();
+      return [tint.r / base.r, tint.g / base.g, tint.b / base.b];
+    };
+    this.daySkyTint = skyTint(map.sky, MAPS.ocean.sky);
+    this.nightSkyTint = skyTint(map.nightSky, MAPS.ocean.nightSky);
+    const surfaceBase = new THREE.Color(MAPS.ocean.surface);
+    this.surfaceTint.set(map.surface);
+    this.surfaceTint.setRGB(this.surfaceTint.r / surfaceBase.r, this.surfaceTint.g / surfaceBase.g, this.surfaceTint.b / surfaceBase.b);
 
+    // Quality hides kelp by detaching it. Reattach it before disposing the old
+    // map so low-quality map switches also release every plant's GPU buffers.
+    for (const kelp of this.kelps) this.terrain.add(kelp.root);
     disposeTree(this.terrain);
     this.terrain.clear();
     this.kelps = [];
@@ -110,9 +147,11 @@ export class World {
       this.scene.remove(this.scenery.group);
       disposeTree(this.scenery.group);
     }
-    this.scenery = buildScenery(map);
+    this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
+    this.colorGrade.apply(this.scene);
+    this.updateLighting(this.lastSceneTime, this.lastCameraY, this.lastCameraX);
   }
 
   private buildSeabed(rng: Rng) {
@@ -126,6 +165,7 @@ export class World {
       pos.setY(i, h);
     }
     const g = geo.toNonIndexed();
+    geo.dispose();
     g.computeVertexNormals();
     const colors: number[] = [];
     const sand = new THREE.Color(this.map.sand);
@@ -265,35 +305,6 @@ export class World {
     }
   }
 
-  private buildRays(rng: Rng) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 4;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createLinearGradient(0, 0, 0, 128);
-    grad.addColorStop(0, 'rgba(255,255,240,0.55)');
-    grad.addColorStop(1, 'rgba(255,255,240,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 4, 128);
-    const tex = new THREE.CanvasTexture(canvas);
-    for (let i = 0; i < 14; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        opacity: rng.range(0.25, 0.5),
-        side: THREE.DoubleSide,
-        fog: false,
-      });
-      const ray = new THREE.Mesh(new THREE.PlaneGeometry(rng.range(1.5, 4), 34), mat);
-      ray.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), -16, rng.range(-14, -3));
-      ray.rotation.z = rng.range(-0.35, -0.15);
-      this.rays.push(ray);
-      this.scene.add(ray);
-    }
-  }
-
   private buildSnow(rng: Rng) {
     const n = 1400;
     const pos = new Float32Array(n * 3);
@@ -314,17 +325,10 @@ export class World {
 
   private buildSurface() {
     const geo = this.surfaceGeometry();
-    const mat = new THREE.MeshStandardMaterial({
-      color: '#8fe3f2',
-      flatShading: true,
-      transparent: true,
-      opacity: 0.72,
-      side: THREE.DoubleSide,
-      roughness: 0.25,
-      metalness: 0.1,
-    });
+    const mat = new WaterSurfaceMaterial();
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(0, 0, -30);
+    mesh.renderOrder = 1;
     this.scene.add(mesh);
     return mesh;
   }
@@ -338,15 +342,15 @@ export class World {
 
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
+    const detailChanged = this.quality.detail !== quality.detail;
     this.quality = quality;
+    this.rain.setQuality(quality);
+    this.shafts.setQuality(quality);
     this.kelps.forEach((kelp, i) => {
       kelp.root.visible = i < quality.kelpCount;
       // Hidden objects still receive Three.js matrix updates while in the scene.
       if (kelp.root.visible) this.terrain.add(kelp.root);
       else this.terrain.remove(kelp.root);
-    });
-    this.rays.forEach((ray, i) => {
-      ray.visible = i < quality.rayCount && !this.night && (ray.material as THREE.MeshBasicMaterial).opacity > 0;
     });
     this.snow.geometry.setDrawRange(0, quality.snowCount);
     if (surfaceChanged) {
@@ -355,13 +359,21 @@ export class World {
       this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
       old.dispose();
     }
+    if (detailChanged && this.scenery) {
+      const { visible } = this.scenery.group;
+      this.scene.remove(this.scenery.group);
+      disposeTree(this.scenery.group);
+      this.scenery = buildScenery(this.map, quality.detail);
+      this.scenery.group.visible = visible;
+      this.updateScenery(this.lastDecorationTime, 0);
+      this.scene.add(this.scenery.group);
+    }
   }
 
   private buildBoat() {
     const boat = new THREE.Group();
 
     const hullMat = flatMat('#b8483e');
-    const hullDarkMat = flatMat('#742f37');
     const trimMat = flatMat('#f0bf72');
     const deckMat = flatMat('#d7bb88');
     const cabinMat = flatMat('#e9eee7');
@@ -376,36 +388,46 @@ export class World {
     // A side-profile extrusion gives the hull a readable pointed bow and a
     // deep keel, while keeping the same flat-shaded low-poly language.
     const hullShape = new THREE.Shape();
-    hullShape.moveTo(-3.35, 0.38);
-    hullShape.lineTo(2.05, 0.38);
-    hullShape.lineTo(3.45, 0.12);
+    hullShape.moveTo(-3.35, 0.64);
+    hullShape.lineTo(2.05, 0.64);
+    hullShape.lineTo(3.45, 0.64);
+    hullShape.lineTo(3.45, 0.28);
     hullShape.lineTo(2.62, -0.45);
     hullShape.lineTo(-2.38, -0.62);
     hullShape.lineTo(-3.45, -0.08);
     hullShape.closePath();
     const hullGeo = new THREE.ExtrudeGeometry(hullShape, { depth: 1.72, bevelEnabled: false, steps: 1 });
     hullGeo.translate(0, 0, -0.86);
-    const hull = new THREE.Mesh(hullGeo, hullMat);
+    const hull = new THREE.Mesh(new THREE.BufferGeometry().copy(hullGeo), [hullMat, deckMat]);
 
     const stripeShape = new THREE.Shape();
     stripeShape.moveTo(-3.2, -0.05);
-    stripeShape.lineTo(2.62, 0.0);
-    stripeShape.lineTo(2.35, -0.2);
+    stripeShape.lineTo(2.05, 0.0);
+    stripeShape.lineTo(2.05, -0.2);
     stripeShape.lineTo(-2.55, -0.28);
     stripeShape.closePath();
     const stripeGeo = new THREE.ExtrudeGeometry(stripeShape, { depth: 0.035, bevelEnabled: false });
     stripeGeo.translate(0, 0, 0.85);
     const stripe = new THREE.Mesh(stripeGeo, trimMat);
 
-    const keel = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.22, 1.05), hullDarkMat);
-    keel.position.set(-0.15, -0.53, 0);
-    keel.rotation.z = -0.035;
     const deck = new THREE.Mesh(new THREE.BoxGeometry(6.25, 0.18, 1.58), deckMat);
     deck.position.y = 0.55;
-    const bowDeck = new THREE.Mesh(new THREE.ConeGeometry(1.05, 1.4, 4), deckMat);
-    bowDeck.position.set(2.6, 0.61, 0);
-    bowDeck.rotation.z = Math.PI / 2;
-    bowDeck.scale.set(0.6, 1, 1);
+    // Add a shoulder ring so only the foredeck narrows, leaving the work area wide.
+    const foredeckShape = new THREE.Shape();
+    foredeckShape.moveTo(-3.125, -0.79);
+    foredeckShape.lineTo(2.12, -0.79);
+    foredeckShape.lineTo(2.85, -0.44);
+    foredeckShape.lineTo(3.38, -0.095);
+    foredeckShape.lineTo(3.38, 0.095);
+    foredeckShape.lineTo(2.85, 0.44);
+    foredeckShape.lineTo(2.12, 0.79);
+    foredeckShape.lineTo(-3.125, 0.79);
+    foredeckShape.closePath();
+    deck.geometry.dispose();
+    const foredeckGeo = new THREE.ExtrudeGeometry(foredeckShape, {depth: 0.18, bevelEnabled: false});
+    foredeckGeo.rotateX(Math.PI / 2);
+    foredeckGeo.translate(0, 0.09, 0);
+    deck.geometry.copy(foredeckGeo);
 
     const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.05, 1.35, 1.28), cabinMat);
     cabin.position.set(-0.82, 1.34, 0);
@@ -434,7 +456,13 @@ export class World {
 
     const railPosts = [-2.65, -2.0, 1.65, 2.32].map((x) => rod(new THREE.Vector3(x, 0.61, 0.64), new THREE.Vector3(x, 1.02, 0.64), 0.035, metalMat));
     const sideRail = rod(new THREE.Vector3(-2.65, 1.02, 0.64), new THREE.Vector3(2.32, 1.02, 0.64), 0.04, metalMat);
-    const bowRail = rod(new THREE.Vector3(2.32, 1.02, 0.64), new THREE.Vector3(3.18, 0.7, 0.48), 0.04, metalMat);
+    const bowRail = rod(new THREE.Vector3(2.32, 1.02, 0.64), new THREE.Vector3(3.3, 1.02, 0.07), 0.04, metalMat);
+    boat.add(rod(new THREE.Vector3(2.32, 1.02, -0.79), new THREE.Vector3(3.3, 1.02, -0.07), 0.04, metalMat));
+    boat.add(rod(new THREE.Vector3(3.3, 0.6, 0), new THREE.Vector3(3.3, 1.02, 0), 0.035, metalMat));
+    for (const sign of [-1, 1]) {
+      boat.add(rod(new THREE.Vector3(2.12, 0.61, sign * 0.79), new THREE.Vector3(2.85, 0.61, sign * 0.44), 0.05, trimMat));
+      boat.add(rod(new THREE.Vector3(2.85, 0.61, sign * 0.44), new THREE.Vector3(3.38, 0.61, sign * 0.095), 0.05, trimMat));
+    }
 
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 2.75, 6), woodMat);
     mast.position.set(2.3, 1.95, 0);
@@ -444,13 +472,7 @@ export class World {
     antenna.position.set(-0.84, 2.54, 0);
     const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), lampMat);
     antennaTip.position.set(-0.84, 2.96, 0);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.52), flatMat('#ffcc4d', { side: THREE.DoubleSide }));
-    flag.position.set(2.68, 3.04, 0);
-    flag.rotation.y = Math.PI / 2;
 
-    const searchLight = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.21, 0.18, 6), lampMat);
-    searchLight.position.set(0.13, 2.28, 0.1);
-    searchLight.rotation.z = Math.PI / 2;
     const engineVent = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.26, 0.72), metalMat);
     engineVent.position.set(-2.18, 0.78, 0);
     const ventSlat = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.78), trimMat);
@@ -470,81 +492,272 @@ export class World {
     crateBand.position.set(-2.55, 0.82, 0.15);
     const lifeRing = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.065, 5, 10), flatMat('#f2714b'));
     lifeRing.position.set(-1.92, 0.98, 0.9);
-    lifeRing.rotation.x = Math.PI / 2;
+    lifeRing.rotation.x = 0;
 
-    const bowLamp = new THREE.Mesh(new THREE.SphereGeometry(0.095, 6, 4), lampMat);
-    bowLamp.position.set(3.18, 0.74, 0.43);
     const sternLamp = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), redLampMat);
     sternLamp.position.set(-3.05, 0.74, 0.15);
     const propeller = new THREE.Mesh(new THREE.TorusGeometry(0.23, 0.045, 4, 8), metalMat);
     propeller.position.set(-2.72, -0.62, 0);
     propeller.rotation.y = Math.PI / 2;
 
-    boat.add(hull, stripe, keel, deck, bowDeck, cabin, cabinFront, cabinSide, cabinBackWindow, cabinFrontFrame, roof, roofTrim);
-    boat.add(...railPosts, sideRail, bowRail, mast, mastBrace, boom, antenna, antennaTip, flag);
-    boat.add(searchLight, engineVent, ventSlat, reel, reelDrum, reelArm, crate, crateBand, lifeRing, bowLamp, sternLamp, propeller);
+    boat.add(hull, stripe, cabin, cabinFront, cabinSide, cabinBackWindow, cabinFrontFrame, roof, roofTrim);
+    boat.add(...railPosts, sideRail, bowRail, mast, mastBrace, boom, antenna, antennaTip);
+    boat.add(engineVent, ventSlat, reel, reelDrum, reelArm, crate, crateBand, lifeRing, sternLamp, propeller);
+    // Shared cross sections make deck and underwater bow one continuous shell.
+    const sections = [
+      [-3.35, 0.79, -0.3], [-2.8, 0.79, -0.58],
+      [1.8, 0.79, -0.58], [2.35, 0.69, -0.43],
+      [2.85, 0.43, -0.18], [3.35, 0.035, 0.12],
+    ];
+    const rings = sections.map(([x, w, bottom]) => [
+      new THREE.Vector3(x, 0.64, -w),
+      new THREE.Vector3(x, bottom, -w * 0.57),
+      new THREE.Vector3(x, bottom, w * 0.57),
+      new THREE.Vector3(x, 0.64, w),
+    ]);
+    const vertices: number[] = [];
+    const refinedHullGeo = new THREE.BufferGeometry();
+    const triangle = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, material: number) => {
+      const start = vertices.length / 3;
+      vertices.push(...a.toArray(), ...b.toArray(), ...c.toArray());
+      refinedHullGeo.addGroup(start, 3, material);
+    };
+    for (let i = 0; i < rings.length - 1; i++) {
+      for (let j = 0; j < 4; j++) {
+        const k = (j + 1) % 4;
+        triangle(rings[i][j], rings[i + 1][j], rings[i][k], j === 3 ? 1 : 0);
+        triangle(rings[i][k], rings[i + 1][j], rings[i + 1][k], j === 3 ? 1 : 0);
+      }
+    }
+    triangle(rings[0][0], rings[0][1], rings[0][2], 0);
+    triangle(rings[0][0], rings[0][2], rings[0][3], 0);
+    const end = rings[rings.length - 1];
+    triangle(end[0], end[2], end[1], 0);
+    triangle(end[0], end[3], end[2], 0);
+    refinedHullGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    refinedHullGeo.computeVertexNormals();
+    hull.name = 'integrated-hull-and-deck';
+    hull.geometry.dispose();
+    hull.geometry = refinedHullGeo;
+    const rubberMat = flatMat('#263239');
+    const seamMat = flatMat('#9a784f');
+    const whiteMat = flatMat('#fff3da');
+    const detailBox = (size: number[], pos: number[], mat: THREE.Material, name: string) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat);
+      mesh.position.set(pos[0], pos[1], pos[2]);
+      mesh.name = name;
+      boat.add(mesh);
+      return mesh;
+    };
+    for (let x = -2.9; x < 2.7; x += 0.32) {
+      const plankWidth = 1.5 * (1 - 0.75 * THREE.MathUtils.clamp((x - 2.12) / 1.26, 0, 1));
+      detailBox([0.018, 0.014, plankWidth], [x, 0.648, 0], seamMat, 'deck-plank-seam');
+    }
+    for (const z of [-0.79, 0.79]) {
+      detailBox([5.25, 0.1, 0.09], [-0.505, 0.48, z], trimMat, 'gunwale-cap');
+      const rearStripe = stripe.clone();
+      if (z < 0) { rearStripe.position.z = -1.735; boat.add(rearStripe); }
+      for (const x of [-2.45, -1.65, 1.9]) {
+        const tire = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.08, 8, 16), rubberMat);
+        tire.position.set(x, 0.2, z * 1.07);
+        boat.add(tire, rod(new THREE.Vector3(x, 0.6, z), new THREE.Vector3(x, 0.31, z * 1.07), 0.014, ropeMat));
+      }
+      if (z < 0) {
+        for (const x of [-2.65, -2.0, 1.65, 2.32]) boat.add(rod(new THREE.Vector3(x, 0.61, z), new THREE.Vector3(x, 1.02, z), 0.035, metalMat));
+        boat.add(rod(new THREE.Vector3(-2.65, 1.02, z), new THREE.Vector3(2.32, 1.02, z), 0.04, metalMat));
+      }
+      detailBox([0.46, 0.84, 0.025], [-1.56, 1.13, z > 0 ? 0.659 : -0.659], blueMat, 'cabin-door');
+      detailBox([0.075, 0.035, 0.04], [-1.39, 1.12, z > 0 ? 0.68 : -0.68], trimMat, 'door-handle');
+      for (const x of [-1.5, -0.4, 0.45]) {
+        detailBox([0.04, 0.53, 0.055], [x, 1.58, z > 0 ? 0.685 : -0.685], cabinMat, 'window-mullion');
+      }
+      detailBox([1.9, 0.045, 0.06], [-0.78, 1.33, z > 0 ? 0.68 : -0.68], trimMat, 'window-sill');
+    }
+    // Forward-facing windshield and navigation fittings.
+    detailBox([0.025, 0.48, 0.96], [0.219, 1.6, 0], glassMat, 'forward-windshield');
+    detailBox([0.055, 0.54, 0.045], [0.24, 1.6, 0], cabinMat, 'windshield-divider');
+    for (const x of [-2.9, 2.35]) {
+      detailBox([0.32, 0.08, 0.2], [x, 0.7, -0.32], metalMat, 'cleat-base');
+      boat.add(rod(new THREE.Vector3(x - 0.2, 0.81, -0.32), new THREE.Vector3(x + 0.2, 0.81, -0.32), 0.035, metalMat));
+    }
+    for (let i = 0; i < 5; i++) {
+      const coil = new THREE.Mesh(new THREE.TorusGeometry(0.13 + i * 0.028, 0.014, 6, 24), ropeMat);
+      coil.rotation.x = Math.PI / 2;
+      coil.position.set(2.35, 0.68, 0.18);
+      boat.add(coil);
+    }
+    for (let i = 0; i < 4; i++) detailBox([0.52, 0.025, 0.035], [-2.18, 0.71 + i * 0.055, 0.405], rubberMat, 'engine-vent-slat');
+    const exhaust = rod(new THREE.Vector3(-1.45, 2.16, -0.36), new THREE.Vector3(-1.45, 2.75, -0.36), 0.065, metalMat);
+    boat.add(exhaust);
+    detailBox([0.22, 0.05, 0.18], [-1.45, 2.78, -0.36], rubberMat, 'exhaust-cap');
+    boat.add(rod(new THREE.Vector3(2.3, 3.12, 0), new THREE.Vector3(0.8, 0.7, -0.6), 0.012, ropeMat));
+    boat.add(rod(new THREE.Vector3(2.3, 3.12, 0), new THREE.Vector3(3.0, 0.7, 0.5), 0.012, ropeMat));
+    detailBox([0.8, 0.045, 0.65], [0.95, 0.68, -0.24], metalMat, 'deck-hatch');
+    detailBox([0.18, 0.06, 0.045], [0.95, 0.73, -0.24], trimMat, 'hatch-handle');
+    for (const z of [-0.42, 0.42]) {
+      const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 16), metalMat);
+      flange.rotation.x = Math.PI / 2;
+      flange.position.set(1.45, 0.98, z);
+      boat.add(flange);
+    }
+    const ropeDrum = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.76, 16), ropeMat);
+    ropeDrum.rotation.x = Math.PI / 2;
+    ropeDrum.position.set(1.45, 0.98, 0);
+    boat.add(ropeDrum);
+    for (let i = 0; i < 3; i++) detailBox([0.76, 0.018, 0.018], [-2.55, 0.67 + i * 0.14, 0.512], seamMat, 'crate-board-seam');
+    const ringBands = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.069, 8, 8, Math.PI / 5), whiteMat);
+    for (let i = 0; i < 4; i++) {
+      const band = ringBands.clone();
+      band.position.copy(lifeRing.position);
+      band.position.z += 0.006;
+      band.rotation.z = i * Math.PI / 2;
+      boat.add(band);
+    }
     boat.position.set(0, 0.2, 0);
     this.scene.add(boat);
     return boat;
   }
 
-  setNight(night: boolean) {
-    this.night = night;
-    (this.snow.material as THREE.PointsMaterial).color.set(night ? '#7ff7ff' : '#e8fbff');
+  get night(): boolean {
+    return this.lighting.nightMix > 0.55;
   }
 
-  update(time: number, cameraY: number) {
+  setTimeOfDay(mode: TimeOfDay) {
+    this.dayCycle.setMode(mode);
+  }
+
+  setWeather(mode: WeatherMode) {
+    this.weather.setMode(mode);
+  }
+
+  setLightingEffects(enabled: boolean) {
+    this.lightingEffects = enabled;
+    this.sun.visible = enabled;
+    (this.surface.material as WaterSurfaceMaterial).setEffectsEnabled(enabled);
+    if (!enabled) this.shafts.group.visible = false;
+  }
+
+  advanceTime(dt: number, running = true) {
+    this.lighting = this.dayCycle.advance(dt, running);
+    const weather = this.weather.advance(dt, running);
+    if (running && Number.isFinite(dt) && dt > 0) {
+      this.weatherTime += dt;
+      this.cloudTime += dt * (0.15 + weather.wind * 0.5);
+      this.waveTime += dt * (1 + weather.wind * 0.35);
+    }
+  }
+
+  update(time: number, cameraY: number, cameraX = 0) {
     const elapsed = time - this.lastDecorationTime;
-    if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
+    const tick = elapsed + 1e-6 >= 1 / this.quality.decorationHz;
+    if (tick) {
       this.updateDecorations(time, Math.min(elapsed, 0.25));
       this.lastDecorationTime = time;
     }
+    this.updateLighting(time, cameraY, cameraX, tick ? Math.min(elapsed, 0.25) : null);
+  }
 
-    // Water colour, fog and light fall off with depth.
+  /**
+   * Sky, light, fog and water for this frame. `sceneryDt` moves the shoreline on by
+   * that many seconds; null (between decoration ticks) leaves it as it is, and 0
+   * (paused, or a fresh map) re-poses it so a changed setting still shows.
+   */
+  updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
+    this.lastSceneTime = time;
+    this.lastCameraY = cameraY;
+    this.lastCameraX = cameraX;
+    const weather = this.weather.state;
+    const baseLight = this.lighting;
+    const overcast = weather.cloud * 0.85;
+    const mixSky = (color: readonly number[], day: readonly number[], night: readonly number[]): [number, number, number] =>
+      color.map((c, i) => {
+        const tint = THREE.MathUtils.lerp(this.daySkyTint[i], this.nightSkyTint[i], baseLight.nightMix);
+        const overcastColor = THREE.MathUtils.lerp(day[i], night[i], baseLight.nightMix);
+        return THREE.MathUtils.clamp(THREE.MathUtils.lerp(c, overcastColor, overcast) * tint, 0, 1);
+      }) as [number, number, number];
+    const lighting: LightingState = {
+      ...baseLight,
+      skyColor: mixSky(baseLight.skyColor, [0.36, 0.44, 0.51], [0.04, 0.065, 0.12]),
+      horizonColor: mixSky(baseLight.horizonColor, [0.57, 0.63, 0.67], [0.08, 0.12, 0.19]),
+      sunIntensity: baseLight.sunIntensity * (1 - weather.cloud * 0.88),
+      ambientIntensity: baseLight.ambientIntensity * (1 - weather.cloud * 0.28),
+    };
+    this.skyColor.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
+    this.horizonColor.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
+    this.atmosphere.update(lighting, weather, cameraY, cameraX, this.cloudTime, this.quality);
+    this.colorGrade.update(lighting, weather, cameraY, this.lightingEffects);
+
+    // The same continuous light state drives both sides of the waterline.
     const depth = -cameraY;
     const fog = this.scene.fog as THREE.Fog;
     if (depth < 0) {
-      const sky = this.night ? this.nightSky : this.sky;
-      (this.scene.background as THREE.Color).copy(sky);
-      fog.color.copy(sky);
-      [fog.near, fog.far] = this.map.haze;
+      this.scene.background = this.horizonColor;
+      fog.color.copy(this.horizonColor);
+      fog.near = this.map.haze[0] * THREE.MathUtils.lerp(1, 0.45, weather.rain);
+      fog.far = this.map.haze[1] * THREE.MathUtils.lerp(1, 0.475, weather.rain);
     } else {
-      const c = waterColorAt(depth, this.night);
-      (this.scene.background as THREE.Color).copy(c);
-      fog.color.copy(c);
+      this.waterBackground.copy(waterColorAt(depth));
+      this.waterBackground.lerp(this.horizonColor, 0.06 * Math.max(0, 1 - depth / 60));
+      this.waterBackground.multiplyScalar(THREE.MathUtils.lerp(1, 0.35, lighting.nightMix) * (1 - weather.cloud * 0.12));
+      this.scene.background = this.waterBackground;
+      fog.color.copy(this.waterBackground);
       fog.near = 6;
       fog.far = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
     }
-    const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1) * (this.night ? 0.35 : 1);
-    this.hemi.intensity = 1.4 * light;
-    this.sun.intensity = 2.2 * light * light;
+    const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1);
+    this.sun.color.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
+    this.hemi.color.copy(this.skyColor).lerp(this.horizonColor, 0.3);
+    // Sky pixels are dark at night; use their hue without losing all fill light.
+    this.hemi.color.lerp(this.sun.color, 0.2 + 0.6 * lighting.nightMix);
+    this.hemi.intensity = lighting.ambientIntensity * light;
+    this.sun.position.set(...lighting.direction).multiplyScalar(80);
+    this.sun.intensity = lighting.sunIntensity * light * light;
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;
-      if (this.scenery.group.visible) this.scenery.update(time, this.night);
+      if (sceneryDt !== null && this.scenery.group.visible) this.updateScenery(time, sceneryDt);
     }
-    const rayOpacity = this.night ? 0 : 0.35 * THREE.MathUtils.clamp(1 - depth / 35, 0, 1);
-    this.rays.forEach((ray, i) => {
-      ray.visible = i < this.quality.rayCount && rayOpacity > 0;
-      (ray.material as THREE.MeshBasicMaterial).opacity = rayOpacity;
-    });
+    this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
+    (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
+    const waterMaterial = this.surface.material as WaterSurfaceMaterial;
+    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather);
+    waterMaterial.color.multiply(this.surfaceTint);
+    this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
+  }
+
+  /** Animate the shore by `dt` seconds (0 re-poses it) in the current weather, light setting and swell. */
+  private updateScenery(time: number, dt: number) {
+    if (!this.scenery) return;
+    const env = this.sceneryEnv;
+    env.weather = this.weather.state;
+    env.lightingEffects = this.lightingEffects;
+    env.waveTime = this.waveTime;
+    env.swell = this.swell();
+    this.scenery.update(time, this.night, dt, env);
+  }
+
+  /** How much the wind lifts the waves; the scenery's floats ride the same swell. */
+  private swell() {
+    return 1 + this.weather.state.wind * 0.75;
   }
 
   private updateDecorations(time: number, dt: number) {
     // Waves.
+    const waveTime = this.waveTime;
+    const swell = this.swell();
     const pos = this.surface.geometry.attributes.position;
     const base = this.surfaceBase;
     const waves = this.map.waves;
     for (let i = 0; i < pos.count; i++) {
       const x = base[i * 3];
       const z = base[i * 3 + 2];
-      pos.setY(i, (Math.sin(x * 0.15 + time * 1.3) * 0.35 + Math.cos(z * 0.2 + time * 0.9) * 0.25) * waves);
+      pos.setY(i, (Math.sin(x * 0.15 + waveTime * 1.3) * 0.35 + Math.cos(z * 0.2 + waveTime * 0.9) * 0.25) * swell * waves);
     }
     pos.needsUpdate = true;
     this.surface.geometry.computeVertexNormals();
 
-    this.boat.position.y = 0.25 + Math.sin(time * 1.3) * 0.18 * waves;
-    this.boat.rotation.z = Math.sin(time * 1.1) * 0.05 * waves;
+    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
+    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
 
     for (const k of this.kelps) {
       if (!k.root.visible) continue;

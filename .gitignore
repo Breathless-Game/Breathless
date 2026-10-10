@@ -16,3 +16,9 @@ dist/
 
 # local breath recordings (physiological data)
 sensor/recordings/
+
+# PEARL market (sensor/market.mjs): oracle + market secret keys, server-mode ledger
+sensor/.market-oracle.json
+sensor/.market-keypair.json
+sensor/.market-state.json
+sensor/.market-state.json.tmp

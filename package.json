@@ -4,8 +4,12 @@
   "scripts": {
     "sensor": "npm --prefix sensor start",
     "sensor:sim": "npm --prefix sensor run sim",
+    "market": "npm --prefix sensor run market",
     "game": "npm --prefix game run dev",
     "dev": "node scripts/dev.mjs",
-    "setup": "npm --prefix sensor install && npm --prefix game install"
+    "showcase:gif": "node scripts/capture-showcase.mjs",
+    "setup": "npm --prefix sensor install && npm --prefix game install",
+    "build": "npm --prefix game run build",
+    "start": "node sensor/index.mjs --serve game/dist"
   }
 }

@@ -16,8 +16,11 @@ import { HALF_WIDTH, World } from './world';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
+import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { loadEquipment, nextRodTier, rodTier, saveEquipment, upgrade, type EquipmentState } from './equipment';
+import { loadEquipment, nextRodTier, planUpgrade, rodTier, saveEquipment, totalPearls, type EquipmentState } from './equipment';
+import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
+import { NftQueue } from './nft-queue';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -58,11 +61,11 @@ window.addEventListener('resize', resize);
 resize();
 
 const diver = new Diver(scene);
+world.colorGrade.apply(diver.group);
 const hud = new Hud();
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
-let night = false;
 
 function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
@@ -70,7 +73,7 @@ function randomSeed(): number {
 
 function rollFor(zone: Zone, depth: number): FishSpec {
   const a = rollFish(randomSeed(), zone, depth);
-  if (!night) return a;
+  if (!world.night) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
   const b = rollFish(randomSeed(), zone, depth);
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
@@ -82,6 +85,7 @@ function spawnFish(zone: Zone) {
   const fish = new Fish(spec, zone, THREE.MathUtils.randFloat(-HALF_WIDTH, HALF_WIDTH), -depth, HALF_WIDTH);
   fishes.push(fish);
   scene.add(fish.mesh.group);
+  world.colorGrade.apply(fish.mesh.group);
 }
 
 /** Fill the zones the current map opens. Deeper zones stay empty: you cannot reach them here. */
@@ -100,14 +104,21 @@ let phase: Phase = 'menu';
 let outOfAir = false;
 let emergency = 1;
 let net: FishSpec[] = [];
-const bank: FishSpec[] = loadBank();
+const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
-function loadBank(): FishSpec[] {
+function loadBank(): BankedFish[] {
   try {
-    return JSON.parse(localStorage.getItem('deepbreath.bank') ?? '[]');
+    // Fish banked under the old rule were paid on surfacing: migrateBank marks them legacy.
+    const { bank, changed } = migrateBank(JSON.parse(localStorage.getItem('deepbreath.bank') ?? '[]'));
+    if (changed) {
+      try {
+        localStorage.setItem('deepbreath.bank', JSON.stringify(bank));
+      } catch {}
+    }
+    return bank;
   } catch {
     return [];
   }
@@ -122,7 +133,16 @@ function saveBank() {
 const currentTier = () => rodTier(equipment);
 hud.setNet(net, currentTier().capacity);
 hud.setBank(bank);
-const vault = new Vault(bank, saveBank);
+const nftQueue = new NftQueue(bank, saveBank, {
+  changed: () => vault.refresh(),
+  sold(fish, result) {
+    hud.setBank(bank);
+    hud.toast(fish, `SOLD · +${result.pearls} PEARLS`);
+    void syncPearls(result.pearls);
+  },
+});
+const vault = new Vault(bank, nftQueue);
+nftQueue.start();
 const health = new HealthLog();
 const report = new Report(health);
 const gear = new GearPanel(() => buyNextRod());
@@ -140,22 +160,54 @@ function refreshEquipment() {
   diver.setNetLevel(tier.level);
 }
 
-function buyNextRod() {
+/** Re-read the on-chain PEARL balance into the cache. `earned` shows a sale's Pearls before the read lands. */
+async function syncPearls(earned = 0) {
+  if (earned) {
+    equipment.pearls += earned;
+    refreshEquipment();
+  }
+  try {
+    equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    refreshEquipment();
+  } catch (e) {
+    console.warn('PEARL balance unavailable', e);
+  }
+}
+
+let buying = false;
+async function buyNextRod() {
+  if (buying) return;
   const next = nextRodTier(equipment);
   if (!next) {
     gear.showNotice('The net is already at maximum level.');
     return;
   }
-  const upgraded = upgrade(equipment);
-  if (!upgraded) {
-    gear.showNotice(`Need ${next.cost - equipment.pearls} more Pearls.`);
-    hud.message(`Need ${next.cost - equipment.pearls} more Pearls`, 1500);
+  const plan = planUpgrade(equipment);
+  if (!plan) {
+    gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
+    hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
     return;
   }
-  equipment.rodLevel = upgraded.rodLevel;
-  equipment.pearls = upgraded.pearls;
-  refreshEquipment();
-  hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+  // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
+  buying = true;
+  gear.setBusy(true);
+  try {
+    if (plan.fromChain > 0) {
+      await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
+      equipment.pearls = Math.max(0, equipment.pearls - plan.fromChain);
+    }
+    equipment.legacyPearls -= plan.fromLegacy;
+    equipment.rodLevel = plan.tier.level;
+    hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+  } catch (e) {
+    console.error('upgrade failed', e);
+    gear.showNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
+  } finally {
+    buying = false;
+    gear.setBusy(false);
+    refreshEquipment();
+    if (plan.fromChain > 0) void syncPearls();
+  }
 }
 
 // ---- Input --------------------------------------------------------------
@@ -166,13 +218,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
   }
   keys.add(e.key.toLowerCase());
-  // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
+  // Not on the workbench: the report would pop up over the table and the chart.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
   if (phase !== 'play') return;
   if (e.code === 'Space') {
@@ -180,10 +232,14 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+    if (vault.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
+    if (gear.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'n') {
-    setNight(!night);
+    const nightSelected = world.dayCycle.mode === 'night'
+      || (world.dayCycle.mode === 'cycle' && world.night);
+    setTimeOfDay(nightSelected ? 'morning' : 'night');
   } else if (e.key.toLowerCase() === 'k') {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
@@ -199,14 +255,17 @@ function setBreathMode(mode: BreathMode) {
   hud.message(`Breath input: ${mode}`);
 }
 
-function setNight(on: boolean) {
-  night = on;
-  world.setNight(on);
-  hud.message(on ? 'Night falls. Rarer fish rise.' : 'Sunrise.');
+function setTimeOfDay(mode: TimeOfDay) {
+  world.setTimeOfDay(mode);
+  const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
+  hud.message(labels[mode]);
 }
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
-document.getElementById('gear-open')!.addEventListener('click', () => gear.toggle(true));
+document.getElementById('gear-open')!.addEventListener('click', () => {
+  gear.toggle(true);
+  void syncPearls();
+});
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
 
 function axis(neg: string[], pos: string[]) {
@@ -245,26 +304,24 @@ function tryCatch() {
   setTimeout(() => world.map === map && spawnFish(zone), 4000);
 }
 
+// Banking pays nothing: every fish is queued to become an NFT, and Pearls come only from selling one.
 function bankNet() {
   if (!net.length) return;
-  const reward = net.reduce((sum, f) => sum + fishValue(f), 0);
-  bank.push(...net);
+  bank.push(...net.map(bankEntry));
   saveBank();
-  equipment.pearls += reward;
-  refreshEquipment();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
-  hud.message(`Banked ${net.length} fish · +${reward} Pearls`);
+  hud.message(`Banked ${net.length} fish · minting NFTs…`);
   hud.toast(rarest, 'BANKED');
+  noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
   hud.setNet(net, currentTier().capacity);
   hud.setBank(bank);
-  noteBankValue(true);
+  nftQueue.kick();
 }
 
 // ---- Maps ---------------------------------------------------------------
-/** Record progress toward the next map, and say so when a dive opens one. */
-function noteBankValue(announce: boolean) {
-  const value = bankValue(bank);
+/** Record progress toward the next map (the lifetime banked value), and say so when a dive opens one. */
+function noteBankValue(announce: boolean, value: number) {
   if (value <= mapProgress.bestValue) return;
   const opened = MAP_ORDER.map((id) => MAPS[id]).filter(
     (m) => !mapProgress.unlockAll && mapProgress.bestValue < m.unlockValue && value >= m.unlockValue,
@@ -306,7 +363,7 @@ function setDemoUnlock(on: boolean) {
 
 const mapPicker = new MapPicker(mapProgress, selectMap, setDemoUnlock);
 showMapOnHud();
-noteBankValue(false);
+noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
 
 function blackout() {
   phase = 'blackout';
@@ -331,6 +388,7 @@ const calibStep = document.getElementById('calib-step')!;
 const calibSub = document.getElementById('calib-sub')!;
 let sawHold = false;
 let calibPhase = '';
+let calibFallback: ReturnType<typeof setTimeout> | null = null;
 
 function markCalib(phase: string) {
   if (phase === calibPhase) return;
@@ -390,9 +448,15 @@ document.getElementById('test-play')!.addEventListener('click', () => {
 
 function updateCalibration() {
   const s = breath.state;
-  if (!s.connected) {
+  if (s.mode === 'keyboard' && s.error) {
+    // breath.ts dropped to keyboard, e.g. the server's live Presage slots are all taken.
+    calibStep.textContent = 'Playing with keyboard: hold Shift to dive';
+    calibSub.textContent = s.error;
+    camWrap.style.visibility = 'hidden';
+    if (!calibFallback) calibFallback = setTimeout(() => phase === 'calibrating' && startGame(), 3000);
+  } else if (!s.connected) {
     calibStep.textContent = 'Connecting to breath sensor…';
-    calibSub.textContent = 'Start it with: npm run sensor';
+    calibSub.textContent = import.meta.env.DEV ? 'Start it with: npm run sensor' : 'Reconnecting…';
   } else if (!s.trace.length) {
     calibStep.textContent = 'Presage is warming up…';
     calibSub.textContent = s.hint || 'Sit still, face and chest in view';
@@ -416,6 +480,7 @@ function updateCalibration() {
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
 let paused = false;
+let resetDayClock = false;
 
 function pause() {
   if (phase !== 'play' || paused) return;
@@ -459,6 +524,8 @@ function goToMenu() {
   breath.stopLive();
   sawHold = false;
   calibPhase = '';
+  if (calibFallback) clearTimeout(calibFallback);
+  calibFallback = null;
   calib.classList.add('hidden');
   camWrap.style.visibility = 'hidden';
   hud.hide();
@@ -467,6 +534,8 @@ function goToMenu() {
 
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
+  world.setLightingEffects(s.lightingEffects);
+  world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -486,48 +555,55 @@ const pauseMenu = new PauseMenu(settings, {
   breathModes,
   breathMode: () => breath.state.mode,
   setBreathMode,
-  night: () => night,
-  setNight,
+  timeOfDay: () => world.dayCycle.mode,
+  setTimeOfDay,
   applySettings,
 });
 
 // ---- Title screen -------------------------------------------------------
-// START drops its fish onto the workbench (gear + map); the dive launches from the start card.
+// START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
   { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
-// Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
+// Gear set in the workbench's READY tray for this dive. Not used by the dive yet: upgrades aren't wired in.
 let loadout: UpgradeId[] = [];
+
+// How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
+const BENCH_CAMERA_DROP = 1.4;
+let benchPan = 0;
 
 const workbench = new Workbench({
   progress: () => mapProgress,
   setUnlockAll: setDemoUnlock,
+  pan(u, tableY) {
+    benchPan = u;
+    titleScreen.setPan(u, tableY);
+  },
   dive(id, gear) {
     loadout = gear;
     selectMap(id);
     openStartCard();
   },
-  back: () => showTitle(false),
 });
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
   workbench.hide();
+  benchPan = 0;
+  titleScreen.setPan(0);
   titleScreen.show(intro);
 }
 
 function openWorkbench() {
-  titleScreen.dropAway('START', () => {
-    titleScreen.hide();
-    workbench.show(true);
-  });
+  if (!workbench.visible) workbench.show(true);
 }
 
 function openStartCard() {
   titleScreen.hide();
+  benchPan = 0;
   overlay.classList.remove('hidden');
 }
 
@@ -537,6 +613,7 @@ function backFromStartCard() {
   if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
   else {
     overlay.classList.add('hidden');
+    titleScreen.show(false);
     workbench.show(false);
   }
 }
@@ -546,12 +623,28 @@ showTitle(true);
 
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
 document.addEventListener('visibilitychange', () => {
+  resetDayClock = true;
   if (document.hidden) pause();
 });
 
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
+const timeLabel = document.getElementById('time-of-day')!;
+let displayedMinute = -1;
+let displayedWeather = '';
+
+function updateTimeLabel() {
+  const minute = Math.round(world.dayCycle.hour * 60) % (24 * 60);
+  const weather = world.weather.state.kind;
+  if (minute === displayedMinute && weather === displayedWeather) return;
+  displayedMinute = minute;
+  displayedWeather = weather;
+  const hour = Math.floor(minute / 60);
+  const period = world.night ? 'Night' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Dusk';
+  const weatherLabels = { clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain', storm: 'Storm' };
+  timeLabel.textContent = `${period} · ${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')} · ${weatherLabels[weather]}`;
+}
 
 function update(dt: number, time: number) {
   const s = breath.state;
@@ -614,12 +707,13 @@ function update(dt: number, time: number) {
 
   diver.update(dt, time, -diver.pos.y);
   for (const f of fishes) f.update(dt, time, diver.pos);
-  world.update(time, camera.position.y);
+  world.update(time, camera.position.y, camera.position.x);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
   // the surface so we never look at the diver through the translucent waves.
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9), 22);
+  const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
+  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9) - benchDrop, 22);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 
@@ -637,10 +731,16 @@ function frame() {
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
+  // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  resetDayClock = false;
   if (!paused) {
     time += dt;
     update(dt, time);
+  } else {
+    world.updateLighting(time, camera.position.y, camera.position.x);
   }
+  updateTimeLabel();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -659,9 +759,12 @@ Object.assign(window, {
   fishes,
   keys,
   renderQuality,
+  nftQueue,
+  setTimeOfDay,
   debugStep(seconds: number) {
     for (let t = 0; t < seconds; t += 1 / 30) {
       time += 1 / 30;
+      world.advanceTime(1 / 30);
       update(1 / 30, time);
     }
     renderer.render(scene, camera);
