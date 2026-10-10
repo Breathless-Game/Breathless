@@ -380,7 +380,8 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── sky.ts          atmospheric sky, time-driven sun / moon and layered clouds
         ├── color-grade.ts  shared morning / afternoon / night color balance in scene materials
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
-        ├── water.ts        sky reflection and moving sun / moon highlights in one water draw call
+        ├── water.ts        GPU waves, facet color and polygonal sun / moon reflection patches
+        ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
         ├── maps.ts         the three map definitions (depth, unlock value, palette) and the saved map progress
@@ -557,7 +558,9 @@ The game picks the starting quality from the CPU logical core count and the devi
 | Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
 | Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
-| Water micro-ripple layers | 1 | 2 | 3 |
+| Water triangles | 480 | 1920 | 4320 |
+| Reflection detail | Polygon patches | + secondary colored facets | + bright tips |
+| Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
 | Maximum raindrops | 160 | 420 | 800 |
@@ -577,11 +580,15 @@ Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Ni
 
 Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
 
-Ripple normals and viewing-angle reflection approximate the sky and moving sun / moon highlights on the water. Reflection and opacity are reduced when seen from underwater. Underwater sunlight uses soft, irregular scattering that spreads and weakens with depth; red light is absorbed faster than blue. All 4 / 8 / 14 light shafts share one draw call and disappear at night, in storms or at depth. This runs in the existing water material, preserving fog and color management without a reflection camera or a second scene render. Low, medium and high use 1 / 2 / 3 micro-ripple layers. It reflects the sky and light sources; boats and fish do not have live mirror reflections.
+The sea keeps a low-poly silhouette: slightly irregular triangles have separate blue-green facet colors and flat normals. Sun and moon reflections appear as short angular wedges and trapezoids, arranged along a path toward the visible source. Low quality retains this shape; medium adds another family of colored facets and high adds sparse bright tips. Waves run in the vertex shader, eliminating per-frame water vertex uploads and CPU normal rebuilding. Shared corners remain watertight. The existing water draw handles the reflections without a reflection camera or extra scene render; boats and fish do not have live mirror reflections.
+
+Large luminous sun and moon discs use warm gold and cool silver-blue layered halos. Low keeps the core and primary halos; higher settings add softer transitions. Clouds attenuate their light before compositing so a thick storm can hide the bright core. No fullscreen bloom pass or render target is allocated. Their compressed elevation keeps the enlarged discs within the side-on camera at noon.
+
+Reflection and opacity are reduced underwater. Sunlight scatters through soft, irregular openings, spreads and weakens with depth, and loses red light faster than blue. All 4 / 8 / 14 shafts share one draw, skipped at night, in storms, at depth or with effects disabled.
 
 Morning highlights are gently warm, afternoon highlights become golden, and night shifts toward muted blue. The material shaders share one color-grade state; cloud cover reduces saturation and underwater depth removes the warm cast. This adds no fullscreen pass or render target. Sky color and fog remain continuous when lighting effects are disabled.
 
-- `npm --prefix game test` also covers the day cycle, midnight and color continuity, manual blends, pauses and returning to the cycle.
+- `npm --prefix game test` also covers the day cycle, midnight and color continuity, manual blends, pauses, returning to the cycle, and watertight water geometry at every quality level.
 - Inspect `world.dayCycle.hour` / `world.dayCycle.mode` in the console, or preview lighting with `setTimeOfDay('afternoon')`.
 
 ### Weather

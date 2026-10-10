@@ -87,8 +87,8 @@ export function sampleLighting(hour: number): LightingState {
   // view. The same vectors drive the visible discs and water reflections.
   const angle = (normalizedHour - 6) * Math.PI / 12;
   const elevation = Math.sin(angle);
-  const sunDirection = unit(Math.cos(angle) * 0.55, elevation * 0.31, -1);
-  const moonDirection = unit(-Math.cos(angle) * 0.55, -elevation * 0.31, -1);
+  const sunDirection = unit(Math.cos(angle) * 0.55, elevation * 0.21, -1);
+  const moonDirection = unit(-Math.cos(angle) * 0.55, -elevation * 0.21, -1);
   // Blend their contribution around the horizon without a zero vector or an
   // instantaneous direction flip. Keep the scene's fill source above water.
   const blend = Math.max(0, Math.min(1, (elevation + 0.55) / 1.1));
