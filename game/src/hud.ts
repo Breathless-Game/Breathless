@@ -1,5 +1,5 @@
 import type { BreathState } from './breath';
-import { FishSpec, RARITY } from './fish';
+import { FishSpec, RARITY, fishValue } from './fish';
 import { fishIcon } from './portrait';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -135,10 +135,12 @@ export class Hud {
   setBank(bank: FishSpec[]) {
     this.bankCount.textContent = `${bank.length} fish`;
     const best = bank.reduce<FishSpec | null>(
-      (a, f) => (!a || RARITY[f.rarity].value > RARITY[a.rarity].value ? f : a),
+      (a, f) => (!a || fishValue(f) > fishValue(a) ? f : a),
       null,
     );
-    this.bankValue.textContent = best ? `best: ${RARITY[best.rarity].label} ${best.species}` : 'surface to bank your net';
+    this.bankValue.textContent = best
+      ? `best: ${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} pts`
+      : 'surface to bank your net';
   }
 
   toast(spec: FishSpec, title?: string) {
@@ -149,7 +151,7 @@ export class Hud {
     el.style.setProperty('--c', r.color);
     el.innerHTML = `<img alt=""><div><div class="r">${title ?? r.label.toUpperCase()}</div><div class="n"></div></div>`;
     el.querySelector('img')!.src = fishIcon(spec);
-    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg`;
+    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
     this.toasts.prepend(el);
     setTimeout(() => el.remove(), 3100);
   }
