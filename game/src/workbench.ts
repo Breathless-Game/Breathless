@@ -1006,8 +1006,8 @@ export class Workbench {
     } else {
       const map = MAPS[id];
       $('wb-place-title').textContent = `${map.name} · ${map.nameZh}`;
-      $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · 0–${mapDepth(map) - 2} m · ${map.place}`;
-      $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}.`;
+      $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · Shelf ${mapDepth(map)} m · Trench ∞ · ${map.place}`;
+      $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
     }
     const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
     $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
