@@ -1,5 +1,7 @@
 # HackRU26 · 屏息 Breathless 🫁
 
+[English](README.md) · **简体中文**
+
 > **用你真实的憋气来潜水抓鱼。** 摄像头通过 Presage 识别你是否在憋气，憋住气潜水员才能下潜；越深鱼越稀有；在水下一换气就必须马上浮上去，否则网里的鱼全丢。抓到的鱼可以铸造成 Solana NFT，玩家之间交易。游戏还会安静地记录每次憋气的时长和心率，你想看的时候一键生成健康报告。
 
 低多边形（low-poly）2.5D 风格，Three.js + TypeScript，前端为主，加一个本地 Node 传感器服务。
@@ -274,10 +276,10 @@ node sensor/analyze.mjs
 node sensor/analyze.mjs --sweep
 ```
 
-网格搜索 `holdWindowUs` / `flatRatio` / `releaseRatio` / `useApnea`，给出最好的几组。
+网格搜索 `activityWindowUs` / `holdRatio` / `releaseRatio` / `releaseHoldUs`，给出最好的几组。
 
 ```bash
-node sensor/analyze.mjs --trace=lo --flatRatio=0.3
+node sensor/analyze.mjs --trace=lo --holdRatio=0.45
 ```
 
 改用腹部曲线、或者指定某组参数重放。
@@ -303,9 +305,11 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 └── game/                   Vite + TypeScript + Three.js
     ├── index.html          HUD、标题卡、收藏面板、报告面板的 DOM
     ├── vite.config.ts      端口 5173；Node polyfills（Umi 和 Irys 需要）
+    ├── tests/              node --test：自动画质的单元测试
     └── src/
         ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
         ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
+        ├── breathtest.ts   标题页的 2.5 分钟憋气测试：按提示憋气和呼吸，自动打标注
         ├── world.ts        海底、礁石、珊瑚、海带、光束、雪、水面、船；按深度变化雾和颜色；昼夜
         ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
         ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
@@ -320,6 +324,7 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
         ├── report.ts       健康报告：指标卡、两张图、解读文字、存 PDF、删除数据
         ├── pause.ts        Esc 暂停菜单：继续（水下 3 秒倒数）、设置、回到主页面
         ├── settings.ts     玩家设置（画质、摄像头小窗、操作提示），存 localStorage
+        ├── render-quality.ts  自动画质：按设备选初始档位，持续掉帧时降档
         └── style.css       深色玻璃风 HUD
 ```
 
@@ -421,8 +426,6 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 - sensor 的日志直接看运行 `npm run sensor` 的那个终端。Presage 的状态码和 ValidationCode 提示会翻译成 HUD 左上角的黄色 hint。
 - Presage 一直卡在 `starting`：检查 `.env` 里的 key，看浏览器是否真的在发帧（HUD 的 frames 计数），以及光线够不够。
 
----
-
 ### 自动画质
 
 暂停菜单的 Settings → Render quality 默认选 Auto；也可以手动选择高、中、低档并保存，手动档位不会自动降级。已有手动设置继续生效。暂停时不参与帧率采样，切换摄像头预览或操作提示不会重置 Auto 已降到的档位。
@@ -443,6 +446,8 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 
 - `npm --prefix game test`：画质分级、像素预算、持续卡顿、后台恢复和降档冷却测试。
 - 控制台查看 `renderQuality.level` 和 `renderQuality.settings`，确认当前档位与预算。
+
+---
 
 ## 12. 当前状态与待办
 
@@ -479,6 +484,7 @@ node sensor/analyze.mjs --trace=lo --flatRatio=0.3
 - **秘密**：`.env`、私钥、任何 API key 都不要进仓库。新的环境变量要同步加到 `.env.example`（只写变量名，不写值）。
 - **风格**：TypeScript strict；低多边形 + flat shading；颜色变量在 `style.css` 的 `:root`；注释只解释"为什么"。
 - **改参数**：玩法常数集中在 `main.ts` 顶部和 `fish.ts` 的 `RARITY` / `ZONES`，改了请在 PR 里说明。
+- **README 有两份**：`README.md`（English）和 `README.zh-CN.md`（中文）。改其中一份时，请在同一个 PR 里把另一份也改了。
 
 ---
 
