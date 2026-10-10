@@ -435,6 +435,20 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
 - **为什么 Vite 要加 polyfill**：Umi 和 Irys 依赖 Node 的 `Buffer`、`stream`、`crypto`，所以 `vite.config.ts` 用了 `vite-plugin-node-polyfills`。
 
+### PEARL coin / 珍珠币
+
+游戏货币珍珠是 devnet 上真正的 SPL 代币 **PEARL**（decimals 0）。客户端是 `game/src/pearl.ts`（`pearlBalance`、`sellToMarket`、`spendPearls`），由 `wallet.ts` 里的 owner 钱包签名（现在是临时钱包，以后换成 Phantom）。服务端是 `sensor/market.mjs`，同源挂在 `/api/market/{info,quote,sell}`。市场启动时选定模式：
+
+- **合约模式**（设置了 `FISH_MARKET_PROGRAM_ID`）：PEARL 的 mint 归 Anchor 合约 `fish_market` 所有（PDA `pearl`）。一条 `sell_fish` 指令原子地烧掉鱼并给卖家铸 PEARL，同时强制执行 `config.max_value`。服务端只当**预言机**：`POST /api/market/quote` 检查卖家确实持有这条鱼、价值合理，然后返回一笔它已部分签名的 `sell_fish` 交易。玩家签名、发送，并支付手续费。
+- **服务端模式**（兜底）：市场钱包自己创建 PEARL mint 并持有铸币权。玩家把鱼转给市场钱包，`POST /api/market/sell` 在链上核验这笔转账，铸 PEARL，再烧掉鱼。`sensor/.market-state.json` 里的已售集合保证重试安全（不会重复付款）。
+- **消费**：两种模式下，`spendPearls` 都是从玩家的代币账户里烧掉 PEARL。
+- **定价**：价值取自鱼的链上 Attributes，没有就按「稀有度价值 × 区域倍率」重算。超过「稀有度价值 × 6」的直接拒绝。
+- **信任模型**：这是 devnet 黑客松版本。鱼由客户端钱包铸造，所以谁都能铸一条「神话」拿来卖。稀有度上限（合约模式下再加 `max_value`）只限制单笔金额，PEARL 没有真实价值。服务端密钥（`sensor/.market-oracle.json` 或 `MARKET_ORACLE_KEYPAIR`，以及 `sensor/.market-keypair.json`）权限 600，已加入 gitignore。它们不打日志，也不放进 `VITE_*`。
+- **开发**：
+  - 在 `npm run dev` 旁边再跑 `npm run market`（端口 8795，可用 `MARKET_PORT` 改）。Vite 会把 `/api` 代理过去。
+  - 启动时会打印公钥。服务端模式下如果 airdrop 被限流，去 <https://faucet.solana.com> 给它领币。
+  - 单元测试：`npm --prefix sensor test`。对着正在运行的市场在 devnet 上跑一遍卖鱼和消费：`npm --prefix sensor run market:e2e`。
+
 ---
 
 ## 9. 健康报告

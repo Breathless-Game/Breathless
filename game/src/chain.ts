@@ -25,7 +25,7 @@ const SYMBOL = 'DIVE';
 
 let umi: Umi | null = null;
 
-function getUmi(): Umi {
+export function getUmi(): Umi {
   if (umi) return umi;
   const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
   let secret: Uint8Array | null = null;

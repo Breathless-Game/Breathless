@@ -435,6 +435,20 @@ Every fish that is banked earns its catch value in Pearls; fish lost in a blacko
 - **Optional environment variable**: `VITE_SOLANA_RPC` (defaults to `https://api.devnet.solana.com`). Every `VITE_*` variable is bundled into the front end, so **never put a secret in one**.
 - **Why Vite needs polyfills**: Umi and Irys depend on Node's `Buffer`, `stream` and `crypto`, so `vite.config.ts` uses `vite-plugin-node-polyfills`.
 
+### PEARL coin / 珍珠币
+
+Pearls, the in-game currency, are a real SPL token, **PEARL** (decimals 0), on devnet. Client: `game/src/pearl.ts` (`pearlBalance`, `sellToMarket`, `spendPearls`), signed by the owner wallet from `wallet.ts` (the burner today, Phantom later). Server: `sensor/market.mjs`, same-origin at `/api/market/{info,quote,sell}`. The market picks a mode at start-up:
+
+- **Program mode** (`FISH_MARKET_PROGRAM_ID` set): the `fish_market` Anchor program owns the PEARL mint (PDA `pearl`). One `sell_fish` instruction burns the fish and mints its value to the seller, atomically, and enforces `config.max_value`. The server is only the **oracle**: `POST /api/market/quote` checks that the seller owns the fish and that its value is sane, then returns a `sell_fish` tx it has partially signed. The player signs it, sends it and pays the fees.
+- **Server mode** (the fallback): the market wallet creates the PEARL mint and holds its authority. The player transfers the fish to the market wallet, and `POST /api/market/sell` verifies that transfer on-chain, mints the PEARL and burns the fish. A sold set in `sensor/.market-state.json` makes retries safe (no double pay).
+- **Spend**: `spendPearls` burns PEARL from the player's token account, in both modes.
+- **Price**: the catch value comes from the fish's on-chain Attributes, or is recomputed as rarity value × zone multiplier. Anything above rarity value × 6 is rejected.
+- **Trust model**: this is a devnet hackathon build. Client wallets mint the fish, so anyone can mint a "mythic" and sell it. The rarity cap, plus `max_value` in program mode, only bounds each sale, and PEARL has no real value. The server keys (`sensor/.market-oracle.json` or `MARKET_ORACLE_KEYPAIR`, and `sensor/.market-keypair.json`) are mode 600 and gitignored. They are never logged and never go in `VITE_*`.
+- **Dev**:
+  - Run `npm run market` (port 8795, `MARKET_PORT` overrides) next to `npm run dev`. Vite proxies `/api` to it.
+  - On start the market prints its public key. In server mode, fund that key at <https://faucet.solana.com> if the airdrop is rate-limited.
+  - Tests: `npm --prefix sensor test`. Devnet sell and spend check against the running market: `npm --prefix sensor run market:e2e`.
+
 ---
 
 ## 9. Health report

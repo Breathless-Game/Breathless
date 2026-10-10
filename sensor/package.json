@@ -5,9 +5,18 @@
   "version": "0.1.0",
   "scripts": {
     "start": "node index.mjs",
-    "sim": "node index.mjs --sim"
+    "sim": "node index.mjs --sim",
+    "market": "node market-server.mjs",
+    "market:e2e": "node pearl-e2e.mjs",
+    "test": "node --test market-rules.test.mjs fish-market.test.mjs"
   },
   "dependencies": {
+    "@metaplex-foundation/mpl-core": "^1.10.0",
+    "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
+    "@metaplex-foundation/mpl-toolbox": "^0.11.5",
+    "@metaplex-foundation/umi": "^1.6.0",
+    "@metaplex-foundation/umi-bundle-defaults": "^1.6.0",
+    "@metaplex-foundation/umi-uploader-irys": "^1.6.0",
     "@smartspectra/node-sdk": "^3.4.0",
     "dotenv": "^16.4.5",
     "ws": "^8.18.0"
