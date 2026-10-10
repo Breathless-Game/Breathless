@@ -1100,6 +1100,58 @@ button:disabled {
   color: var(--danger);
 }
 
+#market-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+#market-bar:empty {
+  display: none;
+}
+
+#market-bar .paused {
+  color: var(--gold);
+}
+
+#market-bar .sale {
+  color: var(--hold);
+}
+
+#market-bar a {
+  color: var(--breathe);
+}
+
+#collection-grid .nft-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#collection-grid .nft-status.busy {
+  color: var(--breathe);
+}
+
+#collection-grid .nft-status.failed {
+  color: var(--danger);
+}
+
+#collection-grid .paid {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+#collection-grid .sell-confirm {
+  display: flex;
+  gap: 6px;
+}
+
 /* ---- gear workshop ---- */
 #gear-panel {
   position: fixed;
