@@ -172,7 +172,7 @@ window.addEventListener('keydown', (e) => {
     openWorkbench();
   }
   keys.add(e.key.toLowerCase());
-  // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
+  // Not on the workbench: the report would pop up over the table and the chart.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
   if (phase !== 'play') return;
   if (e.code === 'Space') {
@@ -508,7 +508,7 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
-// Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
+// Gear set in the workbench's READY tray for this dive. Not used by the dive yet: upgrades aren't wired in.
 let loadout: UpgradeId[] = [];
 
 // How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
