@@ -7,7 +7,8 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
-    // The PEARL market (sensor/market-server.mjs, `npm run market`); same-origin /api in production.
+    // The PEARL market (sensor/market-server.mjs, `npm run market`); `npm start` serves /api/market same-origin.
     proxy: { '/api': `http://127.0.0.1:${process.env.MARKET_PORT ?? 8795}` },
   },
+  build: { rollupOptions: { input: ['index.html', 'showcase.html'] } },
 });
