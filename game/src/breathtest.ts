@@ -49,6 +49,10 @@ export class BreathTest {
 
   constructor(private breath: BreathSource) {}
 
+  get open() {
+    return !this.panel.classList.contains('hidden');
+  }
+
   start() {
     this.running = true;
     this.step = -1;
