@@ -28,8 +28,10 @@ const FRICTION = 3; // damping of the height field as a whole
 // but leaves broad motion, like an edge flapping, its bounce. Keeps STEP · 8 · this < 2.
 const VISCOSITY = 15;
 const WRINKLE_R = 0.28; // how far around the pointer it wrinkles
-const WRINKLE_WAVE = 0.2; // wrinkle spacing
-const WRINKLE_PUSH = 1.6; // how hard a moving pointer wrinkles it
+const WRINKLE_WAVE = [0.15, 0.27]; // wrinkle spacing, picked afresh each pointer move
+const WRINKLE_TURN = 0.45; // radians: how far a move's wrinkles may turn off square to it
+const WRINKLE_PUSH = 0.95; // how hard a moving pointer wrinkles it
+const WRINKLE_GRAIN = 0.07; // how much the paper's own grain shifts the ridges about
 const MAX_STIR = 6; // pointer speed cap, sheet units/s
 // Whole-sheet bending while carried: overdamped, so it sags and recovers without jiggling.
 const BEND_STIFF = 140;
@@ -67,7 +69,10 @@ export class SoftPaper {
   private v0: Float32Array; // velocities at the start of the step
   private rest: Float32Array;
   private presses: Press[] = [];
-  private stirAt = { x: 0, z: 0, dx: 0, dz: 0, speed: 0 };
+  private stirAt = { x: 0, z: 0, dx: 0, dz: 0, speed: 0, k: 0 };
+  // The paper's grain: a fixed, smooth random field that shifts ridges about (phase) and makes some weaker (gain).
+  private grainPhase: Float32Array;
+  private grainGain: Float32Array;
   private acc = 0;
 
   private bendU = 0;
@@ -100,6 +105,21 @@ export class SoftPaper {
     this.v0 = new Float32Array(n);
     this.rest = new Float32Array(n);
     this.mesh = new THREE.Mesh(geo, material);
+    // A few random waves summed: smooth over the sheet, irregular to the eye.
+    this.grainPhase = new Float32Array(n);
+    this.grainGain = new Float32Array(n);
+    const waves = Array.from({ length: 6 }, () => ({ fx: 2 + Math.random() * 9, fz: 2 + Math.random() * 9, p: Math.random() * 6.3 }));
+    for (let i = 0; i < n; i++) {
+      let a = 0;
+      let b = 0;
+      waves.forEach((wv, j) => {
+        const s = Math.sin(this.px[i] * wv.fx + this.pz[i] * wv.fz * (j % 2 ? 1 : -1) + wv.p);
+        if (j < 3) a += s / 3;
+        else b += s / 3;
+      });
+      this.grainPhase[i] = a * WRINKLE_GRAIN;
+      this.grainGain[i] = 0.55 + 0.45 * b; // 0.1 .. 1
+    }
     this.reset();
   }
 
@@ -125,11 +145,18 @@ export class SoftPaper {
     }
   }
 
-  /** The pointer is over the sheet at (x, z), moving (vx, vz) in sheet units/s. */
+  /**
+   * The pointer is over the sheet at (x, z), moving (vx, vz) in sheet units/s.
+   * Each move wrinkles a little differently: the ridges turn a bit off square to
+   * the motion and their spacing changes, so it never looks combed.
+   */
   stir(x: number, z: number, vx: number, vz: number) {
     const speed = Math.min(Math.hypot(vx, vz), MAX_STIR);
     if (speed < 1e-3) return;
-    this.stirAt = { x, z, dx: vx / Math.hypot(vx, vz), dz: vz / Math.hypot(vx, vz), speed };
+    const turn = (Math.random() - 0.5) * 2 * WRINKLE_TURN;
+    const a = Math.atan2(vz, vx) + turn;
+    const wave = WRINKLE_WAVE[0] + Math.random() * (WRINKLE_WAVE[1] - WRINKLE_WAVE[0]);
+    this.stirAt = { x, z, dx: Math.cos(a), dz: Math.sin(a), speed, k: (2 * Math.PI) / wave };
   }
 
   /** Where a point of the page (fractions across and down, 0..1) is now, in world space. */
@@ -184,7 +211,6 @@ export class SoftPaper {
     const v0 = this.v0;
     v0.set(v);
     const s = this.stirAt;
-    const k = (2 * Math.PI) / WRINKLE_WAVE;
     for (let j = 0; j < nz; j++) {
       for (let i = 0; i < nx; i++) {
         const n = j * nx + i;
@@ -201,7 +227,7 @@ export class SoftPaper {
           const ox = this.px[n] - s.x;
           const oz = this.pz[n] - s.z;
           const fall = Math.exp(-((ox * ox + oz * oz) / (WRINKLE_R * WRINKLE_R)));
-          if (fall > 0.01) a += WRINKLE_PUSH * 60 * s.speed * fall * Math.sin(k * (ox * s.dx + oz * s.dz));
+          if (fall > 0.01) a += WRINKLE_PUSH * 60 * s.speed * fall * this.grainGain[n] * Math.sin(s.k * (ox * s.dx + oz * s.dz + this.grainPhase[n]));
         }
         v[n] += a * dt;
       }
