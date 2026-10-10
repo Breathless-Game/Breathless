@@ -9,6 +9,8 @@ import { Report } from './report';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
 import { TitleScreen } from './title';
+import { Workbench } from './workbench';
+import type { UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
@@ -101,6 +103,14 @@ function spawnFish(band: Band) {
 // out of view (not within VIEW_M of the diver) so they never pop in on screen.
 const trenchFish = new Set<Fish>();
 const VIEW_M = 14;
+// Each trench fish roams this far above and below the depth it was rolled at:
+// wide enough to swim from out of view into view, close enough that its rarity
+// still fits where it's caught.
+const TRENCH_ROAM_M = 9;
+// A diver who stops in the trench should have this many fish within NEAR_M
+// (on screen) or swimming there.
+const NEAR_WANT = 3;
+const NEAR_M = 10;
 
 /** Shallowest depth a trench fish may spawn at: the current map's shelf. */
 function trenchTop(): number {
@@ -118,9 +128,22 @@ function spawnTrenchFish(diverDepth: number) {
   for (let tries = 0; tries < 8 && Math.abs(depth - diverDepth) < VIEW_M; tries++) {
     depth = THREE.MathUtils.randFloat(top, bottom);
   }
-  // Each fish keeps to a few metres around where it was rolled, so its rarity matches its depth.
-  const band = { top: Math.max(trenchTop() - 1, depth - 4), bottom: depth + 4 };
-  trenchFish.add(addFish(band, depth, TRENCH_X - 0.8));
+  return addTrenchFish(depth);
+}
+
+function addTrenchFish(depth: number): Fish {
+  const band = { top: Math.max(trenchTop() - 1, depth - TRENCH_ROAM_M), bottom: depth + TRENCH_ROAM_M };
+  const fish = addFish(band, depth, TRENCH_X - 0.8);
+  trenchFish.add(fish);
+  return fish;
+}
+
+/** Point a trench fish at the depth in its band closest to the diver; true if that's on screen. */
+function headToward(f: Fish, diverDepth: number): boolean {
+  const depth = THREE.MathUtils.clamp(diverDepth, f.band.top + 1.5, f.band.bottom - 0.5);
+  if (Math.abs(depth - diverDepth) >= NEAR_M) return false;
+  f.target.y = -depth;
+  return true;
 }
 
 function tendTrench(diverDepth: number) {
@@ -130,6 +153,26 @@ function tendTrench(diverDepth: number) {
     if (d < top - 15 || d > bottom + 15) removeFish(f);
   }
   while (trenchFish.size < TRENCH_FISH) spawnTrenchFish(diverDepth);
+  if (diverDepth <= trenchTop()) return;
+
+  // Keep a few fish on screen (or on their way) for a diver who stops: send in
+  // the closest ones that can reach, else swap the farthest for a fresh fish
+  // just out of view above or below. Nothing spawns within VIEW_M.
+  const gap = (f: Fish) => Math.abs(-f.pos.y - diverDepth);
+  const coming = (f: Fish) => gap(f) < NEAR_M || Math.abs(-f.target.y - diverDepth) < NEAR_M;
+  const others = [...trenchFish].filter((f) => !coming(f)).sort((a, b) => gap(a) - gap(b));
+  let seen = trenchFish.size - others.length;
+  for (const f of others) {
+    if (seen >= NEAR_WANT) return;
+    if (headToward(f, diverDepth)) seen++;
+  }
+  while (seen < NEAR_WANT && others.length && gap(others[others.length - 1]) >= VIEW_M) {
+    removeFish(others.pop()!);
+    const above = diverDepth - VIEW_M - 2 > trenchTop() && Math.random() < 0.5;
+    const depth = diverDepth + (above ? -1 : 1) * THREE.MathUtils.randFloat(VIEW_M + 0.5, VIEW_M + 2);
+    headToward(addTrenchFish(depth), diverDepth);
+    seen++;
+  }
 }
 
 /**
@@ -223,10 +266,11 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && titleScreen.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
-    openStartCard();
+    openWorkbench();
   }
   keys.add(e.key.toLowerCase());
-  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating') report.toggle();
+  // On the workbench any key (H included) packs the inspected gear; don't also pop the report.
+  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
   if (phase !== 'play') return;
   if (e.code === 'Space') {
     e.preventDefault();
@@ -351,13 +395,15 @@ function selectMap(id: MapId) {
   mapPicker.render();
 }
 
-const mapPicker = new MapPicker(mapProgress, selectMap, (on) => {
+function setDemoUnlock(on: boolean) {
   mapProgress.unlockAll = on;
   // Turning the demo switch off while standing on a locked map sends you back to the first one.
   if (!isUnlocked(world.map, mapProgress)) selectMap('fjord');
   saveMapProgress(mapProgress);
   mapPicker.render();
-});
+}
+
+const mapPicker = new MapPicker(mapProgress, selectMap, setDemoUnlock);
 showMapOnHud();
 noteBankValue(false);
 
@@ -394,6 +440,8 @@ function markCalib(phase: string) {
 function startGame() {
   phase = 'play';
   overlay.classList.add('hidden');
+  // The workbench's dive transition may still be fading out if the player was quick.
+  workbench.hide();
   hud.show();
   hud.message('Hold your breath and dive!', 2400);
 }
@@ -484,6 +532,7 @@ function onEscape() {
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
+  else if (workbench.visible && phase === 'menu') workbench.escape();
   else if (phase === 'play') pause();
   else if (phase === 'calibrating') goToMenu();
   else if (!overlay.classList.contains('hidden')) backFromStartCard();
@@ -542,16 +591,38 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
-// Start opens the existing start card (camera / keyboard / breath test).
+// START drops its fish onto the workbench (gear + map); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openStartCard },
+  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
   { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
+// Gear packed on the workbench for this dive. Not used by the dive yet: upgrades aren't wired in.
+let loadout: UpgradeId[] = [];
+
+const workbench = new Workbench({
+  progress: () => mapProgress,
+  setUnlockAll: setDemoUnlock,
+  dive(id, gear) {
+    loadout = gear;
+    selectMap(id);
+    openStartCard();
+  },
+  back: () => showTitle(false),
+});
+
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
+  workbench.hide();
   titleScreen.show(intro);
+}
+
+function openWorkbench() {
+  titleScreen.dropAway('START', () => {
+    titleScreen.hide();
+    workbench.show(true);
+  });
 }
 
 function openStartCard() {
@@ -563,7 +634,10 @@ function backFromStartCard() {
   if (breathTest.open) breathTest.stop();
   // The camera may already be on (calibration or breath test): release it on the way out.
   if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
-  else showTitle(false);
+  else {
+    overlay.classList.add('hidden');
+    workbench.show(false);
+  }
 }
 
 document.getElementById('card-back')!.addEventListener('click', backFromStartCard);
@@ -661,7 +735,8 @@ function update(dt: number, time: number) {
 
   hud.setBreath(s, outOfAir);
   hud.setDepth(-diver.pos.y);
-  hud.setEmergency(outOfAir ? emergency : null);
+  // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
+  hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
   if (phase === 'calibrating') updateCalibration();
 }
 
@@ -684,6 +759,8 @@ frame();
 
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
+  workbench,
+  loadout: () => loadout,
   breath,
   breathTest,
   titleScreen,

@@ -67,13 +67,27 @@
       </div>
     </div>
 
+    <div id="workbench" class="hidden">
+      <canvas id="wb-canvas"></canvas>
+      <div id="wb-hint" class="small">Click gear to inspect &amp; pack · click a map to dive · Esc back</div>
+      <label id="wb-demo" class="small"><input type="checkbox" id="wb-demo-box" /> Unlock all maps (demo)</label>
+      <div id="wb-toast"></div>
+      <div id="wb-inspect" class="hidden"><img id="wb-zoom" alt="" /></div>
+      <aside id="wb-info" class="hidden">
+        <div id="wb-info-title"></div>
+        <div id="wb-info-sub" class="small"></div>
+        <p id="wb-info-text"></p>
+        <div id="wb-info-hint" class="small muted"></div>
+      </aside>
+    </div>
+
     <div id="overlay">
       <div class="card">
         <h1>BREATH<span>LESS</span></h1>
         <p class="tagline">Your real lungs are the oxygen tank.</p>
         <ol>
           <li><b>Hold your breath</b> in real life and your diver can dive.</li>
-          <li>The deeper you go, the rarer the fish. Mythics live in the Abyss.</li>
+          <li>The deeper you go, the rarer the fish. Mythics only appear below 50 m, down in the trench.</li>
           <li><b>Breathe underwater</b> and you are out of air: race to the surface or lose your net.</li>
           <li>Surface to bank your catch.</li>
         </ol>
