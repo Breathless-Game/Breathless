@@ -1,5 +1,5 @@
 import type { BreathState } from './breath';
-import { FishSpec, RARITY, zoneForDepth } from './fish';
+import { FishSpec, RARITY, fishValue } from './fish';
 import { fishIcon } from './portrait';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -135,24 +135,23 @@ export class Hud {
   setBank(bank: FishSpec[]) {
     this.bankCount.textContent = `${bank.length} fish`;
     const best = bank.reduce<FishSpec | null>(
-      (a, f) => (!a || (f.value ?? RARITY[f.rarity].value) > (a.value ?? RARITY[a.rarity].value) ? f : a),
+      (a, f) => (!a || fishValue(f) > fishValue(a) ? f : a),
       null,
     );
     this.bankValue.textContent = best
-      ? `best: ${RARITY[best.rarity].label} ${best.species} · ${best.value ?? RARITY[best.rarity].value} pts`
+      ? `best: ${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} pts`
       : 'surface to bank your net';
   }
 
   toast(spec: FishSpec, title?: string) {
     const r = RARITY[spec.rarity];
-    const map = zoneForDepth(spec.depthM);
     const el = document.createElement('div');
     const big = spec.rarity === 'legendary' || spec.rarity === 'mythic';
     el.className = `toast${big ? ' big' : ''}`;
     el.style.setProperty('--c', r.color);
     el.innerHTML = `<img alt=""><div><div class="r">${title ?? r.label.toUpperCase()}</div><div class="n"></div></div>`;
     el.querySelector('img')!.src = fishIcon(spec);
-    el.querySelector('.n')!.textContent = `${spec.name} · ${map.mapNameZh} · ${spec.weightKg} kg · ${spec.value ?? r.value} pts`;
+    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
     this.toasts.prepend(el);
     setTimeout(() => el.remove(), 3100);
   }

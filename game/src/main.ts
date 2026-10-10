@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
-import { Fish, FishSpec, RARITY, RARITY_ORDER, rollFish, ZONES, type Zone } from './fish';
+import { Fish, FishSpec, RARITY_ORDER, fishValue, rollFish, ZONES, type Zone } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
@@ -195,7 +195,7 @@ function tryCatch() {
   if (!best) return;
   fishes.splice(fishes.indexOf(best), 1);
   scene.remove(best.mesh.group);
-  const caught = { ...best.spec, depthM: Math.round(-best.pos.y) };
+  const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
   net.push(caught);
   hud.setNet(net, NET_CAPACITY);
   hud.toast(caught);
@@ -209,9 +209,7 @@ function bankNet() {
   if (!net.length) return;
   bank.push(...net);
   saveBank();
-  const rarest = net.reduce((a, f) => (
-    (f.value ?? RARITY[f.rarity].value) > (a.value ?? RARITY[a.rarity].value) ? f : a
-  ));
+  const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(`Banked ${net.length} fish!`);
   hud.toast(rarest, 'BANKED');
   net = [];
