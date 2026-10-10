@@ -222,6 +222,7 @@ npm run game       # 游戏，http://localhost:5173
         ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
         ├── world.ts        海底、礁石、珊瑚、海带、光束、雪、水面、船；按深度变化雾和颜色；昼夜
         ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
+        ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
         ├── fish.ts         稀有度表、区域掉率、物种名、rollFish(seed)、鱼的网格、游动和逃跑 AI
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
