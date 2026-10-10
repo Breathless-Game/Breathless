@@ -57,14 +57,17 @@ export const ROD_TIERS: readonly RodTier[] = Object.freeze([
 
 export interface EquipmentState {
   rodLevel: RodLevel;
+  /** On-chain PEARL, as last read with pearlBalance(): a cache for instant UI. */
   pearls: number;
+  /** Pearls earned locally before PEARL went on-chain. Spent before on-chain PEARL. */
+  legacyPearls: number;
 }
 
 export const EQUIPMENT_STORAGE_KEY = 'deepbreath.equipment';
 
 const LEGACY_ROD_KEY = 'deepbreath.rod';
 const LEGACY_PEARLS_KEYS = ['deepbreath.pearls', 'deepbreath.pearl'] as const;
-const DEFAULT_STATE: EquipmentState = { rodLevel: 1, pearls: 0 };
+const DEFAULT_STATE: EquipmentState = { rodLevel: 1, pearls: 0, legacyPearls: 0 };
 
 type EquipmentInput = EquipmentState | RodLevel | number | null | undefined;
 
@@ -90,7 +93,9 @@ function normalize(value: unknown): EquipmentState {
   const record = value as Record<string, unknown>;
   // `level` was used by an early prototype; retain it during migration.
   const level = record.rodLevel ?? record.level;
-  return { rodLevel: validLevel(level), pearls: validPearls(record.pearls) };
+  // Saves from before on-chain PEARL have no legacyPearls: every Pearl in them was earned locally.
+  if (!('legacyPearls' in record)) return { rodLevel: validLevel(level), pearls: 0, legacyPearls: validPearls(record.pearls) };
+  return { rodLevel: validLevel(level), pearls: validPearls(record.pearls), legacyPearls: validPearls(record.legacyPearls) };
 }
 
 function readNumber(storage: Storage, key: string): number | undefined {
@@ -174,14 +179,28 @@ export function nextRodTier(input?: EquipmentInput): RodTier | null {
   return ROD_TIERS[level] ?? null;
 }
 
+/** Every Pearl the player can spend: legacy local Pearls plus cached on-chain PEARL. */
+export function totalPearls(state: EquipmentState): number {
+  return state.legacyPearls + state.pearls;
+}
+
+export interface UpgradePlan {
+  tier: RodTier;
+  /** Taken from the local legacy balance, which is spent first. */
+  fromLegacy: number;
+  /** Must be burned on-chain with spendPearls() before the tier applies. */
+  fromChain: number;
+}
+
 /**
- * Attempt to buy the next rod/net tier.  This is pure so callers can decide
- * when to persist the result; the returned state has the upgrade cost removed.
+ * Plan buying the next rod/net tier, or null when it is maxed out or
+ * unaffordable.  Pure: the caller spends the on-chain part, then applies it.
  */
-export function upgrade(state: EquipmentState): EquipmentState | null {
+export function planUpgrade(state: EquipmentState): UpgradePlan | null {
   const current = normalize(state);
-  const next = nextRodTier(current.rodLevel);
-  if (!next || current.pearls < next.cost) return null;
-  return { rodLevel: next.level, pearls: current.pearls - next.cost };
+  const tier = nextRodTier(current.rodLevel);
+  if (!tier || totalPearls(current) < tier.cost) return null;
+  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
+  return { tier, fromLegacy, fromChain: tier.cost - fromLegacy };
 }
 

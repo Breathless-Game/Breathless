@@ -81,6 +81,14 @@ test('prototype rod/pearl keys travel too, so equipment.ts can still migrate the
   assert.equal(store.getItem(`deepbreath.${OWNER_A}.pearl`), '5');
 });
 
+test('an unfinished PEARL sale travels too, so pearl.ts can resume it', () => {
+  const pending = '{"asset1":{"mode":"server","transferTx":"sig"}}';
+  const store = memoryStore({ 'deepbreath.pearl.pending': pending });
+  W.migrateLegacy(store, OWNER_A);
+  assert.equal(store.getItem(`deepbreath.${OWNER_A}.pearl.pending`), pending);
+  assert.equal(W.namespacedKey(OWNER_A, 'deepbreath.pearl.pending'), `deepbreath.${OWNER_A}.pearl.pending`);
+});
+
 test('migration happens once: a second wallet starts empty', () => {
   const store = memoryStore(LEGACY);
   W.migrateLegacy(store, OWNER_A);
