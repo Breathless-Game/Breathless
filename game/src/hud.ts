@@ -146,7 +146,7 @@ export class Hud {
   }
 
   setEquipment(state: EquipmentState, tier: RodTier) {
-    this.gearSummary.textContent = `ROD Lv${tier.level} · ${tier.capacity} slots · ${state.pearls} ◇`;
+    this.gearSummary.textContent = `NET Lv${tier.level} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${state.pearls} ◇`;
   }
 
   toast(spec: FishSpec, title?: string) {

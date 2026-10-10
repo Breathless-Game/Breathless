@@ -31,7 +31,10 @@ export interface WorkbenchHooks {
 }
 
 const ACCESSORIES: UpgradeId[] = ['fins', 'tank', 'lamp'];
-const CATCHERS: UpgradeId[] = ['rod', 'net', 'bait'];
+// The catching side is intentionally separate from boat equipment: the rod
+// carries the net, the reel changes recovery, and bait remains a future hook
+// quality branch. Boat upgrades are not shown on this workbench.
+const CATCHERS: UpgradeId[] = ['rod', 'reel', 'net'];
 const PLACEHOLDER = 'Description coming soon. 描述待补充。';
 const ROMAN = ['I', 'II', 'III'];
 const DIFFICULTY_COLOR: Record<MapDef['difficulty'], string> = { Casual: '#3ef0a8', Normal: '#ffcc4d', Hard: '#ff4d5e' };
