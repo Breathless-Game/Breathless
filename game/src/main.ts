@@ -21,6 +21,8 @@ import { GearPanel } from './gear-panel';
 import { loadEquipment, nextRodTier, planUpgrade, rodTier, saveEquipment, totalPearls, type EquipmentState } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
+import { WorldEvents, type EventContext } from './events';
+import { disposeTree } from './lowpoly';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -63,6 +65,41 @@ resize();
 const diver = new Diver(scene);
 world.colorGrade.apply(diver.group);
 const hud = new Hud();
+
+// Random world events (avalanches, whales, a leviathan...). They play only during a
+// dive (see update()); menus show none and cost nothing.
+const events = new WorldEvents(scene, world.map, renderQuality.settings.detail);
+world.colorGrade.apply(scene);
+const eventCtx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
+let eventsLive = false;
+const shakeOffset = new THREE.Vector3();
+// Fish near the diver bolt for a moment when the ground shakes or something huge passes.
+const SCATTER: Record<string, number> = { avalanche: 5, rockfall: 1.5, leviathan: 2 }; // seconds until it hits
+const scatterAt = new THREE.Vector3();
+const scatterThreat = new THREE.Vector3();
+let scatterFrom = Infinity;
+let scatterUntil = -Infinity;
+let scatterFresh = false;
+events.onEvent = (e) => {
+  hud.message(e.label, 2600);
+  const delay = SCATTER[e.id];
+  if (delay !== undefined) {
+    scatterFrom = time + delay;
+    scatterUntil = scatterFrom + 2.5;
+    scatterFresh = true;
+  }
+};
+
+let eventDetail = renderQuality.settings.detail;
+/** Keep the events' detail level in step with the render quality. */
+function syncEventDetail() {
+  const detail = renderQuality.settings.detail;
+  if (detail === eventDetail) return;
+  eventDetail = detail;
+  events.setDetail(detail);
+  // The rebuild made new materials: give them the scene's colour grade too.
+  world.colorGrade.apply(scene);
+}
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
@@ -88,9 +125,15 @@ function spawnFish(zone: Zone) {
   world.colorGrade.apply(fish.mesh.group);
 }
 
+/** Each fish owns its geometry and materials: free them with the mesh. */
+function removeFish(f: Fish) {
+  scene.remove(f.mesh.group);
+  disposeTree(f.mesh.group);
+}
+
 /** Fill the zones the current map opens. Deeper zones stay empty: you cannot reach them here. */
 function populate() {
-  for (const f of fishes) scene.remove(f.mesh.group);
+  for (const f of fishes) removeFish(f);
   fishes.length = 0;
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
@@ -293,7 +336,7 @@ function tryCatch() {
   }
   if (!best) return;
   fishes.splice(fishes.indexOf(best), 1);
-  scene.remove(best.mesh.group);
+  removeFish(best);
   const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
   net.push(caught);
   hud.setNet(net, tier.capacity);
@@ -347,6 +390,8 @@ function selectMap(id: MapId) {
   mapProgress.selected = id;
   saveMapProgress(mapProgress);
   world.setMap(MAPS[id]);
+  events.setMap(world.map);
+  world.colorGrade.apply(scene);
   maxDepth = mapDepth(world.map);
   populate();
   showMapOnHud();
@@ -537,6 +582,7 @@ function applySettings(s: Settings) {
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
+  syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
   document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
@@ -706,7 +752,16 @@ function update(dt: number, time: number) {
   }
 
   diver.update(dt, time, -diver.pos.y);
-  for (const f of fishes) f.update(dt, time, diver.pos);
+  const scattering = time >= scatterFrom && time < scatterUntil;
+  if (scattering && scatterFresh) {
+    scatterAt.copy(diver.pos);
+    scatterFresh = false;
+  }
+  for (const f of fishes) {
+    const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
+    // A threat just behind each nearby fish, on the diver's side: it darts away.
+    f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
+  }
   world.update(time, camera.position.y, camera.position.x);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
@@ -714,8 +769,38 @@ function update(dt: number, time: number) {
   const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
   const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
   camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, world.seabedY + 9) - benchDrop, 22);
+  camera.position.sub(shakeOffset);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+
+  // World events, after World.update (the lightning flash tints what it wrote).
+  // Only during a dive: leaving or starting one clears them and restarts the clock.
+  const diving = phase === 'play' || phase === 'blackout';
+  if (diving !== eventsLive) {
+    eventsLive = diving;
+    events.stop();
+    scatterFrom = Infinity;
+    scatterUntil = -Infinity;
+  }
+  if (diving) {
+    const weather = world.weather.state;
+    eventCtx.cameraY = camera.position.y;
+    eventCtx.cameraX = camera.position.x;
+    eventCtx.aspect = camera.aspect;
+    eventCtx.depth = -diver.pos.y;
+    eventCtx.night = world.night;
+    eventCtx.shelfDepth = Math.min(38, mapDepth(world.map) * 0.6);
+    eventCtx.lightingEffects = world.lightingEffectsEnabled;
+    eventCtx.storm = weather.storm;
+    eventCtx.cloud = weather.cloud;
+    events.update(time, dt, eventCtx);
+  }
+  // The storm's own sheet lightning holds off while an event bolt strikes.
+  world.quietWeatherLightning = events.activeId === 'lightning';
+  // A subtle shake (a few cm) on top of the follow, taken off again next frame.
+  const shake = events.shake;
+  shakeOffset.set(shake * Math.sin(time * 47.3) * Math.cos(time * 13.1), shake * Math.sin(time * 53.7 + 1.3) * Math.cos(time * 9.7), 0);
+  camera.position.add(shakeOffset);
 
   hud.setBreath(s, outOfAir);
   hud.setDepth(-diver.pos.y, maxDepth);
@@ -728,6 +813,7 @@ function frame() {
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
     world.setQuality(renderQuality.settings);
+    syncEventDetail();
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
@@ -754,6 +840,10 @@ Object.assign(window, {
   breathTest,
   titleScreen,
   world,
+  events,
+  renderer,
+  /** Fire a world event now, e.g. trigger('whale'). Only during a dive, like the schedule. */
+  trigger: (id: string) => eventsLive && events.trigger(id),
   selectMap,
   diver,
   fishes,

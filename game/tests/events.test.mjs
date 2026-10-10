@@ -163,3 +163,29 @@ test('forcing an event replaces the running one, and the next gap counts from it
   schedule.tick(500, ctx(0));
   assert.ok(schedule.dueAt >= 500 + FIRST_DELAY[0] && schedule.dueAt <= 500 + FIRST_DELAY[1]);
 });
+
+test('lighting effects off rule out the aurora and lightning; lightning needs a storm and cloud hides the aurora', () => {
+  const rng = seeded(21);
+  const fjord = eventsForMap('fjord');
+  const ocean = eventsForMap('ocean');
+  for (let i = 0; i < 400; i++) {
+    assert.notEqual(pickEvent(fjord, ctx(0, { night: true, cloud: 0, lightingEffects: false }), rng).id, 'aurora');
+    assert.notEqual(pickEvent(ocean, ctx(0, { storm: 1, cloud: 1, lightingEffects: false }), rng).id, 'lightning');
+    assert.notEqual(pickEvent(ocean, ctx(0, { storm: 0.2, cloud: 0.9 }), rng).id, 'lightning');
+    assert.notEqual(pickEvent(fjord, ctx(0, { night: true, cloud: 0.8 }), rng).id, 'aurora');
+  }
+  assert.ok(eligible(ocean, ctx(0, { storm: 1, cloud: 1, lightingEffects: true })).some((d) => d.id === 'lightning'));
+  assert.ok(eligible(fjord, ctx(0, { night: true, cloud: 0.1 })).some((d) => d.id === 'aurora'));
+  // Unknown weather filters nothing (the lab and older callers).
+  assert.ok(eligible(ocean, ctx(0)).some((d) => d.id === 'lightning'));
+});
+
+test('reset forgets the running event and waits the first-event delay again', () => {
+  const schedule = new EventSchedule('ocean', { rng: seeded(23) });
+  schedule.tick(0, ctx(0));
+  schedule.force('whale');
+  schedule.reset();
+  assert.equal(schedule.running, null);
+  assert.equal(schedule.tick(100, ctx(0)), null);
+  assert.ok(schedule.dueAt >= 100 + FIRST_DELAY[0] && schedule.dueAt <= 100 + FIRST_DELAY[1]);
+});
