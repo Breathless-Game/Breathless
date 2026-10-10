@@ -187,7 +187,7 @@ export function rollFish(seed: number, depthM: number, odds = rarityOdds(depthM)
     archetype,
     lengthCm,
     weightKg,
-    depthM: Math.round(depthM),
+    depthM: recordedDepth(depthM),
     hue,
     sat: rng.range(...pal.sat),
     light: rng.range(...pal.light),
@@ -204,12 +204,28 @@ export function fishValue(fish: FishSpec): number {
 }
 
 // In the trench the multiplier keeps climbing past the Abyss's 2.5: +1 every 50 m, up to 6.
+// sensor/market-rules.mjs mirrors these (MAX_MULTIPLIER, TRENCH_STEP_M) to price a sale.
 const TRENCH_TOP = ZONES[ZONES.length - 1].bottom;
+export const MAX_REWARD_MULTIPLIER = 6;
+const TRENCH_STEP_M = 50;
+
+/**
+ * The sea has no bottom, but the depth recorded on a caught fish (and written on-chain)
+ * stops here. Odds and value stop changing far above it (350 m and 235 m), so nothing is
+ * lost; the HUD still shows the real depth. The market rejects deeper fish:
+ * MAX_DEPTH_M in sensor/market-rules.mjs must stay equal (its tests check).
+ */
+export const MAX_RECORDED_DEPTH_M = 1000;
 
 /** Catch value multiplier for a fish caught at this depth. */
 export function rewardMultiplierAt(depthM: number): number {
   if (depthM < TRENCH_TOP) return zoneForDepth(depthM).rewardMultiplier;
-  return Math.min(6, ZONES[ZONES.length - 1].rewardMultiplier + (depthM - TRENCH_TOP) / 50);
+  return Math.min(MAX_REWARD_MULTIPLIER, ZONES[ZONES.length - 1].rewardMultiplier + (depthM - TRENCH_TOP) / TRENCH_STEP_M);
+}
+
+/** The depth to record for a fish caught `depthM` metres down: whole metres, at most MAX_RECORDED_DEPTH_M. */
+export function recordedDepth(depthM: number): number {
+  return Math.min(MAX_RECORDED_DEPTH_M, Math.max(0, Math.round(depthM)));
 }
 
 /** The depth zone a depth falls in, so callers do not repeat the cutoffs. */

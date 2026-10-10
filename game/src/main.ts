@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
-import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, rollFish, ZONES } from './fish';
+import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
 import { HealthLog } from './health';
@@ -391,7 +391,8 @@ function tryCatch() {
   if (!best) return;
   const inTrench = trenchFish.has(best);
   removeFish(best);
-  const caught = { ...best.spec, depthM: Math.round(-best.pos.y), map: world.map.id };
+  // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
+  const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
   hud.setNet(net, tier.capacity);
   hud.toast(caught);

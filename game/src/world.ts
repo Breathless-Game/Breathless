@@ -10,7 +10,7 @@ import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
-import { buildScenery, type Scenery } from './scenery';
+import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
 
 export const HALF_WIDTH = 70;
 /**
@@ -176,6 +176,8 @@ export class World {
   private wallMat = flatMat('#ffffff', { vertexColors: true });
   private glowMat = new THREE.MeshBasicMaterial({ color: '#4ff5d2', vertexColors: true, fog: false });
   private scenery: Scenery | null = null;
+  // Reused on every tick so animating the shore allocates nothing.
+  private sceneryEnv: SceneryEnv = {};
   private daySkyTint: [number, number, number] = [1, 1, 1];
   private nightSkyTint: [number, number, number] = [1, 1, 1];
   private surfaceTint = new THREE.Color(1, 1, 1);
@@ -252,7 +254,7 @@ export class World {
       this.scene.remove(this.scenery.group);
       disposeTree(this.scenery.group);
     }
-    this.scenery = buildScenery(map);
+    this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
     this.colorGrade.apply(this.scene);
@@ -587,6 +589,7 @@ export class World {
 
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
+    const detailChanged = this.quality.detail !== quality.detail;
     this.quality = quality;
     this.rain.setQuality(quality);
     this.shafts.setQuality(quality);
@@ -602,6 +605,17 @@ export class World {
       this.surface.geometry = this.surfaceGeometry();
       this.surfaceBase = (this.surface.geometry.attributes.position.array as Float32Array).slice();
       old.dispose();
+    }
+    if (detailChanged && this.scenery) {
+      const { visible } = this.scenery.group;
+      this.scene.remove(this.scenery.group);
+      disposeTree(this.scenery.group);
+      this.scenery = buildScenery(this.map, quality.detail);
+      this.scenery.group.visible = visible;
+      this.updateScenery(this.lastDecorationTime, 0);
+      this.scene.add(this.scenery.group);
+      // The new shore's materials missed setMap's grading pass.
+      this.colorGrade.apply(this.scenery.group);
     }
     // Trench walls are thinned by quality; rebuild the live chunks only if that changed.
     const density = wallDensity(quality);
@@ -891,14 +905,20 @@ export class World {
   update(time: number, cameraY: number, cameraX = 0) {
     this.updateTrench(cameraY);
     const elapsed = time - this.lastDecorationTime;
-    if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
+    const tick = elapsed + 1e-6 >= 1 / this.quality.decorationHz;
+    if (tick) {
       this.updateDecorations(time, Math.min(elapsed, 0.25), cameraY);
       this.lastDecorationTime = time;
     }
-    this.updateLighting(time, cameraY, cameraX);
+    this.updateLighting(time, cameraY, cameraX, tick ? Math.min(elapsed, 0.25) : null);
   }
 
-  updateLighting(time: number, cameraY: number, cameraX = 0) {
+  /**
+   * Sky, light, fog and water for this frame. `sceneryDt` moves the shoreline on by
+   * that many seconds; null (between decoration ticks) leaves it as it is, and 0
+   * (paused, or a fresh map) re-poses it so a changed setting still shows.
+   */
+  updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
     this.lastSceneTime = time;
     this.lastCameraY = cameraY;
     this.lastCameraX = cameraX;
@@ -951,7 +971,7 @@ export class World {
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;
-      if (this.scenery.group.visible) this.scenery.update(time, this.night, weather, this.lightingEffects);
+      if (sceneryDt !== null && this.scenery.group.visible) this.updateScenery(time, sceneryDt);
     }
     this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
@@ -961,11 +981,26 @@ export class World {
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
   }
 
+  /** Animate the shore by `dt` seconds (0 re-poses it) in the current weather, light setting and swell. */
+  private updateScenery(time: number, dt: number) {
+    if (!this.scenery) return;
+    const env = this.sceneryEnv;
+    env.weather = this.weather.state;
+    env.lightingEffects = this.lightingEffects;
+    env.waveTime = this.waveTime;
+    env.swell = this.swell();
+    this.scenery.update(time, this.night, dt, env);
+  }
+
+  /** How much the wind lifts the waves; the scenery's floats ride the same swell. */
+  private swell() {
+    return 1 + this.weather.state.wind * 0.75;
+  }
+
   private updateDecorations(time: number, dt: number, cameraY: number) {
     // Waves.
-    const wind = this.weather.state.wind;
     const waveTime = this.waveTime;
-    const swell = 1 + wind * 0.75;
+    const swell = this.swell();
     const pos = this.surface.geometry.attributes.position;
     const base = this.surfaceBase;
     const waves = this.map.waves;

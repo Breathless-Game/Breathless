@@ -12,7 +12,7 @@ import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { zoneName } from './depth-odds';
-import { RARITY, ZONES, fishValue, zoneForDepth, type FishSpec } from './fish';
+import { RARITY, ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
 import { fishCard } from './portrait';
 import { ownerAddress, ownerSigner, sessionSigner } from './wallet';
@@ -27,7 +27,7 @@ const SYMBOL = 'DIVE';
 
 let umi: Umi | null = null;
 
-function getUmi(): Umi {
+export function getUmi(): Umi {
   if (umi) return umi;
   const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
   let secret: Uint8Array | null = null;
@@ -93,6 +93,9 @@ export interface MintResult {
 export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): Promise<MintResult> {
   const u = getUmi();
   const rarity = RARITY[spec.rarity].label;
+  // Older bank entries may predate the cap; the market rejects anything deeper.
+  const depthM = recordedDepth(spec.depthM);
+  const catchValue = fishValue(spec);
 
   onStep?.('upload-image');
   const png = createGenericFile(dataUrlBytes(fishCard(spec)), `${spec.id}.png`, { contentType: 'image/png' });
@@ -104,16 +107,16 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
     ['Species', spec.species],
     ['Zone', zoneLabel(spec)],
     ...(spec.map && spec.map in MAPS ? [['Map', MAPS[spec.map as MapId].name] as [string, string]] : []),
-    ['Depth (m)', String(spec.depthM)],
+    ['Depth (m)', String(depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],
-    ['Catch value', String(fishValue(spec))],
+    ['Catch value', String(catchValue)],
     ['Seed', spec.id],
   ];
   const uri = await u.uploader.uploadJson({
     name: spec.name,
     symbol: SYMBOL,
-    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
+    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
     image,
     attributes: traits.map(([trait_type, value]) => ({ trait_type, value })),
     properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },
@@ -137,7 +140,9 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
         attributeList: [
           { key: 'rarity', value: spec.rarity },
           { key: 'species', value: spec.species },
-          { key: 'depth', value: String(spec.depthM) },
+          { key: 'depth', value: String(depthM) },
+          // The market pays this (bounded by rarity value x 6), so a sale pays what the collection showed.
+          { key: 'value', value: String(catchValue) },
           { key: 'seed', value: spec.id },
         ],
       },
