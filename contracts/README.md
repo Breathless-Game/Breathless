@@ -99,6 +99,9 @@ export PATH="$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/b
 cd contracts
 npm install
 npm run fixtures          # dumps mpl-core + token-metadata from devnet into tests/fixtures/
+# Anchor.toml's provider wallet is .keys/deployer.json. In a fresh clone, any
+# throwaway key works for local tests (only devnet needs the real deployer):
+[ -f .keys/deployer.json ] || solana-keygen new --no-bip39-passphrase --silent -o .keys/deployer.json
 CARGO_BUILD_JOBS=2 anchor build
 anchor test --skip-build  # local validator with both programs loaded via [[test.genesis]]
 ```
