@@ -34,6 +34,10 @@ export class Hud {
     $('hud').classList.remove('hidden');
   }
 
+  hide() {
+    $('hud').classList.add('hidden');
+  }
+
   setBreath(s: BreathState, danger: boolean) {
     const holding = s.holding;
     this.chip.textContent = danger ? 'OUT OF AIR' : holding ? 'HOLDING' : 'BREATHING';
