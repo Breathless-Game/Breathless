@@ -1,6 +1,7 @@
 import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
 import { fishIcon } from './portrait';
+import type { EquipmentState, RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -27,6 +28,7 @@ export class Hud {
   private netSlots = $('net-slots');
   private bankCount = $('bank-count');
   private bankValue = $('bank-value');
+  private gearSummary = $('gear-summary');
   private toasts = $('toasts');
   private msgTimer = 0;
 
@@ -141,6 +143,10 @@ export class Hud {
     this.bankValue.textContent = best
       ? `best: ${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} pts`
       : 'surface to bank your net';
+  }
+
+  setEquipment(state: EquipmentState, tier: RodTier) {
+    this.gearSummary.textContent = `ROD Lv${tier.level} · ${tier.capacity} slots · ${state.pearls} ◇`;
   }
 
   toast(spec: FishSpec, title?: string) {
