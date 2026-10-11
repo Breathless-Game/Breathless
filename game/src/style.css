@@ -2679,6 +2679,16 @@ button:disabled {
   margin-left: 8px;
 }
 
+.aq-view-hint {
+  display: inline-block;
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  opacity: 0.78;
+}
+
 #aq-tabs {
   display: flex;
   gap: 4px;
@@ -2742,6 +2752,11 @@ button:disabled {
   display: block;
   width: 100%;
   aspect-ratio: 1.75;
+  cursor: pointer;
+}
+
+#aq-canvas.top-view {
+  cursor: zoom-out;
 }
 
 #aq-empty {
