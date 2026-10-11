@@ -1,3 +1,4 @@
+import { lang, onLangChange, setLang, type Lang } from './i18n';
 import {
   activePath,
   EQUIPMENT_TIERS,
@@ -51,8 +52,7 @@ const ACCESSORY_SLOT_NAMES: Record<AccessorySlot, { zh: string; en: string }> = 
   chestPlugin: { zh: '胸口插件', en: 'Chest plugin' },
 };
 
-type GearLanguage = 'zh' | 'en';
-const LANGUAGE_KEY = 'deepbreath.language';
+type GearLanguage = Lang;
 
 const COPY = {
   zh: {
@@ -119,14 +119,6 @@ function tierText(tier: { level: number; name: string; effect: string }, slot: U
   return language === 'zh' ? TIER_ZH[slot][tier.level - 1] : tier;
 }
 
-function loadLanguage(): GearLanguage {
-  try { return localStorage.getItem(LANGUAGE_KEY) === 'en' ? 'en' : 'zh'; } catch { return 'zh'; }
-}
-
-function saveLanguage(language: GearLanguage) {
-  try { localStorage.setItem(LANGUAGE_KEY, language); } catch {}
-}
-
 function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot, language: GearLanguage): string {
   switch (slot) {
     case 'net': return language === 'zh' ? `${stats.netCapacity} 条容量 · ${stats.catchRadius.toFixed(1)} m 捕捞范围` : `${stats.netCapacity} capacity · ${stats.catchRadius.toFixed(1)} m catch range`;
@@ -173,7 +165,9 @@ export class GearPanel {
   private assemblyGrid = $('gear-assembly-grid');
   private assemblySummary = $('gear-assembly-summary');
   private assembly: Partial<Record<AccessorySlot, AccessoryId>> = this.loadAssembly();
-  private language: GearLanguage = loadLanguage();
+  private get language(): GearLanguage {
+    return lang();
+  }
   private view: 'upgrades' | 'assembly' = 'upgrades';
   private selectedSlot: UpgradeSlot = 'net';
   private lastState: EquipmentState | null = null;
@@ -185,9 +179,9 @@ export class GearPanel {
     this.onPathChange = onPathChange;
     this.renderLanguage();
     $('gear-close').addEventListener('click', () => this.toggle(false));
-    this.languageButton.addEventListener('click', () => {
-      this.language = this.language === 'zh' ? 'en' : 'zh';
-      saveLanguage(this.language);
+    // The panel's own EN / 中文 button flips the one global language (the same as Settings).
+    this.languageButton.addEventListener('click', () => setLang(this.language === 'zh' ? 'en' : 'zh'));
+    onLangChange(() => {
       this.renderLanguage();
       if (this.lastState) {
         this.renderSlots(this.lastState);

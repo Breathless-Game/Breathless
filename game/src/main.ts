@@ -54,6 +54,10 @@ import { SynthesisPanel } from './synthesis-panel';
 import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
 import type { LessonId } from './tutorial';
+import { initI18n } from './i18n';
+
+// One UI language (Settings → Language): <html lang> and index.html's static text.
+initI18n();
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
