@@ -3,15 +3,16 @@ import type { LightingState } from './daylight';
 import type { RenderQuality } from './render-quality';
 import type { WeatherState } from './weather';
 
-/** A single-pass approximation of the sky reflected by a rippling water surface. */
+/** Colored low-poly facets and broken celestial highlights in one water draw. */
 export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
-  private readonly dayWater = new THREE.Color('#61bdc9');
-  private readonly nightWater = new THREE.Color('#183f58');
+  private readonly dayWater = new THREE.Color('#367f91');
+  private readonly nightWater = new THREE.Color('#17364d');
   private readonly waterUniforms = {
     uWaterTime: { value: 0 },
     uWaterEffects: { value: 1 },
     uWaterDetail: { value: 1 },
     uWaterWind: { value: 0 },
+    uWaterMapWaves: { value: 1 },
     uWaterAbove: { value: 1 },
     uWaterSky: { value: new THREE.Color('#a8e3f5') },
     uWaterHorizon: { value: new THREE.Color('#e5f3e6') },
@@ -22,27 +23,40 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
 
   constructor() {
     super({
-      color: '#61bdc9',
-      roughness: 0.44,
-      metalness: 0,
-      transparent: true,
-      opacity: 0.56,
-      depthWrite: false,
-      side: THREE.DoubleSide,
+      color: '#367f91', flatShading: true, roughness: 0.85, metalness: 0,
+      transparent: true, opacity: 0.78, depthWrite: false, side: THREE.DoubleSide,
     });
-    // Both faces share the same thin sheet. A second transparent pass wastes
-    // fill rate and can make the surface look like a solid wall from below.
     this.forceSinglePass = true;
     this.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.waterUniforms);
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vWaterWorldPosition;')
+        .replace('#include <common>', `#include <common>
+          attribute vec4 aWaterFacet;
+          attribute vec4 aWaterPatch;
+          varying vec4 vWaterPatch;
+          varying vec3 vWaterFacetCenter;
+          varying vec2 vWaterFacetTone;
+          uniform float uWaterTime;
+          uniform float uWaterWind;
+          uniform float uWaterMapWaves;
+        `)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          // Shared corners evaluate the same two waves on the GPU. No per-frame
+          // geometry upload or CPU normal rebuild is needed at any quality.
+          transformed.y += (sin(position.x * 0.15 + uWaterTime * 1.3) * 0.35
+            + cos(position.z * 0.2 + uWaterTime * 0.9) * 0.25)
+            * (1.0 + uWaterWind * 0.75) * uWaterMapWaves;
+        `)
         .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
-          vWaterWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
+          vWaterPatch = aWaterPatch;
+          vWaterFacetCenter = (modelMatrix * vec4(aWaterFacet.x, 0.0, aWaterFacet.y, 1.0)).xyz;
+          vWaterFacetTone = aWaterFacet.zw;
         `);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
-          varying vec3 vWaterWorldPosition;
+          varying vec4 vWaterPatch;
+          varying vec3 vWaterFacetCenter;
+          varying vec2 vWaterFacetTone;
           uniform float uWaterTime;
           uniform float uWaterEffects;
           uniform float uWaterDetail;
@@ -54,62 +68,75 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           uniform vec3 uWaterLightDirection;
           uniform float uWaterLightStrength;
         `)
-        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-          // Vertex waves supply the broad swell; analytic derivatives add
-          // small moving ripples without normal textures or geometry work.
-          vec3 waterNormal = inverseTransformDirection(normal, viewMatrix);
-          if (uWaterEffects > 0.5) {
-            vec2 waterPoint = vWaterWorldPosition.xz;
-            // A slow phase warp breaks up parallel sine-wave stripes while
-            // keeping the low setting to one small-scale ripple layer.
-            float waterWarp = sin(dot(waterPoint, vec2(0.13, -0.09)) + uWaterTime * 0.21);
-            float waterRippleA = cos(dot(waterPoint, vec2(0.73, 0.41)) + uWaterTime * 1.25 + waterWarp * 0.72);
-            vec2 waterSlope = vec2(0.061, 0.034) * waterRippleA;
-            if (uWaterDetail > 0.5) {
-              float waterRippleB = cos(dot(waterPoint, vec2(-1.05, 0.93)) - uWaterTime * 1.7 - waterWarp * 0.91);
-              waterSlope += vec2(-0.035, 0.031) * waterRippleB;
-            }
-            if (uWaterDetail > 1.5) {
-              float waterRippleC = cos(dot(waterPoint, vec2(2.45, 1.72)) + uWaterTime * 2.3 + waterWarp * 1.4);
-              waterSlope += vec2(0.016, 0.011) * waterRippleC;
-            }
-            float waterFace = waterNormal.y < 0.0 ? -1.0 : 1.0;
-            waterSlope *= 1.0 + uWaterWind * 0.9;
-            waterNormal = normalize(waterNormal + vec3(-waterSlope.x, 0.0, -waterSlope.y) * waterFace);
-            normal = normalize(mat3(viewMatrix) * waterNormal);
-          }
-        `)
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-          // The sky and small solar glints below already model this interface.
-          // Subdue the standard material's broad lobe so the same light source
-          // does not produce a second, overexposed sheet of reflected glare.
-          reflectedLight.directSpecular *= 0.24;
+          // Celestial reflection below supplies the stylized highlight. A
+          // second smooth specular lobe would erase the triangle silhouettes.
+          reflectedLight.directSpecular = vec3(0.0);
         `)
         .replace('#include <opaque_fragment>', `
+          vec3 waterNormal = inverseTransformDirection(normal, viewMatrix);
+          // All three vertices carry the same seed: hue and brightness belong
+          // to a whole face, never a screen-space noise or smooth wave stripe.
+          float facetTone = vWaterFacetTone.x;
+          vec3 facetCool = vec3(0.82, 0.96, 1.08);
+          vec3 facetWarm = vec3(1.02, 1.02, 0.94);
+          vec3 facetPalette = mix(facetCool, facetWarm, facetTone);
+          float facetValue = mix(0.86, 1.08, facetTone);
+          outgoingLight *= mix(vec3(1.0), facetPalette * facetValue, 0.82 * uWaterAbove + 0.18);
+
           if (uWaterEffects > 0.5) {
-            vec3 waterView = normalize(cameraPosition - vWaterWorldPosition);
+            vec3 waterView = normalize(cameraPosition - vWaterFacetCenter);
             float waterFacing = clamp(dot(waterNormal, waterView), 0.0, 1.0);
-            float waterFresnel = 0.025 + 0.975 * pow(1.0 - waterFacing, 5.0);
+            float waterFresnel = 0.035 + 0.60 * pow(1.0 - waterFacing, 5.0);
             vec3 waterReflection = reflect(-waterView, waterNormal);
-            vec3 waterSky = mix(uWaterHorizon, uWaterSky, smoothstep(0.0, 0.7, abs(waterReflection.y)));
-            // Reflection strengthens at grazing angles above the surface.
-            // From below, preserve the view of the boat and the illuminated sky.
-            float waterReflectionWeight = waterFresnel * mix(0.06, 0.86, uWaterAbove);
-            outgoingLight = mix(outgoingLight, waterSky, waterReflectionWeight);
-            vec3 waterHalfVector = normalize(waterView + uWaterLightDirection);
-            float waterAlignment = max(dot(waterNormal, waterHalfVector), 0.0);
-            // Small, interrupted glints replace the broad secondary lobe that
-            // made the old reflection look like a painted horizontal stripe.
-            vec2 waterGlintPoint = vWaterWorldPosition.xz;
-            float waterGlintWarp = sin(dot(waterGlintPoint, vec2(0.13, -0.09)) + uWaterTime * 0.21);
-            float waterGlintBreakup = smoothstep(0.12, 0.92, 0.5 + 0.5 * sin(
-              dot(waterGlintPoint, vec2(1.6, 0.72)) + uWaterTime * 1.4 + waterGlintWarp * 2.0));
-            float waterGlint = pow(waterAlignment, 132.0) * (0.38 + 0.62 * waterGlintBreakup);
-            float waterGlintWeight = clamp(waterGlint * uWaterLightStrength * uWaterAbove, 0.0, 0.64);
-            // Blend toward the light's color rather than accumulating unbounded
-            // glare, so afternoon remains golden and moonlight stays cool silver.
-            outgoingLight = mix(outgoingLight, max(outgoingLight, uWaterLightColor * 0.98), waterGlintWeight);
-            diffuseColor.a = clamp(diffuseColor.a + waterFresnel * 0.18 * uWaterAbove + waterGlintWeight * 0.045, 0.0, 0.78);
+            vec3 waterSky = mix(uWaterHorizon, uWaterSky, smoothstep(0.0, 0.6, abs(waterReflection.y)));
+            // Retain blue-green body color at grazing angles so reflected sky
+            // paints facets instead of washing the sea into a pale mirror.
+            vec3 reflectedFacet = waterSky * facetPalette * mix(0.35, 0.51, facetTone);
+            outgoingLight = mix(outgoingLight, reflectedFacet, waterFresnel * mix(0.04, 0.48, uWaterAbove));
+
+            // Reflect each polygon's average view and normal. A broad source
+            // path selects faces; sparse thresholds turn it into angular shards.
+            vec3 waterHalf = normalize(waterView + uWaterLightDirection);
+            float alignment = max(dot(waterNormal, waterHalf), 0.0);
+            float reflectionPath = pow(alignment, 72.0);
+            vec2 towardSource = normalize(uWaterLightDirection.xz);
+            vec2 toFacet = vWaterFacetCenter.xz - cameraPosition.xz;
+            float sourceDistance = max(0.0, dot(toFacet, towardSource));
+            float acrossSource = abs(toFacet.x * towardSource.y - toFacet.y * towardSource.x);
+            float laneWidth = (2.0 + sourceDistance * 0.075) * mix(1.6, 1.0, uWaterDetail * 0.5);
+            float sourceLane = (1.0 - smoothstep(laneWidth * 0.4, laneWidth, acrossSource))
+              * smoothstep(0.0, 4.0, sourceDistance);
+            // A tapered path keeps the light readable on coarse geometry as
+            // well. Individual facet slopes still vary its colored fragments.
+            reflectionPath = max(reflectionPath, sourceLane * mix(0.58, 0.90, facetTone));
+            float facetPulse = 0.5 + 0.5 * sin(uWaterTime * (0.65 + uWaterWind * 0.25)
+              + vWaterFacetTone.y * 6.283 + vWaterFacetCenter.x * 0.13);
+            float shard = smoothstep(0.34, 0.72, reflectionPath)
+              * smoothstep(0.40, 0.64, vWaterFacetTone.y + facetPulse * 0.16);
+            if (uWaterDetail > 0.5) {
+              // Medium adds a gentler second family of colored faces.
+              shard += smoothstep(0.12, 0.48, reflectionPath) * 0.20
+                * smoothstep(0.68, 0.86, facetTone + facetPulse * 0.12);
+            }
+            if (uWaterDetail > 1.5) {
+              // High adds sparse bright tips, still constant across each face.
+              shard += pow(reflectionPath, 3.0) * smoothstep(0.88, 0.98, facetPulse) * 0.22;
+            }
+            // Slice an inset triangle into a short trapezoid or wedge. Thin
+            // angular patches read as light on water instead of solid ice tiles.
+            float inset = min(min(vWaterPatch.x, vWaterPatch.y), vWaterPatch.z);
+            float edgeAA = max(fwidth(inset), 0.002);
+            float polygon = smoothstep(0.045, 0.045 + edgeAA, inset);
+            float bandCenter = 0.38 + vWaterFacetTone.x * 0.22;
+            float bandDistance = abs(vWaterPatch.w - bandCenter);
+            float bandWidth = mix(0.045, 0.09, uWaterDetail * 0.5);
+            float bandAA = max(fwidth(vWaterPatch.w), 0.002);
+            polygon *= 1.0 - smoothstep(bandWidth, bandWidth + bandAA, bandDistance);
+            float highlight = clamp(shard * polygon * uWaterLightStrength * uWaterAbove, 0.0, 0.88);
+            vec3 highlightColor = mix(uWaterLightColor * 0.70, vec3(1.0, 0.97, 0.86), 0.12);
+            outgoingLight = mix(outgoingLight, max(outgoingLight, highlightColor), highlight);
+            diffuseColor.a = clamp(diffuseColor.a + highlight * 0.08, 0.0, 0.9);
           }
           #include <opaque_fragment>
         `);
@@ -117,30 +144,27 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   }
 
   customProgramCacheKey(): string {
-    // Quality and time of day change uniforms, never shader programs.
-    return 'deepbreath-water-sky-v5';
+    return 'deepbreath-water-facets-v1';
   }
 
   setEffectsEnabled(enabled: boolean): void {
     this.waterUniforms.uWaterEffects.value = enabled ? 1 : 0;
   }
 
-  update(time: number, lighting: LightingState, cameraY: number, quality: RenderQuality, weather?: WeatherState): void {
+  update(time: number, lighting: LightingState, cameraY: number, quality: RenderQuality, weather?: WeatherState, mapWaves = 1): void {
     const uniforms = this.waterUniforms;
     uniforms.uWaterTime.value = time;
     uniforms.uWaterDetail.value = quality.waterDetail;
     uniforms.uWaterWind.value = weather?.wind ?? 0;
+    uniforms.uWaterMapWaves.value = mapWaves;
     uniforms.uWaterAbove.value = THREE.MathUtils.smoothstep(cameraY, -0.65, 0.9);
     uniforms.uWaterSky.value.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
     uniforms.uWaterHorizon.value.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
     uniforms.uWaterLightColor.value.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
-    // The visible sun/moon, scene lighting and reflection all use the same
-    // celestial direction, so the glint follows the disc across the sky.
     uniforms.uWaterLightDirection.value.set(...lighting.direction).normalize();
-    uniforms.uWaterLightStrength.value = Math.min(0.82, 0.14 + lighting.sunIntensity * 0.26)
+    uniforms.uWaterLightStrength.value = Math.min(1.1, 0.52 + lighting.sunIntensity * 0.28)
       * (1 - (weather?.cloud ?? 0) * 0.93);
-    this.roughness = 0.44 + (weather?.cloud ?? 0) * 0.26;
     this.color.copy(this.dayWater).lerp(this.nightWater, lighting.nightMix);
-    this.opacity = THREE.MathUtils.lerp(0.34, 0.56, uniforms.uWaterAbove.value);
+    this.opacity = THREE.MathUtils.lerp(0.30, 0.78, uniforms.uWaterAbove.value);
   }
 }

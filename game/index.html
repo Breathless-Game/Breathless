@@ -29,6 +29,8 @@
       <div id="cam-wrap"><video id="cam" playsinline muted></video></div>
 
       <section id="depth">
+        <!-- zone bands (per map) + tick marks are laid out by Hud on a non-linear scale -->
+        <div id="depth-best" class="hidden"><span id="depth-best-label"></span></div>
         <div id="depth-marker"><span id="depth-label">0 m</span></div>
       </section>
 
@@ -69,6 +71,10 @@
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
       <div id="wb-hint" class="small">Click gear to get it ready · drag to throw · click the map to choose where to dive · Esc back</div>
+    </div>
+
+    <!-- Above the title layer, whose fish hang in front of the table. -->
+    <div id="wb-ui" class="hidden">
       <div id="wb-tip" class="hidden"></div>
       <div id="wb-chart" class="hidden">
         <div id="wb-paper">
@@ -88,13 +94,27 @@
       <div id="wb-toast"></div>
     </div>
 
+    <div id="login" class="hidden">
+      <div class="card">
+        <h2>Connect Phantom</h2>
+        <p class="tagline">Your Phantom wallet is your account. Fish you mint belong to it.</p>
+        <div class="buttons">
+          <button id="login-connect" class="primary">Connect Phantom</button>
+          <a id="login-install" class="button primary hidden" href="https://phantom.app" target="_blank" rel="noopener">Get Phantom ↗</a>
+        </div>
+        <p id="login-status" class="small"></p>
+        <p class="small muted">Devnet only. Phantom → Settings → Developer Settings → Testnet Mode → Solana Devnet</p>
+        <button id="login-back" class="link">← Back</button>
+      </div>
+    </div>
+
     <div id="overlay">
       <div class="card">
         <h1>BREATH<span>LESS</span></h1>
         <p class="tagline">Your real lungs are the oxygen tank.</p>
         <ol>
           <li><b>Hold your breath</b> in real life and your diver can dive.</li>
-          <li>The deeper you go, the rarer the fish. Mythics live in the Abyss.</li>
+          <li>The deeper you go, the rarer the fish. Mythics only appear below 50 m, down in the trench.</li>
           <li><b>Breathe underwater</b> and you are out of air: race to the surface or lose your net.</li>
           <li>Surface to bank your catch.</li>
         </ol>
@@ -176,6 +196,7 @@
           </label>
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <div class="setting"><span>Phantom wallet</span><span id="set-wallet" class="wallet-row"></span></div>
           <div class="menu-buttons">
             <button id="settings-back">Back</button>
           </div>

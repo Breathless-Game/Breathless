@@ -158,19 +158,22 @@ body {
   position: absolute;
   right: 26px;
   top: 170px;
-  bottom: 120px;
+  /* clear the bank panel below it (count, best fish, gear line, two buttons ≈ 190px) */
+  bottom: 206px;
   width: 16px;
   border-radius: 8px;
-  background: linear-gradient(#46c1d6, #0d4d73 50%, #020a1a);
+  /* non-linear scale: 50% = 60 m, so the bar is already deep blue by the middle */
+  background: linear-gradient(#46c1d6, #1a7a99 20%, #0d4d73 35%, #052844 50%, #020a1a 75%, #000408);
   border: 1px solid var(--line);
 }
 
+/* zone bands (left of the bar); --top / --h are set by Hud from the depth scale */
 .zone {
   position: absolute;
   right: 26px;
   top: var(--top);
-  height: var(--h);
-  font-size: 11px;
+  height: calc(var(--h) - 2px);
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -187,6 +190,63 @@ body {
 
 .zone.abyss {
   color: #c79bff;
+}
+
+/* bottomless: the bracket fades out instead of ending */
+.zone.trench {
+  color: #5fe0d0;
+  border-image: linear-gradient(rgba(255, 255, 255, 0.15), transparent) 1;
+}
+
+/* depth ticks (right of the bar), centred on their depth */
+.tick {
+  position: absolute;
+  left: calc(100% + 2px);
+  height: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0.8;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.tick::before {
+  content: '';
+  width: 4px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* deepest this session: thin gold tick under the main marker */
+#depth-best {
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(255, 204, 77, 0.6);
+  transform: translateY(-1px);
+}
+
+#depth-best-label {
+  position: absolute;
+  right: calc(100% + 11px);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
 #time-of-day {
@@ -415,6 +475,7 @@ body {
 }
 
 #overlay .card,
+#login .card,
 #pause .card {
   max-width: 560px;
   width: 100%;
@@ -501,7 +562,16 @@ button.link {
   position: fixed;
   inset: 0;
   z-index: 30;
+}
+
+/* The vignette fades out as the camera pans down: the title layer sits over the workbench table. */
+#title-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
   background: radial-gradient(ellipse at center 40%, rgba(4, 18, 34, 0.1), rgba(2, 8, 18, 0.7));
+  opacity: calc(1 - var(--pan, 0));
+  pointer-events: none;
 }
 
 #title-canvas {
@@ -545,13 +615,35 @@ button.link {
 }
 
 /* ---- workbench ---- */
-/* Sits over the title screen, whose rope and fish stay live at the top: only
-   the chart, tip and toast take the pointer; the 3D table reads clicks through
-   the title canvas underneath (see workbench.ts). */
+/* Three layers: the 3D table (#workbench) under the title screen, whose rope
+   and fish stay live and hang in front of the table, and the chart, tip and
+   toast (#wb-ui) over both. The table reads its clicks off the title canvas
+   (see workbench.ts). */
 #workbench {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 29;
+  pointer-events: none;
+}
+
+/* While the chart is picked up and held toward the camera it is nearer than the
+   fish: the table goes on top and the fish fade out (they'd be cut by the table). */
+body.wb-lifted #workbench {
+  z-index: 31;
+}
+
+#title-screen {
+  transition: opacity 0.25s;
+}
+
+body.wb-lifted #title-screen {
+  opacity: 0;
+}
+
+#wb-ui {
+  position: fixed;
+  inset: 0;
+  z-index: 32;
   pointer-events: none;
 }
 
@@ -638,9 +730,16 @@ button.link {
   transition: opacity 0.3s;
 }
 
+/* .pre: laid out (so the paper can be measured) but not shown yet, while the
+   3D map is carried up to exactly where the paper sits. */
+#wb-chart.pre,
 #wb-chart.closing {
   opacity: 0;
   pointer-events: none;
+}
+
+#wb-chart.pre {
+  transition: none;
 }
 
 #wb-paper {
@@ -650,30 +749,11 @@ button.link {
   aspect-ratio: 1000 / 640;
   border-radius: 6px;
   box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
-  animation: wb-unfold 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-#wb-chart.closing #wb-paper:not(.zooming) {
-  animation: wb-fold 0.3s ease-in forwards;
 }
 
 #wb-paper.zooming {
   transform: scale(4);
   transition: transform 0.65s cubic-bezier(0.5, 0, 0.75, 0);
-}
-
-@keyframes wb-unfold {
-  from {
-    transform: perspective(1400px) translateY(20vh) rotateX(60deg) scaleX(0.5);
-    opacity: 0;
-  }
-}
-
-@keyframes wb-fold {
-  to {
-    transform: perspective(1400px) translateY(20vh) rotateX(60deg) scaleX(0.5);
-    opacity: 0;
-  }
 }
 
 #wb-chart-canvas {
@@ -769,6 +849,9 @@ button.link {
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
+}
+
+#wb-chart:not(.pre) #wb-place {
   animation: wb-place-in 0.4s ease-out;
 }
 
@@ -852,6 +935,60 @@ button.link {
 #overlay #map-picker,
 #overlay #maps-demo-row {
   display: none;
+}
+
+/* ---- login gate ---- */
+#login {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at center, rgba(4, 18, 34, 0.35), rgba(2, 8, 18, 0.85));
+  padding: 16px;
+  overflow-y: auto;
+}
+
+#login .card {
+  max-width: 460px;
+  margin: auto;
+}
+
+#login h2 {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+#login-status {
+  color: var(--gold);
+  min-height: 1em;
+}
+
+a.button {
+  display: inline-block;
+  font-weight: 700;
+  border-radius: 12px;
+  padding: 12px 18px;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+a.button.primary {
+  background: var(--hold);
+  color: #032417;
+}
+
+.wallet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wallet-addr {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 /* ---- pause menu ---- */
@@ -1415,7 +1552,7 @@ button:disabled {
 #map-picker {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 8px;
   margin: 4px 0 8px;
 }
 
@@ -1428,8 +1565,13 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Three columns leave ~142px of text per card: every line below is sized to fit on one row. */
 .map-card > :not(.map-swatch) {
-  padding: 0 10px;
+  padding: 0 7px;
+}
+
+.map-place {
+  letter-spacing: 0.02em;
 }
 
 .map-swatch {
@@ -1447,8 +1589,23 @@ button:disabled {
   margin-top: 4px;
 }
 
+.map-lock,
+.map-trench {
+  font-size: 11px;
+  line-height: 15px;
+}
+
 .map-lock {
   margin-top: 2px;
+  color: var(--muted);
+}
+
+/* same teal as the Trench band on the depth gauge */
+.map-trench {
+  color: #5fe0d0;
+}
+
+.map-card.locked .map-trench {
   color: var(--muted);
 }
 

@@ -2,8 +2,10 @@
  * Persistent equipment progression for the fishing net (the game's fishing
  * rod concept).  The module deliberately keeps progression state separate
  * from the Three.js mesh in `gear.ts`, so a visual rebuild cannot reset a
- * player's upgrades.
+ * player's upgrades.  Saves live under the connected wallet's storage keys.
  */
+
+import { storageKey } from './wallet';
 
 export type RodLevel = 1 | 2 | 3;
 
@@ -98,7 +100,7 @@ function normalize(value: unknown): EquipmentState {
 
 function readNumber(storage: Storage, key: string): number | undefined {
   try {
-    const value = storage.getItem(key);
+    const value = storage.getItem(storageKey(key));
     if (value == null) return undefined;
     const parsed = JSON.parse(value) as unknown;
     const n = Number(parsed);
@@ -118,7 +120,7 @@ export function loadEquipment(): EquipmentState {
 
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+    raw = localStorage.getItem(storageKey(EQUIPMENT_STORAGE_KEY));
   } catch {
     return cloneDefault();
   }
@@ -154,7 +156,7 @@ export function saveEquipment(state: EquipmentState): void {
   const safe = normalize(state);
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(EQUIPMENT_STORAGE_KEY, JSON.stringify(safe));
+    localStorage.setItem(storageKey(EQUIPMENT_STORAGE_KEY), JSON.stringify(safe));
   } catch {
     // Private browsing/quota errors should not interrupt a dive.
   }
