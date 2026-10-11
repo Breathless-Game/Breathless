@@ -15,7 +15,7 @@
 import { config } from 'dotenv';
 import { mkdirSync } from 'node:fs';
 import { createServer, STATUS_CODES } from 'node:http';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
@@ -32,6 +32,7 @@ import { BreathDetector } from './breath-detector.mjs';
 import { loadJpegDecoder } from './decode.mjs';
 import { FrameFormat, LatestFrameDecoder, parseFrame } from './frames.mjs';
 import { createNftHandler } from './nft-meta.mjs';
+import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
 import { staticHandler } from './static.mjs';
 
@@ -478,17 +479,21 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// Where the PEARL market's keys and state live, and the fish number counter (.market-serial.json):
+// MARKET_DIR (relative to the repo root), default sensor/. deploy.sh never touches .market-* there.
+const marketDir = () =>
+  process.env.MARKET_DIR
+    ? resolve(fileURLToPath(new URL('..', import.meta.url)), process.env.MARKET_DIR)
+    : fileURLToPath(new URL('.', import.meta.url));
+
 // Serve mode's PEARL market (market.mjs, the same one `npm run market` runs in dev). Imported
 // lazily and fenced off: if it cannot start (missing dependency, bad config), the game and the
-// sensor still serve and /api/market answers 503. Its keys and state live in MARKET_DIR
-// (relative to the repo root), default sensor/.
+// sensor still serve and /api/market answers 503.
 let market = null;
 let marketDown = 'PEARL market is starting, try again in a moment';
 async function startMarket() {
   try {
-    const dir = process.env.MARKET_DIR
-      ? resolve(fileURLToPath(new URL('..', import.meta.url)), process.env.MARKET_DIR)
-      : fileURLToPath(new URL('.', import.meta.url));
+    const dir = marketDir();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const { createMarket } = await import('./market.mjs');
     market = await createMarket({
@@ -515,6 +520,9 @@ if (SERVE) {
   // Fish NFT metadata and art, generated from the URL (nft-meta.mjs). PUBLIC_ORIGIN overrides the
   // origin its JSON points at; by default that is the request's Host.
   const nft = createNftHandler({ log });
+  // Fish numbers (#0042) for new mints, POST /api/nft/serial (nft-serial.mjs), counted in the market
+  // dir (startMarket has created it by now). Before `nft`, which answers every other /api/nft/ path.
+  const serials = createSerialHandler({ file: join(marketDir(), SERIAL_FILE), clientIp, log });
   const server = createServer(async (req, res) => {
     try {
       let pathname = '';
@@ -522,6 +530,7 @@ if (SERVE) {
         pathname = new URL(req.url ?? '/', 'http://x').pathname;
       } catch {} // the static handler answers 400
       if (pathname.startsWith('/api/')) {
+        if (await serials(req, res)) return;
         if (await nft(req, res)) return;
         if (market && (await market.handle(req, res))) return;
         // Never fall through to the index.html fallback: the game would read that as a market answer.

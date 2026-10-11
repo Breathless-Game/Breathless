@@ -25,7 +25,16 @@ export interface BankedFish extends FishSpec {
   sellQueued?: true;
   /** The NFT's metadata URI points at our host (minted that way, or repaired from a dead Irys URI), or cannot be changed by us. */
   metaFixed?: true;
+  /** The fish's global number (#0042), from our server before it is minted (or repaired). Never made up locally. */
+  serial?: number;
+  /** The NFT's on-chain name and URI carry the number (minted that way, or repaired), or cannot be changed by us. */
+  nameFixed?: true;
+  /** Failed attempts to write the number onto an already-minted NFT; repairs stop after a few. */
+  repairTries?: number;
 }
+
+/** Same range as isSerial in nft-uri.ts (kept import-free here for the tests). */
+const validSerial = (n: unknown) => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 999_999_999;
 
 /** Automatic attempts before a failed mint waits for the player's Retry. */
 export const MAX_AUTO_MINT_TRIES = 4;
@@ -104,7 +113,13 @@ export function migrateBank(saved: unknown): { bank: BankedFish[]; changed: bool
     if (f.assetId) f.nft = 'minted';
     else if (f.nft === 'minting' || f.nft === 'minted') f.nft = 'pending';
     if (f.legacy && f.sellQueued) delete f.sellQueued;
-    if (f.nft !== (entry as BankedFish).nft || f.legacy !== (entry as BankedFish).legacy || f.sellQueued !== (entry as BankedFish).sellQueued) {
+    if (f.serial !== undefined && !validSerial(f.serial)) delete f.serial;
+    if (
+      f.nft !== (entry as BankedFish).nft ||
+      f.legacy !== (entry as BankedFish).legacy ||
+      f.sellQueued !== (entry as BankedFish).sellQueued ||
+      f.serial !== (entry as BankedFish).serial
+    ) {
       changed = true;
     }
     bank.push(f);
