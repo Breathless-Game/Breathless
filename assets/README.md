@@ -39,6 +39,8 @@ The pictures are renders. The game does not load them: it draws every fish and t
 | Fish model | `buildFishMesh(spec)` | [`game/src/fish.ts`](../game/src/fish.ts) |
 | Fish sprite, icon and NFT card | `fishSprite` / `fishIcon` / `fishCard` | [`game/src/portrait.ts`](../game/src/portrait.ts) |
 | Fishing rod | `buildFishingNetMesh()` | [`game/src/gear.ts`](../game/src/gear.ts) |
+| 13 Diving Accessories | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts), [`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
+| Accessory 3D Studio | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html), [`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | Preview page | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html), [`game/src/asset-library.ts`](../game/src/asset-library.ts) |
 | Rod inspection and export | `gear-preview.html` | [`game/gear-preview.html`](../game/gear-preview.html), [`game/src/gear-preview.ts`](../game/src/gear-preview.ts) |
 
@@ -52,13 +54,15 @@ There are 17 species in 6 rarities. Three things decide how a fish looks and beh
 - The **rarity** sets the color range, the glow, the base speed and the value.
 - The **seed** picks the exact color, size and name, so two fish of the same species are never quite the same.
 
-Each picture below shows one fish of that species. The seeds that produced them are listed in [section 5](#5-rendering-the-pictures-again).
+Each picture below shows one fish of that species. The seeds the preview page uses are listed in [section 5](#5-rendering-the-pictures-again); most of the saved pictures were rendered with older seeds, see the note there.
+
+Rarity depends only on the depth a fish is caught at, not on the map or the zone name: `RARITY_BY_DEPTH` in [`game/src/depth-odds.ts`](../game/src/depth-odds.ts) gives percent weights at anchor depths, interpolated in between and constant from 350 m down. The full table is in section 7 of the [main README](../README.md#7-game-design-parameters). Each rarity below lists a few points from it.
 
 ### Gallery
 
 #### Common
 
-Color `#b8c4cc` · value 1 · base speed 2.2 · base flee radius 3 · found in Shallows (70%), Coral Reef (20%)
+Color `#b8c4cc` · value 1 · base speed 2.2 · base flee radius 3 · 90% at the surface, 58% at 50 m, 22% from 350 m down
 
 | Sand Minnow | Grey Perch | Mud Goby |
 | :---: | :---: | :---: |
@@ -67,7 +71,7 @@ Color `#b8c4cc` · value 1 · base speed 2.2 · base flee radius 3 · found in S
 
 #### Uncommon
 
-Color `#5fd38d` · value 3 · base speed 2.8 · base flee radius 3.6 · found in Shallows (25%), Coral Reef (35%), The Abyss (10%)
+Color `#5fd38d` · value 3 · base speed 2.8 · base flee radius 3.6 · 9.5% at the surface, 28% at 50 m, 26% from 350 m down
 
 | Striped Wrasse | Coral Chromis | Silver Snapper |
 | :---: | :---: | :---: |
@@ -76,7 +80,7 @@ Color `#5fd38d` · value 3 · base speed 2.8 · base flee radius 3.6 · found in
 
 #### Rare
 
-Color `#4aa8ff` · value 10 · base speed 3.4 · base flee radius 4.4 · found in Shallows (5%), Coral Reef (30%), The Abyss (30%)
+Color `#4aa8ff` · value 10 · base speed 3.4 · base flee radius 4.4 · 0.5% at the surface, 10.5% at 50 m, 25% from 350 m down
 
 | Azure Tang | Neon Cardinal | Spotted Grouper |
 | :---: | :---: | :---: |
@@ -85,7 +89,7 @@ Color `#4aa8ff` · value 10 · base speed 3.4 · base flee radius 4.4 · found i
 
 #### Epic
 
-Color `#b46cff` · value 35 · base speed 4.2 · base flee radius 5.2 · found in Coral Reef (13%), The Abyss (35%)
+Color `#b46cff` · value 35 · base speed 4.2 · base flee radius 5.2 · only below 15 m: 3% at 50 m, 16.5% from 350 m down
 
 | Violet Lionfish | Ember Triggerfish | Ghost Angelfish |
 | :---: | :---: | :---: |
@@ -94,7 +98,7 @@ Color `#b46cff` · value 35 · base speed 4.2 · base flee radius 5.2 · found i
 
 #### Legendary
 
-Color `#ffb340` · value 150 · base speed 5 · base flee radius 6 · found in Coral Reef (2%), The Abyss (19%)
+Color `#ffb340` · value 150 · base speed 5 · base flee radius 6 · only below 30 m: 0.5% at 50 m, 7.5% from 350 m down
 
 | Golden Koi Dragon | Abyssal Sunfish | Crowned Sailfish |
 | :---: | :---: | :---: |
@@ -103,7 +107,7 @@ Color `#ffb340` · value 150 · base speed 5 · base flee radius 6 · found in C
 
 #### Mythic
 
-Color `#ff5fd2` · value 800 · base speed 5.8 · base flee radius 7 · found in The Abyss (6%)
+Color `#ff5fd2` · value 800 · base speed 5.8 · base flee radius 7 · only below 50 m: 0.2% at 80 m, 3% from 350 m down
 
 | Moonfin Leviathan | Prism Coelacanth |
 | :---: | :---: |
@@ -224,9 +228,9 @@ A fish cruises at 55% of its speed. When the diver comes inside the flee radius,
 
 ### From seed to NFT card
 
-`rollFish(seed, zone, depth)` → `FishSpec` → `buildFishMesh(spec)` → `fishCard(spec)`
+`rollFish(seed, depth, odds?)` → `FishSpec` → `buildFishMesh(spec)` → `fishCard(spec)`
 
-The same seed in the same zone always gives the same fish, so anyone can render a card again and check it. `fishCard` draws the 512 × 512 image that gets minted: the rarity color as the backdrop, the fish, and its name, size, depth and id.
+The same seed at the same depth always gives the same fish, so anyone can render a card again and check it. The depth sets the rarity odds and is stored on the fish with its catch value; a third argument, `odds`, overrides the odds (the title screen uses it). `fishCard` draws the 512 × 512 image that gets minted: the rarity color as the backdrop, the fish, and its name, size, depth and id.
 
 <img src="cards/moonfin-leviathan.png" width="320" alt="Example NFT card: Starborn Moonfin Leviathan">
 
@@ -257,9 +261,10 @@ The design doc calls this item a fishing rod. Underwater, the game uses it as a 
 | `tip` / `Catch_Centre` | Empty marker | – | – | 2.7, the middle of the hoop |
 
 - **Pivot**: the origin of the model is the diver's shoulder, and the rod points along +x. `diver.ts` attaches it to the body at `(0.6, 0, 0.3)` and turns the whole group for the swing.
-- **Catch point**: `Space` swings the rod. Catch detection measures from `tip`; capacity and range come from [`equipment.ts`](../game/src/equipment.ts).
+- **Catch point**: `Space` swings the rod. The nearest fish within the net tier's catch radius of `tip` is caught, and the net holds as many fish as the tier's capacity. The tiers are `ROD_TIERS` in [`game/src/equipment.ts`](../game/src/equipment.ts): Lv1 2.4 m and 6 fish, Lv2 2.8 m and 8, Lv3 3.2 m and 10.
 - **Web**: 224 line segments in one draw call. Seven rows of 16 points have alternating half-cell offsets; paired diagonals form diamonds, with seams only at the gathered end and rim.
-- **Upgrades**: three tiers are implemented. Only `mouth` (hoop, guard, web and braces) scales; the grip, reel, shaft and catch centre keep their positions.
+- **Not built yet**: the rod, bait and boat upgrades in section 7.1 of the [design doc](../design/game-design-document.md#7-经济与升级) (in Chinese) are design only. The net tiers are the only upgrade in the game.
+- **Upgrades**: three tiers are implemented. `Diver.setNetLevel()` scales only `mouth` (hoop, guard, web and braces), by 15% per tier above Lv1; the grip, reel, shaft and catch centre keep their positions.
 
 | Tier | Net capacity | Catch radius | Mouth scale |
 | --- | --- | --- | --- |
@@ -278,11 +283,11 @@ Start `npm run game` and open <http://localhost:5173/gear-preview.html> to rotat
 **In code.** Build the model, or ask for a picture at any size:
 
 ```ts
-import { ZONES, rollFish, buildFishMesh } from './fish';
+import { rollFish, buildFishMesh } from './fish';
 import { fishCard, fishSprite } from './portrait';
 import { buildFishingNetMesh } from './gear';
 
-const spec = rollFish(43, ZONES[2], 48);    // Starborn Moonfin Leviathan
+const spec = rollFish(43, 350);             // Starborn Moonfin Leviathan, caught at 350 m
 scene.add(buildFishMesh(spec).group);       // the 3D model
 img.src = fishSprite(spec, 256);            // transparent PNG as a data URL, any size
 img.src = fishCard(spec);                   // the 512 × 512 NFT card
@@ -303,27 +308,29 @@ The pictures go out of date when someone changes a model. To render them again:
 
 For another size, use the console on that page: `await assetLibrary.sprite('azure-tang', 1024)` returns a data URL.
 
-The page uses the lowest seed that rolls each species. A striped species waits for a roll that has stripes. These are the fish in the pictures:
+The page rolls every seed at 350 m, the deepest anchor in `RARITY_BY_DEPTH`, where every rarity can roll (mythic included). It uses the lowest seed that rolls each species there. A striped species waits for a roll that has stripes. These are the fish the page draws:
 
-| Species | Seed | Zone | Depth | Call |
-| --- | --- | --- | --- | --- |
-| Sand Minnow | 1 | Shallows | 9 m | `rollFish(1, ZONES[0], 9)` |
-| Grey Perch | 8 | Shallows | 9 m | `rollFish(8, ZONES[0], 9)` |
-| Mud Goby | 5 | Shallows | 9 m | `rollFish(5, ZONES[0], 9)` |
-| Striped Wrasse | 2 | Shallows | 9 m | `rollFish(2, ZONES[0], 9)` |
-| Coral Chromis | 11 | Coral Reef | 28 m | `rollFish(11, ZONES[1], 28)` |
-| Silver Snapper | 10 | Coral Reef | 28 m | `rollFish(10, ZONES[1], 28)` |
-| Azure Tang | 1 | Coral Reef | 28 m | `rollFish(1, ZONES[1], 28)` |
-| Neon Cardinal | 8 | The Abyss | 48 m | `rollFish(8, ZONES[2], 48)` |
-| Spotted Grouper | 5 | Coral Reef | 28 m | `rollFish(5, ZONES[1], 28)` |
-| Violet Lionfish | 2 | The Abyss | 48 m | `rollFish(2, ZONES[2], 48)` |
-| Ember Triggerfish | 11 | The Abyss | 48 m | `rollFish(11, ZONES[2], 48)` |
-| Ghost Angelfish | 5 | The Abyss | 48 m | `rollFish(5, ZONES[2], 48)` |
-| Golden Koi Dragon | 43 | Coral Reef | 28 m | `rollFish(43, ZONES[1], 28)` |
-| Abyssal Sunfish | 20 | The Abyss | 48 m | `rollFish(20, ZONES[2], 48)` |
-| Crowned Sailfish | 30 | The Abyss | 48 m | `rollFish(30, ZONES[2], 48)` |
-| Moonfin Leviathan | 43 | The Abyss | 48 m | `rollFish(43, ZONES[2], 48)` |
-| Prism Coelacanth | 36 | The Abyss | 48 m | `rollFish(36, ZONES[2], 48)` |
+| Rarity | Species | Seed | Call |
+| --- | --- | --- | --- |
+| common | Grey Perch | 8 | `rollFish(8, 350)` |
+| common | Mud Goby | 9 | `rollFish(9, 350)` |
+| common | Sand Minnow | 7 | `rollFish(7, 350)` |
+| uncommon | Coral Chromis | 14 | `rollFish(14, 350)` |
+| uncommon | Silver Snapper | 24 | `rollFish(24, 350)` |
+| uncommon | Striped Wrasse | 27 | `rollFish(27, 350)` |
+| rare | Azure Tang | 1 | `rollFish(1, 350)` |
+| rare | Neon Cardinal | 11 | `rollFish(11, 350)` |
+| rare | Spotted Grouper | 5 | `rollFish(5, 350)` |
+| epic | Ember Triggerfish | 20 | `rollFish(20, 350)` |
+| epic | Ghost Angelfish | 30 | `rollFish(30, 350)` |
+| epic | Violet Lionfish | 2 | `rollFish(2, 350)` |
+| legendary | Abyssal Sunfish | 107 | `rollFish(107, 350)` |
+| legendary | Crowned Sailfish | 36 | `rollFish(36, 350)` |
+| legendary | Golden Koi Dragon | 89 | `rollFish(89, 350)` |
+| mythic | Moonfin Leviathan | 43 | `rollFish(43, 350)` |
+| mythic | Prism Coelacanth | 104 | `rollFish(104, 350)` |
+
+> **The PNGs in this folder are older than this table.** They were rendered when rarity came from the zone, with different seeds. Five seeds are unchanged (Grey Perch 8, Azure Tang 1, Spotted Grouper 5, Violet Lionfish 2, Moonfin Leviathan 43), so those sprites still match. The other 12 sprites show another fish of the same species: same shape and pattern, different exact color and size. The example card is the same Starborn Moonfin Leviathan (90 cm, 7.83 kg, #0000002b), but the saved PNG reads "caught at 48 m"; the page now renders it as "caught at 350 m". Render the pictures again (steps above) to bring them in line.
 
 ---
 

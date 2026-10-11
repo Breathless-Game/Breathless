@@ -1,7 +1,10 @@
 import { ZONES, fishValue, type FishSpec, type Zone } from './fish';
+import { storageKey } from './wallet';
 
 // The three waters from the design doc (design/game-design-document.md, section 6).
-// A map is pure data: how deep you may dive, when it unlocks, and its palette.
+// A map is pure data: how deep its shelf goes (which shallow zones it has),
+// when it unlocks, and its palette and scenery. Every map has a
+// bottomless trench under the boat, so a map never limits how deep you dive.
 // world.ts builds the underwater terrain from it, scenery.ts the shoreline.
 
 export type MapId = 'fjord' | 'tianchi' | 'ocean';
@@ -12,9 +15,9 @@ export interface MapDef {
   nameZh: string;
   place: string;
   difficulty: 'Casual' | 'Normal' | 'Hard';
-  /** How many depth zones are open, counted down from the surface. */
+  /** How many depth zones the shelf spans, counted down from the surface. */
   zoneCount: 1 | 2 | 3;
-  /** Names shown on the depth gauge for the open zones. */
+  /** Names shown on the depth gauge for the shelf zones; the gauge adds the Trench below them. */
   zoneLabels: readonly string[];
   /** Total value of banked fish needed before this map opens. */
   unlockValue: number;
@@ -45,7 +48,7 @@ export const MAPS: Record<MapId, MapDef> = {
     zoneCount: 1,
     zoneLabels: ['Shallows'],
     unlockValue: 0,
-    blurb: 'Calm glacial water between snow peaks. Short dives, gentle fish.',
+    blurb: 'Calm glacial water between snow peaks. A shallow shelf, then a sheer drop.',
     sky: '#bfe6f2',
     nightSky: '#07122b',
     haze: [50, 240],
@@ -71,7 +74,7 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 'Normal',
     zoneCount: 2,
     zoneLabels: ['Shallows', 'Sunken Forest'],
-    unlockValue: 150,
+    unlockValue: 0,
     blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees below.',
     sky: '#d6e6dc',
     nightSky: '#0a1620',
@@ -98,8 +101,8 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 'Hard',
     zoneCount: 3,
     zoneLabels: ['Shallows', 'Reef', 'Abyss'],
-    unlockValue: 1000,
-    blurb: 'Open water under a storm front. The only place the Abyss opens.',
+    unlockValue: 0,
+    blurb: 'Open water under a storm front. Reef and abyss on the widest shelf.',
     sky: '#a8e3f5',
     nightSky: '#0b1430',
     haze: [40, 200],
@@ -125,7 +128,7 @@ export function mapZones(map: MapDef): readonly Zone[] {
   return ZONES.slice(0, map.zoneCount);
 }
 
-/** Seabed depth in metres: the deepest open zone plus a little floor clearance. */
+/** Shelf depth in metres: the bottom of the deepest shelf zone plus a little floor clearance. The trench under the boat drops away from here with no bottom. */
 export function mapDepth(map: MapDef): number {
   return ZONES[map.zoneCount - 1].bottom + 2;
 }
@@ -145,7 +148,7 @@ const KEY = 'deepbreath.maps';
 export function loadMapProgress(): MapProgress {
   const progress: MapProgress = { selected: 'fjord', bestValue: 0, unlockAll: false };
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}');
+    const saved = JSON.parse(localStorage.getItem(storageKey(KEY)) ?? '{}');
     if (saved.selected in MAPS) progress.selected = saved.selected;
     if (Number.isFinite(saved.bestValue)) progress.bestValue = saved.bestValue;
     progress.unlockAll = saved.unlockAll === true;
@@ -155,7 +158,7 @@ export function loadMapProgress(): MapProgress {
 
 export function saveMapProgress(progress: MapProgress) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(progress));
+    localStorage.setItem(storageKey(KEY), JSON.stringify(progress));
   } catch {}
 }
 
