@@ -15,8 +15,7 @@ import {
   type EquipmentState,
 } from './equipment';
 import { ACCESSORIES, type AccessoryDef, type AccessoryId, type AccessorySlot } from './accessories';
-import { pearls as pearlText, type BankedFish } from './market';
-import { CRAFT_RECIPES, canCraft, emptyCraftingInventory, eligibleFish, type CraftingInventory, type CraftRecipe } from './crafting';
+import { pearls as pearlText } from './market';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -65,7 +64,6 @@ const COPY = {
     selectedPearls: '选择模块后再打包下潜', max: 'MAX', fullyUpgraded: '已达最高等级', highest: '当前属性已达到该配件上限',
     previewUnavailable: '升级预览暂不可用', preview: '升级预览', nextLevel: '下一级', need: '还差', spending: '正在消耗 PEARL…',
     branch: '分支模块', branchUnlock: 'Lv2 解锁分支模块', chooseBranch: '升级到 Lv2 后可选择专精路线', equipped: '已装配', canEquip: '可装配', remove: '点击拆下', empty: '尚未装配配件 · 选择下方卡片开始',
-    craftingKicker: '材料合成 · MATERIAL CRAFTING', craftingTitle: '鱼饵配方', craftingHelp: '用已铸造、未出售的鱼 NFT 合成鱼饵。点击合成会先确认，再在链上销毁选中的鱼。', inventory: '库存', mintedFish: '可用 NFT', craft: '合成', missing: '材料不足', waiting: '等待鱼 NFT 铸造', unavailable: '当前没有可用鱼 NFT', crafting: '正在合成…',
   },
   en: {
     language: '中文', languageLabel: '切换到中文', kicker: 'DIVER LOADOUT', title: 'Loadout workshop', close: 'Close (G)',
@@ -76,24 +74,7 @@ const COPY = {
     selectedPearls: 'Choose modules before packing a dive', max: 'MAX', fullyUpgraded: 'Fully upgraded', highest: 'This module is at its attribute cap',
     previewUnavailable: 'Upgrade preview unavailable', preview: 'Upgrade preview', nextLevel: 'Next', need: 'Need', spending: 'Spending PEARL…',
     branch: 'SPECIALISATION', branchUnlock: 'SPECIALISATION AT LV2', chooseBranch: 'Reach Lv2 to choose a specialisation path', equipped: 'Fitted', canEquip: 'Available', remove: 'Click to remove', empty: 'No accessories fitted · Choose a card below',
-    craftingKicker: '材料合成 · MATERIAL CRAFTING', craftingTitle: 'Bait recipes', craftingHelp: 'Craft bait from minted, unsold fish NFTs. Crafting asks for confirmation before burning the selected fish on-chain.', inventory: 'Inventory', mintedFish: 'usable NFTs', craft: 'Craft', missing: 'Missing materials', waiting: 'Waiting for fish NFT mint', unavailable: 'No eligible fish NFT', crafting: 'Crafting…',
   },
-} as const;
-
-export interface GearCraftingState {
-  inventory: CraftingInventory;
-  bank: readonly BankedFish[];
-}
-
-export interface GearCraftingHooks {
-  state: () => GearCraftingState;
-  craft: (recipeId: string) => void;
-}
-
-const MATERIAL_LABELS = {
-  bait1: { zh: '基础鱼饵', en: 'Basic bait' },
-  bait2: { zh: '深潜鱼饵', en: 'Deep bait' },
-  bait3: { zh: '深渊鱼饵', en: 'Abyss bait' },
 } as const;
 
 const TIER_ZH: Record<UpgradeSlot, readonly { name: string; effect: string }[]> = {
@@ -191,26 +172,17 @@ export class GearPanel {
   private tabAssembly = $<HTMLButtonElement>('gear-tab-assembly');
   private assemblyGrid = $('gear-assembly-grid');
   private assemblySummary = $('gear-assembly-summary');
-  private recipeGrid = $('gear-recipes');
-  private craftingInventory = $('gear-crafting-inventory');
   private assembly: Partial<Record<AccessorySlot, AccessoryId>> = this.loadAssembly();
   private language: GearLanguage = loadLanguage();
   private view: 'upgrades' | 'assembly' = 'upgrades';
   private selectedSlot: UpgradeSlot = 'net';
   private lastState: EquipmentState | null = null;
   private busy = false;
-  private craftBusy = false;
   private closeTimer = 0;
-  private crafting: GearCraftingHooks;
 
-  constructor(
-    onUpgrade: (slot: UpgradeSlot) => void,
-    onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {},
-    crafting: GearCraftingHooks = { state: () => ({ inventory: emptyCraftingInventory(), bank: [] }), craft: () => {} },
-  ) {
+  constructor(onUpgrade: (slot: UpgradeSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
     this.onUpgrade = onUpgrade;
     this.onPathChange = onPathChange;
-    this.crafting = crafting;
     this.renderLanguage();
     $('gear-close').addEventListener('click', () => this.toggle(false));
     this.languageButton.addEventListener('click', () => {
@@ -278,16 +250,12 @@ export class GearPanel {
     $('gear-selected-label').textContent = copy.selected;
     $('gear-next-label').textContent = copy.next;
     $('gear-footnote').textContent = copy.footnote;
-    $('gear-crafting-kicker').textContent = copy.craftingKicker;
-    $('gear-crafting-title').textContent = copy.craftingTitle;
-    $('gear-crafting-help').textContent = copy.craftingHelp;
     $('gear-assembly-kicker').textContent = copy.assemblyKicker;
     $('gear-assembly-title').textContent = copy.assemblyTitle;
     $('gear-assembly-clear').textContent = copy.clear;
     $('gear-assembly-help').textContent = copy.assemblyHelp;
     this.upgradeView.setAttribute('aria-label', this.language === 'zh' ? '合成箱' : 'Upgrade box');
     this.assemblyView.setAttribute('aria-label', this.language === 'zh' ? '装配箱' : 'Assembly box');
-    this.renderRecipes();
   }
 
   showNotice(message: string) {
@@ -302,18 +270,11 @@ export class GearPanel {
     if (this.lastState) this.render(this.lastState);
   }
 
-  /** While the selected fish is being burned and the bait inventory is updated. */
-  setCraftBusy(busy: boolean) {
-    this.craftBusy = busy;
-    this.renderRecipes();
-  }
-
   render(state: EquipmentState) {
     this.lastState = state;
     this.renderSlots(state);
     this.renderDetail(state);
     this.renderAssembly();
-    this.renderRecipes();
   }
 
   private setView(view: 'upgrades' | 'assembly') {
@@ -417,58 +378,6 @@ export class GearPanel {
         return card;
       }),
     );
-  }
-
-  private renderRecipes() {
-    if (!this.recipeGrid || !this.craftingInventory) return;
-    const copy = COPY[this.language];
-    const snapshot = this.crafting.state();
-    const inventory = { ...emptyCraftingInventory(), ...snapshot.inventory };
-    const inventoryLabels = Object.entries(inventory)
-      .filter(([, amount]) => amount > 0)
-      .map(([material, amount]) => `${MATERIAL_LABELS[material as keyof typeof MATERIAL_LABELS][this.language]} ×${amount}`);
-    this.craftingInventory.textContent = `${copy.inventory}: ${inventoryLabels.length ? inventoryLabels.join(' · ') : '—'}`;
-    this.recipeGrid.replaceChildren(
-      ...CRAFT_RECIPES.map((recipe) => this.renderRecipe(recipe, snapshot, inventory, copy)),
-    );
-  }
-
-  private renderRecipe(
-    recipe: CraftRecipe,
-    snapshot: GearCraftingState,
-    inventory: CraftingInventory,
-    copy: (typeof COPY)[GearLanguage],
-  ): HTMLElement {
-    const fish = eligibleFish(snapshot.bank, recipe);
-    const ready = canCraft(recipe, inventory, snapshot.bank);
-    const card = document.createElement('article');
-    card.className = `gear-recipe${ready ? ' ready' : ''}`;
-    const head = document.createElement('div');
-    head.className = 'gear-recipe-head';
-    const title = document.createElement('strong');
-    title.textContent = this.language === 'zh' ? recipe.nameZh : recipe.nameEn;
-    const output = document.createElement('span');
-    output.className = 'gear-recipe-output';
-    output.textContent = this.language === 'zh' ? recipe.resultZh : recipe.resultEn;
-    head.append(title, output);
-    const material = document.createElement('div');
-    material.className = 'gear-recipe-material';
-    material.textContent = `${this.language === 'zh' ? '材料' : 'Materials'} · ${this.language === 'zh' ? recipe.materialZh : recipe.materialEn}`;
-    const status = document.createElement('div');
-    status.className = 'gear-recipe-status';
-    status.textContent = fish.length
-      ? `${fish.length} ${copy.mintedFish}`
-      : snapshot.bank.some((entry) => entry.nft !== 'minted' && !entry.legacy)
-        ? copy.waiting
-        : copy.unavailable;
-    const button = document.createElement('button');
-    button.className = 'mini';
-    button.type = 'button';
-    button.textContent = this.craftBusy ? copy.crafting : ready ? copy.craft : copy.missing;
-    button.disabled = this.craftBusy || !ready;
-    button.addEventListener('click', () => this.crafting.craft(recipe.id));
-    card.append(head, material, status, button);
-    return card;
   }
 
   private renderDetail(state: EquipmentState) {

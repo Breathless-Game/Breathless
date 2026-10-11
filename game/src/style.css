@@ -2497,8 +2497,7 @@ button:disabled {
 }
 
 .gear-card,
-.gear-upgrade-card,
-.gear-crafting-card {
+.gear-upgrade-card {
   margin-top: 18px;
   padding: 16px;
   border: 1px solid var(--line);
@@ -2559,92 +2558,6 @@ button:disabled {
   width: 100%;
 }
 
-.gear-crafting-card {
-  background: rgba(106, 184, 255, 0.045);
-}
-
-.gear-crafting-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.gear-crafting-head h3 {
-  margin: 4px 0 0;
-}
-
-.gear-crafting-inventory {
-  max-width: 52%;
-  color: var(--hold);
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: right;
-}
-
-.gear-crafting-card > p {
-  margin: 10px 0;
-  line-height: 1.45;
-}
-
-.gear-recipes {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.gear-recipe {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 7px;
-  padding: 11px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.gear-recipe.ready {
-  border-color: rgba(62, 240, 168, 0.58);
-  background: rgba(62, 240, 168, 0.055);
-}
-
-.gear-recipe-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.gear-recipe-head strong {
-  min-width: 0;
-  font-size: 13px;
-}
-
-.gear-recipe-output {
-  color: var(--gold);
-  font-size: 10px;
-  text-align: right;
-}
-
-.gear-recipe-material,
-.gear-recipe-status {
-  min-height: 31px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.gear-recipe-status {
-  min-height: 16px;
-  color: var(--hold);
-}
-
-.gear-recipe button {
-  width: 100%;
-  margin-top: auto;
-}
-
 .gear-notice {
   color: var(--gold);
   text-align: center;
@@ -2654,16 +2567,6 @@ button:disabled {
 .gear-footnote {
   line-height: 1.5;
   margin: 16px 0 0;
-}
-
-@media (max-width: 640px) {
-  .gear-recipes {
-    grid-template-columns: 1fr;
-  }
-
-  .gear-crafting-inventory {
-    max-width: 48%;
-  }
 }
 
 /* ---- health report ---- */

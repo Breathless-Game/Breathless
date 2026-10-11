@@ -31,7 +31,6 @@ import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { applyCraft, emptyCraftingInventory, planCraft, sanitizeCraftingInventory, type CraftingInventory } from './crafting';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
@@ -664,22 +663,7 @@ function saveBank() {
   } catch {}
 }
 
-function loadCrafting(): CraftingInventory {
-  try {
-    return sanitizeCraftingInventory(JSON.parse(localStorage.getItem(storageKey('crafting')) ?? '{}'));
-  } catch {
-    return emptyCraftingInventory();
-  }
-}
-
-function saveCrafting() {
-  try {
-    localStorage.setItem(storageKey('crafting'), JSON.stringify(crafting));
-  } catch {}
-}
-
 const currentTier = () => { const tier = rodTier(equipment); return { ...tier, capacity: tier.capacity + shipBonus.capacity, catchRadius: tier.catchRadius * (1 + shipBonus.range) }; };
-let crafting: CraftingInventory = emptyCraftingInventory();
 hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
@@ -707,14 +691,7 @@ const aquarium = new Aquarium(bank, {
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
 const report = new Report(health);
-const gear = new GearPanel(
-  (slot) => buyNextUpgrade(slot),
-  (slot, path) => selectEquipmentPath(slot, path),
-  {
-    state: () => ({ inventory: crafting, bank }),
-    craft: (recipeId) => { void craftRecipe(recipeId); },
-  },
-);
+const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => selectEquipmentPath(slot, path));
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
 diver.setNetLevel(currentTier().level);
@@ -865,7 +842,6 @@ async function synthUpgrade(slot: UpgradeSlot) {
   }
  }
 let buying = false;
-let craftingBusy = false;
 /** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
 async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
   if (buying) return 'Already upgrading…';
@@ -904,54 +880,6 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
     if (plan.fromChain > 0) void syncPearls();
   }
   return failed;
-}
-
-/** Burns one eligible fish NFT and records the bait only after the chain transaction succeeds. */
-async function craftRecipe(recipeId: string): Promise<string | null> {
-  if (craftingBusy) return 'Already crafting…';
-  if (phase === 'play') {
-    gear.showNotice('Return to the workbench before crafting bait.');
-    return 'Return to the workbench before crafting bait.';
-  }
-  if (nftQueue.busy) {
-    const message = 'Wait for the mint or sale queue to finish before crafting.';
-    gear.showNotice(message);
-    return message;
-  }
-  const plan = planCraft(recipeId, crafting, bank);
-  if (!plan) {
-    const message = 'The recipe needs a minted fish and the listed bait materials.';
-    gear.showNotice(message);
-    return message;
-  }
-  const fish = plan.fish;
-  const confirmation = `Burn ${fish.name} (${fish.rarity} fish NFT) to craft ${plan.recipe.nameEn}? This cannot be undone.`;
-  if (!window.confirm(confirmation)) return 'Craft cancelled.';
-
-  craftingBusy = true;
-  gear.setCraftBusy(true);
-  try {
-    // Do not remove local material until the owner-signed burn has landed.
-    await (await nftQueue.loadChain()).burnFish(fish.assetId!);
-    const index = bank.findIndex((entry) => entry === fish || entry.assetId === fish.assetId);
-    if (index < 0) throw new Error('The selected fish is no longer in the bank.');
-    bank.splice(index, 1);
-    crafting = applyCraft(crafting, plan.recipe);
-    saveBank();
-    saveCrafting();
-    hud.setBank(bank);
-    vault.refresh();
-    hud.message(`${plan.recipe.nameEn} crafted`, 1800);
-  } catch (e) {
-    const message = `Craft failed: ${(e as Error).message ?? e}`;
-    console.error('craft failed', e);
-    gear.showNotice(message);
-    return message;
-  } finally {
-    craftingBusy = false;
-    gear.setCraftBusy(false);
-  }
-  return null;
 }
 
 function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
@@ -2018,7 +1946,6 @@ async function logOut() {
 
 function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());
-  crafting = loadCrafting();
   Object.assign(equipment, loadEquipment());
   synthesisState = loadSynthesis();
   Object.assign(mapProgress, loadMapProgress());
