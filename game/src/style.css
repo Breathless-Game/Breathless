@@ -338,6 +338,86 @@ body {
   background: rgba(255, 255, 255, 0.16);
 }
 
+/* Heaving a capsized boat upright: a big key in the middle of the screen, a ring that fills. */
+#mash {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  pointer-events: none;
+}
+
+#mash .ring {
+  position: relative;
+  width: 136px;
+  height: 136px;
+  animation: mash-beckon 0.7s ease-in-out infinite;
+}
+
+#mash.hit .ring {
+  animation: mash-hit 0.13s ease-out;
+}
+
+#mash svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+#mash .track {
+  fill: rgba(6, 16, 28, 0.62);
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 8;
+}
+
+#mash .arc {
+  fill: none;
+  stroke: #ffb340;
+  stroke-width: 8;
+  stroke-linecap: round;
+  /* The circumference of r = 52. */
+  stroke-dasharray: 326.73;
+  stroke-dashoffset: 326.73;
+  transition: stroke-dashoffset 0.07s linear;
+}
+
+#mash .key {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 68px;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.65);
+}
+
+#mash .label {
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  color: #ffd9b0;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.75);
+  white-space: nowrap;
+}
+
+/* The key has the middle of the screen: messages move up out of its way. */
+#mash:not(.hidden) ~ #center-msg {
+  top: 20%;
+}
+
+@keyframes mash-beckon {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.07); }
+}
+
+@keyframes mash-hit {
+  0% { transform: scale(1.24); }
+  100% { transform: scale(1); }
+}
+
 /* Sharks in the water: the pulse they hunt by and how worked up they are. */
 #shark {
   position: absolute;
