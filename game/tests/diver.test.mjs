@@ -22,7 +22,8 @@ const commonUrl = await moduleUrl('upgrade-models/common');
 const fishingNetUrl = await moduleUrl('fishing-net', { './upgrade-models/common': commonUrl });
 const gearUrl = await moduleUrl('gear', { './fishing-net': fishingNetUrl });
 const fxUrl = await moduleUrl('fx');
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl }));
+const conceptUrl = await moduleUrl('diver-designs');
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './diver-designs': conceptUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
@@ -155,7 +156,10 @@ test('surfacing fast punches white water up at the head; drifting up does not', 
     assert.equal(burst.length > 0, splashes, `climbing at ${speed} m/s`);
     if (!splashes) continue;
     const middle = burst.reduce((sum, position) => sum + position.x, 0) / burst.length;
-    assert.ok(middle > diver.pos.x + 0.2, 'the burst is at the head, not the fins');
+    const suitScale=diver.group.children[0].scale.x;
+    const headX=diver.pos.x+0.9*suitScale*Math.cos(diver.group.children[0].rotation.z);
+    const finsX=diver.pos.x-2*suitScale;
+    assert.ok(Math.abs(middle-headX)<Math.abs(middle-finsX), 'the burst is nearer the scaled head than the fins');
     assert.ok(burst.some(position => position.y > 0.3));
   }
 });
