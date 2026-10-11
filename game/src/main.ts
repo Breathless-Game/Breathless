@@ -874,6 +874,7 @@ function update(dt: number, time: number) {
   diver.update(dt, time, -diver.pos.y);
   tendTrench(-diver.pos.y);
   for (const f of fishes) f.update(dt, time, diver.pos);
+  world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
 
   // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
