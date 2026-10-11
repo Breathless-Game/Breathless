@@ -74,7 +74,7 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
 
 /** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
 function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
-  const group = buildDeepSonar({ lengthLevel: level, detail: 1, startsCarried: false }).group;
+  const group = buildDeepSonar({ lengthLevel: level, detail: 2, startsCarried: false }).group;
   const halos: THREE.Mesh[] = [];
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshBasicMaterial) halos.push(object);
