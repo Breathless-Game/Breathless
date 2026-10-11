@@ -213,6 +213,27 @@ export class TitleScreen {
     return { x: e.clientX, y: e.clientY + this.pan };
   }
 
+  /** Where menu fish i is on screen (its middle), or null while it isn't hanging there. */
+  fishCenter(i: number): { x: number; y: number } | null {
+    const f = this.fish[i];
+    if (!this.running || !f) return null;
+    if (!f.dropped) {
+      // Not on its line yet (still to drop in): where it will hang, under its spot on the rope.
+      const a = this.ps[Math.round(f.def.at * ROPE_SEGS)];
+      return a ? { x: a.x, y: a.y + f.lineLen - this.pan } : null;
+    }
+    const h = this.ps[f.head];
+    const t = this.ps[f.tail];
+    return { x: (h.x + t.x) / 2, y: (h.y + t.y) / 2 - this.pan };
+  }
+
+  /** Something dropped into menu fish i: it bobs down on its lines and swings back. */
+  bump(i: number, px = 40) {
+    const f = this.fish[i];
+    if (!f?.dropped) return;
+    for (const n of [f.head, f.tail]) this.ps[n].py -= px * STEP * 60;
+  }
+
   /** Renames a menu fish (index as given to the constructor): its carved name changes in place. */
   setLabel(i: number, label: string) {
     const f = this.fish[i];

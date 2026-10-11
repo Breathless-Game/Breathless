@@ -229,77 +229,226 @@ export function drawTraces(c: CanvasRenderingContext2D, r: TripRecord, x: number
   line(r.breath, '#4a9be0');
 }
 
+// ---- The report as a sheet of paper ------------------------------------------
+
+/** The grade stamp's ink. */
+export const GRADE_COLOR: Record<string, string> = { S: '#d0359f', A: '#c8901c', B: '#2a9d6a', C: '#3a7fc0', D: '#8a8a8a' };
+
+/**
+ * The trip report drawn as a sheet of cream paper (W×H canvas pixels): the health
+ * desk's sheet on the table, and the report at the end of a trip. null: no trips yet.
+ */
+export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null, W: number, H: number) {
+  // Cream paper, a ruled border.
+  c.fillStyle = '#f3ead6';
+  c.fillRect(0, 0, W, H);
+  c.strokeStyle = 'rgba(90, 60, 30, 0.35)';
+  c.lineWidth = 4;
+  c.strokeRect(24, 24, W - 48, H - 48);
+  const ink = '#3a2210';
+  const soft = 'rgba(58, 34, 16, 0.55)';
+  c.textBaseline = 'alphabetic';
+  if (!r) {
+    c.fillStyle = ink;
+    c.font = '800 64px Inter, system-ui, sans-serif';
+    c.textAlign = 'center';
+    c.fillText('No trips yet · 还没有记录', W / 2, H / 2 - 20);
+    c.font = '500 36px Inter, system-ui, sans-serif';
+    c.fillStyle = soft;
+    c.fillText('Dive, then come back to the main menu: the trip report lands here.', W / 2, H / 2 + 50);
+
+    return;
+  }
+  c.textAlign = 'left';
+  const L = 70;
+  c.fillStyle = soft;
+  c.font = '700 30px Inter, system-ui, sans-serif';
+  c.fillText(`TRIP REPORT · 本次报告 · ${tripDate(r)}`, L, 92);
+  c.fillStyle = ink;
+  c.font = '900 64px Inter, system-ui, sans-serif';
+  c.fillText(mapNames(r), L, 160);
+  // The grade, stamped in the corner.
+  c.save();
+  c.translate(W - 180, 130);
+  c.rotate(-0.12);
+  c.strokeStyle = GRADE_COLOR[r.grade];
+  c.fillStyle = GRADE_COLOR[r.grade];
+  c.lineWidth = 8;
+  c.beginPath();
+  c.arc(0, 0, 78, 0, Math.PI * 2);
+  c.stroke();
+  c.font = '900 92px Inter, system-ui, sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(r.grade, 0, 4);
+  c.restore();
+  c.textAlign = 'right';
+  c.fillStyle = ink;
+  c.font = '800 44px Inter, system-ui, sans-serif';
+  c.fillText(`${r.score.total} pts`, W - 290, 150);
+
+  // Left column: the catch and the dives. Right column: health.
+  const line = (x: number, y: number, w: number, k: string, v: string) => {
+    c.textAlign = 'left';
+    c.fillStyle = soft;
+    c.font = '600 30px Inter, system-ui, sans-serif';
+    c.fillText(k, x, y);
+    c.textAlign = 'right';
+    c.fillStyle = ink;
+    c.font = '800 32px Inter, system-ui, sans-serif';
+    c.fillText(v, x + w, y);
+    c.strokeStyle = 'rgba(90, 60, 30, 0.15)';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(x, y + 12);
+    c.lineTo(x + w, y + 12);
+    c.stroke();
+  };
+  const head = (x: number, y: number, t: string) => {
+    c.textAlign = 'left';
+    c.fillStyle = '#8a5a2a';
+    c.font = '800 28px Inter, system-ui, sans-serif';
+    c.fillText(t, x, y);
+  };
+  const colW = 560;
+  let y = 240;
+  head(L, y, 'CATCH · 渔获');
+  y += 50;
+  line(L, y, colW, 'Caught · 捕获', String(r.caught.length));
+  y += 48;
+  line(L, y, colW, 'Banked · 入库', String(r.banked));
+  y += 48;
+  const counts = rarityCounts(r);
+  c.font = '700 26px Inter, system-ui, sans-serif';
+  let cx = L;
+  for (const [k, n] of counts) {
+    const text = `${RARITY[k].label} ×${n}`;
+    const w = c.measureText(text).width + 30;
+    c.strokeStyle = RARITY[k].color;
+    c.fillStyle = RARITY[k].color;
+    c.lineWidth = 3;
+    c.beginPath();
+    c.roundRect(cx, y - 30, w, 42, 21);
+    c.stroke();
+    c.textAlign = 'left';
+    c.fillText(text, cx + 15, y);
+    cx += w + 12;
+  }
+  y += 64;
+  head(L, y, 'DIVES · 下潜');
+  y += 50;
+  line(L, y, colW, 'Dives · 次数', String(r.dives));
+  y += 48;
+  line(L, y, colW, 'Deepest · 最深', `${Math.round(r.deepest)} m`);
+  y += 48;
+  line(L, y, colW, 'Longest hold · 最长屏息', secs(r.longestHoldMs));
+  y += 48;
+  line(L, y, colW, 'Blackouts · 昏厥', String(r.blackouts));
+
+  const R = L + colW + 90;
+  const rw = W - R - 70;
+  let ry = 240;
+  head(R, ry, 'HEALTH · 健康指标');
+  ry += 50;
+  for (const [k, v] of healthLines(r).slice(0, 6)) {
+    line(R, ry, rw, k, v);
+    ry += 48;
+  }
+  // Heart (red) and breathing (blue) over the trip.
+  const gy = ry + 10;
+  c.fillStyle = 'rgba(90, 60, 30, 0.06)';
+  c.fillRect(R, gy, rw, H - gy - 70);
+  if (r.pulse.length > 1 || r.breath.length > 1) drawTraces(c, r, R + 8, gy + 10, rw - 16, H - gy - 90);
+  else {
+    c.textAlign = 'center';
+    c.fillStyle = soft;
+    c.font = '600 26px Inter, system-ui, sans-serif';
+    c.fillText('No sensor this trip · 无传感器数据', R + rw / 2, gy + (H - gy - 70) / 2);
+  }
+}
+
 // ---- The report -------------------------------------------------------------
 
-/** The trip report over the title, between the trip and the main menu. */
+const SHEET_W = 1400;
+const SHEET_H = 985; // the health desk's sheet's proportions
+
+/**
+ * The trip report over the title, between the trip and the main menu: the same
+ * sheet of paper as on the health desk, dropped in at a slight tilt. Put away, it
+ * shrinks and flies into the HEALTH fish on the rope (where the reports are kept),
+ * which bobs as it swallows it.
+ */
 export class TripReport {
   private root: HTMLElement;
+  private sheet: HTMLCanvasElement;
   private done: (() => void) | null = null;
+  private closing = false;
+  /** Where the report goes: the HEALTH fish's middle on screen (null: it just fades), and its gulp. */
+  target: () => { x: number; y: number } | null = () => null;
+  swallowed: () => void = () => {};
 
   constructor() {
     this.root = document.createElement('div');
     this.root.id = 'trip-report';
     this.root.className = 'hidden';
+    this.root.innerHTML = `
+      <div class="trip-paper">
+        <canvas width="${SHEET_W}" height="${SHEET_H}"></canvas>
+        <button class="primary" id="trip-done">Keep it · 收起报告</button>
+      </div>
+      <div class="table-hint small">Click anywhere or press Esc to put it away</div>`;
+    this.sheet = this.root.querySelector('canvas')!;
     document.body.append(this.root);
+    this.root.addEventListener('click', () => this.close());
   }
 
   get open() {
-    return !this.root.classList.contains('hidden');
+    return !this.root.classList.contains('hidden') && !this.closing;
   }
 
   show(r: TripRecord, done?: () => void) {
     this.done = done ?? null;
-    const counts = rarityCounts(r);
-    const mins = Math.max(1, Math.round((r.endAt - r.at) / 60000));
-    this.root.innerHTML = `
-      <div class="card">
-        <div class="trip-head">
-          <div>
-            <div class="small muted">TRIP REPORT · 本次报告 · ${tripDate(r)} · ${mins} min</div>
-            <h2>${mapNames(r)}</h2>
-          </div>
-          <div class="trip-score">
-            <div class="trip-grade grade-${r.grade}">${r.grade}</div>
-            <div><b>${r.score.total}</b><span class="small muted"> pts</span></div>
-          </div>
-        </div>
-        <div class="trip-cols">
-          <section>
-            <h3>Score · 评分</h3>
-            <div class="trip-line"><span>Fish · 渔获</span><b>+${r.score.fish}</b></div>
-            <div class="trip-line"><span>Longest hold · 屏息</span><b>+${r.score.hold}</b></div>
-            <div class="trip-line"><span>Deepest · 深度</span><b>+${r.score.depth}</b></div>
-            ${r.score.penalty ? `<div class="trip-line"><span>Blackouts · 昏厥</span><b class="bad">−${r.score.penalty}</b></div>` : ''}
-            <h3>Catch · 渔获统计</h3>
-            <div class="trip-line"><span>Caught · 捕获</span><b>${r.caught.length}</b></div>
-            <div class="trip-line"><span>Banked · 入库</span><b>${r.banked}</b></div>
-            <div class="trip-rarity">${counts.map(([k, n]) => `<span style="border-color:${RARITY[k].color};color:${RARITY[k].color}">${RARITY[k].label} ×${n}</span>`).join('') || '<span class="muted">No fish this trip</span>'}</div>
-            <h3>Dives · 下潜</h3>
-            <div class="trip-line"><span>Dives · 次数</span><b>${r.dives}</b></div>
-            <div class="trip-line"><span>Deepest · 最深</span><b>${Math.round(r.deepest)} m</b></div>
-            <div class="trip-line"><span>Blackouts · 昏厥</span><b>${r.blackouts}</b></div>
-          </section>
-          <section>
-            <h3>Health · 健康指标</h3>
-            ${healthLines(r).map(([k, v]) => `<div class="trip-line"><span>${k}</span><b>${v}</b></div>`).join('')}
-            <canvas class="trip-traces" width="640" height="160"></canvas>
-            <div class="small muted">${r.heart || r.breathRate ? '<span style="color:#e8505b">━</span> heart rate · <span style="color:#4a9be0">━</span> breathing rate' : 'No sensor this trip (keyboard): heart and breathing figures need the camera.'}</div>
-          </section>
-        </div>
-        <div class="trip-foot"><button class="primary" id="trip-done">Main menu · 返回主菜单</button></div>
-      </div>`;
-    const canvas = this.root.querySelector<HTMLCanvasElement>('.trip-traces')!;
-    drawTraces(canvas.getContext('2d')!, r, 4, 8, canvas.width - 8, canvas.height - 16);
-    this.root.querySelector('#trip-done')!.addEventListener('click', () => this.close());
-    this.root.classList.remove('hidden');
+    this.closing = false;
+    drawTripSheet(this.sheet.getContext('2d')!, r, SHEET_W, SHEET_H);
+    const paper = this.root.querySelector<HTMLElement>('.trip-paper')!;
+    paper.getAnimations().forEach((a) => a.cancel());
+    this.root.classList.remove('hidden', 'leaving');
+    paper.animate(
+      [
+        { transform: 'translateY(-60vh) rotate(-9deg)', opacity: 0 },
+        { transform: 'translateY(2vh) rotate(1.5deg)', opacity: 1, offset: 0.75 },
+        { transform: 'translateY(0) rotate(-1.2deg)' },
+      ],
+      { duration: 650, easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)', fill: 'forwards' },
+    );
     this.root.querySelector<HTMLButtonElement>('#trip-done')!.focus();
   }
 
+  /** Put away: it rolls up small and flies into the HEALTH fish. */
   close() {
     if (!this.open) return;
-    this.root.classList.add('hidden');
-    const done = this.done;
-    this.done = null;
-    done?.();
+    this.closing = true;
+    const paper = this.root.querySelector<HTMLElement>('.trip-paper')!;
+    const box = paper.getBoundingClientRect();
+    const to = this.target();
+    const dx = to ? to.x - (box.left + box.width / 2) : 0;
+    const dy = to ? to.y - (box.top + box.height / 2) : -window.innerHeight * 0.6;
+    this.root.classList.add('leaving'); // the backdrop clears
+    const fly = paper.animate(
+      [
+        { transform: 'translate(0, 0) rotate(-1.2deg) scale(1)', opacity: 1 },
+        { transform: `translate(0, -2vh) rotate(-1.2deg) scale(0.92, 0.5)`, opacity: 1, offset: 0.25 }, // rolls up
+        { transform: `translate(${dx}px, ${dy}px) rotate(150deg) scale(0.04)`, opacity: 0.9 },
+      ],
+      { duration: 750, easing: 'cubic-bezier(0.45, 0, 0.4, 1)', fill: 'forwards' },
+    );
+    fly.onfinish = () => {
+      this.root.classList.add('hidden');
+      this.closing = false;
+      if (to) this.swallowed();
+      const done = this.done;
+      this.done = null;
+      done?.();
+    };
   }
 }

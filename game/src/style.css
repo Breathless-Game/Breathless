@@ -3737,40 +3737,46 @@ button:disabled {
   align-items: center;
 }
 
-/* ---- trip report (back at the main menu) ---- */
+/* ---- trip report (back at the main menu): the health desk's sheet of paper ---- */
 #trip-report {
   position: fixed;
   inset: 0;
   z-index: 58;
   display: grid;
   place-items: center;
-  background: rgba(2, 8, 18, 0.6);
+  padding: 24px 16px 64px;
+  background: rgba(2, 8, 18, 0.55);
   backdrop-filter: blur(6px);
-  padding: 16px;
-  animation: trip-in 0.4s ease-out;
+  transition: background 0.5s, backdrop-filter 0.5s;
+  cursor: pointer;
 }
 
-@keyframes trip-in {
-  from {
-    opacity: 0;
-  }
+#trip-report.leaving {
+  background: rgba(2, 8, 18, 0);
+  backdrop-filter: blur(0);
 }
 
-#trip-report .card {
-  width: min(880px, 100%);
-  max-height: calc(100vh - 32px);
-  overflow-y: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  padding: 24px 28px;
-  animation: trip-card-in 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+.trip-paper {
+  position: relative;
+  width: min(1000px, calc(100vw - 32px), calc((100vh - 120px) * 1.42));
 }
 
-@keyframes trip-card-in {
-  from {
-    transform: translateY(24px) scale(0.96);
-  }
+.trip-paper canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.trip-paper #trip-done {
+  position: absolute;
+  right: 3%;
+  bottom: -22px;
+}
+
+#trip-report .table-hint {
+  bottom: 18px;
 }
 
 .trip-head {

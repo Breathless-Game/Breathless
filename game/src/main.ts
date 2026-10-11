@@ -1466,6 +1466,10 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
   { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.59, label: 'HEALTH', onClick: openHealthDesk },
   { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.76, label: 'SETTINGS', onClick: openSettingsDesk },
 ]);
+// The trip report, put away, flies into the HEALTH fish (that's where the reports are kept).
+const HEALTH_FISH = 2;
+tripReport.target = () => titleScreen.fishCenter(HEALTH_FISH);
+tripReport.swallowed = () => titleScreen.bump(HEALTH_FISH, 60);
 
 // Gear set in the workbench's READY tray for this dive. The selected slots are
 // applied when the dive starts, so an omitted accessory falls back to tier 1.

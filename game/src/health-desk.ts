@@ -1,8 +1,7 @@
 import * as THREE from 'three';
-import { RARITY } from './fish';
 import { SoftPaper } from './paper';
 import { TableScene, type TableHooks } from './table-scene';
-import { drawTraces, healthLines, loadTrips, mapNames, rarityCounts, secs, tripDate, type TripRecord } from './trip';
+import { drawTripSheet, GRADE_COLOR, loadTrips, mapNames, secs, tripDate, type TripRecord } from './trip';
 
 // The health desk, from the title's HEALTH fish: a table comes up with the latest
 // trip report laid out on it as a sheet of paper, and a bamboo jar of fortune
@@ -24,15 +23,60 @@ const TEX_W = 1400;
 const TEX_H = Math.round((TEX_W * PAPER.d) / PAPER.w);
 const JAR = { x: 3.95, z: -0.35, r: 0.5, h: 1.15 };
 const STICKS = 14; // the jar holds this many earlier trips
-const STICK_H = 1.75;
+const SCROLL_L = 1.5; // a rolled report, end to end
+const SCROLL_R = 0.085;
+const SWAP_S = 1.6; // rolled up, crossed over, unrolled
 
-const GRADE_COLOR: Record<string, string> = { S: '#d0359f', A: '#c8901c', B: '#2a9d6a', C: '#3a7fc0', D: '#8a8a8a' };
 
 interface Stick {
   mesh: THREE.Group;
   record: TripRecord;
   base: THREE.Vector3;
   lift: number;
+}
+
+const clamp01 = (u: number) => Math.min(1, Math.max(0, u));
+const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
+
+const SCROLL_PAPER = new THREE.MeshStandardMaterial({ color: '#efe3c4', roughness: 0.9 });
+const SCROLL_END = new THREE.MeshStandardMaterial({ color: '#d8c9a4', roughness: 0.9 });
+
+/**
+ * A rolled-up report, its pivot in the middle and its length along y: the paper
+ * roll, its spiralled ends a shade darker, and a ribbon tied round it in the
+ * trip's grade colour.
+ */
+function scrollMesh(grade: string): THREE.Group {
+  const g = new THREE.Group();
+  const roll = new THREE.Mesh(new THREE.CylinderGeometry(SCROLL_R, SCROLL_R, 1, 16, 1, true), SCROLL_PAPER);
+  const ends = [0.5, -0.5].map((y) => {
+    const end = new THREE.Mesh(new THREE.CircleGeometry(SCROLL_R, 16), SCROLL_END);
+    end.rotation.x = y > 0 ? -Math.PI / 2 : Math.PI / 2;
+    end.position.y = y;
+    return end;
+  });
+  const length = new THREE.Group(); // scaled for the scroll's length; the ribbon stays its size
+  length.add(roll, ...ends);
+  const ribbon = new THREE.Mesh(new THREE.CylinderGeometry(SCROLL_R * 1.08, SCROLL_R * 1.08, 0.13, 16), new THREE.MeshStandardMaterial({ color: GRADE_COLOR[grade] ?? '#888', roughness: 0.6 }));
+  roll.castShadow = ribbon.castShadow = true;
+  g.add(length, ribbon);
+  g.userData.length = length;
+  g.userData.scroll = true;
+  setScrollLength(g, SCROLL_L);
+  return g;
+}
+
+function setScrollLength(g: THREE.Object3D, l: number) {
+  (g.userData.length as THREE.Group).scale.y = l;
+}
+
+function disposeScroll(g: THREE.Object3D) {
+  g.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      o.geometry.dispose();
+      if (o.material !== SCROLL_PAPER && o.material !== SCROLL_END) (o.material as THREE.Material).dispose();
+    }
+  });
 }
 
 const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
@@ -42,7 +86,7 @@ export class HealthDesk extends TableScene {
   private paperTex: THREE.CanvasTexture;
   private sheet: SoftPaper;
   private paper = new THREE.Group(); // the sheet's pose: on the table, carried, or held up
-  private paperState: 'table' | 'lifting' | 'held' | 'dropping' = 'table';
+  private paperState: 'table' | 'lifting' | 'held' | 'dropping' | 'swapping' = 'table';
   private paperTween: { t: number; dur: number; fn: (u: number) => void; done: () => void } | null = null;
   // Held up, the sheet is drawn on its own layer over the blurred table (like the workbench's chart).
   private heldEl: HTMLElement;
@@ -104,7 +148,7 @@ export class HealthDesk extends TableScene {
     this.tip.className = 'hidden';
     this.hint = document.createElement('div');
     this.hint.className = 'table-hint small';
-    this.hint.textContent = 'Hover a stick in the jar for an earlier trip · click it to lay it out · Esc back';
+    this.hint.textContent = 'Click the report to pick it up · hover a rolled report in the jar, click to swap it in · Esc back';
     this.root.append(this.hint);
     document.body.append(this.tip); // over the title layer: the card mustn't hide behind a hanging fish
 
@@ -132,9 +176,15 @@ export class HealthDesk extends TableScene {
   protected onHide() {
     this.hovered = null;
     this.tip.classList.add('hidden');
-    // Gone mid-pickup: the report goes straight back onto the table.
+    // Gone mid-pickup or mid-swap: the report goes straight back onto the table.
     this.paperTween = null;
     this.paperState = 'table';
+    for (const o of this.scene.children.filter((c) => c.userData.scroll)) {
+      this.scene.remove(o);
+      disposeScroll(o);
+    }
+    this.paper.scale.z = 1;
+    this.paper.visible = true;
     this.scene.add(this.paper);
     this.paper.position.copy(REST_POS);
     this.paper.quaternion.copy(REST_Q);
@@ -292,23 +342,21 @@ export class HealthDesk extends TableScene {
     this.scene.add(this.jar);
   }
 
-  /** One stick per earlier trip, fanned out a little in the jar, its tip painted the trip's grade. */
+  /** One rolled-up report per earlier trip, standing in the jar at its own lean, tied with its grade's colour. */
   private fillJar(trips: TripRecord[]) {
-    for (const s of this.sticks) this.jar.remove(s.mesh);
+    for (const s of this.sticks) {
+      this.jar.remove(s.mesh);
+      disposeScroll(s.mesh);
+    }
     this.sticks = trips.map((record, i) => {
       const n = trips.length;
       const a = (i / Math.max(1, n)) * Math.PI * 2 + 0.4;
       const rr = n > 1 ? JAR.r * 0.5 * (0.6 + 0.4 * ((i * 7) % 3) / 2) : 0;
-      const mesh = new THREE.Group();
-      const wood = new THREE.Mesh(new THREE.BoxGeometry(0.09, STICK_H, 0.03), new THREE.MeshStandardMaterial({ color: '#e2c48c', roughness: 0.8 }));
-      wood.position.y = STICK_H / 2;
-      const tip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.24, 0.035), new THREE.MeshStandardMaterial({ color: GRADE_COLOR[record.grade] ?? '#888', roughness: 0.6 }));
-      tip.position.y = STICK_H - 0.12;
-      wood.castShadow = tip.castShadow = true;
-      mesh.add(wood, tip);
-      // Leaning out from the middle, each at its own angle.
+      const mesh = scrollMesh(record.grade);
       mesh.rotation.set(Math.sin(a) * 0.16, a, -Math.cos(a) * 0.16);
-      const base = new THREE.Vector3(Math.cos(a) * rr, 0.08 + ((i * 5) % 4) * 0.05, Math.sin(a) * rr);
+      // The scroll's pivot is its middle: stand its foot on the jar's floor.
+      const foot = new THREE.Vector3(Math.cos(a) * rr, 0.08 + ((i * 5) % 4) * 0.05, Math.sin(a) * rr);
+      const base = foot.add(new THREE.Vector3(0, SCROLL_L / 2, 0).applyEuler(mesh.rotation));
       mesh.position.copy(base);
       mesh.userData.stick = i;
       this.jar.add(mesh);
@@ -316,140 +364,97 @@ export class HealthDesk extends TableScene {
     });
   }
 
+  /**
+   * A rolled report taken from the jar: the sheet on the table rolls up and flies
+   * into the jar while the picked one flies out onto the table and unrolls there.
+   */
+  private swapTo(s: Stick) {
+    this.paperState = 'swapping';
+    this.hovered = null;
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const outgoing = this.shown;
+    const incoming = s.record;
+    const rest = this.sticks.filter((x) => x !== s).map((x) => x.record);
+    // The picked scroll leaves the jar (keeping where it is in the world).
+    this.scene.attach(s.mesh);
+    this.sticks = this.sticks.filter((x) => x !== s);
+    const inFrom = s.mesh.position.clone();
+    const inQ0 = s.mesh.quaternion.clone();
+    // The table's sheet rolls up into a scroll as long as it is wide.
+    const long = PAPER.w * 0.92;
+    const out = outgoing ? scrollMesh(outgoing.grade) : null;
+    const onTable = REST_POS.clone().add(new THREE.Vector3(0, 0.1, 0));
+    const lying = REST_Q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2));
+    const jarTop = new THREE.Vector3(JAR.x, JAR.h + SCROLL_L * 0.55, JAR.z);
+    const upright = new THREE.Quaternion();
+    if (out) {
+      out.position.copy(onTable);
+      out.quaternion.copy(lying);
+      setScrollLength(out, long);
+      out.scale.setScalar(0.001);
+      this.scene.add(out);
+    }
+    const arc = (a: THREE.Vector3, b: THREE.Vector3, u: number, into: THREE.Vector3) => into.lerpVectors(a, b, u).setY(lerp(a.y, b.y, u) + Math.sin(u * Math.PI) * 1.4);
+    let laidOut = false;
+    this.paperTween = {
+      t: 0,
+      dur: SWAP_S,
+      fn: (u) => {
+        // 1) The sheet rolls up into a scroll on the table; the picked one rises out of the jar.
+        const roll = easeInOut(clamp01(u / 0.3));
+        this.paper.scale.z = 1 - roll * 0.97;
+        this.paper.visible = u < 0.33 || u > 0.68;
+        if (out) out.scale.set(1, roll > 0.15 ? 1 : 0.001, 1);
+        s.mesh.position.copy(inFrom).setY(inFrom.y + easeOut(clamp01(u / 0.3)) * 1.2);
+        // 2) They cross: the rolled sheet to the jar (standing up, shortening), the picked one to the table.
+        const fly = easeInOut(clamp01((u - 0.3) / 0.38));
+        if (fly > 0) {
+          if (out) {
+            arc(onTable, jarTop, fly, out.position);
+            out.quaternion.slerpQuaternions(lying, upright, fly);
+            setScrollLength(out, lerp(long, SCROLL_L, fly));
+          }
+          const from = inFrom.clone().setY(inFrom.y + 1.2);
+          arc(from, onTable, fly, s.mesh.position);
+          s.mesh.quaternion.slerpQuaternions(inQ0, lying, fly);
+          setScrollLength(s.mesh, lerp(SCROLL_L, long, fly));
+        }
+        // 3) The rolled sheet drops into the jar; the picked one unrolls into the sheet on the table.
+        const open = easeOut(clamp01((u - 0.68) / 0.32));
+        if (open > 0) {
+          if (!laidOut) {
+            laidOut = true;
+            this.layOut(incoming);
+          }
+          if (out) out.position.y = jarTop.y - open * SCROLL_L * 0.6;
+          this.paper.scale.z = 0.03 + open * 0.97;
+          s.mesh.scale.set(1 - open, 1, 1 - open);
+        }
+      },
+      done: () => {
+        this.scene.remove(s.mesh);
+        disposeScroll(s.mesh);
+        if (out) {
+          this.scene.remove(out);
+          disposeScroll(out);
+        }
+        this.paper.scale.z = 1;
+        this.paper.visible = true;
+        const all = (outgoing ? [outgoing, ...rest] : rest).sort((a, b) => b.at - a.at);
+        this.fillJar(all.slice(0, STICKS));
+        this.sheet.knock(0, 0, 1.0, 2.5); // unrolled flat, its edges still lift and settle
+        this.jolt(0.03);
+        this.paperState = 'table';
+      },
+    };
+  }
+
   // ---- The paper --------------------------------------------------------------
 
   private layOut(r: TripRecord | null) {
     this.shown = r;
-    const canvas = this.paperTex.image as HTMLCanvasElement;
-    const c = canvas.getContext('2d')!;
-    const W = TEX_W;
-    const H = TEX_H;
-    // Cream paper, a ruled border.
-    c.fillStyle = '#f3ead6';
-    c.fillRect(0, 0, W, H);
-    c.strokeStyle = 'rgba(90, 60, 30, 0.35)';
-    c.lineWidth = 4;
-    c.strokeRect(24, 24, W - 48, H - 48);
-    const ink = '#3a2210';
-    const soft = 'rgba(58, 34, 16, 0.55)';
-    c.textBaseline = 'alphabetic';
-    if (!r) {
-      c.fillStyle = ink;
-      c.font = '800 64px Inter, system-ui, sans-serif';
-      c.textAlign = 'center';
-      c.fillText('No trips yet · 还没有记录', W / 2, H / 2 - 20);
-      c.font = '500 36px Inter, system-ui, sans-serif';
-      c.fillStyle = soft;
-      c.fillText('Dive, then come back to the main menu: the trip report lands here.', W / 2, H / 2 + 50);
-      this.paperTex.needsUpdate = true;
-      return;
-    }
-    c.textAlign = 'left';
-    const L = 70;
-    c.fillStyle = soft;
-    c.font = '700 30px Inter, system-ui, sans-serif';
-    c.fillText(`TRIP REPORT · 本次报告 · ${tripDate(r)}`, L, 92);
-    c.fillStyle = ink;
-    c.font = '900 64px Inter, system-ui, sans-serif';
-    c.fillText(mapNames(r), L, 160);
-    // The grade, stamped in the corner.
-    c.save();
-    c.translate(W - 180, 130);
-    c.rotate(-0.12);
-    c.strokeStyle = GRADE_COLOR[r.grade];
-    c.fillStyle = GRADE_COLOR[r.grade];
-    c.lineWidth = 8;
-    c.beginPath();
-    c.arc(0, 0, 78, 0, Math.PI * 2);
-    c.stroke();
-    c.font = '900 92px Inter, system-ui, sans-serif';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(r.grade, 0, 4);
-    c.restore();
-    c.textAlign = 'right';
-    c.fillStyle = ink;
-    c.font = '800 44px Inter, system-ui, sans-serif';
-    c.fillText(`${r.score.total} pts`, W - 290, 150);
-
-    // Left column: the catch and the dives. Right column: health.
-    const line = (x: number, y: number, w: number, k: string, v: string) => {
-      c.textAlign = 'left';
-      c.fillStyle = soft;
-      c.font = '600 30px Inter, system-ui, sans-serif';
-      c.fillText(k, x, y);
-      c.textAlign = 'right';
-      c.fillStyle = ink;
-      c.font = '800 32px Inter, system-ui, sans-serif';
-      c.fillText(v, x + w, y);
-      c.strokeStyle = 'rgba(90, 60, 30, 0.15)';
-      c.lineWidth = 2;
-      c.beginPath();
-      c.moveTo(x, y + 12);
-      c.lineTo(x + w, y + 12);
-      c.stroke();
-    };
-    const head = (x: number, y: number, t: string) => {
-      c.textAlign = 'left';
-      c.fillStyle = '#8a5a2a';
-      c.font = '800 28px Inter, system-ui, sans-serif';
-      c.fillText(t, x, y);
-    };
-    const colW = 560;
-    let y = 240;
-    head(L, y, 'CATCH · 渔获');
-    y += 50;
-    line(L, y, colW, 'Caught · 捕获', String(r.caught.length));
-    y += 48;
-    line(L, y, colW, 'Banked · 入库', String(r.banked));
-    y += 48;
-    const counts = rarityCounts(r);
-    c.font = '700 26px Inter, system-ui, sans-serif';
-    let cx = L;
-    for (const [k, n] of counts) {
-      const text = `${RARITY[k].label} ×${n}`;
-      const w = c.measureText(text).width + 30;
-      c.strokeStyle = RARITY[k].color;
-      c.fillStyle = RARITY[k].color;
-      c.lineWidth = 3;
-      c.beginPath();
-      c.roundRect(cx, y - 30, w, 42, 21);
-      c.stroke();
-      c.textAlign = 'left';
-      c.fillText(text, cx + 15, y);
-      cx += w + 12;
-    }
-    y += 64;
-    head(L, y, 'DIVES · 下潜');
-    y += 50;
-    line(L, y, colW, 'Dives · 次数', String(r.dives));
-    y += 48;
-    line(L, y, colW, 'Deepest · 最深', `${Math.round(r.deepest)} m`);
-    y += 48;
-    line(L, y, colW, 'Longest hold · 最长屏息', secs(r.longestHoldMs));
-    y += 48;
-    line(L, y, colW, 'Blackouts · 昏厥', String(r.blackouts));
-
-    const R = L + colW + 90;
-    const rw = W - R - 70;
-    let ry = 240;
-    head(R, ry, 'HEALTH · 健康指标');
-    ry += 50;
-    for (const [k, v] of healthLines(r).slice(0, 6)) {
-      line(R, ry, rw, k, v);
-      ry += 48;
-    }
-    // Heart (red) and breathing (blue) over the trip.
-    const gy = ry + 10;
-    c.fillStyle = 'rgba(90, 60, 30, 0.06)';
-    c.fillRect(R, gy, rw, H - gy - 70);
-    if (r.pulse.length > 1 || r.breath.length > 1) drawTraces(c, r, R + 8, gy + 10, rw - 16, H - gy - 90);
-    else {
-      c.textAlign = 'center';
-      c.fillStyle = soft;
-      c.font = '600 26px Inter, system-ui, sans-serif';
-      c.fillText('No sensor this trip · 无传感器数据', R + rw / 2, gy + (H - gy - 70) / 2);
-    }
+    drawTripSheet((this.paperTex.image as HTMLCanvasElement).getContext('2d')!, r, TEX_W, TEX_H);
     this.paperTex.needsUpdate = true;
   }
 
@@ -513,13 +518,7 @@ export class HealthDesk extends TableScene {
       if (this.paperState === 'table' && this.paperAt(e)) this.pickUp();
       return;
     }
-    if (s.record === this.shown) return;
-    // The paper on the table goes into the jar; the picked trip comes out onto the table.
-    const all = [this.shown, ...this.sticks.map((x) => x.record)].filter((x): x is TripRecord => !!x && x !== s.record);
-    all.sort((a, b) => b.at - a.at);
-    this.layOut(s.record);
-    this.fillJar(all.slice(0, STICKS));
-    this.hovered = null;
-    this.tip.classList.add('hidden');
+    // The sheet on the table rolls up into the jar; the picked trip comes out and unrolls.
+    if (s.record !== this.shown) this.swapTo(s);
   }
 }
