@@ -36,3 +36,9 @@ test('aquarium: school feeding pays once via buyFood and never leaves the Pour b
   // Nothing between paying and finally may re-render the feeder while the lock is still held.
   assert.ok(!/renderFeeder(Button|Text)?\(\)/.test(body.slice(pay, fin)), 'no feeder re-render while locked');
 });
+
+test('aquarium: Pour button re-renders when the PEARL balance changes', () => {
+  // The balance usually resolves after show(); without this the button stays on "Need N more PEARL".
+  assert.match(src, /import \{[^}]*\bonPearlBalance\b[^}]*\} from '\.\/pearl-balance'/);
+  assert.match(src, /onPearlBalance\(\(\) => \{?\s*this\.renderFeederButton\(\)/);
+});

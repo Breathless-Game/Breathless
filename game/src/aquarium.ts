@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { coreAsset } from './explorer-links';
 import { fishValue, rarityLabel, RARITY, zoneForDepth, zoneName } from './fish';
 import { lang, onLangChange, pickName, t } from './i18n';
+import { onPearlBalance } from './pearl-balance';
 import { FISH_FOODS, fishFood, type FishFoodDef, type FishFoodId } from './fish-food';
 import { buildFishFoodModel } from './fish-food-models';
 import { MAPS, type MapId } from './maps';
@@ -197,6 +198,9 @@ export class Aquarium {
       this.renderFeederText();
       if (this.picked) this.pick(this.picked);
     });
+    // The balance often lands after show(): re-render the Pour button's affordability whenever it moves.
+    // While a payment is in flight renderFeederButton() keeps it locked, so no extra guard is needed.
+    onPearlBalance(() => this.renderFeederButton());
     $('aq-close').addEventListener('click', () => this.close());
     $('aq-prev').addEventListener('click', () => this.step(-1));
     $('aq-next').addEventListener('click', () => this.step(1));
