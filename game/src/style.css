@@ -960,7 +960,8 @@ button.link {
   position: absolute;
   left: 0;
   right: 0;
-  top: 66%;
+  /* Under the fish, but never so low the second hint runs off a short screen. */
+  top: min(58%, calc(100% - 300px));
   text-align: center;
   pointer-events: none;
   text-shadow: 0 6px 30px rgba(0, 0, 0, 0.55);
