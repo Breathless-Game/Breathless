@@ -30,7 +30,7 @@ export interface CurtainOptions {
   /** Length along x, and how tall the rays stand. */
   width: number;
   height: number;
-  /** Quads along its length. Each ray is about four of them wide. */
+  /** Quads along its length; fine rays are shaded independently of this detail. */
   columns: number;
   /** Colours of the lower edge, the body and the fading top. */
   low?: THREE.ColorRepresentation;
@@ -39,53 +39,101 @@ export interface CurtainOptions {
   phase?: number;
 }
 
-// Heights of the four rows of vertices, as a share of the curtain's height, and how bright each is.
-const ROWS = [0, 0.2, 0.58, 1] as const;
-const GLOW = [0.8, 0.6, 0.3, 0] as const;
+// More shape detail near the luminous hem; the fading crown needs fewer quads.
+const ROWS = [0, 0.035, 0.1, 0.22, 0.42, 0.7, 1] as const;
 
-/** One curtain: a folded ribbon standing on its lower edge, redrawn on the CPU a few dozen vertices at a time. */
+/** One draw per ribbon: static geometry, with folds and fine light rays animated on the GPU. */
 export class AuroraCurtain {
-  readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   phase: number;
-  private readonly columns: number;
-  private readonly width: number;
-  private readonly height: number;
-  private readonly tints: THREE.Color[];
-  private readonly positions: Float32Array;
-  private readonly colors: Float32Array;
 
   constructor(options: CurtainOptions) {
-    this.columns = options.columns;
-    this.width = options.width;
-    this.height = options.height;
     this.phase = options.phase ?? 0;
-    const low = new THREE.Color(options.low ?? '#6dffa8');
-    const mid = new THREE.Color(options.mid ?? '#39e69a');
-    const high = new THREE.Color(options.high ?? '#8f5cf0');
-    this.tints = [low, low.clone().lerp(mid, 0.6), mid.clone().lerp(high, 0.7), high];
-
-    const count = (this.columns + 1) * ROWS.length;
-    this.positions = new Float32Array(count * 3);
-    this.colors = new Float32Array(count * 3);
+    const { width, height, columns } = options;
+    const count = (columns + 1) * ROWS.length;
+    const positions = new Float32Array(count * 3);
+    const uv = new Float32Array(count * 2);
     const index: number[] = [];
-    for (let c = 0; c < this.columns; c++) {
+    for (let c = 0; c <= columns; c++) {
+      for (let r = 0; r < ROWS.length; r++) {
+        const i = c * ROWS.length + r;
+        positions[i * 3] = (c / columns - 0.5) * width;
+        positions[i * 3 + 1] = ROWS[r] * height;
+        uv[i * 2] = c / columns;
+        uv[i * 2 + 1] = ROWS[r];
+      }
+      if (c === columns) continue;
       for (let r = 0; r < ROWS.length - 1; r++) {
         const a = c * ROWS.length + r, b = a + ROWS.length;
         index.push(a, b, a + 1, a + 1, b, b + 1);
       }
     }
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
-    geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(index);
     this.mesh = new THREE.Mesh(
       geo,
-      new THREE.MeshBasicMaterial({
-        vertexColors: true, transparent: true, blending: THREE.AdditiveBlending,
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 }, uStrength: { value: 0 }, uFlare: { value: 0 },
+          uPhase: { value: this.phase }, uWidth: { value: width },
+          uLow: { value: new THREE.Color(options.low ?? '#6dffa8') },
+          uMid: { value: new THREE.Color(options.mid ?? '#39e69a') },
+          uHigh: { value: new THREE.Color(options.high ?? '#8f5cf0') },
+        },
+        vertexShader: `
+          uniform float uTime, uFlare, uPhase;
+          varying vec2 vAuroraUv;
+          void main() {
+            vAuroraUv = uv;
+            float x = position.x;
+            float t = uTime * (1.0 + uFlare * 1.6);
+            // Broad folds carry the light; fine rays never turn its crown into flames.
+            float foot = sin(x * 0.03 + t * 0.12 + uPhase) * 5.0
+              + sin(x * 0.065 - t * 0.08 + uPhase) * 1.6;
+            float fold = sin(x * 0.018 + t * 0.16 + uPhase) * 12.0
+              + sin(x * 0.06 + t * 0.10 + uPhase) * 3.0;
+            vec3 p = position;
+            p.y = foot + position.y * (0.94 + 0.06 * sin(x * 0.023 + uPhase) + uFlare * 0.35);
+            p.z = fold - uv.y * 6.0;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime, uStrength, uFlare, uPhase, uWidth;
+          uniform vec3 uLow, uMid, uHigh;
+          varying vec2 vAuroraUv;
+          void main() {
+            float x = (vAuroraUv.x - 0.5) * uWidth;
+            float h = vAuroraUv.y;
+            float t = uTime * (1.0 + uFlare * 1.6);
+            float flow = sin(x * 0.095 + t * 0.12 + uPhase)
+              + sin(x * 0.027 - t * 0.08 + uPhase * 2.0);
+            float rayPhase = x * 1.9 + flow * 2.4 + t * 0.32 + uPhase
+              + h * (1.2 + 0.7 * sin(x * 0.04 + t * 0.09));
+            float ray = pow(0.5 + 0.5 * sin(rayPhase), 6.0);
+            // Subpixel rays dissolve into their average instead of flickering on small screens.
+            ray = mix(ray, 0.226, smoothstep(0.7, 2.5, fwidth(rayPhase)));
+            float band = 0.3 + 0.7 * pow(0.5 + 0.5 * sin(x * 0.025 - t * 0.08 + uPhase * 2.0), 2.0);
+            float ends = 1.0 - smoothstep(0.36, 0.5, abs(vAuroraUv.x - 0.5));
+            float hem = smoothstep(0.0, 0.035, h);
+            float crown = 1.0 - smoothstep(0.62, 1.0, h);
+            float glow = hem * exp(-h * (2.6 + 0.6 * sin(x * 0.07 + t * 0.1))) * crown;
+            vec3 tint = mix(uLow, uMid, smoothstep(0.03, 0.28, h));
+            tint = mix(tint, uHigh, smoothstep(0.4, 0.95, h));
+            // Additive blending uses the source alpha as its RGB factor. Keep the
+            // alpha opaque so the carefully shaped light is not multiplied twice.
+            float light = (0.32 + 0.68 * ray) * band * ends * glow * uStrength;
+            gl_FragColor = vec4(tint * light * (1.0 + uFlare * 0.6), 1.0);
+            #include <colorspace_fragment>
+          }
+        `,
+        transparent: true, blending: THREE.AdditiveBlending,
         depthWrite: false, fog: false, side: THREE.DoubleSide, forceSinglePass: true,
       }),
     );
-    // It waves far outside the bounds it was built with.
+    // GPU folds extend beyond the static geometry's bounds.
     this.mesh.frustumCulled = false;
     this.mesh.visible = false;
   }
@@ -95,40 +143,12 @@ export class AuroraCurtain {
    * `flare` (0..1) makes the rays taller, brighter and quicker.
    */
   update(time: number, strength: number, flare = 0) {
-    this.mesh.visible = strength > 0.01;
-    if (!this.mesh.visible) return;
-    const { columns, width, height, phase, positions, colors, tints } = this;
-    const spacing = width / columns;
-    // A ray every four columns, so it survives however coarse the curtain is.
-    const rayPitch = (Math.PI * 2) / (spacing * 4);
-    const pace = 1 + flare * 1.6;
-    for (let c = 0; c <= columns; c++) {
-      const x = (c / columns - 0.5) * width;
-      // Rays drift sideways and their spacing breathes, so they never march in step.
-      const ray = Math.pow(0.5 + 0.5 * Math.sin(x * rayPitch + Math.sin(x * 0.07 + time * 0.2 * pace) * 3 + time * 0.6 * pace + phase), 2);
-      // Long bright stretches and dim ones wander along the curtain.
-      const band = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(x * 0.021 - time * 0.11 * pace + phase * 2));
-      // Both ends fade out, so the curtain has no edge.
-      const ends = 1 - smoothstep(0.36 * width, 0.5 * width, Math.abs(x));
-      const light = (0.25 + 0.75 * ray) * band * ends * strength * (1 + flare * 0.6);
-      // Brightness carries the rays; their tops stay nearly level, or the curtain looks like flames.
-      const tall = height * (0.9 + 0.14 * ray + 0.35 * flare);
-      const foot = Math.sin(x * 0.03 + time * 0.22 + phase) * 5 - ray * 2.2;
-      const fold = Math.sin(x * 0.018 + time * 0.3 + phase) * 12 + Math.sin(x * 0.06 + time * 0.17 + phase) * 3;
-      for (let r = 0; r < ROWS.length; r++) {
-        const i = (c * ROWS.length + r) * 3;
-        positions[i] = x;
-        positions[i + 1] = foot + tall * ROWS[r];
-        // The top leans back a little, like a sheet hanging in the wind.
-        positions[i + 2] = fold - ROWS[r] * 6;
-        const glow = light * GLOW[r];
-        colors[i] = tints[r].r * glow;
-        colors[i + 1] = tints[r].g * glow;
-        colors[i + 2] = tints[r].b * glow;
-      }
-    }
-    this.mesh.geometry.attributes.position.needsUpdate = true;
-    this.mesh.geometry.attributes.color.needsUpdate = true;
+    const uniforms = this.mesh.material.uniforms;
+    uniforms.uTime.value = time;
+    uniforms.uStrength.value = THREE.MathUtils.clamp(strength, 0, 1);
+    uniforms.uFlare.value = THREE.MathUtils.clamp(flare, 0, 1);
+    uniforms.uPhase.value = this.phase;
+    this.mesh.visible = uniforms.uStrength.value > 0.01;
   }
 
   dispose() {

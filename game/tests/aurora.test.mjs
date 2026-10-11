@@ -45,38 +45,68 @@ test('some nights have no aurora at all, most do', () => {
   assert.ok(without >= 6 && without <= 24, `${without} of ${nights} nights stay dark`);
 });
 
-test('a curtain is brightest along its foot, dark at its top and has no visible ends', () => {
+test('curtain animation keeps geometry static and reuses one material', () => {
   const curtain = new AuroraCurtain({ width: 300, height: 30, columns: 48 });
+  const { geometry, material } = curtain.mesh;
+  const p = geometry.attributes.position, uv = geometry.attributes.uv;
+  const original = p.array.slice(), originalUv = uv.array.slice();
   curtain.update(12, 0);
   assert.equal(curtain.mesh.visible, false, 'no strength, nothing drawn');
   curtain.update(12, 1);
   assert.equal(curtain.mesh.visible, true);
-  const p = curtain.mesh.geometry.attributes.position, c = curtain.mesh.geometry.attributes.color;
-  assert.equal(p.count, 49 * 4);
-  const luma = (i) => c.getX(i) + c.getY(i) + c.getZ(i);
-  let brightest = 0;
-  for (let column = 0; column <= 48; column++) {
-    const foot = column * 4;
-    assert.equal(luma(foot + 3), 0, 'the top edge fades to nothing');
-    for (let row = 0; row < 3; row++) {
-      assert.ok(luma(foot + row) >= luma(foot + row + 1), 'each ray dims upward');
-      assert.ok(p.getY(foot + row + 1) > p.getY(foot + row), 'and stands upright');
-    }
-    brightest = Math.max(brightest, luma(foot));
-  }
-  assert.equal(luma(0), 0);
-  assert.equal(luma(48 * 4), 0);
-  assert.ok(brightest > 0.5);
-  // Mostly green low down, violet only where it fades.
-  const mid = 24 * 4;
-  assert.ok(c.getY(mid) > c.getX(mid) && c.getY(mid) > c.getZ(mid));
-  assert.ok(c.getZ(mid + 2) > c.getY(mid + 2) * 0.6);
-
-  // A flare makes the same curtain taller and brighter.
-  const tall = p.getY(mid + 3) - p.getY(mid), glow = luma(mid);
+  const uniforms = material.uniforms;
+  assert.equal(uniforms.uTime.value, 12);
+  assert.equal(uniforms.uStrength.value, 1);
+  assert.equal(uniforms.uFlare.value, 0);
   curtain.update(12, 1, 1);
-  assert.ok(p.getY(mid + 3) - p.getY(mid) > tall * 1.2);
-  assert.ok(Math.max(...Array.from({ length: 49 }, (_, i) => luma(i * 4))) > brightest);
-  assert.ok(glow >= 0);
+  assert.equal(uniforms.uFlare.value, 1);
+  curtain.phase = 2.5;
+  curtain.update(1000, 0.6, 0.5);
+  assert.equal(uniforms.uPhase.value, 2.5, 'events can choose a new phase without rebuilding');
+  assert.equal(uniforms.uTime.value, 1000);
+  assert.equal(uniforms.uStrength.value, 0.6);
+  assert.deepEqual(p.array, original, 'no per-frame position uploads');
+  assert.deepEqual(uv.array, originalUv);
+  assert.equal(p.version, 0);
+  assert.equal(uv.version, 0);
+  assert.equal(curtain.mesh.material, material);
+  assert.equal(material.depthWrite, false);
+  assert.equal(material.depthTest, true, 'peaks occlude the ribbons');
+  assert.equal(material.forceSinglePass, true);
+  curtain.update(0, -1, 2);
+  assert.equal(curtain.mesh.visible, false);
+  assert.equal(uniforms.uStrength.value, 0);
+  assert.equal(uniforms.uFlare.value, 1);
   assert.deepEqual([auroraGlow.ambient, auroraGlow.surge], [0, 0]);
+  curtain.dispose();
+});
+
+test('all detail levels retain continuous UVs and valid ribbon triangles', () => {
+  for (const columns of [28, 36, 48, 60, 72, 96]) {
+    const curtain = new AuroraCurtain({ width: 340, height: 46, columns });
+    const { geometry } = curtain.mesh;
+    const p = geometry.attributes.position, uv = geometry.attributes.uv;
+    const rows = p.count / (columns + 1);
+    assert.ok(p.count < 700, 'detail remains bounded per curtain');
+    assert.equal(uv.count, p.count);
+    for (let c = 0; c <= columns; c++) {
+      assert.equal(uv.getY(c * rows), 0);
+      assert.equal(uv.getY(c * rows + rows - 1), 1);
+      for (let r = 0; r < rows; r++) {
+        const i = c * rows + r;
+        assert.ok(Math.abs(uv.getX(i) - c / columns) < 1e-6);
+        assert.ok(Number.isFinite(p.getX(i)) && Number.isFinite(p.getY(i)));
+        if (r) assert.ok(p.getY(i) > p.getY(i - 1));
+      }
+    }
+    const indices = geometry.index.array;
+    for (let i = 0; i < indices.length; i += 3) {
+      const [a, b, c] = indices.slice(i, i + 3);
+      assert.ok(a < p.count && b < p.count && c < p.count);
+      const area = (p.getX(b) - p.getX(a)) * (p.getY(c) - p.getY(a))
+        - (p.getY(b) - p.getY(a)) * (p.getX(c) - p.getX(a));
+      assert.ok(area > 0, 'no degenerate or flipped faces');
+    }
+    curtain.dispose();
+  }
 });
