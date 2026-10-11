@@ -30,7 +30,7 @@ import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
-import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
+import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
@@ -1179,9 +1179,12 @@ function showTitle(intro: boolean) {
   titleScreen.show(intro);
 }
 
-// Phantom is required: START goes through the login gate unless a wallet is connected.
+// A wallet is required: START goes through the login gate unless one is connected.
 const loginGate = new LoginGate(() => showTitle(false));
-mountWalletRow(document.getElementById('set-wallet')!);
+// Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
+const logoutHooks = { warning: logoutWarning, logOut };
+mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, 'Not connected');
+for (const id of ['pause-wallet', 'collection-wallet', 'wallet-chip']) mountWalletRow(document.getElementById(id)!, logoutHooks);
 
 function openWorkbench() {
   if (workbench.visible || loginGate.visible) return;
@@ -1195,10 +1198,36 @@ function openWorkbench() {
 
 // ---- Wallet -------------------------------------------------------------
 // Progress above starts as defaults: storage is per wallet, and saves are
-// no-ops until Phantom connects. The first connect loads that wallet's
-// progress in place; switching accounts or disconnecting reloads the page,
-// so nothing in memory from one wallet can be saved under another.
+// no-ops until a wallet connects. The first connect loads that wallet's
+// progress in place; switching accounts or logging out reloads the page,
+// so nothing in memory from one wallet can be saved under another, and no
+// timer, poll or mint keeps running for it.
 let walletOwner: string | null = null;
+
+const diving = () => phase !== 'menu';
+
+/** What logging out right now would cost, or null when nothing. */
+function logoutWarning(): string | null {
+  const parts: string[] = [];
+  if (diving()) parts.push(net.length ? `This dive ends and your net (${net.length} fish) is lost.` : 'This dive ends.');
+  if (nftQueue.busy) parts.push('A fish still minting or selling picks up again at your next login.');
+  return parts.length ? parts.join(' ') : null;
+}
+
+let loggingOut = false;
+/** Log out: progress and the session key stay saved for this wallet; the page reloads to the title. */
+async function logOut() {
+  if (loggingOut) return;
+  loggingOut = true;
+  try {
+    // End a dive the way Main menu does: the hold still goes in this wallet's health log.
+    if (diving()) goToMenu();
+    nftQueue.stop();
+    await disconnectWallet(); // drops the owner: the listener below reloads
+  } finally {
+    loggingOut = false;
+  }
+}
 
 function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());

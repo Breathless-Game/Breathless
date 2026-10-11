@@ -18,8 +18,8 @@ import { walletState } from './wallet';
 // ones the player asked to sell. The rules live in market.ts; this class only runs them. Solana code
 // is imported lazily on the first job, so it never delays or breaks a dive.
 // Mints are paid by the game (session) wallet, so only they wait for its SOL. Sales are signed and
-// paid by the owner's Phantom wallet, which says so itself if it is short.
-// Nothing runs before Phantom connects; main.ts reloads the page when the wallet changes.
+// paid by the owner's own wallet, which says so itself if it is short.
+// Nothing runs before a wallet connects; logging out stops the queue, and main.ts reloads the page when the wallet changes.
 // Every fish gets its global number (#0042) from our server just before it is minted; if the server
 // cannot answer, the fish stays queued and the queue asks again later. A number is never made up.
 
@@ -72,6 +72,8 @@ export class NftQueue {
   private airdropTried = false;
   private wakeTimer = 0;
   private pollTimer = 0;
+  private startTimer = 0;
+  private stopped = false;
 
   constructor(
     private bank: BankedFish[],
@@ -81,11 +83,29 @@ export class NftQueue {
 
   /** Resume fish left queued by an earlier session, once the page has settled. */
   start() {
-    window.setTimeout(() => this.kick(), START_DELAY_MS);
+    this.stopped = false;
+    window.clearTimeout(this.startTimer);
+    this.startTimer = window.setTimeout(() => this.kick(), START_DELAY_MS);
+  }
+
+  /**
+   * Logging out: start no new job (mint, sale, repair, number request) and drop every timer, the
+   * number retry included. A number still on its way is ignored; a transaction already sent finishes
+   * or resumes next login.
+   */
+  stop() {
+    this.stopped = true;
+    for (const t of [this.startTimer, this.wakeTimer, this.pollTimer]) window.clearTimeout(t);
+    this.startTimer = this.wakeTimer = this.pollTimer = 0;
+  }
+
+  /** A mint or sale is under way right now. */
+  get busy() {
+    return this.minting !== null || this.selling.size > 0;
   }
 
   kick() {
-    if (!walletState().connected) return;
+    if (this.stopped || !walletState().connected) return;
     void this.runMints();
     void this.runSells();
   }
@@ -141,6 +161,7 @@ export class NftQueue {
     try {
       const c = await this.loadChain();
       this.balance = await c.balanceSol();
+      if (this.stopped) return false;
       if (this.balance < min && !this.airdropTried) {
         this.airdropTried = true;
         try {
@@ -173,7 +194,7 @@ export class NftQueue {
   }
 
   private schedulePoll(ms = POLL_MS) {
-    if (this.pollTimer) return;
+    if (this.stopped || this.pollTimer) return;
     this.pollTimer = window.setTimeout(() => {
       this.pollTimer = 0;
       if (document.hidden) this.schedulePoll(ms);
@@ -185,9 +206,11 @@ export class NftQueue {
   private async ensureSerial(f: BankedFish): Promise<boolean> {
     if (f.serial) return true;
     const owner = walletState().owner;
-    if (!owner) return false;
+    if (this.stopped || !owner) return false;
     try {
       const serial = await this.fetchSerial(f.id, owner);
+      // Logged out (or the account changed) while the server answered: drop the answer, start nothing.
+      if (this.stopped || walletState().owner !== owner) return false;
       if (!f.serial) f.serial = serial;
       this.save();
       if (this.serials !== 'ok') {
@@ -196,6 +219,7 @@ export class NftQueue {
       }
       return true;
     } catch (e) {
+      if (this.stopped) return false;
       console.warn('fish number unavailable, waiting', e);
       if (this.serials !== 'waiting') {
         this.serials = 'waiting';
@@ -208,6 +232,7 @@ export class NftQueue {
 
   private scheduleWake() {
     window.clearTimeout(this.wakeTimer);
+    if (this.stopped) return;
     const at = nextRetryAt(this.bank);
     if (at !== null) this.wakeTimer = window.setTimeout(() => this.kick(), Math.max(1000, at - Date.now()));
   }
@@ -216,7 +241,7 @@ export class NftQueue {
     if (this.mintBusy) return;
     this.mintBusy = true;
     try {
-      while (nextToMint(this.bank, Date.now())) {
+      while (!this.stopped && nextToMint(this.bank, Date.now())) {
         if (!(await this.ensureFunds(MIN_MINT_SOL))) return;
         // Pick after the await: the player may have sold or cancelled in the meantime.
         const f = nextToMint(this.bank, Date.now());
@@ -224,6 +249,7 @@ export class NftQueue {
         // Its number first: the mint writes it into the on-chain name and the URI. No answer, no mint.
         if (!(await this.ensureSerial(f))) return;
         if (nextToMint(this.bank, Date.now()) !== f) continue; // the queue changed during the request
+        if (this.stopped) return; // logged out during the checks above: send nothing
         this.minting = { fish: f, step: null };
         this.apply(f, { type: 'start' });
         try {
@@ -263,7 +289,7 @@ export class NftQueue {
    * after MAX_REPAIR_TRIES. If the number server is down, repairs wait for it like mints do.
    */
   private async runRepairs() {
-    if (this.repairBusy || this.repairsDone || this.mintBusy || !walletState().connected) return;
+    if (this.stopped || this.repairBusy || this.repairsDone || this.mintBusy || !walletState().connected) return;
     const todo = () =>
       this.bank.filter(
         (f) =>
@@ -278,14 +304,17 @@ export class NftQueue {
     this.repairBusy = true;
     try {
       if (await this.balanceBelow(MIN_REPAIR_SOL)) return; // try again after the next mint or top-up
+      if (this.stopped) return;
       this.repairsDone = true;
       const c = await this.loadChain();
       for (const f of todo()) {
+        if (this.stopped) break;
         if (!todo().includes(f)) continue; // sold or queued for sale meanwhile
         if (!(await this.ensureSerial(f))) {
-          this.repairsDone = false; // the number server is down: the scheduled retry runs these again
+          this.repairsDone = false; // the number server is down (or we logged out): the next run picks these up
           break;
         }
+        if (this.stopped) break;
         try {
           const result = await c.repairFishUri(f as typeof f & { assetId: string });
           if (result === 'updated') console.info(`NFT name and metadata updated: ${nftName(f)} (${f.assetId})`);
@@ -313,8 +342,8 @@ export class NftQueue {
     if (this.sellBusy) return;
     this.sellBusy = true;
     try {
-      // One at a time: each sale is its own Phantom approval.
-      for (let f = nextToSell(this.bank); f; f = nextToSell(this.bank)) await this.sellOne(f);
+      // One at a time: each sale is its own approval in the player's wallet.
+      for (let f = nextToSell(this.bank); f && !this.stopped; f = nextToSell(this.bank)) await this.sellOne(f);
     } finally {
       this.sellBusy = false;
     }

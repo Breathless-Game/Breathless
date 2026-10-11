@@ -8,15 +8,18 @@ import { sessionBalance, topUpSession, walletState } from './wallet';
 import { isUserRejection } from './wallet-storage';
 
 // The collection panel: banked fish as NFT cards, the devnet wallets, and selling.
-// Phantom owns the fish and signs sales; the game wallet pays mint fees without
+// The player's wallet owns the fish and signs sales; the game wallet pays mint fees without
 // prompts. Chain code is loaded lazily (through the queue), so a Solana hiccup
 // can never break the dive itself.
 
-/** Below this the game wallet can't cover a mint (the queue's MIN_MINT_SOL): offer a Phantom top-up. */
+/** Below this the game wallet can't cover a mint (the queue's MIN_MINT_SOL): offer a top-up from the player's wallet. */
 const FUND_BELOW_SOL = 0.02;
 const FUND_SOL = 0.1;
 
 const $ = (id: string) => document.getElementById(id)!;
+
+/** The wallet app the player logged in with ("Phantom", "MetaMask", …). Plain text: never put it in innerHTML. */
+const walletName = () => walletState().wallet?.name ?? 'Your wallet';
 
 const STEP_LABEL = {
   mint: 'Minting on Solana…',
@@ -87,7 +90,7 @@ export class Vault {
   private async refreshWallet(note = '') {
     const { owner, session } = walletState();
     if (!owner || !session) {
-      this.walletEl.textContent = 'Connect Phantom to mint.';
+      this.walletEl.textContent = 'Connect a wallet to mint.';
       return;
     }
     const ownerLink = () => explorerLink(owner, 'View wallet on Explorer ↗');
@@ -101,7 +104,8 @@ export class Vault {
       const bal = sol == null ? 'balance unavailable' : `${sol.toFixed(3)} SOL`;
       const link = (a: string) => `<a target="_blank" rel="noopener" href="${c.explorer('address', a)}">${short(a)}</a>`;
       const fund = sol != null && sol < FUND_BELOW_SOL ? ` <button id="fund" class="mini primary">Fund game wallet (${FUND_SOL} SOL)</button>` : '';
-      this.walletEl.innerHTML = `Phantom ${link(owner)} <span class="owner-explorer"></span> · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+      this.walletEl.innerHTML = `<span class="owner-name"></span> ${link(owner)} <span class="owner-explorer"></span> · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+      this.walletEl.querySelector('.owner-name')!.textContent = walletName();
       this.walletEl.querySelector('.owner-explorer')!.replaceWith(ownerLink());
       this.walletEl.querySelector('.note')!.textContent = note;
       $('airdrop').addEventListener('click', () => this.airdrop());
@@ -111,11 +115,11 @@ export class Vault {
     }
   }
 
-  /** Phantom sends devnet SOL to the game wallet (one prompt). */
+  /** The player's wallet sends devnet SOL to the game wallet (one prompt). */
   private async fund() {
     const btn = $('fund') as HTMLButtonElement;
     btn.disabled = true;
-    btn.textContent = 'Approve in Phantom…';
+    btn.textContent = `Approve in ${walletName()}…`;
     try {
       await topUpSession(FUND_SOL);
       await this.refreshWallet('Game wallet funded.');
@@ -127,7 +131,7 @@ export class Vault {
         isUserRejection(e)
           ? 'Top-up cancelled.'
           : /insufficient|debit an account|0x1\b/i.test(msg)
-            ? 'Your Phantom wallet needs devnet SOL (faucet.solana.com), and Phantom must be on Devnet.'
+            ? `${walletName()} needs devnet SOL (faucet.solana.com) and must be on Devnet.`
             : `Top-up failed: ${msg.slice(0, 100)}`,
       );
     }
@@ -232,11 +236,11 @@ export class Vault {
     if (err) {
       const sale = q.sellErrors.has(f);
       const line = el('div', 'err', sale ? `Sale failed: ${err}` : `Mint failed: ${err}`);
-      // Mints are paid by the game wallet, sales by the player's Phantom wallet.
-      if (sale && isUserRejection({ message: err })) line.textContent = 'Sale cancelled in Phantom.';
+      // Mints are paid by the game wallet, sales by the player's own wallet.
+      if (sale && isUserRejection({ message: err })) line.textContent = `Sale cancelled in ${walletName()}.`;
       else if (isFundsError(err)) {
         line.textContent = sale
-          ? 'Your Phantom wallet needs devnet SOL for the sale fee (faucet.solana.com), and Phantom must be on Devnet.'
+          ? `${walletName()} needs devnet SOL for the sale fee (faucet.solana.com) and must be on Devnet.`
           : 'The game wallet is out of devnet SOL. Fund it above.';
       }
       cap.appendChild(line);
