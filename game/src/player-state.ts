@@ -17,6 +17,8 @@ import type { EquipmentLevel, EquipmentPathId, EquipmentPaths, EquipmentSlot, Eq
 import type { MaterialId, RecipeDef, SynthesisState } from './synthesis';
 import type { FishFoodId } from './fish-food';
 import type { AquariumGrowth } from './aquarium-state';
+import type { BoatId } from './gear-nft';
+import type { MapId } from './maps';
 
 /** The program id generated for player_state (public, not a secret). */
 export const DEFAULT_PLAYER_STATE_PROGRAM_ID = 'EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ';
@@ -62,6 +64,9 @@ export const ACCOUNT_DISCRIMINATORS = Object.freeze({
   Config: [155, 12, 170, 224, 30, 250, 204, 130],
   PlayerState: [56, 3, 60, 86, 174, 16, 244, 195],
   Aquarium: [83, 39, 33, 207, 228, 184, 2, 132],
+  // v2
+  Progress: [125, 4, 195, 102, 134, 179, 253, 6],
+  ProgressConfig: [127, 198, 232, 142, 103, 192, 144, 50],
 } as const);
 
 export const INSTRUCTION_DISCRIMINATORS = Object.freeze({
@@ -77,6 +82,12 @@ export const INSTRUCTION_DISCRIMINATORS = Object.freeze({
   shark_bite: [93, 58, 72, 158, 252, 114, 249, 96],
   feed: [46, 213, 237, 176, 190, 113, 182, 94],
   forget_fish: [89, 97, 234, 13, 207, 58, 15, 203],
+  // v2
+  init_progress_config: [93, 241, 94, 134, 156, 57, 157, 173],
+  set_progress_config: [62, 238, 29, 56, 116, 142, 192, 215],
+  buy_boat: [92, 118, 219, 59, 116, 176, 51, 179],
+  set_ship: [105, 250, 223, 187, 254, 147, 224, 137],
+  record_catch: [36, 14, 58, 242, 96, 105, 45, 233],
 } as const);
 
 /** Account sizes (discriminator included). Aquarium grows by FISH_ENTRY_SIZE per fish. */
@@ -569,4 +580,221 @@ export function forgetFish(context: PdaContext, input: Common & { owner: Signer;
   const owner = input.owner.publicKey;
   return ix(programId, 'forget_fish', [[owner, true], [findAquariumPda(context, owner, programId)[0], true]],
     fishArgs(input.fish), [input.owner]);
+}
+
+// ==== v2: Progress (boats, ships, lifetime banked value) =========================
+//
+// Additive to v1: nothing above changes. One Progress PDA per wallet (["progress", owner])
+// and one admin-set ProgressConfig (["progress_config"]) with the boat prices and the ship /
+// map unlock thresholds.
+//
+// Wiring record_catch into the fish mint (server, sensor/fish-collection.mjs cosignMint):
+// append recordCatch(...) to the same Core `create` transaction builder, with
+//   oracle = u.identity (the market wallet, already a signer there as collection authority),
+//   payer  = the request's `payer` (the game's session key, already the fee payer),
+//   owner  = m.owner, fish = fishSeedKey(m.fishId), value = the validated fish value,
+// before .setFeePayer/.build. No new signer: the session key signs as before and also funds
+// the Progress rent (first catch) plus 8 bytes per new fish. A retried mint of the same fish
+// is a no-op on chain. The game's cosignedTxProblem (fish-cosign.ts) must then accept this
+// program id next to Metaplex Core, and nft-queue.ts MIN_MINT_SOL should cover the extra rent.
+
+/** Boat pieces in program order = BOAT_IDS (gear-nft.ts). */
+export const BOAT_ORDER: readonly BoatId[] = Object.freeze(['bait', 'boat', 'boatSpeed', 'boatHull', 'boatDeck'] as const);
+/** Maps in program order (maps.ts MAPS). */
+export const MAP_ORDER: readonly MapId[] = Object.freeze(['fjord', 'tianchi', 'ocean'] as const);
+const BOAT_SLOT_COUNT = 5;
+const SHIP_COUNT = 6;
+const MAP_COUNT = 3;
+
+/** Progress header size (discriminator included); the catch log of u64 keys follows it. */
+export const PROGRESS_HEADER_SIZE = 100;
+export const CATCH_KEY_SIZE = 8;
+export const PROGRESS_CONFIG_SIZE = 266;
+
+export function findProgressPda(context: PdaContext, owner: PublicKey, programId = playerStateProgramId()): Pda {
+  return context.eddsa.findPda(programId, [utf8('progress'), publicKeyBytes(owner)]);
+}
+
+export function findProgressConfigPda(context: PdaContext, programId = playerStateProgramId()): Pda {
+  return context.eddsa.findPda(programId, [utf8('progress_config')]);
+}
+
+export interface ProgressRules {
+  /** PEARL per boat level (index 0 = Lv1 = 0). */
+  boatPrices: Record<BoatId, [bigint, bigint, bigint]>;
+  /** Lifetime banked value that unlocks each ship (ships.ts SHIPS order). */
+  shipThresholds: bigint[];
+  /** Lifetime banked value that unlocks each map. */
+  mapThresholds: Record<MapId, bigint>;
+}
+
+/** upgrades.ts boat-group prices, ships.ts thresholds, and the map unlocks 150 / 1000. */
+export const GAME_PROGRESS_RULES: ProgressRules = {
+  boatPrices: {
+    bait: [0n, 40n, 300n],
+    boat: [0n, 120n, 700n],
+    boatSpeed: [0n, 80n, 500n],
+    boatHull: [0n, 80n, 500n],
+    boatDeck: [0n, 80n, 500n],
+  },
+  shipThresholds: [0n, 50n, 150n, 500n, 1200n, 2500n],
+  mapThresholds: { fjord: 0n, tianchi: 150n, ocean: 1000n },
+};
+
+function writeRules(w: Writer, r: ProgressRules): Writer {
+  for (const id of BOAT_ORDER) for (const p of r.boatPrices[id]) w.u64(p);
+  if (r.shipThresholds.length !== SHIP_COUNT) throw new Error(`Need ${SHIP_COUNT} ship thresholds`);
+  for (const t of r.shipThresholds) w.u64(t);
+  for (const id of MAP_ORDER) w.u64(r.mapThresholds[id]);
+  return w;
+}
+
+function readRules(r: Reader): ProgressRules {
+  const boat = r.many(BOAT_SLOT_COUNT, () => r.many(3, () => r.u64()) as [bigint, bigint, bigint]);
+  const ships = r.many(SHIP_COUNT, () => r.u64());
+  const maps = r.many(MAP_COUNT, () => r.u64());
+  return { boatPrices: record(BOAT_ORDER, boat), shipThresholds: ships, mapThresholds: record(MAP_ORDER, maps) };
+}
+
+/** Encodes ProgressRules exactly as the instructions take them (for tests and scripts). */
+export function encodeProgressRules(rules: ProgressRules): Uint8Array {
+  return writeRules(new Writer(), rules).done();
+}
+
+export interface ProgressConfigAccount { version: number; bump: number; rules: ProgressRules }
+
+export function decodeProgressConfig(data: Uint8Array): ProgressConfigAccount {
+  checkDiscriminator(data, ACCOUNT_DISCRIMINATORS.ProgressConfig, 'ProgressConfig');
+  const r = new Reader(data, 8);
+  return { version: r.u8(), bump: r.u8(), rules: readRules(r) };
+}
+
+export interface ProgressAccount {
+  version: number;
+  bump: number;
+  owner: PublicKey;
+  /** Value of every fish ever banked; never decreases. */
+  lifetimeValue: bigint;
+  /** The most valuable single fish recorded. */
+  bestValue: bigint;
+  catches: number;
+  boatLevels: Record<BoatId, EquipmentLevel>;
+  /** SHIPS index sailed. */
+  ship: number;
+}
+
+export function decodeProgress(data: Uint8Array): ProgressAccount {
+  checkDiscriminator(data, ACCOUNT_DISCRIMINATORS.Progress, 'Progress');
+  const r = new Reader(data, 8);
+  const version = r.u8(), bump = r.u8(), owner = r.pubkey();
+  const lifetimeValue = r.u64(), bestValue = r.u64(), catches = r.u32();
+  const boatLevels = record(BOAT_ORDER, r.many(BOAT_SLOT_COUNT, () => level(r.u8())));
+  return { version, bump, owner, lifetimeValue, bestValue, catches, boatLevels, ship: r.u8() };
+}
+
+/** The recorded fish keys (sorted ascending) after the Progress header. */
+export function decodeCatchLog(data: Uint8Array): bigint[] {
+  const p = decodeProgress(data);
+  const r = new Reader(data, PROGRESS_HEADER_SIZE);
+  return r.many(Math.min(p.catches, Math.floor((data.length - PROGRESS_HEADER_SIZE) / CATCH_KEY_SIZE)), () => r.u64());
+}
+
+/** A fish's catch-log key: its 8-hex seed id (sensor/fish-gen.mjs seedOfId) as a u64. */
+export function fishSeedKey(id: string): bigint {
+  if (!/^[0-9a-f]{8}$/.test(id)) throw new Error(`Bad fish id ${id}`);
+  return BigInt(`0x${id}`);
+}
+
+/** Maps open at this lifetime banked value. */
+export function unlockedMaps(lifetimeValue: bigint, rules: ProgressRules): MapId[] {
+  return MAP_ORDER.filter((id) => lifetimeValue >= rules.mapThresholds[id]);
+}
+
+/** SHIPS indexes that may be sailed at this lifetime banked value. */
+export function unlockedShips(lifetimeValue: bigint, rules: ProgressRules): number[] {
+  return rules.shipThresholds.flatMap((t, i) => (lifetimeValue >= t ? [i] : []));
+}
+
+const boatIndex = (id: BoatId) => {
+  const i = BOAT_ORDER.indexOf(id);
+  if (i < 0) throw new Error(`Unknown boat piece ${id}`);
+  return i;
+};
+
+/** Config admin: creates the ProgressConfig. */
+export function initProgressConfig(context: PdaContext, input: Common & { admin: Signer; rules?: ProgressRules }): TransactionBuilder {
+  const programId = input.programId ?? playerStateProgramId();
+  return ix(programId, 'init_progress_config', [
+    [input.admin.publicKey, true],
+    [findConfigPda(context, programId)[0], false],
+    [findProgressConfigPda(context, programId)[0], true],
+    [SYSTEM_PROGRAM_ID, false],
+  ], writeRules(new Writer(), input.rules ?? GAME_PROGRESS_RULES), [input.admin], PROGRESS_CONFIG_SIZE + ACCOUNT_HEADER_SIZE);
+}
+
+/** Config admin: replaces the boat prices and unlock thresholds. */
+export function setProgressConfig(context: PdaContext, input: Common & { admin: Signer; rules: ProgressRules }): TransactionBuilder {
+  const programId = input.programId ?? playerStateProgramId();
+  return ix(programId, 'set_progress_config', [
+    [input.admin.publicKey, false],
+    [findConfigPda(context, programId)[0], false],
+    [findProgressConfigPda(context, programId)[0], true],
+  ], writeRules(new Writer(), input.rules), [input.admin]);
+}
+
+/**
+ * Owner signs: burns the ProgressConfig price of `level` (must be the current level + 1) of a
+ * boat piece. Creates the owner's Progress on first use (pass `createsProgress` so the fee
+ * estimate includes its rent).
+ */
+export function buyBoat(
+  context: PdaContext,
+  input: Common & PearlAccounts & { owner: Signer; boat: BoatId; level: 2 | 3; createsProgress?: boolean },
+): TransactionBuilder {
+  const programId = input.programId ?? playerStateProgramId();
+  const owner = input.owner.publicKey;
+  const ata = input.ownerPearl ?? findPearlAta(context, owner, input.pearlMint, input.tokenProgram)[0];
+  return ix(programId, 'buy_boat', [
+    [owner, true],
+    [findConfigPda(context, programId)[0], false],
+    [findProgressConfigPda(context, programId)[0], false],
+    [findProgressPda(context, owner, programId)[0], true],
+    [input.pearlMint, true],
+    [ata, true],
+    [input.tokenProgram, false],
+    [SYSTEM_PROGRAM_ID, false],
+  ], new Writer().u8(boatIndex(input.boat)).u8(input.level), [input.owner],
+  input.createsProgress ? PROGRESS_HEADER_SIZE + ACCOUNT_HEADER_SIZE : 0);
+}
+
+/** Owner signs: sails an unlocked ship (SHIPS index). */
+export function setShip(context: PdaContext, input: Common & { owner: Signer; ship: number }): TransactionBuilder {
+  const programId = input.programId ?? playerStateProgramId();
+  const owner = input.owner.publicKey;
+  return ix(programId, 'set_ship', [
+    [owner, false],
+    [findProgressConfigPda(context, programId)[0], false],
+    [findProgressPda(context, owner, programId)[0], true],
+  ], new Writer().u8(input.ship), [input.owner]);
+}
+
+/**
+ * Oracle (Config.oracle, the market wallet) signs: adds one banked fish's value to the owner's
+ * lifetime value, once per fish key. `payer` (any signer, e.g. the mint tx's fee payer) funds
+ * the Progress rent and the 8 bytes per new fish. See the wiring note at the top of this section.
+ */
+export function recordCatch(
+  context: PdaContext,
+  input: Common & { oracle: Signer; payer: Signer; owner: PublicKey; fish: bigint; value: bigint | number; createsProgress?: boolean },
+): TransactionBuilder {
+  const programId = input.programId ?? playerStateProgramId();
+  return ix(programId, 'record_catch', [
+    [input.oracle.publicKey, false],
+    [input.payer.publicKey, true],
+    [findConfigPda(context, programId)[0], false],
+    [input.owner, false],
+    [findProgressPda(context, input.owner, programId)[0], true],
+    [SYSTEM_PROGRAM_ID, false],
+  ], new Writer().u64(input.fish).u64(input.value), [input.oracle, input.payer],
+  CATCH_KEY_SIZE + (input.createsProgress ? PROGRESS_HEADER_SIZE + ACCOUNT_HEADER_SIZE : 0));
 }
