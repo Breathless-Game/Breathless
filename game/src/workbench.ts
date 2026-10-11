@@ -16,6 +16,8 @@ import { SoftPaper } from './paper';
 import { Diver } from './diver';
 import { GearInspector, type ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { setDeepSonarColor } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -299,6 +301,7 @@ export class Workbench {
         else if (!ready && p.mode === 'ready') this.unready(p);
       },
       sonarColor: (color) => {
+        this.setSonarColor(color);
         this.hooks.sonarColor?.(color);
       },
       buy: async (def) => {
@@ -394,6 +397,7 @@ export class Workbench {
     this.resize();
     // Levels bought (or a ship picked, or a wallet's save loaded) since the pieces were last built.
     this.refreshGear();
+    this.setSonarColor(loadSonarConfig().color);
     if (intro || !this.placed) this.scatter(intro);
     this.placed = true;
     this.time = 0;
@@ -630,6 +634,12 @@ export class Workbench {
     }
     const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
     return { model: buildUpgradeModel(id, level), key: level };
+  }
+
+  /** Apply the persisted beacon accent to the table piece and open inspector. */
+  private setSonarColor(color: string) {
+    const piece = this.pieces.find((item) => item.id === 'sonar');
+    if (piece) setDeepSonarColor(piece.obj, color);
   }
 
   private buildPiece(id: UpgradeId, i: number): Piece {
