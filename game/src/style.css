@@ -587,6 +587,105 @@ body {
   max-width: 100%;
 }
 
+/* The equipped label and the net moved into the hotbar (bottom centre). */
+#hud-bl {
+  display: none;
+}
+
+#help {
+  display: none; /* the controls live in Settings now */
+}
+
+#hotbar {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  padding: 8px 12px 10px;
+  max-width: calc(100vw - 32px - 360px); /* clear of the bank panel on the right */
+}
+
+.hotbar-tabs {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.hotbar-tabs .on {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.hotbar-key {
+  margin-left: auto;
+}
+
+.hotbar-key b {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+#hotbar-gear {
+  display: flex;
+  gap: 8px;
+}
+
+.hotbar-cell {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
+}
+
+.hotbar-cell.on {
+  border: 2px solid var(--hold);
+  background: rgba(62, 240, 168, 0.14);
+  box-shadow: 0 0 16px rgba(62, 240, 168, 0.3);
+}
+
+.hotbar-cell.unpacked {
+  opacity: 0.35;
+}
+
+.hotbar-num {
+  position: absolute;
+  top: 3px;
+  left: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.hotbar-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.hotbar-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#hotbar #net-slots {
+  margin-top: 0;
+  flex-wrap: nowrap;
+}
+
+#hotbar .slot {
+  width: 64px;
+  height: 64px;
+}
+
 #active-gear {
   min-width: 176px;
   border-color: rgba(62, 240, 168, 0.45);

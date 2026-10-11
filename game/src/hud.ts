@@ -253,7 +253,52 @@ export class Hud {
     this.msgTimer = window.setTimeout(() => this.centerMsg.classList.remove('show'), ms);
   }
 
+  // ---- Hotbar (bottom centre) -------------------------------------------
+  // GEAR: the six quick slots, the equipped one lit, unpacked ones dimmed.
+  // BAG (Tab): the fish caught this dive, in the net slots.
+  private hotbarKey = '';
+  private bagCount = '';
+
+  /** Redraws the gear row only when the equipped slot or what's packed changed. */
+  setHotbar(slots: readonly { slot: EquipmentSlot; label: string; icon: string }[], active: EquipmentSlot, packed: (slot: EquipmentSlot) => boolean) {
+    const key = active + slots.map((s) => (packed(s.slot) ? 1 : 0)).join('');
+    if (key === this.hotbarKey) return;
+    this.hotbarKey = key;
+    $('hotbar-gear').replaceChildren(
+      ...slots.map((s, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'hotbar-cell';
+        cell.classList.toggle('on', s.slot === active);
+        cell.classList.toggle('unpacked', !packed(s.slot));
+        const num = document.createElement('span');
+        num.className = 'hotbar-num';
+        num.textContent = String(i + 1);
+        const icon = document.createElement('span');
+        icon.className = 'hotbar-icon';
+        icon.textContent = s.icon;
+        const label = document.createElement('span');
+        label.className = 'hotbar-label';
+        label.textContent = s.label;
+        cell.append(num, icon, label);
+        return cell;
+      }),
+    );
+  }
+
+  /** Tab: between the gear row and the bag of caught fish. */
+  toggleBag(show = $('net').classList.contains('hidden')) {
+    $('net').classList.toggle('hidden', !show);
+    $('hotbar-gear').classList.toggle('hidden', show);
+    $('hotbar-tab-bag').classList.toggle('on', show);
+    $('hotbar-tab-gear').classList.toggle('on', !show);
+  }
+
   setNet(net: FishSpec[], capacity: number) {
+    const count = `${net.length}/${capacity}`;
+    if (count !== this.bagCount) {
+      this.bagCount = count;
+      $('hotbar-bag-count').textContent = count;
+    }
     this.netSlots.innerHTML = '';
     for (let i = 0; i < capacity; i++) {
       const slot = document.createElement('div');

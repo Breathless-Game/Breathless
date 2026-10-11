@@ -66,11 +66,20 @@
             <div id="active-gear-hint" class="small">按 1 快速切换 · Tab 轮盘</div>
           </section>
 
-          <section id="net" class="panel">
-            <div class="small muted">NET</div>
-            <div id="net-slots"></div>
-          </section>
         </div>
+
+        <!-- Bottom centre: the gear you carry (1–6), or with Tab your bag of caught fish. -->
+        <section id="hotbar" class="panel">
+          <div class="hotbar-tabs small">
+            <span id="hotbar-tab-gear" class="on">GEAR · 装备</span>
+            <span id="hotbar-tab-bag">BAG · 鱼篓 <span id="hotbar-bag-count"></span></span>
+            <span class="hotbar-key"><b>Tab</b> 切换</span>
+          </div>
+          <div id="hotbar-gear"></div>
+          <div id="net" class="hidden">
+            <div id="net-slots"></div>
+          </div>
+        </section>
 
         <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>B</b> field guide · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> menu</div>
 

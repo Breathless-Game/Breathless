@@ -706,8 +706,14 @@ window.addEventListener('keydown', (e) => {
     onEscape();
     return;
   }
-  // Tab is a hold-to-open radial wheel. Number keys and Q/E are instant
-  // quick-slot shortcuts; consume them before movement/catch handling.
+  // Tab flips the hotbar between your gear and your bag of fish (it no longer opens the
+  // wheel). Number keys and Q/E are instant quick-slot shortcuts; the wheel consumes them
+  // before movement/catch handling.
+  if (e.key === 'Tab' && phase === 'play' && !paused) {
+    e.preventDefault();
+    if (!e.repeat) hud.toggleBag();
+    return;
+  }
   if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
   if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !settingsDesk.visible && !loginGate.visible && !pauseMenu.open && !aquarium.open) {
@@ -1883,6 +1889,7 @@ function update(dt: number, time: number) {
 
   hud.setBreath(s, outOfAir);
   hud.placeBreath(overDiversHead());
+  hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
