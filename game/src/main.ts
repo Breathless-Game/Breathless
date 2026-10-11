@@ -10,7 +10,6 @@ import { Hud } from './hud';
 import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
 import { LazyReport as Report } from './lazy-panels';
-import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
 import { LazySettingsDesk as SettingsDesk } from './lazy-panels';
 import { dropdownOpen } from './dropdown';
@@ -730,6 +729,14 @@ const aquarium = new Aquarium(bank, {
   message(text) {
     hud.message(text, 1600);
   },
+  openCollection() {
+    vault.toggle(true);
+    fieldGuide?.mark('collection');
+    void syncPearls();
+  },
+  closeCollection() {
+    vault.toggle(false);
+  },
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
@@ -1318,7 +1325,7 @@ document.getElementById('gear-open')!.addEventListener('click', () => {
   gear.toggle(true);
   void syncPearls();
 });
-for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
+document.getElementById('report-btn')!.addEventListener('click', () => report.toggle(true));
 
 function axis(neg: string[], pos: string[]) {
   return (pos.some((k) => keys.has(k)) ? 1 : 0) - (neg.some((k) => keys.has(k)) ? 1 : 0);
@@ -1533,27 +1540,6 @@ document.getElementById('start-keys')!.addEventListener('click', () => {
 });
 document.getElementById('calib-skip')!.addEventListener('click', startGame);
 
-// Guided breath test: labeled data for tuning the detector (see sensor/analyze.mjs).
-const breathTest = new BreathTest(breath);
-async function startBreathTest() {
-  try {
-    if (!breath.video.srcObject) await breath.startLive();
-    document.getElementById('cam-wrap')!.style.visibility = 'visible';
-    hud.show();
-    breathTest.start();
-  } catch (err) {
-    console.error(err);
-    document.getElementById('start-test')!.textContent = t('Camera blocked: allow camera access, then retry', '摄像头被阻止：请允许摄像头访问后重试');
-  }
-}
-document.getElementById('start-test')!.addEventListener('click', startBreathTest);
-document.getElementById('test-again')!.addEventListener('click', () => breathTest.start());
-document.getElementById('test-stop')!.addEventListener('click', () => breathTest.stop());
-document.getElementById('test-play')!.addEventListener('click', () => {
-  breathTest.stop();
-  startGame();
-});
-
 function updateCalibration() {
   const s = breath.state;
   if (s.mode === 'keyboard' && s.error) {
@@ -1765,11 +1751,10 @@ function onEscape() {
   else if (!sharkBitten.classList.contains('hidden')) sharkBitten.classList.add('hidden');
   else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
+  else if (vault.open) vault.toggle(false); // the Collection can sit on top of the aquarium
   else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
-  else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
-  else if (breathTest.open) breathTest.stop();
   else if (loginGate.visible) showTitle(false);
   else if (settingsDesk.visible) settingsDesk.escape();
   // Aboard, Esc from the bare table goes back into the water, not to the title.
@@ -1880,7 +1865,7 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
 ]);
 // The fish are built with their English names (which also fixes how each one hangs); the carved names follow the UI language.
 const TITLE_LABELS: readonly (readonly [number, string, string])[] = [
-  [1, 'AQUARIUM', '图鉴'],
+  [1, 'AQUARIUM', '鱼缸'],
   [2, 'SETTINGS', '设置'],
 ];
 function labelTitleFish() {
@@ -2256,7 +2241,6 @@ function openStartCard() {
 }
 
 function backFromStartCard() {
-  if (breathTest.open) breathTest.stop();
   // The camera may already be on (calibration or breath test): release it on the way out.
   if (phase === 'calibrating' || breath.video.srcObject) goToMenu();
   else {
@@ -2266,7 +2250,6 @@ function backFromStartCard() {
   }
 }
 
-document.getElementById('card-back')!.addEventListener('click', backFromStartCard);
 showTitle(true);
 
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
@@ -2598,7 +2581,6 @@ Object.assign(window, {
   /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
   diveCameraOffset: () => camera.position.distanceTo(cameraTarget(new THREE.Vector3(), 0)),
   breath,
-  breathTest,
   titleScreen,
   world,
   events,

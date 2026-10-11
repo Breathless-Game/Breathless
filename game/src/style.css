@@ -1688,6 +1688,7 @@ button.danger {
 }
 
 /* ---- collection ---- */
+#collection.over-aquarium { z-index: 33; } /* opened from the aquarium (z 31) */
 #collection {
   position: fixed;
   inset: 24px;
@@ -2799,84 +2800,6 @@ button:disabled {
   }
 }
 
-/* ---- guided breath test ---- */
-#overlay.testing {
-  background: rgba(2, 8, 18, 0.3);
-}
-
-#overlay.testing .card > :not(#test) {
-  display: none;
-}
-
-#start-test {
-  margin-bottom: 10px;
-}
-
-#test-title {
-  font-size: 26px;
-  font-weight: 900;
-}
-
-#test-count {
-  font-size: 44px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-}
-
-#test[data-kind='hold'] #test-title,
-#test[data-kind='hold'] #test-count {
-  color: var(--hold);
-}
-
-#test[data-kind='ready'] #test-title,
-#test[data-kind='ready'] #test-count {
-  color: var(--gold);
-}
-
-#test-sub {
-  color: var(--muted);
-  min-height: 16px;
-}
-
-.test-track {
-  height: 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
-  margin: 14px 0 10px;
-  overflow: hidden;
-}
-
-#test-bar {
-  height: 100%;
-  width: 0;
-  background: var(--breathe);
-  transition: width 0.1s linear;
-}
-
-.test-seen {
-  font-weight: 800;
-  color: var(--breathe);
-}
-
-.test-seen.holding {
-  color: var(--hold);
-}
-
-#test-result {
-  margin: 14px 0 4px;
-  line-height: 1.6;
-}
-
-#test:not([data-kind='done']) #test-done,
-#test[data-kind='done'] #test-stop,
-#test[data-kind='done'] .test-seen {
-  display: none;
-}
-
-#test-done {
-  margin-top: 14px;
-}
-
 /* ---- map picker (start card) ---- */
 #map-picker {
   display: grid;
@@ -3051,6 +2974,17 @@ button:disabled {
   flex: none;
 }
 
+#aq-manage {
+  flex: none;
+  white-space: nowrap;
+}
+
+#aq-manage kbd {
+  margin-left: 4px;
+  font-size: 10px;
+  padding: 0 4px;
+}
+
 #aq-close {
   font-size: 18px;
   line-height: 1;
@@ -3095,6 +3029,7 @@ button:disabled {
 
 .aq-tank {
   position: relative;
+  align-self: start;
 }
 
 .aq-layout {
@@ -3147,15 +3082,119 @@ button:disabled {
   background: transparent;
 }
 
-#aq-food-select {
+#aq-food-picker {
+  position: relative;
   min-width: 0;
-  padding: 7px 8px;
+}
+
+.aq-picker-trigger {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 28px 7px 10px;
+  position: relative;
+  text-align: left;
   color: var(--ink);
   background: rgba(2, 13, 23, 0.82);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   font: inherit;
   font-size: 12px;
+  cursor: pointer;
+}
+
+.aq-picker-trigger::after {
+  content: '';
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-70%) rotate(45deg);
+  opacity: 0.7;
+}
+
+.aq-picker-trigger[aria-expanded='true'],
+.aq-picker-trigger:hover,
+.aq-picker-trigger:focus-visible {
+  border-color: rgba(190, 255, 237, 0.8);
+  outline: none;
+}
+
+.aq-picker-list {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgba(170, 235, 255, 0.4);
+  border-radius: 12px;
+  background: linear-gradient(160deg, rgba(17, 57, 76, 0.97), rgba(5, 18, 31, 0.98));
+  box-shadow: 0 14px 35px rgba(0, 10, 18, 0.55);
+  outline: none;
+}
+
+.aq-picker-list.hidden {
+  display: none;
+}
+
+.aq-picker-list.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.aq-picker-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  position: relative;
+  padding: 7px 26px 7px 10px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aq-picker-option.active {
+  background: rgba(94, 255, 216, 0.16);
+}
+
+.aq-picker-option.selected {
+  box-shadow: inset 0 0 0 1px rgba(94, 255, 216, 0.55);
+}
+
+.aq-picker-option.selected::after {
+  content: '\2713';
+  position: absolute;
+  right: 9px;
+  top: 8px;
+  color: #7dffdc;
+  font-weight: 800;
+}
+
+.aq-picker-option.short .aq-picker-name,
+.aq-picker-option.short .aq-picker-price {
+  opacity: 0.5;
+}
+
+.aq-picker-price {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.aq-picker-price em {
+  margin-left: 6px;
+  font-style: normal;
+  color: #ffb4a8;
 }
 
 .aq-feed-status,
@@ -3183,10 +3222,15 @@ button:disabled {
 
 #aq-empty {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 44%;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: min(100%, 36em);
+  padding: 0 16px;
   text-align: center;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 15px;
   pointer-events: none;

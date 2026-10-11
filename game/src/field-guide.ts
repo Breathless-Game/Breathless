@@ -2,6 +2,7 @@ import './field-guide.css';
 import { guideArt, type GuideArt } from './guide-art';
 import { currentLesson, LESSONS, loadTutorial, recordLesson, saveTutorial, type LessonId } from './tutorial';
 import { lang, onLangChange, t } from './i18n';
+import { SYNTHESIS_ENABLED } from './synthesis';
 
 type ChapterId = 'prepare' | 'assembly' | 'gear' | 'synthesis' | 'dive' | 'return' | 'sonar';
 interface Chapter {
@@ -59,8 +60,14 @@ export const CHAPTERS_EN: readonly Chapter[] = [
 const chapters = (): readonly Chapter[] => {
   const primary = lang() === 'zh' ? CHAPTERS : CHAPTERS_EN;
   const other = lang() === 'zh' ? CHAPTERS_EN : CHAPTERS;
-  return CHAPTERS.map((c, i) => primary.find(x => x.id === c.id) ?? other.find(x => x.id === c.id) ?? primary[i] ?? c);
+  return shownChapters().map((c, i) => {
+    const ch = primary.find(x => x.id === c.id) ?? other.find(x => x.id === c.id) ?? primary[i] ?? c;
+    // The subtitle numbers are renumbered by position so hiding a chapter leaves no gap.
+    return { ...ch, subtitle: ch.subtitle.replace(/^\d+/, String(i + 1).padStart(2, '0')) };
+  });
 };
+/** Chapters players can see: the synthesis chapter is dropped while the station is hidden. */
+const shownChapters = (): readonly Chapter[] => CHAPTERS.filter(c => SYNTHESIS_ENABLED || c.id !== 'synthesis');
 interface GuideHooks {
   canOpen(): boolean;
   toggled(open: boolean): void;
@@ -85,7 +92,7 @@ export class FieldGuide {
     this.root.innerHTML = `<section class="guide-book" role="dialog" aria-modal="true" aria-labelledby="guide-title">
       <div class="guide-binding" aria-hidden="true">${'<i></i>'.repeat(12)}</div>
       <header class="guide-cover"><span data-cover></span><button type="button" id="guide-close"></button></header>
-      <nav class="guide-tabs">${CHAPTERS.map((_, i) => `<button type="button" data-chapter="${i}" aria-controls="guide-pages"></button>`).join('')}</nav>
+      <nav class="guide-tabs">${shownChapters().map((_, i) => `<button type="button" data-chapter="${i}" aria-controls="guide-pages"></button>`).join('')}</nav>
       <div id="guide-pages" class="guide-pages"></div>
       <footer class="guide-footer"><button type="button" id="guide-prev"></button><span id="guide-page-number"></span><button type="button" id="guide-next"></button></footer>
     </section>`;

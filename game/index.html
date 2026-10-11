@@ -110,7 +110,7 @@
     <div id="aquarium" class="hidden">
       <div class="aq-stage">
         <div class="aq-bar">
-          <div class="aq-title"><span data-zh="图鉴">Aquarium</span> <span id="aq-label" class="small muted"></span><span class="aq-view-hint" data-zh="双击鱼缸切换俯视">Double-click the tank for a top view</span></div>
+          <div class="aq-title"><span data-zh="鱼缸">Aquarium</span> <span id="aq-label" class="small muted"></span><span class="aq-view-hint" data-zh="双击鱼缸切换俯视">Double-click the tank for a top view</span></div>
           <button id="aq-prev" class="mini" title="Previous tank (←)" data-zh-title="上一个鱼缸 (←)">‹</button>
           <div id="aq-tabs"></div>
           <button id="aq-next" class="mini" title="Next tank (→)" data-zh-title="下一个鱼缸 (→)">›</button>
@@ -118,6 +118,7 @@
             <span class="small" data-zh="灯光">Light</span>
             <input id="aq-light" type="color" value="#42e8d2" aria-label="Aquarium ambience light color" data-zh-aria-label="鱼缸氛围灯颜色" />
           </label>
+          <button id="aq-manage" class="mini" title="Manage fish: sell, burn, list (C)" data-zh-title="管理鱼：出售、销毁、上架 (C)" aria-label="Manage fish" data-zh-aria-label="管理鱼"><span data-zh="管理鱼">Manage fish</span> <kbd>C</kbd></button>
           <button id="aq-close" class="mini" title="Back to the title (Esc)" data-zh-title="返回标题 (Esc)">×</button>
         </div>
         <div class="aq-layout">
@@ -129,7 +130,10 @@
           <aside id="aq-feeder" aria-label="Aquarium food feeder" data-zh-aria-label="鱼缸喂食器">
             <div class="aq-feeder-title" data-zh="鱼食">Fish food</div>
             <div id="aq-feeder-model" class="aq-feeder-model"></div>
-            <select id="aq-food-select" aria-label="Choose fish food" data-zh-aria-label="选择鱼食"></select>
+            <div id="aq-food-picker" class="aq-picker">
+              <button id="aq-food-trigger" class="aq-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="aq-food-list" aria-label="Choose fish food" data-zh-aria-label="选择鱼食"></button>
+              <ul id="aq-food-list" class="aq-picker-list hidden" role="listbox" tabindex="-1" aria-label="Fish food" data-zh-aria-label="鱼食"></ul>
+            </div>
             <div id="aq-feed-status" class="aq-feed-status"></div>
             <button id="aq-feed-all" class="mini primary" type="button">Pour into tank</button>
             <div class="aq-feeder-hint" data-zh="点击鱼食或按钮，所有鱼会来抢">Click the model or button; the whole school will rush in</div>
@@ -140,7 +144,7 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small" data-zh="把左侧装备拖进托盘上的圆环 · 点击装备或潜水员细看 · 点击隐藏的绿色工作站合成 · 点击海图下潜 · Esc 返回">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the hidden green station to synthesize · click the map to dive · Esc back</div>
+      <div id="wb-hint" class="small" data-zh="把左侧装备拖进托盘上的圆环 · 点击装备或潜水员细看 · 点击海图下潜 · Esc 返回">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the map to dive · Esc back</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
@@ -266,24 +270,7 @@
           <button id="start-live" class="primary" data-zh="用摄像头开始">Start with camera</button>
           <button id="start-keys" data-zh="用键盘游玩">Play with keyboard</button>
         </div>
-        <button id="start-test" class="link" data-zh="憋气测试（2.5 分钟）">Breath test (2.5 min)</button>
-        <button id="open-report" class="link" data-zh="查看我的健康报告">View my health report</button>
-        <button id="card-back" class="link" data-zh="← 返回">← Back</button>
         <p class="small muted" data-zh="呼吸检测由 Presage SmartSpectra 提供 · 请露出脸和胸口，光线充足">Breath detection by Presage SmartSpectra · face and chest visible, good light</p>
-        <div id="test" class="hidden">
-          <div class="row"><div id="test-title"></div><div id="test-count"></div></div>
-          <div id="test-sub" class="small"></div>
-          <div class="test-track"><div id="test-bar"></div></div>
-          <div class="row small">
-            <span id="test-seen" class="test-seen"></span>
-            <button id="test-stop" class="mini" data-zh="停止">Stop</button>
-          </div>
-          <div id="test-result" class="hidden"></div>
-          <div id="test-done" class="buttons">
-            <button id="test-play" class="primary" data-zh="用摄像头游玩">Play with camera</button>
-            <button id="test-again" data-zh="再测一次">Run again</button>
-          </div>
-        </div>
         <div id="calib" class="hidden">
           <div id="calib-step">Connecting to breath sensor…</div>
           <div id="calib-sub" class="small muted"></div>
