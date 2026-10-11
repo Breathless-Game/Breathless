@@ -83,12 +83,15 @@ globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) =>
 const walletStub = dataUrl(`
   export const storageKey = (n) => 'e2e.' + n;
   export const ownerAddress = () => globalThis.__e2e.owner;
-  export const ownerSigner = () => globalThis.__e2e.ownerSigner;`);
+  export const ownerSigner = () => globalThis.__e2e.ownerSigner;
+  export const walletState = () => ({ owner: globalThis.__e2e.owner, session: null, connected: true, wallet: null });`);
 const local = { './chain': dataUrl('export const getUmi = () => globalThis.__e2e.u;'), './wallet': walletStub };
 const fixImports = (code) =>
   code
     .replace(/from (['"])\.\/wallet\1/g, `from '${walletStub}'`)
     .replace(/from (['"])\.\/market\1/g, `from '${dataUrl(transpile('market.ts'))}'`)
+    // PEARL balances come from the market's GET /balance (in this process), like the game in a browser.
+    .replace(/from (['"])\.\/balance-api\1/g, () => `from '${dataUrl(transpile('balance-api.ts').replace('fetch(`/api/market/balance', `fetch(\`${BASE}/api/market/balance`))}'`)
     .replace(/import\((['"])([^'"]+)\1\)/g, (_, q, spec) => `import('${local[spec] ?? import.meta.resolve(spec)}')`);
 const nftUri = await import(dataUrl(transpile('nft-uri.ts')));
 
@@ -170,6 +173,9 @@ const post = async (route, body) => {
   return { status: res.status, body: await res.json() };
 };
 const pearlNow = () => pearl.pearlBalance();
+// pearlBalance() reads GET /balance (cached a few seconds); each sale must invalidate it.
+const bal = await (await fetch(`${BASE}/api/market/balance?owner=${owner}&session=${session.publicKey}`)).json();
+check(bal.raw === '0' && bal.decimals === 0 && typeof bal.sessionSol === 'number', `GET /balance answers: ${JSON.stringify(bal)}`);
 const sell = async (ids) => pearl.sellManyToMarket(ids, () => {});
 
 step('1. a forged mythic is refused');
