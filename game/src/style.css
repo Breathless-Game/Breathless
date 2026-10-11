@@ -522,6 +522,19 @@ body {
   opacity: 1;
 }
 
+/* A link under a message (a payment still confirming): clickable only while it shows. */
+#center-msg a {
+  font-size: 15px;
+  font-weight: 700;
+  color: inherit;
+  text-decoration: underline;
+  pointer-events: none;
+}
+
+#center-msg.show a {
+  pointer-events: auto;
+}
+
 /* Floating at the surface beside the boat: F climbs aboard, back to the workbench. */
 #board-prompt {
   position: absolute;
