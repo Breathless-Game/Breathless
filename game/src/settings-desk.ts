@@ -22,6 +22,14 @@ export interface DeskHooks {
   logOut(): void;
   /** The camera pan between the title (0) and the table (1); tableY: screen y of the table's back. */
   pan(u: number, tableY: number): void;
+  /** It has started panning away (Esc, or the title plaque). */
+  leaving?(): void;
+  /**
+   * How far the camera has moved (table units) and turned (radians; yaw: + right,
+   * pitch: + up) from the overview to lean in over a plaque, so the scene behind
+   * can move with it.
+   */
+  view?(move: THREE.Vector3, yaw: number, pitch: number): void;
 }
 
 type Option = [value: string, en: string, zh: string];
@@ -91,6 +99,19 @@ const LEVER_ON = -0.6; // radians: thrown right
 const LEVER_OFF = 0.6;
 const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
+// Hovering a plaque, the camera leans in over it: closer, and looking down more
+// steeply, so its options read clearly. FOCUS_CAM is the camera's offset from the
+// plaque then (the overview's is CAM - LOOK). It eases in and out at FOCUS_RATE, and
+// lingers FOCUS_HOLD_S after the pointer leaves, so crossing a gap between plaques
+// doesn't swing it back.
+const FOCUS_CAM = new THREE.Vector3(0, 5.6, 6.0);
+// Only part of the way: the camera moves this far toward that, and the view's centre
+// this far toward the plaque, so the table stays in frame (a front plaque centred
+// would show the water past the table's edge).
+const FOCUS_POS = 0.6;
+const FOCUS_LOOK = 0.5;
+const FOCUS_RATE = 3;
+const FOCUS_HOLD_S = 0.5;
 
 const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
 const easeOutBounce = (u: number) => {
@@ -116,6 +137,9 @@ export class SettingsDesk {
   private raf = 0;
   private panTween: { from: number; to: number; t0: number; done?: () => void } | null = null;
   private hovered: Plaque | null = null;
+  private focus = new THREE.Vector3(); // the plaque the camera leans in over, eased
+  private focusU = 0; // 0 = the overview, 1 = leaning in
+  private lastHover = -Infinity; // this.time when a plaque was last hovered
   private press: { plaque: Plaque | null; x: number; y: number; t: number; uv: THREE.Vector2 | null } | null = null;
 
   constructor(private hooks: DeskHooks) {
@@ -164,6 +188,8 @@ export class SettingsDesk {
     });
     this.state = 'opening';
     this.panU = 0;
+    this.focusU = 0;
+    this.lastHover = -Infinity;
     this.panTween = { from: 0, to: 1, t0: 0, done: () => (this.state = 'idle') };
     this.last = performance.now();
     cancelAnimationFrame(this.raf);
@@ -203,6 +229,7 @@ export class SettingsDesk {
         this.hide();
       },
     };
+    this.hooks.leaving?.();
   }
 
   // ---- Scene ------------------------------------------------------------
@@ -494,7 +521,23 @@ export class SettingsDesk {
     const fit = Math.max(1, BASE_ASPECT / this.camera.aspect);
     const lift = (1 - this.panU) * RISE;
     this.camera.position.set(CAM.x * fit, CAM.y * fit + lift, LOOK.z + (CAM.z - LOOK.z) * fit);
-    this.camera.lookAt(LOOK.x, LOOK.y + lift, LOOK.z);
+    const look = new THREE.Vector3(LOOK.x, LOOK.y + lift, LOOK.z);
+    let yaw = 0;
+    let pitch = 0;
+    const from = this.camera.position.clone();
+    if (this.focusU > 0) {
+      // Lean in over the hovered plaque.
+      const base = look.clone().sub(this.camera.position).normalize();
+      const e = easeInOut(this.focusU);
+      const at = new THREE.Vector3(this.focus.x, this.focus.y + lift, this.focus.z);
+      this.camera.position.lerp(at.clone().addScaledVector(FOCUS_CAM, fit), e * FOCUS_POS);
+      look.lerp(at, e * FOCUS_LOOK);
+      const dir = look.clone().sub(this.camera.position).normalize();
+      yaw = Math.atan2(dir.x, -dir.z) - Math.atan2(base.x, -base.z);
+      pitch = Math.asin(dir.y) - Math.asin(base.y);
+    }
+    this.hooks.view?.(this.camera.position.clone().sub(from), yaw, pitch);
+    this.camera.lookAt(look);
     this.camera.updateMatrixWorld();
     const back = new THREE.Vector3(0, 0, TABLE.z0 + SHADOW_Z).project(this.camera);
     this.hooks.pan(this.panU, ((1 - back.y) / 2) * window.innerHeight);
@@ -528,8 +571,24 @@ export class SettingsDesk {
       if (p.slider) p.slider.position.x += (p.sliderX - p.slider.position.x) * k;
       if (p.lever) p.lever.rotation.z += (p.leverA - p.lever.rotation.z) * k;
     }
+    this.updateFocus(dt);
     this.placeCamera();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Eases the camera's lean toward the hovered plaque (only on the settled table), and back out. */
+  private updateFocus(dt: number) {
+    const idle = this.state === 'idle';
+    if (idle && this.hovered) {
+      this.lastHover = this.time;
+      const h = this.hovered.home;
+      // Straight there from the overview; sliding across when moving between plaques.
+      if (this.focusU < 0.01) this.focus.copy(h);
+      else this.focus.lerp(h, 1 - Math.exp(-dt * FOCUS_RATE * 1.5));
+    }
+    const want = idle && this.time - this.lastHover < FOCUS_HOLD_S ? 1 : 0;
+    this.focusU += (want - this.focusU) * (1 - Math.exp(-dt * FOCUS_RATE));
+    if (this.focusU < 0.001) this.focusU = 0;
   }
 
   // ---- Pointer ----------------------------------------------------------

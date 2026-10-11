@@ -2610,7 +2610,19 @@ button:disabled {
   padding: 16px;
 }
 
+/* The scene behind blurs and darkens as the tank comes up (--aq-bg: 0..1, set by aquarium.ts). */
+#aquarium::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.45);
+  backdrop-filter: blur(8px);
+  opacity: var(--aq-bg, 0);
+  pointer-events: none;
+}
+
 .aq-stage {
+  position: relative; /* above the blurred backdrop */
   width: min(1100px, 100%, calc((100vh - 120px) * 1.75));
   display: flex;
   flex-direction: column;
