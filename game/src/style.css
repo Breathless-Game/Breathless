@@ -3464,3 +3464,10 @@ button:disabled {
 .wb-path.on small {
   color: var(--hold);
 }
+/* Ship mode (the boat): the intro is a paragraph, not a one-line effect. */
+#wb-inspect.ships #wb-inspect-effect {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--muted);
+}
