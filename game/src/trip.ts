@@ -1,6 +1,7 @@
 import type { BreathState } from './breath';
 import { fishValue, RARITY, RARITY_ORDER, type FishSpec, type Rarity } from './fish';
 import type { DiveRecord } from './health';
+import { t } from './i18n';
 import { MAPS, type MapId } from './maps';
 import { compute } from './report';
 import { storageKey } from './wallet';
@@ -197,14 +198,14 @@ export function rarityCounts(r: TripRecord): [Rarity, number][] {
 export function healthLines(r: TripRecord): [string, string][] {
   const n = (v: number | null, unit: string, d = 0) => (v == null ? '—' : `${v.toFixed(d)} ${unit}`);
   return [
-    ['Average heart rate · 平均心率', r.heart ? `${Math.round(r.heart.avg)} bpm` : '—'],
-    ['Heart rate range · 心率范围', r.heart ? `${Math.round(r.heart.min)}–${Math.round(r.heart.peak)} bpm` : '—'],
-    ['Breathing rate · 呼吸频率', n(r.breathRate, 'br/min')],
-    ['Resting pulse · 静息心率', n(r.restPulse, 'bpm')],
-    ['Dive reflex · 潜水反射', r.reflexPct == null ? '—' : `−${r.reflexPct.toFixed(0)}%`],
-    ['Recovery · 恢复时间', n(r.recoveryS, 's')],
-    ['Longest hold · 最长屏息', secs(r.longestHoldMs)],
-    ['Average hold · 平均屏息', secs(r.avgHoldMs)],
+    [t('Average heart rate', '平均心率'), r.heart ? `${Math.round(r.heart.avg)} bpm` : '—'],
+    [t('Heart rate range', '心率范围'), r.heart ? `${Math.round(r.heart.min)}–${Math.round(r.heart.peak)} bpm` : '—'],
+    [t('Breathing rate', '呼吸频率'), n(r.breathRate, 'br/min')],
+    [t('Resting pulse', '静息心率'), n(r.restPulse, 'bpm')],
+    [t('Dive reflex', '潜水反射'), r.reflexPct == null ? '—' : `−${r.reflexPct.toFixed(0)}%`],
+    [t('Recovery', '恢复时间'), n(r.recoveryS, 's')],
+    [t('Longest hold', '最长屏息'), secs(r.longestHoldMs)],
+    [t('Average hold', '平均屏息'), secs(r.avgHoldMs)],
   ];
 }
 
@@ -252,10 +253,10 @@ export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null,
     c.fillStyle = ink;
     c.font = '800 64px Inter, system-ui, sans-serif';
     c.textAlign = 'center';
-    c.fillText('No trips yet · 还没有记录', W / 2, H / 2 - 20);
+    c.fillText(t('No trips yet', '还没有记录'), W / 2, H / 2 - 20);
     c.font = '500 36px Inter, system-ui, sans-serif';
     c.fillStyle = soft;
-    c.fillText('Dive, then come back to the main menu: the trip report lands here.', W / 2, H / 2 + 50);
+    c.fillText(t('Dive, then come back to the main menu: the trip report lands here.', '下潜一趟再回到主菜单，本次报告会放在这里。'), W / 2, H / 2 + 50);
 
     return;
   }
@@ -263,7 +264,7 @@ export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null,
   const L = 70;
   c.fillStyle = soft;
   c.font = '700 30px Inter, system-ui, sans-serif';
-  c.fillText(`TRIP REPORT · 本次报告 · ${tripDate(r)}`, L, 92);
+  c.fillText(`${t('TRIP REPORT', '本次报告')} · ${tripDate(r)}`, L, 92);
   c.fillStyle = ink;
   c.font = '900 64px Inter, system-ui, sans-serif';
   c.fillText(mapNames(r), L, 160);
@@ -304,19 +305,19 @@ export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null,
     c.lineTo(x + w, y + 12);
     c.stroke();
   };
-  const head = (x: number, y: number, t: string) => {
+  const head = (x: number, y: number, text: string) => {
     c.textAlign = 'left';
     c.fillStyle = '#8a5a2a';
     c.font = '800 28px Inter, system-ui, sans-serif';
-    c.fillText(t, x, y);
+    c.fillText(text, x, y);
   };
   const colW = 560;
   let y = 240;
-  head(L, y, 'CATCH · 渔获');
+  head(L, y, t('CATCH', '渔获'));
   y += 50;
-  line(L, y, colW, 'Caught · 捕获', String(r.caught.length));
+  line(L, y, colW, t('Caught', '捕获'), String(r.caught.length));
   y += 48;
-  line(L, y, colW, 'Banked · 入库', String(r.banked));
+  line(L, y, colW, t('Banked', '入库'), String(r.banked));
   y += 48;
   const counts = rarityCounts(r);
   c.font = '700 26px Inter, system-ui, sans-serif';
@@ -335,20 +336,20 @@ export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null,
     cx += w + 12;
   }
   y += 64;
-  head(L, y, 'DIVES · 下潜');
+  head(L, y, t('DIVES', '下潜'));
   y += 50;
-  line(L, y, colW, 'Dives · 次数', String(r.dives));
+  line(L, y, colW, t('Dives', '次数'), String(r.dives));
   y += 48;
-  line(L, y, colW, 'Deepest · 最深', `${Math.round(r.deepest)} m`);
+  line(L, y, colW, t('Deepest', '最深'), `${Math.round(r.deepest)} m`);
   y += 48;
-  line(L, y, colW, 'Longest hold · 最长屏息', secs(r.longestHoldMs));
+  line(L, y, colW, t('Longest hold', '最长屏息'), secs(r.longestHoldMs));
   y += 48;
-  line(L, y, colW, 'Blackouts · 昏厥', String(r.blackouts));
+  line(L, y, colW, t('Blackouts', '昏厥'), String(r.blackouts));
 
   const R = L + colW + 90;
   const rw = W - R - 70;
   let ry = 240;
-  head(R, ry, 'HEALTH · 健康指标');
+  head(R, ry, t('HEALTH', '健康指标'));
   ry += 50;
   for (const [k, v] of healthLines(r).slice(0, 6)) {
     line(R, ry, rw, k, v);
@@ -363,7 +364,7 @@ export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null,
     c.textAlign = 'center';
     c.fillStyle = soft;
     c.font = '600 26px Inter, system-ui, sans-serif';
-    c.fillText('No sensor this trip · 无传感器数据', R + rw / 2, gy + (H - gy - 70) / 2);
+    c.fillText(t('No sensor this trip', '无传感器数据'), R + rw / 2, gy + (H - gy - 70) / 2);
   }
 }
 

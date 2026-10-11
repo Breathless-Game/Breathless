@@ -2,15 +2,17 @@ import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { fishIcon } from './portrait';
-import { totalPearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
+import { t, onLangChange } from './i18n';
+import { spendablePearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const SOURCE_LABEL = {
-  presage: 'Presage · live camera',
-  sim: 'Simulator · hold Shift',
-  keyboard: 'Keyboard · hold Shift',
-};
+const sourceLabel = (mode: 'presage' | 'sim' | 'keyboard') =>
+  ({
+    presage: t('Presage · live camera', 'Presage · 实时摄像头'),
+    sim: t('Simulator · hold Shift', '模拟器 · 按住 Shift'),
+    keyboard: t('Keyboard · hold Shift', '键盘 · 按住 Shift'),
+  })[mode];
 
 // ---- depth gauge: the sea has no bottom, so the bar uses a compressive scale ----
 /** Depth (m) that lands at the middle of the bar. */
@@ -64,8 +66,26 @@ export class Hud {
   private toasts = $('toasts');
   private msgTimer = 0;
 
+  // Last inputs, replayed when the language changes.
+  private lastBreath: { s: BreathState; danger: boolean } | null = null;
+  private lastZones: Parameters<Hud['setZones']> | null = null;
+  private lastBank: FishSpec[] | null = null;
+  private lastEquip: [EquipmentState, RodTier] | null = null;
+  private lastGear: [EquipmentSlot, boolean] | null = null;
+  private lastSharks: Parameters<Hud['setSharks']>[0] = null;
+  private lastBest = 0;
+
   constructor() {
     this.buildDepthTicks();
+    onLangChange(() => {
+      if (this.lastBreath) this.setBreath(this.lastBreath.s, this.lastBreath.danger);
+      if (this.lastZones) this.setZones(...this.lastZones);
+      if (this.lastBank) this.setBank(this.lastBank);
+      if (this.lastEquip) this.setEquipment(...this.lastEquip);
+      if (this.lastGear) this.setActiveGear(...this.lastGear);
+      if (this.lastSharks) this.setSharks(this.lastSharks);
+      if (this.lastBest) this.depthBestLabel.textContent = t(`best ${this.lastBest} m`, `最深 ${this.lastBest} m`);
+    });
   }
 
   /** Tick marks (right of the bar), placed with the same scale as the marker. */
@@ -92,13 +112,14 @@ export class Hud {
     shelfM: number,
     water: readonly (readonly [number, string])[],
   ) {
+    this.lastZones = [zones, shelfM, water];
     const gauge = this.depthGauge;
     gauge.querySelectorAll('.zone').forEach((el) => el.remove());
     const stops = water.map(([d, c]) => `${c} ${(depthPos(d) * 100).toFixed(1)}%`);
     gauge.style.background = `linear-gradient(${[...stops, '#000408'].join(', ')})`;
     const bands = [
       ...zones.map((z, i) => ({ ...z, cls: ZONE_TINT[i] ?? '' })),
-      { label: 'Trench', top: shelfM, bottom: Infinity, cls: 'trench' },
+      { label: t('Trench', '海沟'), top: shelfM, bottom: Infinity, cls: 'trench' },
     ];
     const frag = document.createDocumentFragment();
     for (const b of bands) {
@@ -122,8 +143,9 @@ export class Hud {
   }
 
   setBreath(s: BreathState, danger: boolean) {
+    this.lastBreath = { s, danger };
     const holding = s.holding;
-    this.chip.textContent = danger ? 'OUT OF AIR' : holding ? 'HOLDING' : 'BREATHING';
+    this.chip.textContent = danger ? t('OUT OF AIR', '缺氧') : holding ? t('HOLDING', '屏息中') : t('BREATHING', '呼吸中');
     this.chip.className = `chip ${danger ? 'danger' : holding ? 'holding' : 'breathing'}`;
     this.holdTime.textContent = `${(s.holdMs / 1000).toFixed(1)}s`;
     // Toggled, not assigned: the camera bubble also carries `.off` (Settings → camera preview).
@@ -131,15 +153,15 @@ export class Hud {
     this.camWrap.classList.toggle('holding', holding && !danger);
     this.source.textContent =
       s.mode === 'presage' && !s.connected
-        ? 'Presage · sensor offline'
+        ? t('Presage · sensor offline', 'Presage · 传感器离线')
         : s.label
-          ? 'Presage · ⏺ marking your hold'
-          : SOURCE_LABEL[s.mode];
+          ? t('Presage · ⏺ marking your hold', 'Presage · ⏺ 正在标记你的屏息')
+          : sourceLabel(s.mode);
     const parts = [];
-    if (s.rate != null && s.mode === 'presage') parts.push(`${Math.round(s.rate)} br/min`);
+    if (s.rate != null && s.mode === 'presage') parts.push(`${Math.round(s.rate)} ${t('br/min', '次/分')}`);
     if (s.pulse != null && s.mode === 'presage') parts.push(`♥ ${Math.round(s.pulse)}`);
     this.vitals.textContent = parts.join(' · ');
-    this.hint.textContent = s.mode === 'presage' ? s.hint || (s.calibrated ? '' : 'Calibrating: breathe normally') : s.error;
+    this.hint.textContent = s.mode === 'presage' ? s.hint || (s.calibrated ? '' : t('Calibrating: breathe normally', '校准中：请正常呼吸')) : s.error;
     this.drawTrace(s.trace, holding, danger);
   }
 
@@ -188,7 +210,8 @@ export class Hud {
       if (d >= BEST_MIN_M) {
         this.depthBest.classList.remove('hidden');
         this.depthBest.style.top = `${pos * 100}%`;
-        const best = `best ${d.toFixed(0)} m`;
+        this.lastBest = Math.round(d);
+        const best = t(`best ${d.toFixed(0)} m`, `最深 ${d.toFixed(0)} m`);
         if (this.depthBestLabel.textContent !== best) this.depthBestLabel.textContent = best;
       }
     }
@@ -239,15 +262,26 @@ export class Hud {
    * and how worked up they are, 0..1. Null hides it.
    */
   setSharks(state: { count: number; bpm: number; estimated: boolean; intensity: number } | null) {
+    this.lastSharks = state;
     this.shark.classList.toggle('hidden', state == null);
     if (!state) return;
-    this.sharkLabel.textContent = state.count > 1 ? `${state.count} SHARKS` : state.count ? 'SHARK' : 'SHARK WATERS';
+    this.sharkLabel.textContent =
+      state.count > 1 ? t(`${state.count} SHARKS`, `${state.count} 条鲨鱼`) : state.count ? t('SHARK', '鲨鱼') : t('SHARK WATERS', '鲨鱼海域');
     this.sharkPulse.textContent = `♥ ${state.estimated ? '~' : ''}${Math.round(state.bpm)}`;
     this.sharkFill.style.width = `${Math.round(Math.max(0.04, state.intensity) * 100)}%`;
   }
 
-  message(text: string, ms = 1800) {
+  /** A centered message; `link` adds a small clickable link under it (e.g. a devnet explorer tx). */
+  message(text: string, ms = 1800, link?: { href: string; label: string }) {
     this.centerMsg.textContent = text;
+    if (link) {
+      const a = document.createElement('a');
+      a.href = link.href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = link.label;
+      this.centerMsg.append(document.createElement('br'), a);
+    }
     this.centerMsg.classList.add('show');
     clearTimeout(this.msgTimer);
     this.msgTimer = window.setTimeout(() => this.centerMsg.classList.remove('show'), ms);
@@ -260,8 +294,8 @@ export class Hud {
   private bagCount = '';
 
   /** Redraws the gear row only when the equipped slot or what's packed changed. */
-  setHotbar(slots: readonly { slot: EquipmentSlot; label: string; icon: string }[], active: EquipmentSlot, packed: (slot: EquipmentSlot) => boolean) {
-    const key = active + slots.map((s) => (packed(s.slot) ? 1 : 0)).join('');
+  setHotbar(slots: readonly { slot: EquipmentSlot; en: string; zh: string; icon: string }[], active: EquipmentSlot, packed: (slot: EquipmentSlot) => boolean) {
+    const key = t('en', 'zh') + active + slots.map((s) => (packed(s.slot) ? 1 : 0)).join('');
     if (key === this.hotbarKey) return;
     this.hotbarKey = key;
     $('hotbar-gear').replaceChildren(
@@ -278,7 +312,7 @@ export class Hud {
         icon.textContent = s.icon;
         const label = document.createElement('span');
         label.className = 'hotbar-label';
-        label.textContent = s.label;
+        label.textContent = t(s.en, s.zh);
         cell.append(num, icon, label);
         return cell;
       }),
@@ -316,35 +350,41 @@ export class Hud {
   }
 
   setBank(bank: FishSpec[]) {
-    this.bankCount.textContent = `${bank.length} fish`;
+    this.lastBank = bank;
+    this.bankCount.textContent = t(`${bank.length} fish`, `${bank.length} 条鱼`);
     const best = bank.reduce<FishSpec | null>(
       (a, f) => (!a || fishValue(f) > fishValue(a) ? f : a),
       null,
     );
     this.bankValue.textContent = best
-      ? `best: ${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} pts`
-      : 'surface to bank your net';
+      ? t(`best: ${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} pts`, `最佳：${RARITY[best.rarity].label} ${best.species} · ${fishValue(best)} 分`)
+      : t('surface to bank your net', '浮出水面以存入渔获');
   }
 
   setEquipment(state: EquipmentState, tier: RodTier) {
-    this.gearSummary.textContent = `NET Lv${tier.level} · 杆身 ${state.rodGearLevel} · 线轮 ${state.reelLevel} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${totalPearls(state)} ◇`;
+    this.lastEquip = [state, tier];
+    this.gearSummary.textContent = t(
+      `NET Lv${tier.level} · Rod ${state.rodGearLevel} · Reel ${state.reelLevel} · Fins ${state.finsLevel} · Tank ${state.tankLevel} · Lamp ${state.lampLevel} · ${spendablePearls(state)} ◇`,
+      `渔网 Lv${tier.level} · 杆身 ${state.rodGearLevel} · 线轮 ${state.reelLevel} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${spendablePearls(state)} ◇`,
+    );
   }
 
   /** Show the currently selected quick slot beside the net inventory. */
   setActiveGear(slot: EquipmentSlot, packed = true) {
+    this.lastGear = [slot, packed];
     const labels: Record<EquipmentSlot, string> = {
-      net: '捕捞网',
-      rod: '杆身',
-      reel: '线轮',
-      fins: '脚蹼',
-      tank: '应急气瓶',
-      lamp: '探照灯',
+      net: t('Net', '捕捞网'),
+      rod: t('Rod', '杆身'),
+      reel: t('Reel', '线轮'),
+      fins: t('Fins', '脚蹼'),
+      tank: t('Emergency tank', '应急气瓶'),
+      lamp: t('Lamp', '探照灯'),
     };
     const keys: Record<EquipmentSlot, number> = { net: 1, rod: 2, reel: 3, fins: 4, tank: 5, lamp: 6 };
     this.activeGear.classList.toggle('unavailable', !packed);
     this.activeNumber.textContent = String(keys[slot]);
-    this.activeGearLabel.textContent = packed ? labels[slot] : `${labels[slot]} · 未装配`;
-    this.activeGearHint.textContent = `按 ${keys[slot]} 快速切换 · Tab 轮盘`;
+    this.activeGearLabel.textContent = packed ? labels[slot] : `${labels[slot]} · ${t('not equipped', '未装配')}`;
+    this.activeGearHint.textContent = t(`Press ${keys[slot]} to switch · Tab wheel`, `按 ${keys[slot]} 快速切换 · Tab 轮盘`);
   }
 
   toast(spec: FishSpec & Numbered, title?: string) {
@@ -356,13 +396,13 @@ export class Hud {
     el.innerHTML = `<img alt=""><div><div class="r">${title ?? r.label.toUpperCase()}</div><div class="n"></div></div>`;
     el.querySelector('img')!.src = fishIcon(spec);
     const n = el.querySelector('.n')!;
-    n.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
+    n.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} ${t('pts', '分')}`;
     // A minted fish (e.g. the SOLD toast) carries its number, dimmed after the name.
     if (isSerial(spec.serial)) {
       const tag = document.createElement('span');
       tag.className = 'serial';
       tag.textContent = formatSerial(spec.serial);
-      n.replaceChildren(spec.name, ' ', tag, ` · ${spec.weightKg} kg · ${fishValue(spec)} pts`);
+      n.replaceChildren(spec.name, ' ', tag, ` · ${spec.weightKg} kg · ${fishValue(spec)} ${t('pts', '分')}`);
     }
     this.toasts.prepend(el);
     setTimeout(() => el.remove(), 3100);

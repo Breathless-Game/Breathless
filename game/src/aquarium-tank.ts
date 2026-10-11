@@ -45,6 +45,7 @@ interface Swimmer {
   speed: number;
   phase: number;
   grow: number; // 0..1: fading in (scaling up) or out
+  pulse: number; // 1 → 0 after it's fed: a quick swell
   leaving: boolean;
   emissive: THREE.Color; // its own glow, to go back to after a highlight
   emissiveIntensity: number;
@@ -54,6 +55,30 @@ interface Bubble {
   mesh: THREE.Mesh;
   v: number;
 }
+
+/** How feeding has changed a fish in the aquarium (aquarium-state.ts): only how it looks and swims here. */
+export interface FishLook {
+  /** Length multiplier from growth (1 = as caught). */
+  scale: number;
+  /** 0.. how strongly it glows (some foods). */
+  glow: number;
+  /** Swim speed multiplier. */
+  speed: number;
+}
+
+/** Food poured in: flakes sink from the surface, and the school crowds round them. */
+interface Food {
+  flakes: { mesh: THREE.Mesh; v: number; wobble: number }[];
+  at: THREE.Vector3; // where the school gathers (follows the sinking flakes)
+  life: number;
+}
+
+const FOOD_S = 4.2;
+const VIEW_RATE = 4.5;
+// The top view: the camera above the tank looking down through the water (a hair off
+// vertical, so "up" on screen stays the back of the tank).
+const TOP_CAM = new THREE.Vector3(0, 10.5, TANK.z + 0.9);
+const TOP_LOOK = new THREE.Vector3(0, 0.6, TANK.z);
 
 export class TankTable extends TableScene {
   private tank = new THREE.Group();
@@ -69,12 +94,22 @@ export class TankTable extends TableScene {
   private slosh = 0;
   private hovered: Swimmer | null = null;
   private picked: Swimmer | null = null;
+  private lamp = new THREE.PointLight('#9fe8ff', 2.2, 6, 1.6);
+  private food: Food | null = null;
+  private foodGeo = new THREE.DodecahedronGeometry(0.035, 0);
+  private foodMat = new THREE.MeshStandardMaterial({ color: '#e0b25a', roughness: 0.8, flatShading: true });
+  private view = 0; // 0 front, 1 top
+  private viewTarget = 0;
+  private frontCam = new THREE.Vector3(0, 3.7, 9.8);
+  private frontLook = new THREE.Vector3(0, 1.35, 0);
+  /** How feeding has changed a fish (set by aquarium.ts); defaults to as caught. */
+  look: (f: BankedFish) => FishLook = () => ({ scale: 1, glow: 0, speed: 1 });
 
   constructor(hooks: TableHooks) {
     super('aquarium-table', hooks);
     // Lower than the workbench's view and more head-on: you look into the tank through its front glass.
-    this.camAt.set(0, 3.7, 9.8);
-    this.lookAt.set(0, 1.35, 0);
+    this.camAt.copy(this.frontCam);
+    this.lookAt.copy(this.frontLook);
     this.water = new THREE.Mesh();
     this.surface = new THREE.Mesh();
     this.buildTank();
@@ -120,6 +155,61 @@ export class TankTable extends TableScene {
     for (const s of this.swimmers.values()) this.dispose(s);
     this.swimmers.clear();
     this.picked = this.hovered = null;
+  }
+
+  /** The ambience light (the bar's colour picker): the lamp inside, and a tint in the water. */
+  setLight(hex: string) {
+    const c = new THREE.Color(hex);
+    this.lamp.color.copy(c);
+    (this.water.material as THREE.MeshStandardMaterial).color.copy(new THREE.Color('#2a8fb8').lerp(c, 0.45));
+  }
+
+  /** Looking down into the tank from above (a double-click), or back at its front. */
+  setTopView(on: boolean) {
+    this.viewTarget = on ? 1 : 0;
+  }
+
+  get topView() {
+    return this.viewTarget > 0.5;
+  }
+
+  /** Food poured in: it sinks from the surface, and every fish rushes over to it, bubbling. */
+  pourFood() {
+    this.clearFood();
+    const top = BASE_H + TANK.h * WATER;
+    const at = new THREE.Vector3((Math.random() - 0.5) * TANK.w * 0.3, top - 0.1, TANK.d * 0.05);
+    const flakes = Array.from({ length: 14 }, () => {
+      const mesh = new THREE.Mesh(this.foodGeo, this.foodMat);
+      mesh.position.set(at.x + (Math.random() - 0.5) * 0.7, top - 0.02, at.z + (Math.random() - 0.5) * 0.5);
+      mesh.rotation.set(Math.random() * 6, Math.random() * 6, 0);
+      this.tank.add(mesh);
+      return { mesh, v: 0.18 + Math.random() * 0.14, wobble: Math.random() * 6 };
+    });
+    this.food = { flakes, at, life: FOOD_S };
+    for (const s of this.swimmers.values()) {
+      if (s.leaving) continue;
+      s.target.set(at.x + (Math.random() - 0.5) * 0.6, at.y - 0.25 - Math.random() * 0.3, at.z + (Math.random() - 0.5) * 0.5);
+      for (let i = 0; i < 3; i++) this.addBubble(s.pos.x + (Math.random() - 0.5) * 0.2, s.pos.y, s.pos.z, 0.7 + Math.random() * 0.4);
+    }
+  }
+
+  /** It just grew (fed): a quick swell. */
+  pulse(f: BankedFish) {
+    const s = this.swimmers.get(f);
+    if (s) s.pulse = 1;
+  }
+
+  private clearFood() {
+    for (const f of this.food?.flakes ?? []) this.tank.remove(f.mesh);
+    this.food = null;
+  }
+
+  private addBubble(x: number, y: number, z: number, v: number) {
+    const mesh = new THREE.Mesh(this.bubbleGeo, this.bubbleMat);
+    mesh.position.set(x, y, z);
+    mesh.scale.setScalar(0.6 + Math.random());
+    this.tank.add(mesh);
+    this.bubbles.push({ mesh, v });
   }
 
   /** The fish under the pointer, or null. */
@@ -193,11 +283,32 @@ export class TankTable extends TableScene {
 
   protected onHide() {
     this.clearFish();
+    this.clearFood();
     this.tank.visible = false;
+    this.view = this.viewTarget = 0;
   }
 
   protected onFrame(dt: number) {
     this.updateDrop(dt);
+    // Front view ↔ top view, eased.
+    this.view += (this.viewTarget - this.view) * Math.min(1, dt * VIEW_RATE);
+    const v = this.view * this.view * (3 - 2 * this.view);
+    this.camAt.lerpVectors(this.frontCam, TOP_CAM, v);
+    this.lookAt.lerpVectors(this.frontLook, TOP_LOOK, v);
+    // Food sinks, rocking, and is eaten away.
+    const food = this.food;
+    if (food) {
+      food.life -= dt;
+      const floor = BASE_H + SAND_H + 0.05;
+      for (const f of food.flakes) {
+        f.mesh.position.y = Math.max(floor, f.mesh.position.y - f.v * dt);
+        f.mesh.position.x += Math.sin(this.time * 2 + f.wobble) * dt * 0.08;
+        f.mesh.rotation.x += dt * 1.5;
+        f.mesh.scale.setScalar(Math.max(0.01, Math.min(1, food.life / 1.2)));
+      }
+      food.at.y = Math.max(SWIM.y0 + 0.3, food.at.y - dt * 0.25);
+      if (food.life <= 0) this.clearFood();
+    }
     for (const s of [...this.swimmers.values()]) {
       this.swim(s, dt);
       if (s.leaving && s.grow === 0) {
@@ -317,9 +428,8 @@ export class TankTable extends TableScene {
     }
     for (const x of [-TANK.w / 2, TANK.w / 2]) for (const z of [-TANK.d / 2, TANK.d / 2]) bar(e, TANK.h, e, x, cy, z);
     // A glow inside, so the water reads as lit.
-    const lamp = new THREE.PointLight('#9fe8ff', 2.2, 6, 1.6);
-    lamp.position.set(0, BASE_H + TANK.h * 0.95, 0);
-    t.add(lamp);
+    this.lamp.position.set(0, BASE_H + TANK.h * 0.95, 0);
+    t.add(this.lamp);
     t.position.z = TANK.z;
   }
 
@@ -352,6 +462,7 @@ export class TankTable extends TableScene {
       speed: 0.35 + RARITY[fish.rarity].speed * 0.08,
       phase: Math.random() * Math.PI * 2,
       grow: 0,
+      pulse: 0,
       leaving: false,
       emissive: mesh.material.emissive.clone(),
       emissiveIntensity: mesh.material.emissiveIntensity,
@@ -359,18 +470,29 @@ export class TankTable extends TableScene {
   }
 
   private swim(s: Swimmer, dt: number) {
+    const look = this.look(s.fish);
     if (s.pos.distanceTo(s.target) < 0.25) {
-      // Mostly along the tank, drifting up and down and toward and away from the glass.
-      s.target.set(
-        clamp(s.pos.x + (Math.random() - 0.5) * 4, SWIM.x0, SWIM.x1),
-        clamp(s.pos.y + (Math.random() - 0.5) * 0.8, SWIM.y0, SWIM.y1),
-        clamp(s.pos.z + (Math.random() - 0.5) * 1.2, SWIM.z0, SWIM.z1),
-      );
+      const f = this.food;
+      if (f && !s.leaving) {
+        // Food in the water: keep circling it, so the whole school visibly competes.
+        s.target.set(
+          clamp(f.at.x + (Math.random() - 0.5) * 0.7, SWIM.x0, SWIM.x1),
+          clamp(f.at.y - 0.15 - Math.random() * 0.35, SWIM.y0, SWIM.y1),
+          clamp(f.at.z + (Math.random() - 0.5) * 0.6, SWIM.z0, SWIM.z1),
+        );
+      } else {
+        // Mostly along the tank, drifting up and down and toward and away from the glass.
+        s.target.set(
+          clamp(s.pos.x + (Math.random() - 0.5) * 4, SWIM.x0, SWIM.x1),
+          clamp(s.pos.y + (Math.random() - 0.5) * 0.8, SWIM.y0, SWIM.y1),
+          clamp(s.pos.z + (Math.random() - 0.5) * 1.2, SWIM.z0, SWIM.z1),
+        );
+      }
     }
     const to = s.target.clone().sub(s.pos);
     const d = to.length() || 1;
-    // The fish you're looking at idles where it is.
-    const speed = s === this.picked ? s.speed * 0.12 : s.speed;
+    // The fish you're looking at idles where it is; food makes the rest hurry.
+    const speed = (s === this.picked ? s.speed * 0.12 : s.speed * (this.food ? 1.8 : 1)) * look.speed;
     const k = Math.min(1, dt * 1.4);
     s.vel.x += ((to.x / d) * speed - s.vel.x) * k;
     s.vel.y += ((to.y / d) * speed * 0.5 - s.vel.y) * k;
@@ -390,9 +512,13 @@ export class TankTable extends TableScene {
     s.holder.rotation.set(0, s.heading, clamp(s.vel.y * 1.2, -0.35, 0.35));
     s.mesh.tail.rotation.y = Math.sin(this.time * (6 + flat * 8) + s.phase) * 0.35;
     s.grow = clamp(s.grow + (s.leaving ? -dt * 2.5 : dt * 1.8), 0, 1);
-    s.holder.scale.setScalar(s.grow);
-    // Hovered or picked: it glows in its rarity's colour.
-    const lit = s === this.picked ? 0.55 : s === this.hovered ? 0.3 : 0;
+    s.pulse = Math.max(0, s.pulse - dt * 1.8);
+    // Grown by feeding (its length, on the same log scale as at spawn), and swelling just after.
+    const size = clamp(Math.log(Math.max(s.fish.lengthCm * look.scale, 1) / 15) / Math.log(10), 0, 1);
+    const len = lerp(FISH_LEN[0], FISH_LEN[1], size);
+    s.holder.scale.setScalar(s.grow * (len / s.len) * (1 + Math.sin((1 - s.pulse) * Math.PI) * s.pulse * 0.25));
+    // Hovered or picked: it glows in its rarity's colour; some foods leave a glow of their own.
+    const lit = s === this.picked ? 0.55 : s === this.hovered ? 0.3 : Math.min(0.6, look.glow * 0.5);
     const m = s.mesh.material;
     if (lit) {
       m.emissive.set(RARITY[s.fish.rarity].color);

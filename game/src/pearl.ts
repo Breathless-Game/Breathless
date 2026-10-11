@@ -15,8 +15,25 @@
 // Either way the owner (wallet.ts) signs and pays the fees.
 
 // Already loaded by main.ts; only the chain libraries below are lazy.
-import { storageKey } from './wallet';
+import { storageKey, walletState } from './wallet';
 import { sellBatches } from './market';
+import { markBalanceStale, readBalances } from './balance-api';
+import {
+  addPending,
+  createPurchaseStore,
+  neverBroadcast,
+  paymentLock,
+  PaymentPendingError,
+  PENDING_PURCHASES,
+  takePending,
+  TxFailedError,
+  waitForSignature,
+  reconcilePending,
+  type PendingPurchase,
+  type ReconcileReport,
+  type SigVerdict,
+  type StatusDeps,
+} from './payment-safety';
 
 export type SellStep = 'verify' | 'sign' | 'confirm';
 /** What a sale of several fish is doing: the step, how many fish it is at, and (at 'sign') how many transactions the one prompt covers. */
@@ -57,6 +74,12 @@ export interface MarketInfo {
   ready?: boolean;
   /** Server mode: POST /quote-batch and /sell-batch exist (older servers sell one fish per request). */
   batch?: boolean;
+  /** Server mode: the Metaplex Core collection the market buys from (null until created). */
+  fishCollection?: string | null;
+  /** Server mode: POST /cosign-mint and /cosign-migrate exist. */
+  cosign?: boolean;
+  /** Server mode: per-owner mint rate and daily PEARL payout limits. */
+  limits?: { mintsPerHour: number; migrationsPerHour: number; dailyPearls: number };
 }
 type LiveInfo = MarketInfo & { pearlMint: string };
 
@@ -174,6 +197,12 @@ async function pearlAccount(info: LiveInfo) {
 
 /** PEARL held by the owner. 0 before the first sale (no token account yet). */
 export async function pearlBalance(): Promise<number> {
+  // The market reads it for us (one request, no chain code). Older servers lack /balance: read the chain.
+  const { owner, session } = walletState();
+  if (owner) {
+    const b = await readBalances(owner, session);
+    if (b) return b.pearl;
+  }
   const info = await marketInfo();
   if (!info.pearlMint) return 0;
   return (await pearlAccount(info as LiveInfo)).amount;
@@ -247,6 +276,7 @@ async function sellViaProgram(info: LiveInfo, assetId: string, onStep?: (s: Sell
     const [status] = await u.rpc.getSignatureStatuses([base58.serialize(prev.tx)], { searchTransactionHistory: true });
     if (status && !status.error) {
       setPending(assetId, null);
+      markBalanceStale();
       return { pearls: prev.pearls, tx: prev.tx };
     }
   }
@@ -275,10 +305,12 @@ async function sellViaProgram(info: LiveInfo, assetId: string, onStep?: (s: Sell
   setPending(assetId, { mode: 'program', tx: sig, pearls: quote.pearls });
 
   onStep?.('confirm');
-  const res = await u.rpc.confirmTransaction(sigBytes, {
-    commitment: 'confirmed',
-    strategy: { type: 'blockhash', blockhash: m.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight },
-  });
+  const res = await u.rpc
+    .confirmTransaction(sigBytes, {
+      commitment: 'confirmed',
+      strategy: { type: 'blockhash', blockhash: m.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight },
+    })
+    .finally(markBalanceStale); // the server did not pay this one, so its cached balance is old
   setPending(assetId, null);
   if (res.value.err) throw new Error(`Sale failed on-chain: ${JSON.stringify(res.value.err)}`);
   return { pearls: quote.pearls, tx: sig };
@@ -503,23 +535,101 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
   return assetIds.map((id) => done.get(id) ?? { assetId: id, error: 'Sale did not finish; try again' });
 }
 
-/** Spend PEARL by burning it from the owner's token account. Returns the tx signature. */
-export async function spendPearls(amount: number): Promise<string> {
+/**
+ * Spend PEARL by burning it from the owner's token account. Resolves with the tx signature only
+ * once the burn landed without error. One payment at a time (PaymentInProgressError otherwise).
+ *
+ * With `what` (a JSON-safe description of what the burn buys), the signed burn is recorded for this
+ * wallet before it is sent. If its confirmation is lost, it is looked up for a while; still unknown
+ * then, it throws PaymentPendingError and stays recorded: reconcilePurchases() settles it later.
+ */
+export async function spendPearls(amount: number, what?: unknown): Promise<string> {
   if (!Number.isSafeInteger(amount) || amount <= 0) {
     throw new Error(`spendPearls: amount must be a positive whole number, got ${amount}`);
   }
-  const info = await liveInfo();
-  const { u, signer, toolbox, umi, base58 } = await lib();
-  const { ata, amount: have } = await pearlAccount(info);
-  if (have < amount) throw new InsufficientPearlsError(have, amount);
-  // A plain SPL burn by the holder, sent to whichever token program owns the mint.
-  const [ix] = toolbox
-    .burnToken(u, { account: ata, mint: umi.publicKey(info.pearlMint), authority: signer, amount: BigInt(amount) })
-    .getInstructions();
-  const { signature } = await umi
-    .transactionBuilder()
-    .add({ instruction: { ...ix, programId: umi.publicKey(info.tokenProgram) }, signers: [signer], bytesCreatedOnChain: 0 })
-    .setFeePayer(signer)
-    .sendAndConfirm(u);
-  return base58.deserialize(signature)[0];
+  return paymentLock.run(async () => {
+    const info = await liveInfo();
+    const l = await lib();
+    const { u, signer, toolbox, umi, base58 } = l;
+    const { ata, amount: have } = await pearlAccount(info);
+    if (have < amount) throw new InsufficientPearlsError(have, amount);
+    // A plain SPL burn by the holder, sent to whichever token program owns the mint.
+    const [ix] = toolbox
+      .burnToken(u, { account: ata, mint: umi.publicKey(info.pearlMint), authority: signer, amount: BigInt(amount) })
+      .getInstructions();
+    const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
+    // Sign first (the wallet prompt; declining throws with nothing sent), so the signature is known before sending.
+    const tx = await umi
+      .transactionBuilder()
+      .add({ instruction: { ...ix, programId: umi.publicKey(info.tokenProgram) }, signers: [signer], bytesCreatedOnChain: 0 })
+      .setFeePayer(signer)
+      .setBlockhash(blockhash)
+      .buildAndSign(u);
+    const signature = base58.deserialize(tx.signatures[0])[0];
+    const record = what !== undefined;
+    if (record) addPending(purchases, { signature, what, cost: amount, ts: Date.now(), lastValid: blockhash.lastValidBlockHeight });
+    const forget = () => record && takePending(purchases, signature);
+
+    let verdict: SigVerdict;
+    let chainErr: unknown = `transaction ${signature} did not land`;
+    try {
+      try {
+        await u.rpc.sendTransaction(tx, { preflightCommitment: 'confirmed' });
+      } catch (e) {
+        if (neverBroadcast(e)) {
+          forget(); // refused in preflight: never broadcast, nothing burned
+          throw e;
+        }
+        console.warn(`PEARL burn ${signature}: send failed, looking it up`, e);
+      }
+      try {
+        const res = await u.rpc.confirmTransaction(tx.signatures[0], {
+          commitment: 'confirmed',
+          strategy: { type: 'blockhash', ...blockhash },
+        });
+        verdict = res.value.err ? 'failed' : 'ok';
+        if (res.value.err) chainErr = res.value.err;
+      } catch (e) {
+        // Timed out, blockhash expired or the network dropped: the burn may still land. Look it up.
+        console.warn(`PEARL burn ${signature}: confirmation lost, looking it up`, e);
+        verdict = await waitForSignature(signature, blockhash.lastValidBlockHeight, statusDeps(l));
+      }
+    } finally {
+      markBalanceStale(); // a burn the server never saw: the next balance read skips its cache
+    }
+    if (verdict === 'unknown') {
+      if (!record) throw new Error(`PEARL burn ${signature} is not confirmed yet`);
+      throw new PaymentPendingError(signature);
+    }
+    forget();
+    if (verdict === 'failed') {
+      console.error(`PEARL burn ${signature} failed: nothing was burned, nothing is delivered`, chainErr);
+      throw new TxFailedError('PEARL burn', chainErr);
+    }
+    return signature;
+  });
+}
+
+const purchases = createPurchaseStore(() => storageKey(PENDING_PURCHASES));
+
+function statusDeps(l: Lib): StatusDeps {
+  return {
+    statuses: async (sigs) =>
+      (await l.u.rpc.getSignatureStatuses(sigs.map((s) => l.base58.serialize(s)), { searchTransactionHistory: true })).map(
+        (st) => (st ? { error: st.error, commitment: st.commitment } : null),
+      ),
+    blockHeight: () => l.u.rpc.call<number>('getBlockHeight', [{ commitment: 'confirmed' }]),
+  };
+}
+
+/**
+ * Settle PEARL purchases this wallet recorded but never saw confirmed: each that landed is handed
+ * to `deliver` exactly once; failed or expired ones are dropped; unknown ones are kept. Skipped
+ * (all kept) while a payment is in flight.
+ */
+export async function reconcilePurchases(deliver: (rec: PendingPurchase) => void): Promise<ReconcileReport> {
+  const pendingNow = purchases.load();
+  if (!pendingNow.length) return { delivered: [], dropped: [], kept: [] };
+  if (paymentLock.busy) return { delivered: [], dropped: [], kept: pendingNow.map((r) => r.signature) };
+  return paymentLock.run(async () => reconcilePending(purchases, statusDeps(await lib()), deliver));
 }

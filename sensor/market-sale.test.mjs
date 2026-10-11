@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { HttpError, MAX_BATCH, MAX_BATCH_TXS, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
+import { HttpError, MAX_BATCH, MAX_BATCH_TXS, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, appraise, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
+
+// The desk's price gate without the collection check (fish-trust.test.mjs covers that): the on-chain value.
+const plainPrice = (asset) => {
+  const a = appraise(asset.attributes?.attributeList);
+  if (!a.ok) throw new HttpError(422, a.reason);
+  return a.pearls;
+};
 
 // Server mode's batch sale, driven with a fake chain: one transaction moving several fish, the
 // same transaction replayed, fish that are not in it, the wrong seller, and concurrent duplicates.
@@ -49,6 +56,7 @@ function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0 } = {}) {
   let fetches = 0;
   let paySeq = 0;
   const desk = createSaleDesk({
+    priceFish: plainPrice,
     ledger,
     market: MARKET,
     ensureMint: async () => 'PearlMint',
@@ -221,6 +229,7 @@ test('a payment that fails for one fish leaves the others paid, and a retry pays
   const ledger = m.ledger;
   const payments = [];
   const desk = createSaleDesk({
+    priceFish: plainPrice,
     ledger,
     market: MARKET,
     ensureMint: async () => 'PearlMint',
@@ -321,6 +330,7 @@ function pollingSetup({ txs = {}, owners = {}, lagPolls = 0 } = {}) {
   };
   const payments = [];
   const desk = createSaleDesk({
+    priceFish: plainPrice,
     ledger,
     market: MARKET,
     ensureMint: async () => 'PearlMint',

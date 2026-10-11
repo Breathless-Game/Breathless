@@ -2,6 +2,8 @@ import './polyfills';
 import { createSignerFromKeypair, publicKey, transactionBuilder, type Signer, type Umi } from '@metaplex-foundation/umi';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { findWallet, waitForWallet, type OwnerWallet } from './owner-wallets';
+import { markBalanceStale, readBalances } from './balance-api';
+import { confirmedOrThrow } from './payment-safety';
 import {
   SESSION_NAME,
   addressOfSecret,
@@ -246,6 +248,13 @@ function requireSession(): string {
 /** Session wallet balance in SOL. */
 export async function sessionBalance(): Promise<number> {
   const session = requireSession();
+  // The market reads it for us without the Solana client; an older or offline market: ask the RPC.
+  if (owner) {
+    try {
+      const b = await readBalances(owner, session);
+      if (b?.sessionSol != null) return b.sessionSol;
+    } catch {}
+  }
   const u = await solanaUmi();
   const bal = await u.rpc.getBalance(publicKey(session));
   return Number(bal.basisPoints) / 1e9;
@@ -262,7 +271,7 @@ export async function topUpSession(sol: number): Promise<string> {
   const view = new DataView(data.buffer);
   view.setUint32(0, 2, true);
   view.setBigUint64(4, BigInt(Math.round(sol * 1e9)), true);
-  const { signature } = await transactionBuilder()
+  const topUp = transactionBuilder()
     .add({
       instruction: {
         programId: SYSTEM_PROGRAM,
@@ -275,7 +284,7 @@ export async function topUpSession(sol: number): Promise<string> {
       signers: [payer],
       bytesCreatedOnChain: 0,
     })
-    .setFeePayer(payer)
-    .sendAndConfirm(u);
+    .setFeePayer(payer);
+  const signature = await confirmedOrThrow(topUp, u, 'Session top-up').finally(markBalanceStale); // the market's cached session SOL is now old
   return base58.deserialize(signature)[0];
 }

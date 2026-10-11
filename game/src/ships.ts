@@ -1,5 +1,8 @@
 import * as T from 'three';
+import { gearLevelsChanged } from './gear-levels';
+import { onLangChange, t } from './i18n';
 import { storageKey } from './wallet';
+import { idle } from './idle';
 import './ships.css';
 export const SHIP_INTROS_EN = [
   'A red-hulled starter with a blue roof, basic fishing gear and safety equipment for your first voyage.',
@@ -21,7 +24,11 @@ export const SHIPS = [
 
 export class Shipyard {
   private root = document.createElement('section');
-  private models: T.Group[] = [];
+  // Sparse until every model is in: the sailed ship loads at boot, the rest in idle time or when the shipyard opens.
+  private models: (T.Group | undefined)[] = [];
+  private loading = new Map<number, Promise<T.Group>>();
+  private allLoaded = false;
+  private loadingAll: Promise<void> | null = null;
   private index = 0;
   private selected = 0;
   private thumbnails: string[] = [];
@@ -37,18 +44,19 @@ export class Shipyard {
   get shipIndex() { return this.index; }
   shipModel(): T.Object3D | null { return this.models[this.index]?.clone() ?? null; }
   /** A fresh copy of any ship's model (null until the models load), e.g. for the workbench's inspector. */
-  modelAt(i: number): T.Object3D | null { return this.models[i]?.clone() ?? null; }
+  modelAt(i: number): T.Object3D | null { if (!this.models[i]) void this.loadAll(); return this.models[i]?.clone() ?? null; }
   /** Sail ship i if its banked-value threshold is reached: saved, put on the boat, bonus applied. */
   equip(i: number): boolean {
-    if (!SHIPS[i] || this.progress() < SHIPS[i].threshold || !this.models.length) return false;
-    this.index = this.selected = i; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {}
+    if (!SHIPS[i] || this.progress() < SHIPS[i].threshold) return false; // not fetched yet: apply() sails it on arrival
+    this.index = this.selected = i; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {} gearLevelsChanged();
     this.apply(); this.onEquip();
     return true;
   }
   constructor(private boat: T.Group, private progress: () => number, private onToggle: (open: boolean) => void, private onEquip: () => void, private gameScene: T.Scene, private applyColorGrade: (root: T.Object3D) => void) {
     this.root.className = 'shipyard'; this.root.hidden = true;
-    this.root.setAttribute('role', 'dialog'); this.root.setAttribute('aria-modal', 'true'); this.root.setAttribute('aria-label', '船只升级 Shipyard');
+    this.root.setAttribute('role', 'dialog'); this.root.setAttribute('aria-modal', 'true'); this.root.setAttribute('aria-label', t('Shipyard', '船只升级'));
     document.body.append(this.root);
+    onLangChange(() => { this.root.setAttribute('aria-label', t('Shipyard', '船只升级')); if (!this.root.hidden) this.draw(); });
     this.root.addEventListener('click', (e) => {
       const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
       if (!button) return;
@@ -68,43 +76,69 @@ export class Shipyard {
   }
   private async load() {
     try {
-      const loader = new T.ObjectLoader();
-      this.models = await Promise.all(SHIPS.map(async s => {
-        const r = await fetch(`${import.meta.env.BASE_URL}boats/${s.file}.json`); if (!r.ok) throw new Error('boat load');
-        return loader.parse(await r.json()) as T.Group;
-      }));
-      // Preserve each design's proportions while making level progression unambiguous.
-      this.models.forEach((model, level) => {
-        const length = new T.Box3().setFromObject(model).getSize(new T.Vector3()).x;
-        model.scale.multiplyScalar((6 + level * .8) / length);
-        this.applyColorGrade(model);
-      });
-      this.makeThumbnails(); this.reload(); this.onEquip(); // the loaded ship's bonus and model are live now
+      await this.loadOne(this.savedIndex());
+      this.reload(); this.onEquip(); // the loaded ship's bonus and model are live now
     } catch { this.closed = true; if (this.open) this.draw(); }
+    idle(() => void this.loadAll());
   }
-  reload() {
+  /** Fetch one ship's model (once), scaled and colour-graded. */
+  private loadOne(i: number): Promise<T.Group> {
+    let p = this.loading.get(i);
+    if (!p) {
+      p = (async () => {
+        const r = await fetch(`${import.meta.env.BASE_URL}boats/${SHIPS[i].file}.json`); if (!r.ok) throw new Error('boat load');
+        const model = new T.ObjectLoader().parse(await r.json()) as T.Group;
+        // Preserve each design's proportions while making level progression unambiguous.
+        const length = new T.Box3().setFromObject(model).getSize(new T.Vector3()).x;
+        model.scale.multiplyScalar((6 + i * .8) / length);
+        this.applyColorGrade(model);
+        this.models[i] = model;
+        return model;
+      })();
+      p.catch(() => this.loading.delete(i));
+      this.loading.set(i, p);
+    }
+    return p;
+  }
+  /** Every ship, for the shipyard's slots, previews and thumbnails. */
+  private loadAll(): Promise<void> {
+    this.loadingAll ??= Promise.all(SHIPS.map((_, i) => this.loadOne(i))).then(() => {
+      this.allLoaded = true; this.closed = false;
+      this.makeThumbnails(); if (this.open) this.draw();
+    }, () => { this.loadingAll = null; this.closed = true; if (this.open) this.draw(); });
+    return this.loadingAll;
+  }
+  private savedIndex() {
     let saved = 0; try {
       const current = localStorage.getItem(storageKey('ship-v2'));
       const legacy = localStorage.getItem(storageKey('ship'));
       saved = current !== null ? Number(current) : legacy !== null ? Number(legacy) + 1 : 0;
     } catch {}
-    this.index = Number.isInteger(saved) && saved >= 0 && saved < SHIPS.length && this.progress() >= SHIPS[saved].threshold ? saved : 0;
+    return Number.isInteger(saved) && saved >= 0 && saved < SHIPS.length && this.progress() >= SHIPS[saved].threshold ? saved : 0;
+  }
+  reload() {
+    this.index = this.savedIndex();
     this.selected = this.index; this.apply(); if (this.open) this.draw();
   }
   private shown: T.Object3D | null = null;
   private apply() {
-    if (!this.models.length) return;
+    const model = this.models[this.index]?.clone();
+    if (!model) {
+      // Not fetched yet (e.g. another wallet's ship): sail it once it arrives, if still chosen.
+      const i = this.index;
+      this.loadOne(i).then(() => { if (this.index === i) { this.apply(); this.onEquip(); } }, () => {});
+      return;
+    }
     // Swap only the ship model: the boat also carries the diver's bow seat and its lights.
     if (this.shown) this.boat.remove(this.shown);
     else this.boat.children.filter((c) => c instanceof T.Mesh || (c instanceof T.Group && !c.userData.keep)).forEach((c) => this.boat.remove(c));
-    const model = this.models[this.index].clone();
     this.shown = model;
     const bounds = new T.Box3().setFromObject(model); const centre = bounds.getCenter(new T.Vector3());
     // Preserve actual progression in vessel sizes and the world's wave animation.
     model.position.x -= centre.x; model.position.z -= centre.z;
     this.boat.add(model);
   }
-  show() { this.previousFocus = document.activeElement as HTMLElement; this.selected = this.index; this.root.hidden = false; this.onToggle(true); this.draw(); this.root.querySelector<HTMLButtonElement>('[data-close]')?.focus(); }
+  show() { void this.loadAll(); this.previousFocus = document.activeElement as HTMLElement; this.selected = this.index; this.root.hidden = false; this.onToggle(true); this.draw(); this.root.querySelector<HTMLButtonElement>('[data-close]')?.focus(); }
   close() { this.root.hidden = true; cancelAnimationFrame(this.waterFrame); this.onToggle(false); this.previousFocus?.focus(); }
   private animateWater() {
     cancelAnimationFrame(this.waterFrame);
@@ -124,7 +158,7 @@ export class Shipyard {
     let shipScene: T.Scene | undefined;
     let shipCamera: T.OrthographicCamera | undefined;
     const lights: Array<{ source: T.Light; copy: T.Light }> = [];
-    if (this.models[this.selected]) {
+    if (this.allLoaded && this.models[this.selected]) {
       if (shipImage) shipImage.style.display = 'none';
       if (!this.shipRenderer) {
         this.shipRenderer = new T.WebGLRenderer({ antialias: true, alpha: true });
@@ -135,14 +169,14 @@ export class Shipyard {
       }
       feature.append(this.shipRenderer.domElement);
       shipScene = new T.Scene();
-      const model = this.models[this.selected].clone(); shipScene.add(model);
+      const model = this.models[this.selected]!.clone(); shipScene.add(model);
       this.gameScene.traverse(object => {
         if (object instanceof T.Light) {
           const copy = object.clone(); shipScene!.add(copy); lights.push({ source: object, copy });
         }
       });
       const halfHeight = Math.max(...this.models.map(model => {
-        const size = new T.Box3().setFromObject(model).getSize(new T.Vector3());
+        const size = new T.Box3().setFromObject(model!).getSize(new T.Vector3());
         return Math.max(size.y / 2, size.x / 3.2);
       })) * 1.04;
       const bounds = new T.Box3().setFromObject(model), centre = bounds.getCenter(new T.Vector3());
@@ -186,11 +220,11 @@ export class Shipyard {
     const renderer = new T.WebGLRenderer({ antialias: true, alpha: true }); renderer.setSize(480, 300); renderer.outputColorSpace = T.SRGBColorSpace;
     // One shared camera scale: do not auto-enlarge small boats to match the flagship.
     const halfHeight = Math.max(...this.models.map(model => {
-      const size = new T.Box3().setFromObject(model).getSize(new T.Vector3());
+      const size = new T.Box3().setFromObject(model!).getSize(new T.Vector3());
       return Math.max(size.y / 2, size.x / (2 * 1.6));
     })) * 1.04;
     for (const model of this.models) {
-      const scene = new T.Scene(); const copy = model.clone(); scene.add(copy);
+      const scene = new T.Scene(); const copy = model!.clone(); scene.add(copy);
       this.gameScene.traverse(object => { if (object instanceof T.Light) scene.add(object.clone()); });
       const b = new T.Box3().setFromObject(copy), c = b.getCenter(new T.Vector3()), size = b.getSize(new T.Vector3());
       // Flat side elevation, fitted to the full silhouette rather than a distant perspective.
@@ -198,11 +232,13 @@ export class Shipyard {
       camera.position.copy(c).add(new T.Vector3(0, 0, size.z + 20)); camera.lookAt(c); renderer.render(scene,camera);
       this.thumbnails.push(renderer.domElement.toDataURL());
     }
-    renderer.dispose();
+    // A throwaway renderer: release its WebGL context now rather than at GC.
+    renderer.forceContextLoss(); renderer.dispose();
   }
   private draw() {
     queueMicrotask(() => this.animateWater());
     const s = SHIPS[this.selected], unlocked = this.progress() >= s.threshold;
-    this.root.innerHTML = `<div class="shipyard-shell"><header><div><small>DRY DOCK / 船坞</small><h1>船只升级 <span>SHIP UPGRADES</span></h1></div><button data-close aria-label="关闭船坞 / Close shipyard">✕</button></header><div class="shipyard-layout"><aside><small>等级 / LEVEL 0${this.selected}</small><h2>${s.cn}</h2><h3>${s.en}</h3><p>${s.intro}<span class="shipyard-translation">${SHIP_INTROS_EN[this.selected]}</span></p><h4>船只加成 / BONUSES</h4><dl><div><dt>潜水游速<span class="shipyard-translation">Swim speed</span></dt><dd>+${Math.round(s.speed*100)}%</dd></div><div><dt>捕获范围<span class="shipyard-translation">Catch radius</span></dt><dd>+${Math.round(s.range*100)}%</dd></div><div><dt>鱼网容量<span class="shipyard-translation">Net capacity</span></dt><dd>+${s.capacity} 格 / slots</dd></div></dl><p class="shipyard-progress">累计入库价值 / Total banked value ${Math.floor(this.progress())} / ${s.threshold || '初始船 / Starter'}<br>达到目标即可解锁，无需消耗鱼。<span class="shipyard-translation">Reach the target to unlock. No fish are spent.</span></p><button data-equip ${!unlocked || !this.models.length ? 'disabled' : ''}>${this.closed ? '模型加载失败，请刷新 / Loading failed. Refresh.' : !this.models.length ? '模型加载中… / Loading…' : this.index===this.selected ? '当前使用 / EQUIPPED' : unlocked ? '装备船只 / EQUIP' : '尚未解锁 / LOCKED'}</button></aside><main><div class="shipyard-feature">${this.thumbnails[this.selected] ? `<img src="${this.thumbnails[this.selected]}" alt="${s.cn} / ${s.en}">` : '<p>正在准备船只预览… / Preparing preview…</p>'}<span>${s.en} · LV.0${this.selected}</span></div><div class="shipyard-slots">${SHIPS.map((ship,i)=>`<button data-ship="${i}" class="${i===this.selected?'selected':''}" aria-pressed="${i===this.selected}"><small>0${i} ${this.progress()<ship.threshold?'🔒':''}</small>${this.thumbnails[i]?`<img src="${this.thumbnails[i]}" alt="">`:''}<b>${ship.cn}</b><span>${ship.en}${i===this.index?'<br>已装备 / Equipped':''}</span></button>`).join('')}${Array.from({length:4},()=>'<div class="shipyard-empty"><span>？</span><small>未来船位<br>COMING SOON</small></div>').join('')}</div><p class="shipyard-caption">选择船位查看详情 · 点击初始页面船只进入船坞 · Esc 返回<span class="shipyard-translation">Select a slot for details · Click the boat on the title screen to open the shipyard · Esc to return</span></p></main></div></div>`;
+    const name = t(s.en, s.cn), status = this.closed ? t('Loading failed. Refresh.', '模型加载失败，请刷新') : !this.allLoaded ? t('Loading…', '模型加载中…') : this.index === this.selected ? t('EQUIPPED', '当前使用') : unlocked ? t('EQUIP', '装备船只') : t('LOCKED', '尚未解锁');
+    this.root.innerHTML = `<div class="shipyard-shell"><header><div><small>${t('DRY DOCK', '船坞')}</small><h1>${t('Ship upgrades', '船只升级')}</h1></div><button data-close aria-label="${t('Close shipyard', '关闭船坞')}">✕</button></header><div class="shipyard-layout"><aside><small>${t('LEVEL', '等级')} 0${this.selected}</small><h2>${name}</h2><p>${t(SHIP_INTROS_EN[this.selected], s.intro)}</p><h4>${t('BONUSES', '船只加成')}</h4><dl><div><dt>${t('Swim speed', '潜水游速')}</dt><dd>+${Math.round(s.speed*100)}%</dd></div><div><dt>${t('Catch radius', '捕获范围')}</dt><dd>+${Math.round(s.range*100)}%</dd></div><div><dt>${t('Net capacity', '鱼网容量')}</dt><dd>+${s.capacity} ${t('slots', '格')}</dd></div></dl><p class="shipyard-progress">${t('Total banked value', '累计入库价值')} ${Math.floor(this.progress())} / ${s.threshold || t('Starter', '初始船')}<br>${t('Reach the target to unlock. No fish are spent.', '达到目标即可解锁，无需消耗鱼。')}</p><button data-equip ${!unlocked || !this.allLoaded ? 'disabled' : ''}>${status}</button></aside><main><div class="shipyard-feature">${this.thumbnails[this.selected] ? `<img src="${this.thumbnails[this.selected]}" alt="${name}">` : `<p>${t('Preparing preview…', '正在准备船只预览…')}</p>`}<span>${name} · LV.0${this.selected}</span></div><div class="shipyard-slots">${SHIPS.map((ship,i)=>`<button data-ship="${i}" class="${i===this.selected?'selected':''}" aria-pressed="${i===this.selected}"><small>0${i} ${this.progress()<ship.threshold?'🔒':''}</small>${this.thumbnails[i]?`<img src="${this.thumbnails[i]}" alt="">`:''}<b>${t(ship.en, ship.cn)}</b><span>${i===this.index?t('Equipped', '已装备'):''}</span></button>`).join('')}${Array.from({length:4},()=>`<div class="shipyard-empty"><span>？</span><small>${t('COMING SOON', '未来船位')}</small></div>`).join('')}</div><p class="shipyard-caption">${t('Select a slot for details · Click the boat on the title screen to open the shipyard · Esc to return', '选择船位查看详情 · 点击初始页面船只进入船坞 · Esc 返回')}</p></main></div></div>`;
   }
 }

@@ -1,4 +1,5 @@
-import { MAPS, MAP_ORDER, isUnlocked, mapDepth, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, isUnlocked, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
+import { t, pickName, onLangChange } from './i18n';
 
 // The three map cards on the start card. Locked maps show what they need;
 // the demo switch underneath opens everything for showing the game off.
@@ -16,6 +17,7 @@ export class MapPicker {
   ) {
     this.demo.addEventListener('change', () => onDemoToggle(this.demo.checked));
     this.render();
+    onLangChange(() => this.render());
   }
 
   render() {
@@ -43,17 +45,17 @@ export class MapPicker {
         // Two short lines under the meta, so every card keeps one line per row in the
         // three-column layout: the shelf's zones then the trench, or what unlocks the map.
         const [zones, below] = open
-          ? [map.zoneLabels.join(' · '), '+ Trench ∞']
-          : [`🔒 Bank ${map.unlockValue} value`, `you have ${Math.floor(this.progress.bestValue)}`];
+          ? [map.zoneLabels.map(mapZoneLabel).join(' · '), t('+ Trench ∞', '+ 海沟 ∞')]
+          : [t(`🔒 Bank ${map.unlockValue} value`, `🔒 入库价值 ${map.unlockValue}`), t(`you have ${Math.floor(this.progress.bestValue)}`, `当前 ${Math.floor(this.progress.bestValue)}`)];
         card.append(
           swatch,
-          line('map-name', `${map.name} · ${map.nameZh}`),
-          line('map-place small muted', map.place),
-          line('map-meta small', `${map.difficulty} · Shelf ${mapDepth(map)} m`),
+          line('map-name', pickName(map)),
+          line('map-place small muted', mapPlace(map)),
+          line('map-meta small', `${mapDifficulty(map)} · ${t('Shelf', '大陆架')} ${mapDepth(map)} m`),
           line('map-lock small', zones),
           line('map-trench small', below),
         );
-        card.title = map.blurb;
+        card.title = mapBlurb(map);
         card.addEventListener('click', () => this.onPick(id));
         return card;
       }),

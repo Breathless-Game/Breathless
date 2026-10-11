@@ -182,8 +182,43 @@ export function normalizeModel(group: THREE.Group, targetSize = 2.0): THREE.Grou
   if (maxDim > 0) {
     const scale = targetSize / maxDim;
     group.scale.multiplyScalar(scale);
+    group.position.multiplyScalar(scale);
   }
   return group;
+}
+
+export interface AccessoryModelOptions {
+  /** Keep the physical growth between levels in a shared display frame. */
+  preserveTierScale?: boolean;
+}
+
+type AccessoryTierBounds = readonly [number, number, number];
+const accessoryBoundsCache = new Map<AccessoryId, AccessoryTierBounds>();
+
+function disposeBoundsProbe(model: THREE.Group) {
+  model.traverse((object) => {
+    if (object instanceof THREE.Mesh) object.geometry.dispose();
+  });
+}
+
+/**
+ * Accessories are authored at their real proportions, but the old preview
+ * fitted every level independently. Use the largest level as a family frame
+ * when requested so longer fins, tanks, and lamp barrels visibly grow.
+ */
+function accessoryTierBounds(def: AccessoryDef): AccessoryTierBounds {
+  const cached = accessoryBoundsCache.get(def.id);
+  if (cached) return cached;
+  const values = ([1, 2, 3] as const).map((level) => {
+    const probe = def.build(level);
+    probe.updateMatrixWorld(true);
+    const size = new THREE.Box3().setFromObject(probe).getSize(new THREE.Vector3());
+    disposeBoundsProbe(probe);
+    return Math.max(size.x, size.y, size.z);
+  }) as [number, number, number];
+  const result = Object.freeze(values) as AccessoryTierBounds;
+  accessoryBoundsCache.set(def.id, result);
+  return result;
 }
 
 /* =========================================================================
@@ -1462,7 +1497,7 @@ export function getAccessoryDef(id: AccessoryId): AccessoryDef | undefined {
 }
 
 /** Build any accessory model with automatic normalization. */
-export function buildAccessoryModel(id: AccessoryId, level = 1, targetSize = 2.0): THREE.Group {
+export function buildAccessoryModel(id: AccessoryId, level = 1, targetSize = 2.0, options: AccessoryModelOptions = {}): THREE.Group {
   const def = getAccessoryDef(id);
   if (!def) {
     const fallback = new THREE.Group();
@@ -1470,5 +1505,22 @@ export function buildAccessoryModel(id: AccessoryId, level = 1, targetSize = 2.0
     return normalizeModel(fallback, targetSize);
   }
   const model = def.build(level);
-  return normalizeModel(model, targetSize);
+  if (!options.preserveTierScale) return normalizeModel(model, targetSize);
+  model.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(model);
+  const size = bounds.getSize(new THREE.Vector3());
+  const rawMax = Math.max(size.x, size.y, size.z);
+  const familyBounds = accessoryTierBounds(def);
+  const familyMax = Math.max(...familyBounds);
+  let tierScale = rawMax / familyMax;
+  const tierIndex = Math.max(0, Math.min(2, Math.floor(level) - 1));
+  for (let index = 0; index <= tierIndex; index++) tierScale = Math.max(tierScale, familyBounds[index] / familyMax);
+  const centre = bounds.getCenter(new THREE.Vector3());
+  model.position.sub(centre);
+  const scale = (targetSize * tierScale) / rawMax;
+  model.scale.multiplyScalar(scale);
+  model.position.multiplyScalar(scale);
+  model.userData.tierScale = tierScale;
+  model.userData.preserveTierScale = true;
+  return model;
 }

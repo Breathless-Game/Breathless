@@ -12,15 +12,20 @@ import type { FishMesh } from './fish';
 const FONT_PX = 160;
 const TEX_H = 256;
 const LETTER_SPACING = 0.06; // em
+const CJK_PX = 200;
+const CJK_TEX_H = 320;
 
-function font(px: number) {
-  return `900 ${px}px Inter, system-ui, sans-serif`;
+const CJK = /[\u3000-\u9fff\uff00-\uffef]/;
+const CJK_FONT = '"PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif';
+
+function font(px: number, cjk: boolean) {
+  return cjk ? `900 ${px}px ${CJK_FONT}` : `900 ${px}px Inter, system-ui, sans-serif`;
 }
 
 /** Text drawing setup shared by every layer of the texture. */
-function prep(c: CanvasRenderingContext2D) {
-  c.font = font(FONT_PX);
-  c.letterSpacing = `${LETTER_SPACING}em`;
+function prep(c: CanvasRenderingContext2D, cjk = false) {
+  c.font = font(cjk ? CJK_PX : FONT_PX, cjk);
+  c.letterSpacing = `${cjk ? 0.04 : LETTER_SPACING}em`;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
 }
@@ -42,8 +47,43 @@ function rim(label: string, w: number, dy: number, color: string) {
   return cv;
 }
 
+/**
+ * Chinese labels: thin engraved strokes smear into the body colour, so paint them
+ * as solid dark ink with a light halo (high contrast, like the English cut) and a
+ * gentle bump only. Textures are larger, as the glyphs are drawn bigger.
+ */
+function cjkCarving(label: string) {
+  const H = CJK_TEX_H;
+  const probe = document.createElement('canvas').getContext('2d')!;
+  prep(probe, true);
+  const w = Math.ceil(probe.measureText(label).width + CJK_PX * 0.5);
+  const color = document.createElement('canvas');
+  color.width = w;
+  color.height = H;
+  const c = color.getContext('2d')!;
+  prep(c, true);
+  c.lineJoin = 'round';
+  c.lineWidth = CJK_PX * 0.13;
+  c.strokeStyle = 'rgba(255, 246, 225, 0.92)';
+  c.strokeText(label, w / 2, H / 2);
+  c.fillStyle = 'rgba(22, 14, 12, 0.97)';
+  c.fillText(label, w / 2, H / 2);
+  const height = document.createElement('canvas');
+  height.width = w;
+  height.height = H;
+  const h = height.getContext('2d')!;
+  h.fillStyle = '#fff';
+  h.fillRect(0, 0, w, H);
+  h.filter = `blur(${CJK_PX * 0.03}px)`;
+  prep(h, true);
+  h.fillStyle = '#888';
+  h.fillText(label, w / 2, H / 2);
+  return { color, height, aspect: w / H, glyph: CJK_PX / H };
+}
+
 /** Colour (with alpha: only the grooves are drawn) and height textures for the carving. */
 function carving(label: string, tone: THREE.Color) {
+  if (CJK.test(label)) return cjkCarving(label);
   const probe = document.createElement('canvas').getContext('2d')!;
   prep(probe);
   const w = Math.ceil(probe.measureText(label).width + FONT_PX * 0.5);
@@ -99,7 +139,8 @@ export function engraveName(fish: FishMesh, label: string, tone: THREE.Color, me
   const tex = carving(label, tone);
   // Letters about a third of the body's height, but never longer than ~56% of it
   // (so they stop short of the eye and of the thin tail end).
-  let decalH = (height * 0.36) / tex.glyph;
+  const cjk = CJK.test(label);
+  let decalH = (height * (cjk ? 0.46 : 0.36)) / tex.glyph;
   let decalW = decalH * tex.aspect;
   const maxW = len * 0.56;
   if (decalW > maxW) {
@@ -120,7 +161,7 @@ export function engraveName(fish: FishMesh, label: string, tone: THREE.Color, me
   );
   const map = new THREE.CanvasTexture(tex.color);
   map.colorSpace = THREE.SRGBColorSpace;
-  map.anisotropy = 4;
+  map.anisotropy = 8;
   const bumpMap = new THREE.CanvasTexture(tex.height);
   const carvingMesh = new THREE.Mesh(
     geo,
@@ -129,6 +170,8 @@ export function engraveName(fish: FishMesh, label: string, tone: THREE.Color, me
       bumpMap,
       bumpScale: 3,
       transparent: true,
+      // Fins and neighbouring tails sit in front of the flank; the label must stay readable.
+      depthTest: false,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -4,
@@ -136,6 +179,7 @@ export function engraveName(fish: FishMesh, label: string, tone: THREE.Color, me
       metalness,
     }),
   );
+  carvingMesh.renderOrder = 10;
   fish.group.add(carvingMesh);
   fish.group.scale.setScalar(scale);
   return carvingMesh;

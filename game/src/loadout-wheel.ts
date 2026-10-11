@@ -1,5 +1,6 @@
 import { isAction } from './controls';
 import type { EquipmentSlot } from './equipment';
+import { onLangChange, t } from './i18n';
 
 /**
  * The six slots that can be packed on the dive bench.  The order is stable so
@@ -10,16 +11,17 @@ import type { EquipmentSlot } from './equipment';
  */
 export const QUICK_SLOTS: readonly {
   readonly slot: EquipmentSlot;
-  readonly label: string;
+  readonly en: string;
+  readonly zh: string;
   readonly shortLabel: string;
   readonly icon: string;
 }[] = Object.freeze([
-  { slot: 'net', label: '捕捞网', shortLabel: 'NET', icon: '◌' },
-  { slot: 'rod', label: '杆身', shortLabel: 'SHAFT', icon: '╱' },
-  { slot: 'reel', label: '线轮', shortLabel: 'REEL', icon: '◎' },
-  { slot: 'fins', label: '脚蹼', shortLabel: 'FINS', icon: '≋' },
-  { slot: 'tank', label: '应急气瓶', shortLabel: 'TANK', icon: '▣' },
-  { slot: 'lamp', label: '探照灯', shortLabel: 'LAMP', icon: '✦' },
+  { slot: 'net', en: 'Net', zh: '捕捞网', shortLabel: 'NET', icon: '◌' },
+  { slot: 'rod', en: 'Shaft', zh: '杆身', shortLabel: 'SHAFT', icon: '╱' },
+  { slot: 'reel', en: 'Reel', zh: '线轮', shortLabel: 'REEL', icon: '◎' },
+  { slot: 'fins', en: 'Fins', zh: '脚蹼', shortLabel: 'FINS', icon: '≋' },
+  { slot: 'tank', en: 'Emergency tank', zh: '应急气瓶', shortLabel: 'TANK', icon: '▣' },
+  { slot: 'lamp', en: 'Lamp', zh: '探照灯', shortLabel: 'LAMP', icon: '✦' },
 ]);
 
 export interface LoadoutWheelHooks {
@@ -30,6 +32,8 @@ export interface LoadoutWheelHooks {
   /** Called when a player tries to select an unpacked slot. */
   onUnavailable?: (slot: EquipmentSlot) => void;
 }
+
+const slotLabel = (item: { en: string; zh: string }) => t(item.en, item.zh);
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -49,8 +53,8 @@ export class LoadoutWheel {
       button.className = 'loadout-wheel-slot';
       button.dataset.index = String(index);
       button.style.setProperty('--slot-index', String(index));
-      button.setAttribute('aria-label', `${index + 1}: ${item.label}`);
-      button.innerHTML = `<span class="loadout-wheel-key">${index + 1}</span><span class="loadout-wheel-icon">${item.icon}</span><span class="loadout-wheel-name">${item.label}</span>`;
+      button.setAttribute('aria-label', `${index + 1}: ${slotLabel(item)}`);
+      button.innerHTML = `<span class="loadout-wheel-key">${index + 1}</span><span class="loadout-wheel-icon">${item.icon}</span><span class="loadout-wheel-name">${slotLabel(item)}</span>`;
       button.addEventListener('pointerdown', (event) => {
         event.preventDefault();
         this.highlight(index);
@@ -64,6 +68,15 @@ export class LoadoutWheel {
       this.slots.appendChild(button);
     });
     this.render();
+    onLangChange(() => {
+      this.slots.querySelectorAll<HTMLButtonElement>('.loadout-wheel-slot').forEach((button) => {
+        const item = QUICK_SLOTS[Number(button.dataset.index)];
+        button.setAttribute('aria-label', `${Number(button.dataset.index) + 1}: ${slotLabel(item)}`);
+        const name = button.querySelector('.loadout-wheel-name');
+        if (name) name.textContent = slotLabel(item);
+      });
+      this.render();
+    });
   }
 
   get open() {
@@ -199,8 +212,8 @@ export class LoadoutWheel {
   private render() {
     const highlighted = QUICK_SLOTS[this.highlightedIndex];
     const active = QUICK_SLOTS[this.activeIndex];
-    this.center.innerHTML = `<strong>${highlighted.label}</strong><small>松开 Tab 确认</small>`;
-    this.activeLabel.textContent = active.label;
+    this.center.innerHTML = `<strong>${slotLabel(highlighted)}</strong><small>${t('Release Tab to confirm', '松开 Tab 确认')}</small>`;
+    this.activeLabel.textContent = slotLabel(active);
     this.activeNumber.textContent = `${this.activeIndex + 1}`;
     for (const button of Array.from(this.slots.querySelectorAll<HTMLButtonElement>('.loadout-wheel-slot'))) {
       const index = Number(button.dataset.index);

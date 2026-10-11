@@ -1,112 +1,113 @@
-// The game's language: English or 中文. Its text is written bilingual, "English · 中文",
-// and this shows one side of it. pick() takes a string apart at its " · " separators
-// and, wherever a Latin segment is followed by a Chinese one (the pair), keeps the
-// side for the language; anything else (numbers, names, one language only) stays.
-//   - The page: every text node is shown picked, now and as it changes (a
-//     MutationObserver), and back again in full if the language changes.
-//   - Canvases: fillText / strokeText / measureText pick their text too, so painted
-//     labels (the chart, the report paper, the plaques) follow; they show the new
-//     language when they're next painted (onLang lets a painter repaint at once).
+// One UI language at a time: English or 中文, picked in Settings (the title desk's
+// LANGUAGE plaque, or the pause menu's Language row). No library: call sites write
+// both strings, `t('Dive', '下潜')`, at render time, and re-render on onLangChange.
+// Static markup in index.html carries its Chinese in attributes and applyStaticText()
+// swaps it in:
+//   <span data-zh="下潜">Dive</span>            text (the markup's own text is the English)
+//   <p data-zh-html="按 <b>F</b> 上船">…</p>   inner HTML, for text with inline tags
+//   data-zh-aria-label / data-zh-title / data-zh-placeholder   attributes
+// An element with one of these must not hold children that code looks up by id: its
+// content is replaced wholesale.
 
-export type Lang = 'en' | 'zh';
+export type Lang = 'zh' | 'en';
 
-const CJK = /[　-〿㐀-鿿＀-￯]/;
-const LATIN = /[A-Za-z]/;
-const SEP = ' · ';
+/** The stored choice (shared with the old gear-panel toggle, so it carries over). */
+export const LANGUAGE_KEY = 'deepbreath.language';
 
-let current: Lang = 'en';
-const listeners: ((l: Lang) => void)[] = [];
-
-export const lang = () => current;
-
-export function onLang(fn: (l: Lang) => void) {
-  listeners.push(fn);
+/** The stored choice wins; otherwise the browser's language (zh* → 中文, else English). */
+export function resolveLang(stored: string | null | undefined, navLang: string | null | undefined): Lang {
+  if (stored === 'zh' || stored === 'en') return stored;
+  return (navLang ?? '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
-/** The text in the current language (see the top of the file). */
-export function pick(s: string): string {
-  if (!s.includes(SEP) || !CJK.test(s)) return s;
-  const parts = s.split(SEP);
-  const out: string[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    const a = parts[i];
-    const b = parts[i + 1];
-    // A pair: Latin words, then their Chinese.
-    if (b != null && LATIN.test(a) && !CJK.test(a) && CJK.test(b)) {
-      // Keep any leading punctuation the English side had (← Back · 返回 → ← 返回).
-      const lead = a.match(/^[^A-Za-z0-9]*/)![0];
-      out.push(current === 'en' ? a : lead && !b.startsWith(lead.trim()) ? lead + b : b);
-      i++;
-    } else out.push(a);
+let current: Lang | null = null;
+const listeners = new Set<(l: Lang) => void>();
+
+function readStored(): string | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage.getItem(LANGUAGE_KEY);
+  } catch {
+    return null;
   }
-  return out.join(SEP);
 }
 
-/** Both languages of a label, from a pair. */
-export function pair(en: string, zh: string) {
-  return current === 'en' ? en : zh;
+function browserLang(): string | undefined {
+  return typeof navigator === 'undefined' ? undefined : navigator.language;
 }
 
-// ---- The page ---------------------------------------------------------------
-
-const original = new WeakMap<Text, string>(); // a text node's bilingual text
-const shown = new WeakMap<Text, string>(); // what we set it to
-
-function apply(node: Text) {
-  const now = node.nodeValue ?? '';
-  // Changed by the game since we last set it: that's its new bilingual text.
-  if (shown.get(node) !== now) original.set(node, now);
-  const src = original.get(node) ?? now;
-  const out = pick(src);
-  shown.set(node, out);
-  if (out !== now) node.nodeValue = out;
+export function lang(): Lang {
+  if (current === null) current = resolveLang(readStored(), browserLang());
+  return current;
 }
 
-function walk(root: Node) {
-  if (root.nodeType === Node.TEXT_NODE) return apply(root as Text);
-  const it = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let n = it.nextNode(); n; n = it.nextNode()) apply(n as Text);
-}
-
-let observer: MutationObserver | null = null;
-
-function watch() {
-  if (observer) return;
-  observer = new MutationObserver((records) => {
-    for (const r of records) {
-      if (r.type === 'characterData') apply(r.target as Text);
-      else r.addedNodes.forEach(walk);
+export function setLang(l: Lang) {
+  const next: Lang = l === 'zh' ? 'zh' : 'en';
+  const prev = lang();
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(LANGUAGE_KEY, next);
+  } catch {}
+  if (next === prev) return;
+  current = next;
+  syncDocumentLang();
+  for (const fn of [...listeners]) {
+    try {
+      fn(next);
+    } catch (e) {
+      console.error(e);
     }
-  });
-  observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+  }
 }
 
-// ---- Canvases -----------------------------------------------------------------
+/** Calls fn after every language change; returns the unsubscribe. */
+export function onLangChange(fn: (l: Lang) => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 
-function patchCanvas() {
-  const proto = CanvasRenderingContext2D.prototype;
-  for (const name of ['fillText', 'strokeText', 'measureText'] as const) {
-    const orig = proto[name] as (this: CanvasRenderingContext2D, text: string, ...rest: unknown[]) => unknown;
-    (proto as unknown as Record<string, unknown>)[name] = function (this: CanvasRenderingContext2D, text: string, ...rest: unknown[]) {
-      return orig.call(this, typeof text === 'string' ? pick(text) : text, ...rest);
-    };
+/** The string for the current language. */
+export function t(en: string, zh: string): string {
+  return lang() === 'zh' ? zh : en;
+}
+
+/** For data with `name` / `nameZh`: the Chinese one in 中文 (falling back to `name`). */
+export function pickName(o: { name: string; nameZh?: string }): string {
+  return lang() === 'zh' && o.nameZh ? o.nameZh : o.name;
+}
+
+function syncDocumentLang() {
+  if (typeof document === 'undefined') return;
+  document.documentElement.lang = lang() === 'zh' ? 'zh-CN' : 'en';
+}
+
+const ATTRS = ['aria-label', 'title', 'placeholder'] as const;
+
+/** Swaps every data-zh* element under root to the current language. */
+export function applyStaticText(root: ParentNode = document) {
+  const zh = lang() === 'zh';
+  root.querySelectorAll<HTMLElement>('[data-zh]').forEach((el) => {
+    if (el.dataset.en === undefined) el.dataset.en = el.textContent ?? '';
+    el.textContent = zh ? el.dataset.zh! : el.dataset.en;
+  });
+  root.querySelectorAll<HTMLElement>('[data-zh-html]').forEach((el) => {
+    if (el.dataset.enHtml === undefined) el.dataset.enHtml = el.innerHTML;
+    el.innerHTML = zh ? el.dataset.zhHtml! : el.dataset.enHtml;
+  });
+  for (const attr of ATTRS) {
+    root.querySelectorAll<HTMLElement>(`[data-zh-${attr}]`).forEach((el) => {
+      const enKey = `data-en-${attr}`;
+      if (!el.hasAttribute(enKey)) el.setAttribute(enKey, el.getAttribute(attr) ?? '');
+      el.setAttribute(attr, zh ? el.getAttribute(`data-zh-${attr}`)! : el.getAttribute(enKey)!);
+    });
   }
 }
 
 let started = false;
-let applied = false;
 
-/** Shows the game in `l` (from Settings). */
-export function setLang(l: Lang) {
-  if (!started) {
-    started = true;
-    patchCanvas();
-    watch();
-  }
-  if (l === current && applied) return;
-  applied = true;
-  current = l;
-  document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en';
-  walk(document.body);
-  for (const fn of listeners) fn(l);
+/** Once, at startup: sets <html lang>, swaps the static text, and keeps both in step. */
+export function initI18n() {
+  if (started) return;
+  started = true;
+  syncDocumentLang();
+  applyStaticText();
+  onLangChange(() => applyStaticText());
 }

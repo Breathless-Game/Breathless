@@ -25,3 +25,5 @@ sensor/.market-state.json.tmp
 # Fish number counter (sensor/nft-serial.mjs)
 sensor/.market-serial.json
 sensor/.market-serial.json.tmp
+# Co-signed fish registry (sensor/fish-collection.mjs)
+sensor/.market-fish.jsonl

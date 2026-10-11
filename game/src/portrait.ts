@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { buildFishMesh, FishSpec, RARITY } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
+import { t } from './i18n';
 
 // One small offscreen renderer that draws a fish on demand. The 512px card is
 // the NFT image: it is a pure function of the fish seed, so anyone can
 // re-render it and check it matches.
 
 let renderer: THREE.WebGLRenderer | null = null;
+const iconCache = new Map<string, string>();
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
 scene.add(new THREE.HemisphereLight('#ffffff', '#33415c', 1.6));
@@ -16,17 +18,43 @@ const rim = new THREE.DirectionalLight('#9fe8ff', 1.4);
 rim.position.set(-3, 1, -2);
 scene.add(key, rim);
 
+/** True while the shared renderer's context is gone; nothing it draws then may be cached. */
+function contextLost(r: THREE.WebGLRenderer | null): boolean {
+  return !!r && r.getContext().isContextLost();
+}
+
+function dropRenderer() {
+  if (!renderer) return;
+  renderer.dispose();
+  renderer = null;
+}
+
 function getRenderer(size: number) {
+  // The browser can take the context away (too many live WebGL contexts): build a fresh one.
+  if (contextLost(renderer)) dropRenderer();
   if (!renderer) {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(1);
+    // Icons cached around a loss may be blank: forget them so they re-render.
+    renderer.domElement.addEventListener('webglcontextlost', () => iconCache.clear());
   }
   renderer.setSize(size, size, false);
   return renderer;
 }
 
 function renderFish(spec: FishSpec, size: number): HTMLCanvasElement {
-  const r = getRenderer(size);
+  let r = getRenderer(size);
+  drawFish(r, spec);
+  // Lost mid-draw: one retry on a fresh context, so the image is not blank.
+  if (contextLost(r)) {
+    dropRenderer();
+    r = getRenderer(size);
+    drawFish(r, spec);
+  }
+  return r.domElement;
+}
+
+function drawFish(r: THREE.WebGLRenderer, spec: FishSpec) {
   const fish = buildFishMesh(spec);
   fish.group.scale.setScalar(1);
   fish.group.rotation.set(0, -0.55, 0.08);
@@ -45,7 +73,6 @@ function renderFish(spec: FishSpec, size: number): HTMLCanvasElement {
     if (o instanceof THREE.Mesh) o.geometry.dispose();
   });
   fish.material.dispose();
-  return r.domElement;
 }
 
 /** Transparent render at any size, for UI sprites. Not cached: call once and keep the result. */
@@ -53,13 +80,12 @@ export function fishSprite(spec: FishSpec, size: number): string {
   return renderFish(spec, size).toDataURL('image/png');
 }
 
-const iconCache = new Map<string, string>();
-
 export function fishIcon(spec: FishSpec): string {
   const hit = iconCache.get(spec.id);
   if (hit) return hit;
   const url = renderFish(spec, 192).toDataURL('image/png');
-  iconCache.set(spec.id, url);
+  // Never cache a render from a lost context: it is fully transparent.
+  if (!contextLost(renderer)) iconCache.set(spec.id, url);
   return url;
 }
 
@@ -111,7 +137,7 @@ export function fishCard(spec: FishSpec & Numbered): string {
   ctx.fillText(spec.name, 24, S - 32);
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '500 14px "Inter", system-ui, sans-serif';
-  ctx.fillText(`${spec.lengthCm} cm · ${spec.weightKg} kg · caught at ${spec.depthM} m · seed ${spec.id}`, 24, S - 12);
+  ctx.fillText(`${spec.lengthCm} cm · ${spec.weightKg} kg · ${t('caught at', '捕获深度')} ${spec.depthM} m · ${t('seed', '种子')} ${spec.id}`, 24, S - 12);
   ctx.strokeStyle = rc;
   ctx.lineWidth = 6;
   ctx.strokeRect(3, 3, S - 6, S - 6);

@@ -6,6 +6,8 @@ import ts from 'typescript';
 // Stand-in for wallet.ts: equipment.ts only needs storageKey, and the real one pulls in Umi and Phantom.
 // It maps names to the pre-namespacing keys so the fixtures below keep their shape.
 const WALLET_STUB = `data:text/javascript;base64,${Buffer.from("export const storageKey = (name) => (name.startsWith('deepbreath.') ? name : 'deepbreath.' + name);").toString('base64')}`;
+const lampLightingCode = 'export const lampProfile=(level,path)=>{const tier=Math.max(1,Math.min(3,Math.floor(Number(level)||1)));const wide=path==="wideLamp";const profiles=wide?[[18,48,.65,2,.55,.12,.03],[24,60,1.03,2,.8,.2,.045],[32,74,1.25,2,.9,.24,.05]]:[[18,48,.65,2,.55,.12,.03],[33,74,.52,2,.3,.09,.018],[48,102,.43,2,.24,.075,.014]];const p=profiles[tier-1];return {distance:p[0],intensity:p[1],angle:p[2],decay:p[3],penumbra:p[4],scatter:p[5],extinction:p[6]};};';
+const LAMP_LIGHTING_STUB = `data:text/javascript;base64,${Buffer.from(lampLightingCode).toString('base64')}`;
 
 // Transpile market.ts and equipment.ts in memory to keep tests usable on Node 20.
 async function load(path) {
@@ -13,7 +15,9 @@ async function load(path) {
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   });
-  const code = outputText.replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`);
+  const code = outputText
+    .replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`)
+    .replace(/from ['"]\.\/lamp-lighting['"]/g, `from '${LAMP_LIGHTING_STUB}'`);
   return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
 }
 
@@ -252,41 +256,63 @@ test('Pearls saved before on-chain PEARL become a separate legacy balance', () =
   globalThis.localStorage = fakeStorage({ 'deepbreath.equipment': JSON.stringify({ rodLevel: 2, pearls: 420 }) });
   const state = equipment.loadEquipment();
   assert.deepEqual(state, { ...slots(2), pearls: 0, legacyPearls: 420, paths });
-  assert.equal(equipment.totalPearls(state), 420);
+  assert.equal(equipment.spendablePearls(state), 0, 'legacy Pearls are kept but not spendable');
   // Saved back in the new shape, so the next load does not migrate again.
   assert.deepEqual(JSON.parse(localStorage.getItem('deepbreath.equipment')), state);
   state.pearls = 15; // on-chain cache
   equipment.saveEquipment(state);
   assert.deepEqual(equipment.loadEquipment(), { ...slots(2), pearls: 15, legacyPearls: 420, paths });
+  assert.equal(equipment.spendablePearls(equipment.loadEquipment()), 15);
 
   globalThis.localStorage = fakeStorage({ 'deepbreath.pearls': '77' });
   assert.deepEqual(equipment.loadEquipment(), { ...slots(1), pearls: 0, legacyPearls: 77, paths });
   delete globalThis.localStorage;
 });
 
-test('upgrades spend legacy Pearls first and burn only the rest on-chain', () => {
+test('upgrades are paid in on-chain PEARL only: legacy Pearls never count', () => {
   const lv2 = equipment.ROD_TIERS[1];
-  assert.deepEqual(equipment.planUpgrade({ rodLevel: 1, pearls: 0, legacyPearls: 500 }), { tier: lv2, fromLegacy: lv2.cost, fromChain: 0 });
-  assert.deepEqual(equipment.planUpgrade({ rodLevel: 1, pearls: 250, legacyPearls: 100 }), { tier: lv2, fromLegacy: 100, fromChain: lv2.cost - 100 });
-  assert.deepEqual(equipment.planUpgrade({ rodLevel: 1, pearls: 400, legacyPearls: 0 }), { tier: lv2, fromLegacy: 0, fromChain: lv2.cost });
-  assert.equal(equipment.planUpgrade({ rodLevel: 1, pearls: 150, legacyPearls: 149 }), null, 'one short');
+  assert.equal(equipment.planUpgrade({ rodLevel: 1, pearls: 0, legacyPearls: 500 }), null, 'legacy alone cannot pay');
+  assert.equal(equipment.planUpgrade({ rodLevel: 1, pearls: lv2.cost - 1, legacyPearls: 100 }), null, 'legacy does not top up');
+  assert.deepEqual(equipment.planUpgrade({ rodLevel: 1, pearls: lv2.cost, legacyPearls: 0 }), { tier: lv2 }, 'exact balance pays');
+  assert.deepEqual(equipment.planUpgrade({ rodLevel: 1, pearls: 400, legacyPearls: 50 }), { tier: lv2 });
+  assert.equal(equipment.planUpgrade({ rodLevel: 1, pearls: 0, legacyPearls: 0 }), null, 'zero balance');
   assert.equal(equipment.planUpgrade({ rodLevel: 3, pearls: 1e6, legacyPearls: 0 }), null, 'maxed out');
 });
 
-test('slot upgrades follow the same legacy-first PEARL rule and keep the other slots', () => {
+test('flat Pearl prices (fish food, synthesis) burn exactly the cost on-chain', () => {
+  assert.equal(equipment.planPearlSpend({ pearls: 50, legacyPearls: 500 }, 24), 24);
+  assert.equal(equipment.planPearlSpend({ pearls: 24, legacyPearls: 0 }, 24), 24, 'exact balance pays');
+  assert.equal(equipment.planPearlSpend({ pearls: 10, legacyPearls: 500 }, 24), null, 'legacy Pearls do not count');
+  assert.equal(equipment.planPearlSpend({ pearls: 0, legacyPearls: 0 }, 8), null, 'empty balance never pays');
+  assert.equal(equipment.planPearlSpend({ pearls: 7, legacyPearls: 0 }, 8), null, 'one short');
+  assert.equal(equipment.planPearlSpend({ pearls: 100, legacyPearls: 0 }, 0), null, 'zero cost is not a purchase');
+  assert.equal(equipment.planPearlSpend({ pearls: 100, legacyPearls: 0 }, 2.5), null, 'whole Pearls only');
+  const start = { rodLevel: 2, reelLevel: 3, pearls: 50, legacyPearls: 10 };
+  const after = equipment.applyPearlSpend(start, equipment.planPearlSpend(start, 24));
+  assert.equal(after.legacyPearls, 10, 'legacy value is preserved untouched');
+  assert.equal(after.pearls, 26);
+  assert.equal(after.netLevel, 2, 'gear levels are untouched');
+  assert.equal(after.reelLevel, 3);
+  assert.equal(equipment.spendablePearls(after), equipment.spendablePearls(start) - 24);
+});
+
+test('slot upgrades burn the full tier cost on-chain and keep the other slots', () => {
   const start = { rodLevel: 2, pearls: 250, legacyPearls: 100, finsLevel: 3 };
   const fins = equipment.planSlotUpgrade(start, 'fins');
   assert.equal(fins, null, 'fins already maxed');
   const plan = equipment.planSlotUpgrade(start, 'reel');
   const cost = equipment.EQUIPMENT_TIERS.reel[1].cost;
-  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'reel', tier: 2, fromLegacy: 100, fromChain: cost - 100 });
+  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'reel', tier: 2 });
+  assert.equal(plan.tier.cost, cost);
   const after = equipment.applySlotUpgrade(start, plan);
   assert.equal(after.reelLevel, 2);
   assert.equal(after.netLevel, 2);
   assert.equal(after.finsLevel, 3);
-  assert.equal(after.legacyPearls, 0);
-  assert.equal(after.pearls, 250 - (cost - 100));
-  assert.equal(equipment.planSlotUpgrade({ ...start, pearls: 0, legacyPearls: cost - 1 }, 'reel'), null, 'one short');
+  assert.equal(after.legacyPearls, 100, 'legacy value is preserved untouched');
+  assert.equal(after.pearls, 250 - cost);
+  assert.equal(equipment.planSlotUpgrade({ ...start, pearls: cost - 1, legacyPearls: 1e6 }, 'reel'), null, 'one short, legacy ignored');
+  assert.ok(equipment.planSlotUpgrade({ ...start, pearls: cost, legacyPearls: 0 }, 'reel'), 'exact balance pays');
+  assert.equal(equipment.applySlotUpgrade(start, plan, 0).pearls, 250, 'an already-paid fee is not taken twice');
 });
 
 test('deep sonar cable tiers are bought through the same slot plan', () => {
@@ -295,13 +321,13 @@ test('deep sonar cable tiers are bought through the same slot plan', () => {
   const start = { rodLevel: 2, reelLevel: 2, pearls: 400, legacyPearls: 120 };
   assert.equal(equipment.slotTier(start, 'sonar').level, 1, 'older saves start at the 10 m cable');
   const plan = equipment.planSlotUpgrade(start, 'sonar');
-  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'sonar', tier: 2, fromLegacy: 120, fromChain: lv2.cost - 120 });
+  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'sonar', tier: 2 });
   const after = equipment.applySlotUpgrade(start, plan);
   assert.equal(after.sonarLevel, 2);
   assert.equal(after.netLevel, 2);
   assert.equal(after.reelLevel, 2);
-  assert.equal(after.legacyPearls, 0);
-  assert.equal(after.pearls, 400 - (lv2.cost - 120));
+  assert.equal(after.legacyPearls, 120);
+  assert.equal(after.pearls, 400 - lv2.cost);
   assert.equal(equipment.planSlotUpgrade(after, 'sonar'), null, 'Lv3 costs more than is left');
   assert.equal(equipment.nextSlotTier({ ...after, sonarLevel: 3 }, 'sonar'), null, 'maxed out');
   assert.equal(equipment.deriveStats(after).netCapacity, equipment.deriveStats({ ...after, sonarLevel: 1 }).netCapacity, 'sonar leaves the other stats alone');

@@ -10,6 +10,7 @@ import http from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMarket } from './market.mjs';
+import { createGearHandler } from './nft-gear.mjs';
 import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 
@@ -28,11 +29,14 @@ const market = await createMarket({ rpc: RPC, dir: DIR });
 
 // The fish NFT metadata host too, so the Vite proxy serves /api/nft in dev as `npm start` does.
 const nft = createNftHandler();
+// The Boat and Dive Kit NFTs (nft-gear.mjs); before `nft` too.
+const gear = createGearHandler();
 // And the fish numbers (#0042) the game asks for before each mint; before `nft`, which claims /api/nft/.
 const serials = createSerialHandler({ file: join(DIR, SERIAL_FILE) });
 
 const server = http.createServer(async (req, res) => {
   if (await serials(req, res)) return;
+  if (await gear(req, res)) return;
   if (await nft(req, res)) return;
   if (await market.handle(req, res)) return;
   res.writeHead(404, { 'content-type': 'application/json' });

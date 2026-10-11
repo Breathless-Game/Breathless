@@ -1,10 +1,15 @@
 /* A worn field notebook: ink diagrams, linen covers, paper and colored index tabs. */
-.guide-launcher { position: fixed; right: 22px; bottom: 22px; z-index: 80; display: flex; gap: 7px; }
+.guide-launcher { position: fixed; right: 22px; bottom: 22px; z-index: 80; display: flex; gap: 7px; touch-action: none; }
+.guide-launcher #guide-open { display: none; }
+.guide-launcher button { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.guide-launcher.dragging, .guide-launcher.dragging button { cursor: grabbing; }
 .guide-launcher button { background: #eee1bf; color: #3d493e; border: 1px solid #baae90; border-radius: 4px; box-shadow: 0 3px 12px #0005; font-size: 12px; font-weight: 700; padding: 10px 13px; }
 .guide-launcher button[aria-pressed='true'] { background: #a6bdaa; }
 .guide-launcher kbd, .field-guide kbd, .dive-tutorial kbd { display: inline-block; border: 1px solid currentColor; border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; font: inherit; font-size: 11px; margin-left: 5px; }
 .field-guide { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 36px 68px; background: #0b171dcc; backdrop-filter: blur(7px); color: #3a433b; }
-.guide-book { position: relative; width: min(100%, 960px); max-height: 90dvh; display: flex; flex-direction: column; background: #d8c8a5; border: 7px solid #536b5b; border-left-width: 22px; border-radius: 7px 17px 17px 6px; box-shadow: 0 20px 80px #0008, 4px 5px 0 #a09279, 8px 9px 0 #526352; transform: rotate(-.7deg); animation: guide-open .22s ease-out; }
+.guide-book { position: relative; width: min(100%, 960px); max-height: 90dvh; display: flex; flex-direction: column; background: #d8c8a5; border: 7px solid #536b5b; border-left-width: 22px; border-radius: 7px 17px 17px 6px; box-shadow: 0 20px 80px #0008, 4px 5px 0 #a09279, 8px 9px 0 #526352; transform: rotate(-.7deg); animation: guide-open .28s ease-out; }
+.field-guide.closing { pointer-events: none; }
+.field-guide.closing .guide-book { animation: guide-close .24s ease-in forwards; }
 .guide-cover { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 24px; color: #f0e4c7; background: #546555; border-bottom: 2px solid #34463c; letter-spacing: 1px; font-size: 12px; font-weight: 700; }
 .field-guide button { color: inherit; border: 1px solid #8f9778; background: #e9dcba; border-radius: 3px; font: inherit; font-size: 12px; padding: 8px 12px; box-shadow: none; }
 .field-guide button:hover { background: #d8c897; }
@@ -20,7 +25,13 @@
 .guide-tabs button:nth-child(3n) { background: #a1bac0; }
 .guide-tabs button span { display: block; font-size: 10px; opacity: .65; margin-bottom: 4px; }
 .guide-tabs button.selected { width: 54px; background: #f5eacb; box-shadow: 2px 3px 1px #0003, inset 0 -4px #798f6e; }
-.guide-pages { display: grid; grid-template-columns: 1fr 1fr; overflow-y: auto; min-height: 0; background: #ede3c7; background-image: repeating-linear-gradient(0deg, #72562a04 0 1px, transparent 1px 4px); }
+/* English names are longer than 2 Chinese characters: wider tabs, tighter type, never clipped. */
+:root[lang="en"] .guide-tabs { right: -66px; }
+:root[lang="en"] .guide-tabs button { width: 66px; padding: 5px 3px; font-size: 11px; letter-spacing: -.1px; white-space: nowrap; }
+:root[lang="en"] .guide-tabs button.selected { width: 72px; }
+.guide-pages { display: grid; grid-template-columns: 1fr 1fr; overflow-y: auto; min-height: 0; background: #ede3c7; background-image: repeating-linear-gradient(0deg, #72562a04 0 1px, transparent 1px 4px); transform-origin: left center; backface-visibility: hidden; }
+.guide-pages.page-turn-forward { animation: page-turn-forward .32s ease-out; }
+.guide-pages.page-turn-back { animation: page-turn-back .32s ease-out; transform-origin: right center; }
 .guide-page { padding: 26px 30px 24px; }
 .guide-picture { border-right: 1px solid #cbbd97; box-shadow: inset -12px 0 18px -16px #372e24aa; }
 .guide-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 1.4px; margin: 0 0 15px; color: #6c7967; }
@@ -49,7 +60,7 @@
 .guide-tour-control button[aria-checked='true'] { background: #9fb693; }
 #guide-tour-restart { border: 0; background: transparent; padding-left: 0; font-size: 11px; }
 .guide-footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #c6b38b; padding: 12px 22px; font-size: 11px; letter-spacing: 1px; background: #e2d4b0; }
-.dive-tutorial { position: fixed; bottom: 82px; left: 22px; width: min(350px, calc(100vw - 44px)); z-index: 79; background: #eee3c9; color: #394b40; padding: 18px; border: 1px solid #b5b797; border-left: 4px solid #7e9872; border-radius: 3px 8px 8px 3px; box-shadow: 0 7px 24px #0004; }
+.dive-tutorial { position: fixed; bottom: 82px; right: 22px; width: min(350px, calc(100vw - 44px)); z-index: 79; background: #eee3c9; color: #394b40; padding: 18px; border: 1px solid #b5b797; border-right: 4px solid #7e9872; border-radius: 8px 3px 3px 8px; box-shadow: 0 7px 24px #0004; }
 .dive-tutorial h2 { font-size: 16px; line-height: 1.45; margin: 9px 0 7px; }
 .dive-tutorial p:not(.guide-eyebrow) { font-size: 12px; line-height: 1.8; margin: 7px 0 12px; }
 .dive-tutorial strong { display: block; font-size: 12px; font-weight: 700; margin-top: 10px; }
@@ -64,7 +75,10 @@
 #tour-read { margin-top: 14px; background: transparent; color: #4b604f; border-color: #aaa989; }
 .tour-actions { display: flex; gap: 8px; }
 #tour-dismiss { color: #4b604f; background: transparent; border-color: #aaa989; }
-@keyframes guide-open { from { opacity: 0; transform: translateY(20px) rotate(-2deg); } }
+@keyframes guide-open { from { opacity: 0; transform: translateY(20px) rotate(-2deg) scale(.97); } }
+@keyframes guide-close { to { opacity: 0; transform: translateY(26px) rotate(2deg) scale(.96); } }
+@keyframes page-turn-forward { 0% { opacity: .25; transform: perspective(900px) rotateY(-8deg) translateX(18px); } 100% { opacity: 1; transform: perspective(900px) rotateY(0) translateX(0); } }
+@keyframes page-turn-back { 0% { opacity: .25; transform: perspective(900px) rotateY(8deg) translateX(-18px); } 100% { opacity: 1; transform: perspective(900px) rotateY(0) translateX(0); } }
 @media (max-width: 720px) {
   .field-guide { padding: 16px 50px 16px 22px; }
   .guide-book { border-width: 5px; border-left-width: 13px; max-height: 94dvh; transform: none; }
@@ -80,10 +94,14 @@
   .guide-tabs button { width: 37px; height: 48px; padding: 3px; font-size: 11px; }
   .guide-tabs button.selected { width: 40px; }
   .guide-tabs button span { font-size: 9px; }
+  :root[lang="en"] .field-guide { padding-right: 62px; }
+  :root[lang="en"] .guide-tabs { right: -54px; }
+  :root[lang="en"] .guide-tabs button { width: 54px; padding: 3px 2px; font-size: 10px; letter-spacing: -.2px; }
+  :root[lang="en"] .guide-tabs button.selected { width: 58px; }
   .guide-footer { padding: 10px; }
   .guide-footer button { font-size: 10px; padding: 6px; }
   .guide-launcher { right: 12px; bottom: 12px; }
   .guide-launcher button { padding: 8px 10px; }
-  .dive-tutorial { left: 12px; bottom: 65px; padding: 13px; width: min(310px, calc(100vw - 24px)); }
+  .dive-tutorial { right: 12px; bottom: 65px; padding: 13px; width: min(310px, calc(100vw - 24px)); }
 }
-@media (prefers-reduced-motion: reduce) { .guide-book { animation: none; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .guide-book, .guide-pages { transition: none; animation: none; transform: none; } }

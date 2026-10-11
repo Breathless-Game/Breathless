@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { EQUIPMENT_TIERS, ROD_TIERS, type UpgradeSlot } from './equipment';
+import { tierEffect } from './equipment-i18n';
+import { lang, pickName } from './i18n';
 import { buildDeepSonar } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
@@ -33,6 +36,30 @@ export interface UpgradeDef {
 function fromTiers(slot: UpgradeSlot): Pick<UpgradeDef, 'effects' | 'prices'> {
   const t = EQUIPMENT_TIERS[slot];
   return { effects: [t[0].effect, t[1].effect, t[2].effect], prices: [t[0].cost, t[1].cost, t[2].cost] };
+}
+
+/** Chinese effect lines for upgrades whose text is not read from equipment.ts. */
+const EFFECTS_ZH: Partial<Record<UpgradeId, readonly [string, string, string]>> = {
+  bait: ['咬钩等待 ×1.0', '咬钩等待 ×0.8', '咬钩等待 ×0.6'],
+  boat: ['航程 2 小时 · 船体 3', '航程 1 小时 · 船体 5', '航程 30 分钟 · 船体 8'],
+  boatSpeed: ['航程 2 小时', '航程 1 小时', '航程 30 分钟'],
+  boatHull: ['耐久 3', '耐久 5', '耐久 8'],
+  boatDeck: ['1 根鱼竿', '2 根鱼竿', '3 根鱼竿'],
+};
+
+/** Display name of an upgrade in the current UI language. */
+export function upgradeName(def: UpgradeDef): string {
+  return pickName(def);
+}
+
+/** Display effect line (level 1-3) of an upgrade in the current UI language. */
+export function upgradeEffect(def: UpgradeDef, level: number): string {
+  const i = Math.max(0, Math.min(2, level - 1));
+  if (lang() !== 'zh') return def.effects[i];
+  if (def.id === 'net') return `容纳 ${ROD_TIERS[i].capacity} 条鱼`;
+  const fixed = EFFECTS_ZH[def.id];
+  if (fixed) return fixed[i];
+  return tierEffect(def.id as Exclude<UpgradeSlot, 'net'>, i + 1);
 }
 
 export const UPGRADES: UpgradeDef[] = [
@@ -83,6 +110,42 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   sonar: buildSonarDisplay,
 };
 
+export interface UpgradeModelOptions {
+  /** Keep the physical growth between levels in a shared display frame. */
+  preserveTierScale?: boolean;
+}
+
+type TierBounds = readonly [number, number, number];
+const tierBoundsCache = new Map<UpgradeId, TierBounds>();
+
+function disposeBoundsProbe(model: THREE.Group) {
+  model.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.dispose();
+  });
+}
+
+/**
+ * Find a stable reference frame for one upgrade family. Fitting each level
+ * independently makes a longer rod, fin, or sonar cable look the same size
+ * as its starter version. The probe keeps the largest raw tier as the common
+ * frame, so lower tiers retain their real silhouette and growth.
+ */
+function tierBounds(id: UpgradeId): TierBounds {
+  const cached = tierBoundsCache.get(id);
+  if (cached) return cached;
+  const values = ([1, 2, 3] as const).map((level) => {
+    const probe = builders[id](level);
+    probe.updateMatrixWorld(true);
+    const size = new THREE.Box3().setFromObject(probe).getSize(new THREE.Vector3());
+    disposeBoundsProbe(probe);
+    return Math.max(size.x, size.y, size.z);
+  }) as [number, number, number];
+  const result = Object.freeze(values) as TierBounds;
+  tierBoundsCache.set(id, result);
+  return result;
+}
+
 /**
  * The boat on the workbench is the boat from the map (boat.ts), as it is. Each
  * level adds a little on top: a radar on the wheelhouse roof, then spotlights
@@ -110,7 +173,7 @@ function buildBoat(level: UpgradeLevel): THREE.Group {
 
 /** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
 function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
-  const group = buildDeepSonar({ lengthLevel: level, detail: 2, startsCarried: false }).group;
+  const group = buildDeepSonar({ color: loadSonarConfig().color, lengthLevel: level, detail: 2, startsCarried: false }).group;
   const halos: THREE.Mesh[] = [];
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshBasicMaterial) halos.push(object);
@@ -120,18 +183,40 @@ function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
 }
 
 /** Build a centred, two-unit display model shared by the workbench and catalog. */
-export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel): THREE.Group {
+export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel, options: UpgradeModelOptions = {}): THREE.Group {
   const inner = builders[id](level);
   const bounds = new THREE.Box3().setFromObject(inner);
   const centre = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const scale = 2 / Math.max(size.x, size.y, size.z);
+  const rawMax = Math.max(size.x, size.y, size.z);
+  let tierScale = 1;
+  let scale = 2 / rawMax;
+  if (options.preserveTierScale) {
+    const familyBounds = tierBounds(id);
+    const familyMax = Math.max(...familyBounds);
+    // Do not let an upgraded assembly that is naturally more compact (for
+    // example an outboard motor replacing long oars) appear smaller. A tier's
+    // display scale is at least the largest previous tier, while genuinely
+    // longer equipment keeps its authored growth.
+    tierScale = rawMax / familyMax;
+    for (let index = 0; index < level; index++) tierScale = Math.max(tierScale, familyBounds[index] / familyMax);
+    scale = (2 * tierScale) / rawMax;
+  }
   inner.scale.multiplyScalar(scale);
   // Scale the translation too; otherwise an off-centre raw model stays offset.
   inner.position.sub(centre).multiplyScalar(scale);
   const outer = new THREE.Group();
   outer.name = `HackRU_${id}_Lv${level}`;
-  outer.userData = { upgradeId: id, level, source: 'buildUpgradeModel', visualOnly: true };
+  outer.userData = {
+    upgradeId: id,
+    level,
+    source: 'buildUpgradeModel',
+    visualOnly: true,
+    // Consumers that put different gear families on one table can preserve
+    // the tier growth after applying their own family-level display size.
+    tierScale: options.preserveTierScale ? tierScale : 1,
+    preserveTierScale: options.preserveTierScale === true,
+  };
   outer.add(inner);
   return outer;
 }

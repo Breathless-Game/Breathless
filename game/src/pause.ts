@@ -5,19 +5,20 @@
 import type { BreathMode } from './breath';
 import type { TimeOfDay } from './daylight';
 import type { WeatherMode } from './weather';
-import { type Quality, type Settings, type SharkChoice, saveSettings } from './settings';
+import { type Quality, type Settings, saveSettings } from './settings';
 import { closeDropdown, enhanceSelect } from './dropdown';
 import { orbNfts } from './explorer-links';
 import { onWalletChange, walletState } from './wallet';
+import { lang, onLangChange, setLang, t, type Lang } from './i18n';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const RESUME_COUNTDOWN = 3;
 
-const MODE_LABEL: Record<BreathMode, string> = {
-  presage: 'Camera (Presage)',
-  sim: 'Simulator (hold Shift)',
-  keyboard: 'Keyboard (hold Shift)',
+const MODE_LABEL: Record<BreathMode, () => string> = {
+  presage: () => t('Camera (Presage)', '摄像头 (Presage)'),
+  sim: () => t('Simulator (hold Shift)', '模拟器 (按住 Shift)'),
+  keyboard: () => t('Keyboard (hold Shift)', '键盘 (按住 Shift)'),
 };
 
 type View = 'main' | 'settings' | 'confirm' | 'countdown';
@@ -57,14 +58,14 @@ export class PauseMenu {
   private quality = $<HTMLSelectElement>('set-quality');
   private camera = $<HTMLInputElement>('set-camera');
   private help = $<HTMLInputElement>('set-help');
-  private sharks = $<HTMLSelectElement>('set-sharks');
+  private language = $<HTMLSelectElement>('set-lang');
 
   constructor(
     private settings: Settings,
     private hooks: PauseHooks,
   ) {
     // Themed dropdowns in place of the native popups; the selects below keep working as before.
-    for (const select of [this.input, this.timeOfDay, this.weather, this.quality, this.sharks]) enhanceSelect(select);
+    for (const select of [this.input, this.timeOfDay, this.weather, this.quality, this.language]) enhanceSelect(select);
     $('pause-resume').addEventListener('click', () => this.requestResume());
     $('pause-settings').addEventListener('click', () => this.showSettings());
     $('pause-menu').addEventListener('click', () => this.requestQuit());
@@ -79,7 +80,12 @@ export class PauseMenu {
     this.quality.addEventListener('change', () => this.change({ quality: this.quality.value as Quality }));
     this.camera.addEventListener('change', () => this.change({ showCamera: this.camera.checked }));
     this.help.addEventListener('change', () => this.change({ showHelp: this.help.checked }));
-    this.sharks.addEventListener('change', () => this.change({ sharks: this.sharks.value as SharkChoice }));
+    this.language.value = lang();
+    this.language.addEventListener('change', () => setLang(this.language.value as Lang));
+    onLangChange((l) => {
+      this.language.value = l;
+      for (const o of this.input.options) o.textContent = MODE_LABEL[o.value as BreathMode]?.() ?? o.textContent;
+    });
     hooks.applySettings(settings);
     onWalletChange(() => this.refreshChainLink());
     this.refreshChainLink();
@@ -159,7 +165,7 @@ export class PauseMenu {
 
   private showSettings() {
     this.input.replaceChildren(
-      ...this.hooks.breathModes().map((m) => new Option(MODE_LABEL[m], m, false, m === this.hooks.breathMode())),
+      ...this.hooks.breathModes().map((m) => new Option(MODE_LABEL[m](), m, false, m === this.hooks.breathMode())),
     );
     this.timeOfDay.value = this.hooks.timeOfDay();
     this.lighting.checked = this.settings.lightingEffects;
@@ -167,7 +173,7 @@ export class PauseMenu {
     this.quality.value = this.settings.quality;
     this.camera.checked = this.settings.showCamera;
     this.help.checked = this.settings.showHelp;
-    this.sharks.value = this.settings.sharks;
+    this.language.value = lang();
     $('set-input-row').classList.remove('hidden');
     this.show('settings');
   }

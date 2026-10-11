@@ -6,6 +6,7 @@
  */
 
 import { storageKey } from './wallet';
+import { lampProfile } from './lamp-lighting';
 
 export type RodLevel = 1 | 2 | 3;
 export type EquipmentLevel = RodLevel;
@@ -110,7 +111,10 @@ export interface EquipmentState {
   sonarLevel: EquipmentLevel;
   /** On-chain PEARL, as last read with pearlBalance(): a cache for instant UI. */
   pearls: number;
-  /** Pearls earned locally before PEARL went on-chain. Spent before on-chain PEARL. */
+  /**
+   * Pearls earned locally before PEARL went on-chain. Kept in the save untouched, but no longer
+   * spendable or shown: every purchase burns on-chain PEARL only (see spendablePearls()).
+   */
   legacyPearls: number;
   /**
    * One selected module path per slot. Older localStorage records omit this
@@ -131,6 +135,12 @@ export interface EquipmentStats {
   lampDistance: number;
   lampIntensity: number;
   lampAngle: number;
+  /** Fraction of the beam rendered as visible suspended-particle scatter. */
+  lampScatter: number;
+  /** Physical falloff and water absorption controls used by the diver light. */
+  lampDecay: number;
+  lampPenumbra: number;
+  lampExtinction: number;
 }
 
 export interface SlotTier {
@@ -236,7 +246,6 @@ const SLOT_LEVELS: Record<UpgradeSlot, readonly SlotTier[]> = {
 
 /** Tier metadata for the multi-slot workshop UI. */
 export const EQUIPMENT_TIERS: Readonly<Record<UpgradeSlot, readonly SlotTier[]>> = SLOT_LEVELS;
-
 function pathDef(
   slot: EquipmentSlot,
   id: EquipmentPathId,
@@ -459,17 +468,32 @@ export function nextRodTier(input?: EquipmentInput): RodTier | null {
   return ROD_TIERS[level] ?? null;
 }
 
-/** Every Pearl the player can spend: legacy local Pearls plus cached on-chain PEARL. */
-export function totalPearls(state: EquipmentState): number {
-  return state.legacyPearls + state.pearls;
+/**
+ * The Pearls the player can spend and is shown: the cached on-chain PEARL balance only.
+ * legacyPearls stay in the save but are deliberately ignored here.
+ */
+export function spendablePearls(state: EquipmentState): number {
+  return normalize(state).pearls;
+}
+
+/**
+ * Plan paying a flat `cost` (fish food, synthesis fees): the PEARL to burn on-chain, which is
+ * always exactly `cost`. Null when unaffordable or the cost is not a positive whole number.
+ */
+export function planPearlSpend(state: EquipmentState, cost: number): number | null {
+  if (!Number.isSafeInteger(cost) || cost <= 0) return null;
+  return spendablePearls(state) >= cost ? cost : null;
+}
+
+/** Take a burned amount off the cached on-chain balance, once the burn has landed. */
+export function applyPearlSpend(state: EquipmentState, burned: number): EquipmentState {
+  const current = normalize(state);
+  return { ...current, pearls: Math.max(0, current.pearls - burned) };
 }
 
 export interface UpgradePlan {
+  /** Its cost must be burned on-chain with spendPearls() before the tier applies. */
   tier: RodTier;
-  /** Taken from the local legacy balance, which is spent first. */
-  fromLegacy: number;
-  /** Must be burned on-chain with spendPearls() before the tier applies. */
-  fromChain: number;
 }
 
 /**
@@ -479,9 +503,8 @@ export interface UpgradePlan {
 export function planUpgrade(state: EquipmentState): UpgradePlan | null {
   const current = normalize(state);
   const tier = nextRodTier(current.rodLevel);
-  if (!tier || totalPearls(current) < tier.cost) return null;
-  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
-  return { tier, fromLegacy, fromChain: tier.cost - fromLegacy };
+  if (!tier || spendablePearls(current) < tier.cost) return null;
+  return { tier };
 }
 
 function slotLevel(state: EquipmentState, slot: UpgradeSlot): EquipmentLevel {
@@ -564,33 +587,27 @@ export function nextSlotTier(state: EquipmentState, slot: UpgradeSlot): SlotTier
 
 export interface SlotUpgradePlan {
   slot: UpgradeSlot;
+  /** Its cost must be burned on-chain with spendPearls() before the tier applies. */
   tier: SlotTier;
-  /** Taken from the local legacy balance, which is spent first. */
-  fromLegacy: number;
-  /** Must be burned on-chain with spendPearls() before the tier applies. */
-  fromChain: number;
 }
 
 /**
  * Plan buying the next tier for one slot, or null when it is maxed out or
- * unaffordable.  Same rule as planUpgrade(): legacy Pearls first, the rest on-chain.
+ * unaffordable (on-chain PEARL only).  Same rule as planUpgrade().
  */
 export function planSlotUpgrade(state: EquipmentState, slot: UpgradeSlot): SlotUpgradePlan | null {
   const current = normalize(state);
   const tier = nextSlotTier(current, slot);
-  if (!tier || totalPearls(current) < tier.cost) return null;
-  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
-  return { slot, tier, fromLegacy, fromChain: tier.cost - fromLegacy };
+  if (!tier || spendablePearls(current) < tier.cost) return null;
+  return { slot, tier };
 }
 
-/** Apply a slot plan once its on-chain part has been spent, preserving all other upgrade levels. */
-export function applySlotUpgrade(state: EquipmentState, plan: SlotUpgradePlan): EquipmentState {
-  const current = normalize(state);
-  return {
-    ...withSlotLevel(current, plan.slot, plan.tier.level),
-    legacyPearls: Math.max(0, current.legacyPearls - plan.fromLegacy),
-    pearls: Math.max(0, current.pearls - plan.fromChain),
-  };
+/**
+ * Apply a slot plan once its cost has been burned on-chain, preserving all other upgrade levels.
+ * `burned` is what was actually burned (defaults to the tier cost; the synthesis station passes its own fee).
+ */
+export function applySlotUpgrade(state: EquipmentState, plan: SlotUpgradePlan, burned = plan.tier.cost): EquipmentState {
+  return applyPearlSpend(withSlotLevel(normalize(state), plan.slot, plan.tier.level), burned);
 }
 
 /** Pure preview of buying the next tier for one slot (no on-chain spend happens here). */
@@ -626,7 +643,8 @@ export function deriveStats(state: EquipmentState, loadout?: readonly string[]):
   const reelPath = pathModifier(safe, 'reel', reelLevel);
   const finsPath = pathModifier(safe, 'fins', finsLevel);
   const tankPath = pathModifier(safe, 'tank', tankLevel);
-  const lampPath = pathModifier(safe, 'lamp', lampLevel);
+  const lampPath = activePath(safe, 'lamp');
+  const lampOptics = lampProfile(lampLevel, lampPath === 'wideLamp' ? 'wideLamp' : 'focus');
   return {
     netCapacity: Math.max(1, tier.capacity + (netPath.netCapacity ?? 0)),
     catchRadius: Math.max(0.5, tier.catchRadius + (rodLevel - 1) * 0.18 + (netPath.catchRadius ?? 0)),
@@ -638,9 +656,44 @@ export function deriveStats(state: EquipmentState, loadout?: readonly string[]):
     // detector has confirmed an underwater breath. They never touch the true
     // breath threshold or the player's normal hold time.
     emergencySeconds: Math.max(0.1, [3.2, 4.2, 5.2][tankLevel - 1] + (tankPath.emergencySeconds ?? 0)),
-    lampDistance: Math.max(1, [18, 28, 38][lampLevel - 1] + (lampPath.lampDistance ?? 0)),
-    lampIntensity: Math.max(1, [48, 64, 82][lampLevel - 1] + (lampPath.lampIntensity ?? 0)),
-    lampAngle: Math.min(1.5, Math.max(0.2, [0.65, 0.85, 1.05][lampLevel - 1] + (lampPath.lampAngle ?? 0))),
+    // The optical profile is the single source for lamp distance, direct
+    // intensity and beam shape. It keeps focus and wide diffuser paths
+    // physically distinct instead of applying a cosmetic angle-only bonus.
+    lampDistance: lampOptics.distance,
+    lampIntensity: lampOptics.intensity,
+    lampAngle: lampOptics.angle,
+    lampScatter: lampOptics.scatter,
+    lampDecay: lampOptics.decay,
+    lampPenumbra: lampOptics.penumbra,
+    lampExtinction: lampOptics.extinction,
   };
+}
+
+/**
+ * The dive-kit upgrades a shark bite on the Open Ocean takes back (main.ts
+ * resetDiveGearAfterBite): every `group: 'dive'` piece in upgrades.ts. The boat
+ * pieces (bait, boat, boatSpeed, boatHull, boatDeck) are not in EquipmentState
+ * at all (the boat is the shipyard's), so a reset never touches them.
+ */
+export const DIVE_GEAR_SLOTS: readonly UpgradeSlot[] = Object.freeze(['rod', 'reel', 'net', 'fins', 'tank', 'lamp', 'sonar'] as const);
+
+export interface DiveGearReset {
+  /** The new state: every dive slot at level 1, its module path back to the default, Pearls untouched. */
+  state: EquipmentState;
+  /** The slots that were above level 1, with the level they had. */
+  dropped: { slot: UpgradeSlot; from: EquipmentLevel }[];
+}
+
+/**
+ * Pure: every dive slot back to level 1 and its branch back to the default
+ * path, so no path bonus survives and buying Lv2 again starts from the
+ * default branch. Pearls spent are not refunded; both balances are kept.
+ */
+export function resetDiveGear(state: EquipmentState): DiveGearReset {
+  const safe = normalize(state);
+  const dropped = DIVE_GEAR_SLOTS.filter((slot) => slotLevel(safe, slot) > 1).map((slot) => ({ slot, from: slotLevel(safe, slot) }));
+  let next = safe;
+  for (const slot of DIVE_GEAR_SLOTS) next = withSlotLevel(next, slot, 1);
+  return { state: { ...next, paths: { ...DEFAULT_EQUIPMENT_PATHS } }, dropped };
 }
 

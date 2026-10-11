@@ -16,7 +16,9 @@ const three = import.meta.resolve('three');
 const sonarUrl = await sourceUrl('../src/deep-sonar.ts', { three });
 const { DeepSonar, DEEP_SONAR_LENGTH_TIERS, normalizeDeepSonarCustomization } = await import(sonarUrl);
 const walletStub = `data:text/javascript;base64,${Buffer.from("export const storageKey = (name) => 'deepbreath.test.' + name;").toString('base64')}`;
-const { EQUIPMENT_TIERS } = await import(await sourceUrl('../src/equipment.ts', { './wallet': walletStub }));
+const lampLightingCode = 'export const lampProfile=(level,path)=>{const tier=Math.max(1,Math.min(3,Math.floor(Number(level)||1)));const wide=path==="wideLamp";const profiles=wide?[[18,48,.65,2,.55,.12,.03],[24,60,1.03,2,.8,.2,.045],[32,74,1.25,2,.9,.24,.05]]:[[18,48,.65,2,.55,.12,.03],[33,74,.52,2,.3,.09,.018],[48,102,.43,2,.24,.075,.014]];const p=profiles[tier-1];return {distance:p[0],intensity:p[1],angle:p[2],decay:p[3],penumbra:p[4],scatter:p[5],extinction:p[6]};};';
+const lampLightingStub = `data:text/javascript;base64,${Buffer.from(lampLightingCode).toString('base64')}`;
+const { EQUIPMENT_TIERS } = await import(await sourceUrl('../src/equipment.ts', { './wallet': walletStub, './lamp-lighting': lampLightingStub }));
 
 test('deep sonar has bounded low-poly geometry, upgradeable reach and stable node count', () => {
   const sonar = new DeepSonar({ color: '#24d8c2', lengthLevel: 2, detail: 2 });

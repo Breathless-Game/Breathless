@@ -83,6 +83,7 @@ try {
 }
 console.log('market info', info);
 if (info.mode !== 'server') stop('this check is for server mode');
+if (info.cosign) stop('this market only buys fish minted into its collection through /cosign-mint; these test fish are minted directly, so it would refuse them. Use fish-trust-e2e.mjs (co-signed mint, migration, sale), or a market from before the collection');
 const OLD = !!arg('old-market');
 if (!info.pearlMint) stop(`market has no PEARL mint yet (fund ${info.market})`);
 
@@ -143,6 +144,7 @@ const pearlSrc = transpile('pearl.ts')
   .replace("const API = '/api/market';", `const API = '${BASE}/api/market';`)
   .replace(/from (['"])\.\/wallet\1/g, `from '${walletStub}'`)
   .replace(/from (['"])\.\/market\1/g, `from '${dataUrl(transpile('market.ts'))}'`)
+  .replace(/from (['"])\.\/payment-safety\1/g, () => `from '${dataUrl(transpile('payment-safety.ts'))}'`)
   .replace(/import\((['"])([^'"]+)\1\)/g, (_, q, spec) => `import('${local[spec] ?? import.meta.resolve(spec)}')`);
 const pearl = await import(dataUrl(pearlSrc));
 
