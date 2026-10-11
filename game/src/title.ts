@@ -292,8 +292,11 @@ export class TitleScreen {
     this.acc = 0;
 
     const unit = Math.min(this.w, this.h);
+    // No longer than the gap to the nearest neighbour allows, so a full rope still fits the screen.
+    const ats = this.fish.map((f) => f.def.at).sort((a, b) => a - b);
+    const gap = Math.min(Infinity, ...ats.slice(1).map((a, i) => a - ats[i])) * span;
     this.fish.forEach((f, k) => {
-      f.len = f.sideways ? Math.max(150, Math.min(260, unit * 0.3)) : Math.max(70, Math.min(155, unit * 0.16));
+      f.len = f.sideways ? Math.max(150, Math.min(260, unit * 0.3, gap * 0.72)) : Math.max(70, Math.min(155, unit * 0.16));
       // Sideways fish are deep-bodied: hang them low enough that their fins clear the rope.
       f.lineLen = f.sideways ? Math.max(this.h * 0.12, f.len * 0.42) : this.h * (0.05 + 0.03 * ((k * 7) % 3));
       f.dropped = false;
