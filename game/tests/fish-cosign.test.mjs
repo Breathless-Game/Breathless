@@ -42,7 +42,105 @@ test('a co-signed transaction is signed only if it is what we asked for', () => 
   assert.match(cosign.cosignedTxProblem({ ...ok, accounts: [MARKET, ASSET, SESSION, OWNER, cosign.CORE_PROGRAM] }, expect), /fee payer/);
   assert.match(cosign.cosignedTxProblem({ ...ok, header: { numRequiredSignatures: 4 } }, expect), /unexpected signatures/);
   assert.match(cosign.cosignedTxProblem({ ...ok, instructions: [{ programIndex: 4 }, { programIndex: 3 }] }, expect), /other than Metaplex Core/);
-  assert.match(cosign.cosignedTxProblem({ ...ok, instructions: [] }, expect), /other than Metaplex Core/);
+  assert.match(cosign.cosignedTxProblem({ ...ok, instructions: [] }, expect), /no Core call/);
+});
+
+// A co-signed mint as sensor/fish-collection.mjs buildMintTx builds it: Core create, then record_catch.
+const PS = 'EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ';
+const CONFIG = 'Config1111111111111111111111111111111111111';
+const PROGRESS = 'Progress11111111111111111111111111111111111';
+const OTHER = 'An0ther1111111111111111111111111111111111';
+const SYSTEM = '11111111111111111111111111111111';
+function catchData(fish = 0xc0ffeen, value = 25n, disc = cosign.RECORD_CATCH_DISCRIMINATOR) {
+  const d = new Uint8Array(24);
+  d.set(disc);
+  const v = new DataView(d.buffer);
+  v.setBigUint64(8, fish, true);
+  v.setBigUint64(16, value, true);
+  return d;
+}
+//              0        1      2       3      4         5       6       7                    8   9      10
+const KEYS = [SESSION, ASSET, MARKET, OWNER, PROGRESS, CONFIG, SYSTEM, cosign.CORE_PROGRAM, PS, OTHER, COLLECTION];
+// mpl-core 1.10.0 createV2: asset, collection, authority, payer, owner, updateAuthority (unset), system, logWrapper (unset).
+const CREATE_ACCOUNTS = [1, 10, 2, 0, 3, 7, 6, 7];
+const CORE_IX = { programIndex: 7, accountIndexes: CREATE_ACCOUNTS, data: new Uint8Array([cosign.CORE_CREATE_V2_DISCRIMINATOR, 0]) };
+const CATCH_IX = { programIndex: 8, accountIndexes: [2, 0, 5, 3, 4, 6], data: catchData() };
+const mintMsg = (instructions, accounts = KEYS) => ({ accounts, header: { numRequiredSignatures: 3 }, instructions });
+const MINT_EXPECT = {
+  payer: SESSION,
+  signers: [SESSION, ASSET, MARKET],
+  create: { asset: ASSET, collection: COLLECTION, authority: MARKET, payer: SESSION, owner: OWNER },
+  recordCatch: { program: PS, oracle: MARKET, payer: SESSION, config: CONFIG, owner: OWNER, progress: PROGRESS, fish: 0xc0ffeen, value: 25 },
+};
+
+test('a co-signed mint may carry exactly one record_catch, and only the one we expect', () => {
+  const p = (instructions, expect = MINT_EXPECT, accounts) => cosign.cosignedTxProblem(mintMsg(instructions, accounts), expect);
+  assert.equal(p([CORE_IX, CATCH_IX]), null, 'Core create + our record_catch');
+  assert.match(p([CORE_IX]), /does not record the catch/, 'a mint without record_catch is refused');
+  assert.ok(cosign.staleProtocol(p([CORE_IX])), 'a market older than the game: refresh, not "unexpected"');
+  const idl = JSON.parse(readFileSync(new URL('../src/idl/player_state.json', import.meta.url), 'utf8'));
+  assert.deepEqual([...cosign.RECORD_CATCH_DISCRIMINATOR], idl.instructions.find((i) => i.name === 'record_catch').discriminator);
+
+  assert.match(p([CORE_IX, CATCH_IX, CATCH_IX]), /more than once/);
+  assert.match(p([CATCH_IX]), /no Core call/, 'no Core create at all');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xc0ffeen, 25n, [93, 58, 72, 158, 252, 114, 249, 96]) }]), /other than record_catch/, 'shark_bite');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData().slice(0, 16) }]), /other than record_catch/, 'short data');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: undefined }]), /other than record_catch/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 9, 4, 6] }]), /another player/, 'another owner');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 3, 9, 6] }]), /another player/, 'another Progress');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [9, 0, 5, 3, 4, 6] }]), /oracle is not the market/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [1, 0, 5, 3, 4, 6] }]), /oracle is not the market/, 'the asset as oracle');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 1, 5, 3, 4, 6] }]), /payer is not the game wallet/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 9, 3, 4, 6] }]), /unexpected accounts/, 'another Config');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 3, 4, 9] }]), /unexpected accounts/, 'not the system program');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 3, 4, 6, 9] }]), /unexpected accounts/, 'an extra account');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xbadn) }]), /another fish/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xc0ffeen, 30000n) }]), /another fish or value/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, programIndex: 9 }]), /other than Metaplex Core/, 'a look-alike from another program');
+  // Without a record_catch expectation (the migrate flow, or a game older than the market) nothing
+  // but Core passes, and that is the stale-protocol case too.
+  const migrate = p([CORE_IX, CATCH_IX], { payer: SESSION, signers: [SESSION, ASSET, MARKET] });
+  assert.match(migrate, /other than Metaplex Core/);
+  assert.ok(cosign.staleProtocol(migrate));
+  assert.ok(!cosign.staleProtocol(p([CORE_IX, CATCH_IX, CATCH_IX])), 'a real anomaly is not a version mismatch');
+  // The market as payer, or an extra signer, is still refused first.
+  assert.match(p([CORE_IX, CATCH_IX], MINT_EXPECT, [MARKET, ASSET, SESSION, ...KEYS.slice(3)]), /fee payer/);
+});
+
+test('a co-signed mint carries exactly one Core call: the create of our asset, for this owner, in the Breathless collection', () => {
+  const p = (core, expect = MINT_EXPECT) => cosign.cosignedTxProblem(mintMsg([...core, CATCH_IX]), expect);
+  const create = (accountIndexes = CREATE_ACCOUNTS, data = CORE_IX.data) => ({ programIndex: 7, accountIndexes, data });
+  const swap = (at, key) => CREATE_ACCOUNTS.map((k, i) => (i === at ? key : k));
+  assert.equal(p([create()]), null);
+  assert.match(p([create(), create()]), /more than one Core call/, 'a second Core instruction');
+  assert.match(p([create(), { programIndex: 7, accountIndexes: [1, 3], data: new Uint8Array([3]) }]), /more than one Core call/, 'a Core transfer after the create');
+  assert.match(p([create(swap(4, 9))]), /another owner/, 'the fish created for someone else');
+  assert.match(p([create(swap(4, 2))]), /another owner/, 'the market as owner');
+  assert.match(p([create(swap(1, 9))]), /outside the Breathless collection/, 'another collection');
+  assert.match(p([create(swap(1, 7))]), /outside the Breathless collection/, 'no collection');
+  assert.match(p([create(swap(0, 9))]), /another asset/);
+  assert.match(p([create(swap(2, 9))]), /authority is not the market/);
+  assert.match(p([create(swap(3, 2))]), /payer is not the game wallet/, 'the market pays');
+  assert.match(p([create(swap(5, 9))]), /unexpected accounts/, 'an update authority inside a collection');
+  assert.match(p([create(swap(6, 9))]), /unexpected accounts/, 'not the system program');
+  assert.match(p([create([...CREATE_ACCOUNTS, 9])]), /unexpected accounts/, 'an extra account');
+  assert.match(p([create(CREATE_ACCOUNTS.slice(0, 7))]), /unexpected accounts/, 'a missing account');
+  assert.match(p([create(undefined, new Uint8Array([0]))]), /not a create/, 'createV1');
+  assert.match(p([create(undefined, new Uint8Array([3]))]), /not a create/, 'transferV1');
+  assert.match(p([create(undefined, new Uint8Array([]))]), /not a create/);
+  // The migrate flow is unchanged: several Core calls, nothing about a create.
+  const migrate = { payer: SESSION, signers: [SESSION, MARKET] };
+  const update = { programIndex: 3, accountIndexes: [2, 0, 1], data: new Uint8Array([15]) };
+  assert.equal(cosign.cosignedTxProblem({ accounts: [SESSION, MARKET, ASSET, cosign.CORE_PROGRAM], header: { numRequiredSignatures: 2 }, instructions: [update, update] }, migrate), null);
+});
+
+test('mpl-core create() still builds createV2 with the account order the game checks', async () => {
+  const js = await readFile(new URL('../node_modules/@metaplex-foundation/mpl-core/dist/src/generated/instructions/createV2.js', import.meta.url), 'utf8');
+  assert.match(js, /discriminator: 20\b/);
+  const order = [...js.matchAll(/(\w+): \{\s*index: (\d+),/g)].map((m) => [Number(m[2]), m[1]]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+  assert.deepEqual(order, ['asset', 'collection', 'authority', 'payer', 'owner', 'updateAuthority', 'systemProgram', 'logWrapper']);
+  const create = await readFile(new URL('../node_modules/@metaplex-foundation/mpl-core/dist/src/instructions/create.js', import.meta.url), 'utf8');
+  assert.match(create, /generated_1\.createV2\)\(context/);
 });
 
 test('minted fish: in the collection, migratable by this device, or blocked with a reason', () => {

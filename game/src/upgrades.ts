@@ -103,6 +103,17 @@ export function syncUpgradePrices(): void {
   }
 }
 
+/**
+ * The boat group's prices from the chain (player_state ProgressConfig.boat_prices, what buy_boat
+ * burns): the defaults above are the deployed values until the first read.
+ */
+export function syncBoatPrices(prices: Partial<Record<UpgradeId, readonly [number, number, number]>>): void {
+  for (const def of UPGRADES) {
+    const p = def.group === 'boat' ? prices[def.id] : undefined;
+    if (p) def.prices = [p[0], p[1], p[2]];
+  }
+}
+
 const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   rod: buildRod,
   reel: buildReel,

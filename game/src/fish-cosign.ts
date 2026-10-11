@@ -98,22 +98,133 @@ export function mintRequest(fish: MintFacts, a: { owner: string; payer: string; 
 interface MessageLike {
   accounts: readonly unknown[];
   header: { numRequiredSignatures: number };
-  instructions: readonly { programIndex: number }[];
+  instructions: readonly { programIndex: number; accountIndexes?: readonly number[]; data?: Uint8Array }[];
+}
+
+/**
+ * mpl-core's createV2 discriminator (a single u8). @metaplex-foundation/mpl-core 1.10.0's create()
+ * builds createV2 (dist/src/generated/instructions/createV2.js: discriminator 20).
+ */
+export const CORE_CREATE_V2_DISCRIMINATOR = 20;
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+
+/**
+ * The one Core instruction a co-signed mint may carry: createV2 of our new asset into the
+ * Breathless collection, owned by this player, paid by our session key, the market signing as the
+ * collection's update authority. Account order from mpl-core 1.10.0 createV2.js: asset,
+ * collection, authority, payer, owner, updateAuthority, systemProgram, logWrapper; the two it
+ * leaves unset (no update authority inside a collection, no log wrapper) are Core's own id.
+ */
+export interface ExpectedCreate {
+  asset: string;
+  collection: string;
+  /** The market wallet. */
+  authority: string;
+  /** Our session key. */
+  payer: string;
+  owner: string;
+}
+
+/** Why this Core instruction is not exactly the create we expect, or null. */
+function coreCreateProblem(keys: string[], ix: MessageLike['instructions'][number], want: ExpectedCreate): string | null {
+  if (!ix.data || ix.data[0] !== CORE_CREATE_V2_DISCRIMINATOR) return 'its Core call is not a create';
+  const accounts = (ix.accountIndexes ?? []).map((i) => keys[i]);
+  if (accounts[0] !== want.asset) return 'it creates another asset';
+  if (accounts[1] !== want.collection) return 'it creates the fish outside the Breathless collection';
+  if (accounts[2] !== want.authority) return 'its create authority is not the market';
+  if (accounts[3] !== want.payer) return 'its create payer is not the game wallet';
+  if (accounts[4] !== want.owner) return 'it creates the fish for another owner';
+  const expected = [want.asset, want.collection, want.authority, want.payer, want.owner, CORE_PROGRAM, SYSTEM_PROGRAM, CORE_PROGRAM];
+  if (accounts.length !== expected.length || accounts.some((a, i) => a !== expected[i])) return 'its create has unexpected accounts';
+  return null;
+}
+
+/** player_state record_catch's discriminator (game/src/idl/player_state.json; player-state.ts INSTRUCTION_DISCRIMINATORS). */
+export const RECORD_CATCH_DISCRIMINATOR: readonly number[] = Object.freeze([36, 14, 58, 242, 96, 105, 45, 233]);
+
+/**
+ * The one player_state instruction a co-signed mint may carry: record_catch for this player's
+ * fish, signed by the market as oracle and paid by our session key (sensor/fish-collection.mjs
+ * buildMintTx). Every address is what we derived ourselves.
+ */
+export interface ExpectedRecordCatch {
+  program: string;
+  /** The market wallet (Config.oracle). */
+  oracle: string;
+  /** Our session key. */
+  payer: string;
+  /** player_state Config PDA ["config"]. */
+  config: string;
+  owner: string;
+  /** This owner's Progress PDA ["progress", owner]. */
+  progress: string;
+  /** The fish's seed key and its catch value, as the mint request said. */
+  fish: bigint;
+  value: number;
+}
+
+const u64At = (d: Uint8Array, at: number) => new DataView(d.buffer, d.byteOffset, d.byteLength).getBigUint64(at, true);
+
+/** Why this player_state instruction is not exactly the record_catch we expect, or null. */
+function recordCatchProblem(keys: string[], ix: MessageLike['instructions'][number], want: ExpectedRecordCatch): string | null {
+  const data = ix.data;
+  if (!data || data.length !== 24 || RECORD_CATCH_DISCRIMINATOR.some((b, i) => data[i] !== b)) return 'it calls a player_state instruction other than record_catch';
+  const accounts = (ix.accountIndexes ?? []).map((i) => keys[i]);
+  const expected = [want.oracle, want.payer, want.config, want.owner, want.progress, SYSTEM_PROGRAM];
+  if (accounts.length !== expected.length) return 'its record_catch has unexpected accounts';
+  if (accounts[0] !== want.oracle) return 'its record_catch oracle is not the market';
+  if (accounts[1] !== want.payer) return 'its record_catch payer is not the game wallet';
+  if (accounts[3] !== want.owner || accounts[4] !== want.progress) return 'its record_catch is for another player';
+  if (accounts.some((a, i) => a !== expected[i])) return 'its record_catch has unexpected accounts';
+  if (u64At(data, 8) !== want.fish || u64At(data, 16) !== BigInt(want.value)) return 'its record_catch is for another fish or value';
+  return null;
 }
 
 /**
  * Sign only what we asked for: the fee payer is our session key, the signers are exactly the
- * expected ones, and every instruction is a Core call. Returns why not, or null.
+ * expected ones, and every instruction is a Core call. For a mint (`create` and `recordCatch`
+ * given) that is exactly one Core create, exactly the expected one, plus exactly one player_state
+ * record_catch, exactly the expected one. Anything else from player_state or any other program
+ * is refused. Returns why not, or null.
  */
-export function cosignedTxProblem(m: MessageLike, expect: { payer: string; signers: string[]; program?: string }): string | null {
+export function cosignedTxProblem(
+  m: MessageLike,
+  expect: { payer: string; signers: string[]; program?: string; create?: ExpectedCreate; recordCatch?: ExpectedRecordCatch },
+): string | null {
   const keys = m.accounts.map(String);
   if (keys[0] !== expect.payer) return 'its fee payer is not the game wallet';
   const signers = keys.slice(0, m.header.numRequiredSignatures);
   if (signers.length !== expect.signers.length || !expect.signers.every((s) => signers.includes(s))) return 'it asks for unexpected signatures';
   const program = expect.program ?? CORE_PROGRAM;
-  if (!m.instructions.length || m.instructions.some((ix) => keys[ix.programIndex] !== program)) return 'it calls a program other than Metaplex Core';
+  const rc = expect.recordCatch;
+  let catches = 0;
+  let core = 0;
+  for (const ix of m.instructions) {
+    const p = keys[ix.programIndex];
+    if (p === program) {
+      if (++core > 1 && expect.create) return 'it makes more than one Core call';
+      const problem = expect.create ? coreCreateProblem(keys, ix, expect.create) : null;
+      if (problem) return problem;
+      continue;
+    }
+    if (!rc || p !== rc.program) return OTHER_PROGRAM;
+    if (++catches > 1) return 'it records the catch more than once';
+    const problem = recordCatchProblem(keys, ix, rc);
+    if (problem) return problem;
+  }
+  if (!core) return 'it makes no Core call';
+  if (rc && catches !== 1) return NO_RECORD_CATCH;
   return null;
 }
+
+const OTHER_PROGRAM = 'it calls a program other than Metaplex Core';
+const NO_RECORD_CATCH = 'it does not record the catch';
+/**
+ * The game and the market speak different versions of the co-sign protocol: a tab older than the
+ * server (it sees record_catch, or another new instruction) or newer (the server sends no
+ * record_catch). Reloading the page fixes the first; the second clears when the server catches up.
+ */
+export const staleProtocol = (problem: string | null) => problem === OTHER_PROGRAM || problem === NO_RECORD_CATCH;
 
 /** Where a minted fish stands with the market. */
 export type FishTrust =
@@ -143,6 +254,48 @@ export function classifyFish(
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fromBase64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
+type PlayerStateModule = typeof import('./player-state');
+type Pk = Parameters<PlayerStateModule['findProgressPda']>[1];
+
+/**
+ * Everything a co-signed mint may contain, derived here from what we asked for (never from the
+ * market's answer): the Core create of our asset into the Breathless collection, and the market's
+ * record_catch of this fish's value onto this owner's lifetime banked value. Pure given the
+ * player-state module, so tests feed sensor/fish-collection.mjs buildMintTx through it.
+ */
+export function mintExpectation(
+  ps: Pick<PlayerStateModule, 'playerStateProgramId' | 'findConfigPda' | 'findProgressPda' | 'fishSeedKey'>,
+  u: Umi,
+  a: { market: string; collection: string; owner: Pk; payer: string; asset: string; fish: { id: string; value: number } },
+) {
+  const program = ps.playerStateProgramId();
+  const owner = a.owner.toString();
+  const create: ExpectedCreate = { asset: a.asset, collection: a.collection, authority: a.market, payer: a.payer, owner };
+  const recordCatch: ExpectedRecordCatch = {
+    program: program.toString(),
+    oracle: a.market,
+    payer: a.payer,
+    config: ps.findConfigPda(u, program)[0].toString(),
+    owner,
+    progress: ps.findProgressPda(u, a.owner, program)[0].toString(),
+    fish: ps.fishSeedKey(a.fish.id),
+    value: a.fish.value,
+  };
+  return { payer: a.payer, signers: [a.payer, a.asset, a.market], create, recordCatch };
+}
+
+/** The error for a transaction we won't sign; a protocol mismatch asks the player to reload. */
+async function unexpectedTx(what: string, problem: string): Promise<string> {
+  const { t } = await import('./i18n');
+  if (staleProtocol(problem)) {
+    return t(
+      `The game and the market are on different versions (${problem}). Refresh the page and try again; nothing was signed`,
+      `游戏和市场版本不一致（${problem}）。请刷新页面后重试；没有签署任何交易`,
+    );
+  }
+  return t(`The market sent an unexpected ${what} (${problem}); not signing it`, `市场发来了异常的交易（${problem}），未签署`);
+}
+
 // ---- Chain flows --------------------------------------------------------------------------------
 
 export interface CosignedMint {
@@ -157,7 +310,7 @@ export async function cosignMint(
   u: Umi,
   args: { info: CosignInfo; owner: string; session: Signer; fish: MintFacts; name: string; uri: string },
 ): Promise<CosignedMint> {
-  const [{ generateSigner }, { base58 }] = await Promise.all([import('@metaplex-foundation/umi'), import('@metaplex-foundation/umi/serializers')]);
+  const [{ generateSigner, publicKey }, { base58 }] = await Promise.all([import('@metaplex-foundation/umi'), import('@metaplex-foundation/umi/serializers')]);
   const collection = args.info.fishCollection as string;
   const asset = generateSigner(u);
   const payer = args.session.publicKey.toString();
@@ -170,8 +323,10 @@ export async function cosignMint(
     throw e;
   }
   const tx = u.transactions.deserialize(fromBase64(res.tx));
-  const problem = cosignedTxProblem(tx.message, { payer, signers: [payer, asset.publicKey.toString(), String(args.info.market)] });
-  if (problem) throw new Error(`The market sent an unexpected mint transaction (${problem}); not signing it`);
+  const ps = await import('./player-state');
+  const expect = mintExpectation(ps, u, { market: String(args.info.market), collection, owner: publicKey(args.owner), payer, asset: asset.publicKey.toString(), fish: args.fish });
+  const problem = cosignedTxProblem(tx.message, expect);
+  if (problem) throw new Error(await unexpectedTx('mint transaction', problem));
   const signed = await asset.signTransaction(await args.session.signTransaction(tx));
   const sig = await u.rpc.sendTransaction(signed, { preflightCommitment: 'confirmed' });
   const done = await u.rpc.confirmTransaction(sig, {
@@ -235,7 +390,7 @@ export async function makeSellable(
         try {
           const tx = u.transactions.deserialize(fromBase64(t.tx));
           const problem = cosignedTxProblem(tx.message, { payer: ctx.session, signers: [ctx.session, String(info.market)] });
-          if (problem) throw new Error(`The market sent an unexpected transaction (${problem}); not signing it`);
+          if (problem) throw new Error(await unexpectedTx('transaction', problem));
           const sig = await u.rpc.sendTransaction(await session.signTransaction(tx), { preflightCommitment: 'confirmed' });
           const done = await u.rpc.confirmTransaction(sig, {
             commitment: 'confirmed',

@@ -42,6 +42,65 @@ function entry(id, over = {}) {
   return { key, keyHex: sync.fishKeyHex(id), growthMilli: 0, feedCount: 0, food: 'plankton', lastFed: 0, ...over };
 }
 const aquarium = (entries) => ({ version: 1, owner: OWNER, entries });
+const BOAT_LV1 = { bait: 1, boat: 1, boatSpeed: 1, boatHull: 1, boatDeck: 1 };
+const progress = (over = {}) => ({
+  version: 1, bump: 254, owner: OWNER, lifetimeValue: 0n, bestValue: 0n, catches: 0, boatLevels: { ...BOAT_LV1 }, ship: 0, ...over,
+});
+
+test('v2 Progress: no account is lifetime 0, boat pieces Lv1 and the starter ship; rules become plain numbers', () => {
+  assert.deepEqual(sync.progressView(null), { lifetime: 0, best: 0, catches: 0, boatLevels: BOAT_LV1, ship: 0 });
+  const v = sync.progressView(progress({ lifetimeValue: 160n, bestValue: 100n, catches: 2, boatLevels: { ...BOAT_LV1, bait: 2 }, ship: 2 }));
+  assert.deepEqual(v, { lifetime: 160, best: 100, catches: 2, boatLevels: { ...BOAT_LV1, bait: 2 }, ship: 2 });
+  const r = sync.gameProgressRules(ps.GAME_PROGRESS_RULES);
+  assert.deepEqual(r.mapThresholds, { fjord: 0, tianchi: 150, ocean: 1000 });
+  assert.deepEqual(r.shipThresholds, [0, 50, 150, 500, 1200, 2500]);
+  assert.deepEqual(r.boatPrices.boat, [0, 120, 700]);
+  assert.deepEqual(sync.mapsOpen(0, r), ['fjord'], 'a new player sees the fjord only');
+  assert.deepEqual(sync.mapsOpen(149, r), ['fjord']);
+  assert.deepEqual(sync.mapsOpen(150, r), ['fjord', 'tianchi']);
+  assert.deepEqual(sync.mapsOpen(1000, r), ['fjord', 'tianchi', 'ocean']);
+  assert.equal(sync.shipOpen(49, r, 1), false);
+  assert.equal(sync.shipOpen(50, r, 1), true);
+  assert.equal(sync.shipOpen(1e9, r, 6), false, 'no such ship');
+});
+
+test('v2 boat quotes follow ProgressConfig: the next level only, null at Lv3', () => {
+  const R = { ...ps.GAME_PROGRESS_RULES, boatPrices: { ...ps.GAME_PROGRESS_RULES.boatPrices, bait: [0n, 41n, 301n] } };
+  assert.deepEqual(sync.boatQuote(R, BOAT_LV1, 'bait', 10), { level: 2, cost: 41, short: 31 });
+  assert.deepEqual(sync.boatQuote(R, { ...BOAT_LV1, bait: 2 }, 'bait', 500), { level: 3, cost: 301, short: 0 });
+  assert.equal(sync.boatQuote(R, { ...BOAT_LV1, bait: 3 }, 'bait', 500), null);
+});
+
+test("v2 a new player: buy_boat creates Progress, then a mint's record_catch grows the same account", () => {
+  // As the program leaves it: buy_boat bait Lv2 on a wallet with no Progress (lifetime 0)...
+  const afterBoat = progress({ boatLevels: { ...BOAT_LV1, bait: 2 } });
+  const boatRec = { what: { v: 1, kind: 'boat', boat: 'bait', level: 2 }, ts: 1_000, lastValid: 500 };
+  assert.equal(sync.purchaseVisible(boatRec.what, null, null, null), false, 'no Progress yet: not landed');
+  assert.equal(sync.purchaseVisible(boatRec.what, null, null, afterBoat), true);
+  // ...then record_catch (value 160) adds to it and keeps the boat level.
+  const afterCatch = { ...afterBoat, lifetimeValue: 160n, bestValue: 160n, catches: 1 };
+  const v = sync.progressView(afterCatch);
+  assert.equal(v.lifetime, 160);
+  assert.equal(v.boatLevels.bait, 2);
+  assert.deepEqual(sync.mapsOpen(v.lifetime, sync.gameProgressRules(ps.GAME_PROGRESS_RULES)), ['fjord', 'tianchi'], 'Heaven Lake opens without a reload');
+  assert.equal(sync.purchaseVisible(boatRec.what, null, null, afterCatch), true);
+  // A lost confirmation settles by the re-read Progress only once the blockhash expired.
+  assert.equal(sync.settleRecord(boatRec, null, 480, 2_000, null, null, 600_000, afterCatch), 'kept');
+  assert.equal(sync.settleRecord(boatRec, null, 501, 2_000, null, null, 600_000, afterCatch), 'delivered');
+  assert.equal(sync.settleRecord(boatRec, null, 501, 2_000, null, null, 600_000, progress()), 'dropped');
+  const shipRec = { v: 1, kind: 'ship', ship: 2 };
+  assert.equal(sync.purchaseVisible(shipRec, null, null, progress({ ship: 2 })), true);
+  assert.equal(sync.purchaseVisible(shipRec, null, null, progress({ ship: 1 })), false);
+  assert.equal(sync.purchaseVisible(shipRec, null, null, null), false);
+});
+
+test('v2 program errors keep their codes after the v1 ones', () => {
+  assert.equal(errors.playerStateErrorName({ InstructionError: [0, { Custom: 6020 }] }), 'InvalidBoatSlot');
+  assert.equal(errors.playerStateErrorName('custom program error: 0x1785'), 'NotNextLevel');
+  assert.equal(errors.playerStateErrorName({ Custom: 6023 }), 'ShipLocked');
+  assert.equal(errors.playerStateErrorName({ Custom: 6025 }), 'BadCatchLog');
+  assert.equal(errors.playerStateErrorName({ Custom: 6019 }), 'BadClock');
+});
 
 test('Config prices become the game tables (whole PEARL numbers)', () => {
   const g = sync.gamePrices(P);
@@ -210,7 +269,7 @@ test('program errors are recognised in every shape a failed send or confirmation
   const failed = Object.assign(new Error('Upgrade failed on-chain'), { name: 'TxFailedError', label: 'Upgrade', err: { InstructionError: [1, { Custom: 6009 }] } });
   assert.equal(name(failed), 'InsufficientPearl');
   assert.equal(name(new Error('User rejected the request')), null);
-  assert.equal(errors.PLAYER_STATE_ERRORS.length, 20);
+  assert.equal(errors.PLAYER_STATE_ERRORS.length, 26, 'v1 (20) + v2 (6), lib.rs PlayerStateError order');
 });
 
 test('L2: a session-signed set_path the program refused does not fall back to a wallet prompt', () => {

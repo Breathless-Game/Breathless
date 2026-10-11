@@ -252,21 +252,8 @@ export function selectionRange<T>(order: readonly T[], from: T, to: T, selectabl
 }
 
 // ---- Map unlock progress -------------------------------------------------
-// Maps unlock by the lifetime value of every fish ever banked. Selling never lowers it.
-
-/**
- * Lifetime banked value for a save from before selling: the old saved number was the highest bank
- * total, and the bank only ever grew, so it already is the lifetime value. Taking the max with the
- * current bank also covers a bank that predates map progress.
- */
-export function migrateUnlockProgress(saved: number, bankTotal: number): number {
-  return Math.max(Number.isFinite(saved) ? saved : 0, Number.isFinite(bankTotal) ? bankTotal : 0);
-}
-
-/** Lifetime value after banking `added` more. */
-export function addBankedValue(lifetime: number, added: number): number {
-  return lifetime + Math.max(0, Number.isFinite(added) ? added : 0);
-}
+// Maps and ships unlock by the lifetime banked value on chain (player_state Progress, which
+// record_catch raises with each co-signed mint; main.ts applyMapProgress). Selling never lowers it.
 
 /** Errors that mean the burner wallet cannot pay (for the upload or the transaction). */
 export function isFundsError(message: string): boolean {

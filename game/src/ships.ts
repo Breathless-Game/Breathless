@@ -22,6 +22,14 @@ export const SHIPS = [
   { file: '05-dive-support', cn: '深海支援旗舰', en: 'Abyss Atlas', intro: '完整潜水平台、装备工作区与门架吊机，满级深海探索支援船。', threshold: 2500, speed: .18, range: .45, capacity: 4 },
 ] as const;
 
+/** Lifetime banked value per ship: SHIPS' defaults until the chain's ProgressConfig says (setShipThresholds). */
+const thresholds: number[] = SHIPS.map((s) => s.threshold);
+export const shipThreshold = (i: number): number => thresholds[i] ?? Infinity;
+/** The chain's ship thresholds (player_state ProgressConfig.ship_thresholds, what set_ship checks). */
+export function setShipThresholds(values: readonly number[]) {
+  values.forEach((v, i) => { if (i < thresholds.length && Number.isFinite(v)) thresholds[i] = v; });
+}
+
 export class Shipyard {
   private root = document.createElement('section');
   // Sparse until every model is in: the sailed ship loads at boot, the rest in idle time or when the shipyard opens.
@@ -45,14 +53,22 @@ export class Shipyard {
   shipModel(): T.Object3D | null { return this.models[this.index]?.clone() ?? null; }
   /** A fresh copy of any ship's model (null until the models load), e.g. for the workbench's inspector. */
   modelAt(i: number): T.Object3D | null { if (!this.models[i]) void this.loadAll(); return this.models[i]?.clone() ?? null; }
-  /** Sail ship i if its banked-value threshold is reached: saved, put on the boat, bonus applied. */
+  /**
+   * Sail ship i if its lifetime-value threshold is reached: put on the boat, bonus applied, and
+   * cached (the chain's Progress.ship decides; main.ts calls this once set_ship landed).
+   */
   equip(i: number): boolean {
-    if (!SHIPS[i] || this.progress() < SHIPS[i].threshold) return false; // not fetched yet: apply() sails it on arrival
+    if (!SHIPS[i] || this.progress() < shipThreshold(i)) return false; // not fetched yet: apply() sails it on arrival
     this.index = this.selected = i; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {} gearLevelsChanged();
     this.apply(); this.onEquip();
     return true;
   }
-  constructor(private boat: T.Group, private progress: () => number, private onToggle: (open: boolean) => void, private onEquip: () => void, private gameScene: T.Scene, private applyColorGrade: (root: T.Object3D) => void) {
+  /**
+   * progress: the lifetime banked value read from the chain (0 until read). chainShip: the ship
+   * the chain's Progress says is sailed (null until read; the cache then never grants a ship).
+   * request: switching ships from the dialog goes through the chain (set_ship) instead of equip.
+   */
+  constructor(private boat: T.Group, private progress: () => number, private onToggle: (open: boolean) => void, private onEquip: () => void, private gameScene: T.Scene, private applyColorGrade: (root: T.Object3D) => void, private chainShip: () => number | null = () => null, private request?: (i: number) => void) {
     this.root.className = 'shipyard'; this.root.hidden = true;
     this.root.setAttribute('role', 'dialog'); this.root.setAttribute('aria-modal', 'true'); this.root.setAttribute('aria-label', t('Shipyard', '船只升级'));
     document.body.append(this.root);
@@ -62,7 +78,10 @@ export class Shipyard {
       if (!button) return;
       if (button.dataset.close !== undefined) this.close();
       if (button.dataset.ship !== undefined) { this.selected = Number(button.dataset.ship); this.draw(); this.root.querySelector<HTMLButtonElement>(`[data-ship="${this.selected}"]`)?.focus(); }
-      if (button.dataset.equip !== undefined && this.equip(this.selected)) this.draw();
+      if (button.dataset.equip !== undefined) {
+        if (this.request) this.request(this.selected);
+        else if (this.equip(this.selected)) this.draw();
+      }
     });
     this.root.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); this.close(); return; }
@@ -109,15 +128,22 @@ export class Shipyard {
     return this.loadingAll;
   }
   private savedIndex() {
+    const chain = this.chainShip();
+    if (chain !== null) return Number.isInteger(chain) && chain >= 0 && chain < SHIPS.length && this.progress() >= shipThreshold(chain) ? chain : 0;
     let saved = 0; try {
       const current = localStorage.getItem(storageKey('ship-v2'));
       const legacy = localStorage.getItem(storageKey('ship'));
       saved = current !== null ? Number(current) : legacy !== null ? Number(legacy) + 1 : 0;
     } catch {}
-    return Number.isInteger(saved) && saved >= 0 && saved < SHIPS.length && this.progress() >= SHIPS[saved].threshold ? saved : 0;
+    return Number.isInteger(saved) && saved >= 0 && saved < SHIPS.length && this.progress() >= shipThreshold(saved) ? saved : 0;
   }
   reload() {
-    this.index = this.savedIndex();
+    const i = this.savedIndex();
+    if (i === this.index && this.shown) { if (this.open) this.draw(); return; } // same ship: no model swap
+    const changed = this.index !== i;
+    this.index = i;
+    if (changed) gearLevelsChanged(); // the Boat NFT shows the ship sailed
+    if (this.chainShip() !== null) try { localStorage.setItem(storageKey('ship-v2'), String(i)); } catch {} // display cache only
     this.selected = this.index; this.apply(); if (this.open) this.draw();
   }
   private shown: T.Object3D | null = null;
@@ -237,8 +263,8 @@ export class Shipyard {
   }
   private draw() {
     queueMicrotask(() => this.animateWater());
-    const s = SHIPS[this.selected], unlocked = this.progress() >= s.threshold;
+    const s = SHIPS[this.selected], need = shipThreshold(this.selected), unlocked = this.progress() >= need;
     const name = t(s.en, s.cn), status = this.closed ? t('Loading failed. Refresh.', '模型加载失败，请刷新') : !this.allLoaded ? t('Loading…', '模型加载中…') : this.index === this.selected ? t('EQUIPPED', '当前使用') : unlocked ? t('EQUIP', '装备船只') : t('LOCKED', '尚未解锁');
-    this.root.innerHTML = `<div class="shipyard-shell"><header><div><small>${t('DRY DOCK', '船坞')}</small><h1>${t('Ship upgrades', '船只升级')}</h1></div><button data-close aria-label="${t('Close shipyard', '关闭船坞')}">✕</button></header><div class="shipyard-layout"><aside><small>${t('LEVEL', '等级')} 0${this.selected}</small><h2>${name}</h2><p>${t(SHIP_INTROS_EN[this.selected], s.intro)}</p><h4>${t('BONUSES', '船只加成')}</h4><dl><div><dt>${t('Swim speed', '潜水游速')}</dt><dd>+${Math.round(s.speed*100)}%</dd></div><div><dt>${t('Catch radius', '捕获范围')}</dt><dd>+${Math.round(s.range*100)}%</dd></div><div><dt>${t('Net capacity', '鱼网容量')}</dt><dd>+${s.capacity} ${t('slots', '格')}</dd></div></dl><p class="shipyard-progress">${t('Total banked value', '累计入库价值')} ${Math.floor(this.progress())} / ${s.threshold || t('Starter', '初始船')}<br>${t('Reach the target to unlock. No fish are spent.', '达到目标即可解锁，无需消耗鱼。')}</p><button data-equip ${!unlocked || !this.allLoaded ? 'disabled' : ''}>${status}</button></aside><main><div class="shipyard-feature">${this.thumbnails[this.selected] ? `<img src="${this.thumbnails[this.selected]}" alt="${name}">` : `<p>${t('Preparing preview…', '正在准备船只预览…')}</p>`}<span>${name} · LV.0${this.selected}</span></div><div class="shipyard-slots">${SHIPS.map((ship,i)=>`<button data-ship="${i}" class="${i===this.selected?'selected':''}" aria-pressed="${i===this.selected}"><small>0${i} ${this.progress()<ship.threshold?'🔒':''}</small>${this.thumbnails[i]?`<img src="${this.thumbnails[i]}" alt="">`:''}<b>${t(ship.en, ship.cn)}</b><span>${i===this.index?t('Equipped', '已装备'):''}</span></button>`).join('')}${Array.from({length:4},()=>`<div class="shipyard-empty"><span>？</span><small>${t('COMING SOON', '未来船位')}</small></div>`).join('')}</div><p class="shipyard-caption">${t('Select a slot for details · Click the boat on the title screen to open the shipyard · Esc to return', '选择船位查看详情 · 点击初始页面船只进入船坞 · Esc 返回')}</p></main></div></div>`;
+    this.root.innerHTML = `<div class="shipyard-shell"><header><div><small>${t('DRY DOCK', '船坞')}</small><h1>${t('Ship upgrades', '船只升级')}</h1></div><button data-close aria-label="${t('Close shipyard', '关闭船坞')}">✕</button></header><div class="shipyard-layout"><aside><small>${t('LEVEL', '等级')} 0${this.selected}</small><h2>${name}</h2><p>${t(SHIP_INTROS_EN[this.selected], s.intro)}</p><h4>${t('BONUSES', '船只加成')}</h4><dl><div><dt>${t('Swim speed', '潜水游速')}</dt><dd>+${Math.round(s.speed*100)}%</dd></div><div><dt>${t('Catch radius', '捕获范围')}</dt><dd>+${Math.round(s.range*100)}%</dd></div><div><dt>${t('Net capacity', '鱼网容量')}</dt><dd>+${s.capacity} ${t('slots', '格')}</dd></div></dl><p class="shipyard-progress">${t('Total banked value', '累计入库价值')} ${Math.floor(this.progress())} / ${need || t('Starter', '初始船')}<br>${t('Reach the target to unlock. No fish are spent.', '达到目标即可解锁，无需消耗鱼。')}</p><button data-equip ${!unlocked || !this.allLoaded ? 'disabled' : ''}>${status}</button></aside><main><div class="shipyard-feature">${this.thumbnails[this.selected] ? `<img src="${this.thumbnails[this.selected]}" alt="${name}">` : `<p>${t('Preparing preview…', '正在准备船只预览…')}</p>`}<span>${name} · LV.0${this.selected}</span></div><div class="shipyard-slots">${SHIPS.map((ship,i)=>`<button data-ship="${i}" class="${i===this.selected?'selected':''}" aria-pressed="${i===this.selected}"><small>0${i} ${this.progress()<shipThreshold(i)?'🔒':''}</small>${this.thumbnails[i]?`<img src="${this.thumbnails[i]}" alt="">`:''}<b>${t(ship.en, ship.cn)}</b><span>${i===this.index?t('Equipped', '已装备'):''}</span></button>`).join('')}${Array.from({length:4},()=>`<div class="shipyard-empty"><span>？</span><small>${t('COMING SOON', '未来船位')}</small></div>`).join('')}</div><p class="shipyard-caption">${t('Select a slot for details · Click the boat on the title screen to open the shipyard · Esc to return', '选择船位查看详情 · 点击初始页面船只进入船坞 · Esc 返回')}</p></main></div></div>`;
   }
 }

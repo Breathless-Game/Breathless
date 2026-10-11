@@ -39,9 +39,13 @@ import {
   decodeAquarium,
   decodeConfig,
   decodePlayerState,
+  decodeProgress,
+  decodeProgressConfig,
   findAquariumPda,
   findConfigPda,
   findPlayerStatePda,
+  findProgressConfigPda,
+  findProgressPda,
   initPlayer,
   playerStateProgramId,
   setSession,
@@ -51,6 +55,8 @@ import {
   type PearlAccounts,
   type PlayerStateAccount,
   type PlayerStateConfig,
+  type ProgressAccount,
+  type ProgressRules,
 } from './player-state';
 import { biteSettled, chainLevels, isChainPurchase, purchaseVisible, settleRecord, type ChainPurchase } from './player-sync';
 import { playerStateErrorName, sessionFailureFinal } from './player-state-errors';
@@ -62,6 +68,13 @@ export interface PlayerChainSnapshot {
   /** Null until the player's first purchase creates it (init_player is batched into that transaction). */
   player: PlayerStateAccount | null;
   aquarium: AquariumAccount | null;
+  /** v2: the admin-set boat prices and ship / map unlock thresholds (ProgressConfig). */
+  progressRules: ProgressRules;
+  /**
+   * v2: boat levels, the ship sailed and the lifetime banked value (Progress). Null until the
+   * first buy_boat or recorded catch creates it: lifetime 0, boat pieces Lv1, the starter ship.
+   */
+  progress: ProgressAccount | null;
   /** When it was read (ms). */
   at: number;
 }
@@ -113,7 +126,8 @@ export function resetPlayerChain(): void {
 }
 
 /**
- * Read the Config, PlayerState and Aquarium in one RPC call. Concurrent calls share one read.
+ * Read the Config, PlayerState, Aquarium, ProgressConfig and Progress in one RPC call
+ * (getMultipleAccounts). Concurrent calls share one read.
  * Throws (and sets status 'error') when the Config is missing or the RPC fails.
  */
 export function refreshPlayerChain(): Promise<PlayerChainSnapshot> {
@@ -134,22 +148,30 @@ async function read(): Promise<PlayerChainSnapshot> {
     const u = await umi();
     const programId = playerStateProgramId();
     const ownerKey = publicKey(owner);
-    const [configAcc, playerAcc, aquariumAcc] = await u.rpc.getAccounts([
+    const [configAcc, playerAcc, aquariumAcc, rulesAcc, progressAcc] = await u.rpc.getAccounts([
       findConfigPda(u, programId)[0],
       findPlayerStatePda(u, ownerKey, programId)[0],
       findAquariumPda(u, ownerKey, programId)[0],
+      findProgressConfigPda(u, programId)[0],
+      findProgressPda(u, ownerKey, programId)[0],
     ]);
     const ours = (a: (typeof configAcc)) => a.exists && a.owner.toString() === programId.toString();
     if (!configAcc.exists) throw new Error('player_state Config not found on chain');
     if (!ours(configAcc)) throw new Error('player_state Config has the wrong owner');
+    // The unlock thresholds and boat prices: without them nothing about progress can be decided.
+    if (!rulesAcc.exists) throw new Error('player_state ProgressConfig not found on chain');
+    if (!ours(rulesAcc)) throw new Error('player_state ProgressConfig has the wrong owner');
     const next: PlayerChainSnapshot = {
       owner,
       config: decodeConfig(configAcc.data),
       player: ours(playerAcc) ? decodePlayerState((playerAcc as { data: Uint8Array }).data) : null,
       aquarium: ours(aquariumAcc) ? decodeAquarium((aquariumAcc as { data: Uint8Array }).data) : null,
+      progressRules: decodeProgressConfig(rulesAcc.data).rules,
+      progress: ours(progressAcc) ? decodeProgress((progressAcc as { data: Uint8Array }).data) : null,
       at: Date.now(),
     };
     if (next.player && next.player.owner.toString() !== owner) throw new Error('PlayerState belongs to another owner');
+    if (next.progress && next.progress.owner.toString() !== owner) throw new Error('Progress belongs to another owner');
     if (walletState().owner !== owner) throw new Error('Wallet changed while reading');
     snapshot = next;
     status = 'ready';
@@ -492,7 +514,7 @@ async function rereadUntilVisible(what: ChainPurchase, tries = 4): Promise<void>
     try {
       const snap = await refreshPlayerChain();
       settleBiteFromState(snap);
-      if (purchaseVisible(what, snap.player, snap.aquarium)) return;
+      if (purchaseVisible(what, snap.player, snap.aquarium, snap.progress)) return;
     } catch (e) {
       console.warn('player_state re-read failed', e);
     }
@@ -559,7 +581,7 @@ async function settlePending(u: Umi): Promise<ReconcileReport> {
   const snap = await refreshPlayerChain();
   const now = Date.now();
   for (const [i, rec] of records.entries()) {
-    const verdict = settleRecord(rec, statuses[i] ?? null, height, now, snap.player, snap.aquarium, PENDING_MAX_AGE_MS);
+    const verdict = settleRecord(rec, statuses[i] ?? null, height, now, snap.player, snap.aquarium, PENDING_MAX_AGE_MS, snap.progress);
     if (verdict === 'kept') {
       report.kept.push(rec.signature);
       continue;
@@ -590,4 +612,23 @@ export async function reconcilePlayerPurchases(): Promise<ReconcileReport> {
   if (!pendingNow.length) return { delivered: [], dropped: [], kept: [] };
   if (paymentLock.busy) return { delivered: [], dropped: [], kept: pendingNow.map((r) => r.signature) };
   return paymentLock.run(async () => settlePending(await umi()));
+}
+
+// ---- After a co-signed mint (record_catch rides in it) ----------------------------------
+
+/**
+ * A fish mint carrying record_catch landed: read Progress again until its lifetime value moved
+ * past `before` (an RPC node a slot behind may not show it yet). Maps and ships unlock from the
+ * latest read without a reload (onPlayerChainChange). Never throws.
+ */
+export async function rereadAfterCatch(before: bigint, tries = 4): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 1200));
+    try {
+      const snap = await refreshPlayerChain();
+      if ((snap.progress?.lifetimeValue ?? 0n) > before) return;
+    } catch (e) {
+      console.warn('player_state re-read after a catch failed', e);
+    }
+  }
 }

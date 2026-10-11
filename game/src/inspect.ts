@@ -67,7 +67,7 @@ export interface ShipEntry {
   nameZh: string;
   intro: string;
   introZh: string;
-  /** Total banked value that unlocks it. */
+  /** Lifetime banked value that unlocks it (the chain's ProgressConfig). */
   threshold: number;
   /** Its bonuses, one short line each. */
   bonuses: string[];
@@ -77,12 +77,14 @@ export interface ShipHooks {
   list(): readonly ShipEntry[];
   /** The ship sailed now (index). */
   current(): number;
-  /** Total banked value so far. */
+  /** The lifetime banked value read from the chain (0 until read). */
   progress(): number;
   /** A fresh copy of ship i's model, null while the models load. */
   model(i: number): THREE.Object3D | null;
-  /** Sail ship i; false if it's still locked. */
-  equip(i: number): boolean;
+  /** Sail ship i (player_state set_ship). Resolves with why it didn't happen, or null once it did. */
+  equip(i: number): Promise<string | null>;
+  /** The boat's parts bought with PEARL (upgrades.ts group 'boat', player_state buy_boat). */
+  parts(): readonly UpgradeDef[];
 }
 
 export class GearInspector {
@@ -213,6 +215,46 @@ export class GearInspector {
     this.shipMode = this.diverMode = false;
     this.level = Math.min(3, Math.max(1, this.hooks.owned(def)));
     this.open3d(from);
+  }
+
+  /** The middle of the stage: where a part or the ships grow from when picked inside the inspector. */
+  private centre() {
+    const r = this.stage.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  /**
+   * The boat's parts, under the ships and under each part: the ships first, then each part with
+   * its level; click one to look at it (and buy its next level), or the ships to go back.
+   */
+  private renderParts(current: UpgradeDef | null) {
+    const parts = this.hooks.ships.parts();
+    const box = $('wb-inspect-parts');
+    box.classList.toggle('hidden', !parts.length);
+    const item = (label: string, sub: string, on: boolean, go: () => void) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `wb-path${on ? ' on' : ''}`;
+      const name = document.createElement('b');
+      name.textContent = label;
+      const small = document.createElement('small');
+      small.textContent = sub;
+      b.append(name, small);
+      b.addEventListener('click', go);
+      return b;
+    };
+    $('wb-inspect-part-list').replaceChildren(
+      item(t('Ships', '船只'), t('Unlocked by lifetime banked value', '累计入库价值解锁'), current === null, () => {
+        if (current !== null) this.showShips(this.centre());
+      }),
+      ...parts.map((def) => {
+        const owned = Math.min(3, Math.max(1, this.hooks.owned(def)));
+        const next = owned >= 3 ? t('max level', '已满级') : t(`next ${def.prices[owned]} Pearls`, `下一级 ${def.prices[owned]} 珍珠`);
+        return item(lang() === 'zh' ? def.nameZh : def.name, `${t(`Lv ${owned} / 3`, `${owned} / 3 级`)} · ${next}`, current?.id === def.id, () => {
+          if (current?.id !== def.id) this.show(def, this.centre());
+        });
+      }),
+    );
   }
 
   /** The ships, from the boat on the table: opens on the one sailed now. */
@@ -397,6 +439,8 @@ export class GearInspector {
     buy.classList.toggle('hidden', maxed);
     $('wb-inspect-pearls').textContent = this.noticeText() || t(`You have ${Math.floor(pearls)} Pearls`, `你有 ${Math.floor(pearls)} 珍珠`);
     this.renderPaths(def, owned);
+    if (def.group === 'boat') this.renderParts(def);
+    else $('wb-inspect-parts').classList.add('hidden');
 
     $('wb-inspect-dots').replaceChildren(
       ...LEVELS.map((l) => {
@@ -443,6 +487,7 @@ export class GearInspector {
     );
     $('wb-inspect-ready').classList.add('hidden');
     $('wb-inspect-paths').classList.add('hidden');
+    this.renderParts(null);
 
     // The right panel: its bonuses, how far the banked value has come, and Equip.
     $('wb-inspect-up-title').textContent = i === current ? t('Sailing', '当前船只') : unlocked ? t('Equip this ship', '装备船只') : t('Locked', '未解锁');
@@ -450,9 +495,9 @@ export class GearInspector {
     $('wb-inspect-up-price').textContent = ship.threshold ? t(`Unlocks at ${ship.threshold} banked value`, `累计入库价值达到 ${ship.threshold} 解锁`) : t('Starter ship', '初始船只');
     const buy = $<HTMLButtonElement>('wb-inspect-buy');
     buy.classList.remove('hidden');
-    buy.disabled = i === current || !unlocked;
+    buy.disabled = i === current || !unlocked || this.buying;
     buy.classList.toggle('primary', !buy.disabled);
-    buy.textContent = i === current ? t('Equipped', '已装备') : unlocked ? t('Equip', '装备') : t(`Bank ${Math.ceil(ship.threshold - progress)} more`, `还差 ${Math.ceil(ship.threshold - progress)} 入库价值`);
+    buy.textContent = this.buying ? t('Switching…', '切换中…') : i === current ? t('Equipped', '已装备') : unlocked ? t('Equip', '装备') : t(`Bank ${Math.ceil(ship.threshold - progress)} more`, `还差 ${Math.ceil(ship.threshold - progress)} 入库价值`);
     $('wb-inspect-pearls').textContent = this.noticeText() || t(`Total banked value ${Math.floor(progress)} (no fish are spent)`, `累计入库价值 ${Math.floor(progress)}（不会消耗鱼）`);
 
     $('wb-inspect-dots').replaceChildren(
@@ -485,6 +530,7 @@ export class GearInspector {
     this.root.classList.add('diver');
     $('wb-inspect-sonar-color').classList.add('hidden');
     $('wb-inspect-paths').classList.add('hidden');
+    $('wb-inspect-parts').classList.add('hidden');
     $('wb-inspect-name').textContent = t('Your diver', '你的潜水员');
     $('wb-inspect-zh').textContent = '';
     $('wb-inspect-level').textContent = t(`Wearing ${worn.length} / ${d.slots}`, `已穿戴 ${worn.length} / ${d.slots}`);
@@ -543,8 +589,17 @@ export class GearInspector {
     this.renderInfo();
   }
 
-  private equipShip() {
-    this.notice = this.hooks.ships.equip(this.level - 1) ? null : ['Still locked: bank more fish first.', '尚未解锁：先多入库一些鱼。'];
+  /** Sail the ship looked at: set_ship on chain (one wallet prompt); the boat follows once it landed. */
+  private async equipShip() {
+    if (this.buying) return;
+    const i = this.level - 1;
+    this.buying = true;
+    this.notice = null;
+    this.renderInfo();
+    const failed = await this.hooks.ships.equip(i);
+    this.buying = false;
+    if (!this.shipMode) return;
+    this.notice = failed ? [failed, failed] : null;
     this.renderInfo();
   }
 

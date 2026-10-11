@@ -89,6 +89,10 @@ ProgressConfig rules (`GAME_PROGRESS_RULES` in game/src/player-state.ts): boat p
 bait / boat / boatSpeed / boatHull / boatDeck = [0,40,300] / [0,120,700] / [0,80,500] x3;
 ship thresholds [0,50,150,500,1200,2500]; map thresholds fjord 0, tianchi 150, ocean 1000.
 
+Only the server-mode market (co-signed fish mints) sends `record_catch`. A program-mode market
+(`FISH_MARKET_PROGRAM_ID`, the game's `mintRoute` 'legacy') mints without it, so lifetime value
+stays 0 there and maps past the fjord and ships past the first stay locked.
+
 Binary: 455216 bytes, sha256
 `c1a920aaa5522d650f601a3b7ee2dab5db2ff7b58e4720777ec7b53da9566660` (the dumped
 on-chain program matches). ProgramData extended by 73368 bytes (381848 -> 455216).

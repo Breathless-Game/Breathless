@@ -178,6 +178,7 @@
           <div id="wb-place-sub" class="small"></div>
           <p id="wb-place-text"></p>
           <div id="wb-place-warn" class="small hidden"></div>
+          <div id="wb-place-lock" class="small hidden"></div>
           <section id="wb-place-conditions" class="wb-weather-card" aria-label="Entry conditions" data-zh-aria-label="入场条件">
             <div class="wb-weather-title" data-zh="入场记录">FIELD NOTES</div>
             <div id="wb-fishing-advice" class="wb-fishing-advice" role="status">
@@ -252,6 +253,11 @@
             <div class="small muted" data-zh="分支">BRANCH</div>
             <div id="wb-inspect-path-list"></div>
           </div>
+          <!-- The boat's parts (bait, boat, engine, hull, deck): player_state buy_boat burns their PEARL. -->
+          <div id="wb-inspect-parts" class="hidden">
+            <div class="small muted" data-zh="船只部件">BOAT PARTS</div>
+            <div id="wb-inspect-part-list"></div>
+          </div>
         </aside>
         <div id="wb-inspect-hint" class="small" data-zh="拖动旋转 · 横向滑动切换等级 · Esc 或点击外面放下">Drag to rotate · horizontal swipe switches levels · Esc or click outside to put it down</div>
         <button id="wb-inspect-close" class="mini" title="Put it down (Esc)" data-zh-title="放下 (Esc)">×</button>
@@ -281,7 +287,6 @@
           <li data-zh="浮出水面即可把渔获入库。">Surface to bank your catch.</li>
         </ol>
         <div id="map-picker"></div>
-        <label id="maps-demo-row" class="small muted"><input type="checkbox" id="maps-demo" /> <span data-zh="解锁全部地图（演示）">Unlock all maps (demo)</span></label>
         <div class="buttons">
           <button id="start-live" class="primary" data-zh="用摄像头开始">Start with camera</button>
           <button id="start-keys" data-zh="用键盘游玩">Play with keyboard</button>

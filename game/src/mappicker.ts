@@ -1,27 +1,24 @@
-import { MAPS, MAP_ORDER, isUnlocked, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, isUnlocked, lockProgress, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
 import { t, pickName, onLangChange } from './i18n';
 
-// The three map cards on the start card. Locked maps show what they need;
-// the demo switch underneath opens everything for showing the game off.
+// The three map cards on the start card. Locked maps show what they need: the
+// lifetime banked value on chain (player_state Progress) against ProgressConfig's
+// threshold.
 
 const $ = (id: string) => document.getElementById(id)!;
 
 export class MapPicker {
   private root = $('map-picker');
-  private demo = $('maps-demo') as HTMLInputElement;
 
   constructor(
     private progress: MapProgress,
     private onPick: (id: MapId) => void,
-    onDemoToggle: (on: boolean) => void,
   ) {
-    this.demo.addEventListener('change', () => onDemoToggle(this.demo.checked));
     this.render();
     onLangChange(() => this.render());
   }
 
   render() {
-    this.demo.checked = this.progress.unlockAll;
     this.root.replaceChildren(
       ...MAP_ORDER.map((id) => {
         const map = MAPS[id];
@@ -46,7 +43,7 @@ export class MapPicker {
         // three-column layout: the shelf's zones then the trench, or what unlocks the map.
         const [zones, below] = open
           ? [map.zoneLabels.map(mapZoneLabel).join(' · '), t('+ Trench ∞', '+ 海沟 ∞')]
-          : [t(`🔒 Bank ${map.unlockValue} value`, `🔒 入库价值 ${map.unlockValue}`), t(`you have ${Math.floor(this.progress.bestValue)}`, `当前 ${Math.floor(this.progress.bestValue)}`)];
+          : [t(`🔒 Bank ${map.unlockValue} value`, `🔒 入库价值 ${map.unlockValue}`), lockProgress(this.progress)];
         card.append(
           swatch,
           line('map-name', pickName(map)),

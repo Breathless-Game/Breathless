@@ -25,6 +25,13 @@ export const PLAYER_STATE_ERRORS = [
   'FullyGrown',
   'FeedCooldown',
   'BadClock',
+  // v2 (appended in lib.rs order, so every v1 code keeps its number)
+  'InvalidBoatSlot',
+  'NotNextLevel',
+  'InvalidShip',
+  'ShipLocked',
+  'InvalidProgressRules',
+  'BadCatchLog',
 ] as const;
 
 export type PlayerStateErrorName = (typeof PLAYER_STATE_ERRORS)[number];

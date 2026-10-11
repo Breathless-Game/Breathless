@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { pathEffect, pathSummary } from './equipment-i18n';
-import { Shipyard, SHIPS, SHIP_INTROS_EN } from './ships';
+import { setShipThresholds, Shipyard, shipThreshold, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
@@ -17,7 +17,7 @@ import { TitleScreen } from './title';
 import { LazyAquarium as Aquarium } from './lazy-panels';
 import { setFoodPrices, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
-import { syncUpgradePrices, UPGRADES, type UpgradeId } from './upgrades';
+import { syncBoatPrices, syncUpgradePrices, UPGRADES, type UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import {
@@ -26,17 +26,17 @@ import {
   clampWorldXToBounds,
   createWorldBounds,
 } from './bounds';
-import { MAPS, MAP_ORDER, SHARK_WARNING, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, markSharkWarningSeen, saveMapProgress, sharkWarningSeen, type MapId } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, isUnlocked, loadMapProgress, mapDepth, mapZones, markSharkWarningSeen, saveMapProgress, setMapThresholds, sharkWarningSeen, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { activePath, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planPearlSpend, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, setUpgradeCosts, spendablePearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { bankEntry, biteForfeit, isFundsError, migrateBank, pearls, type BankedFish } from './market';
 import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
-import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
+import { BOAT_IDS, normalizeBoat, normalizeKit, type BoatId, type GearLevels } from './gear-nft';
 import { NftQueue } from './nft-queue';
 import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
@@ -71,14 +71,15 @@ import {
   reconcilePlayerPurchases,
   recordSharkBite,
   refreshPlayerChain,
+  rereadAfterCatch,
   sendPlayerPurchase,
   sendSetPath,
   settleOwedBite,
   type OwnerTxContext,
   type PurchasePlan,
 } from './player-chain';
-import { craftQuote, equipmentFromChain, gamePrices, growthByFishId, planFeed, synthesisFromChain, synthQuote, upgradeQuote, type FeedBlock } from './player-sync';
-import { buyUpgrade as buyUpgradeIx, craft as craftIx, feed as feedIx, MAX_FISH_PER_CALL, setPath as setPathIx, synthUpgrade as synthUpgradeIx } from './player-state';
+import { boatQuote, craftQuote, equipmentFromChain, gameProgressRules, gamePrices, growthByFishId, planFeed, progressView, shipOpen, synthesisFromChain, synthQuote, upgradeQuote, type FeedBlock, type ProgressView } from './player-sync';
+import { buyBoat as buyBoatIx, buyUpgrade as buyUpgradeIx, craft as craftIx, feed as feedIx, MAX_FISH_PER_CALL, setPath as setPathIx, setShip as setShipIx, synthUpgrade as synthUpgradeIx } from './player-state';
 import { playerStateErrorName, type PlayerStateErrorName } from './player-state-errors';
 import { explorerTx } from './wallet-storage';
 
@@ -110,9 +111,9 @@ const renderQuality = new AdaptiveQuality({
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-// The map you last played, unless it is no longer open (e.g. the demo switch was turned off).
+// The map you last played. Maps open on the lifetime banked value read from the chain
+// (applyPlayerChain); until then only the free one is, and the saved choice waits for that read.
 const mapProgress = loadMapProgress();
-if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
 // The title's backdrop is a random place at a random hour each visit. It isn't saved:
 // the workbench's chart (or a wallet's last map) decides where you actually dive.
 const backdropMap = MAP_ORDER[Math.floor(Math.random() * MAP_ORDER.length)];
@@ -721,6 +722,12 @@ hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
+  // A co-signed mint also recorded the catch (record_catch): read Progress again, so maps and ships
+  // the new lifetime value opens unlock without a reload.
+  minted(_fish, trusted) {
+    if (!trusted || !walletState().owner) return;
+    void rereadAfterCatch(playerChain()?.progress?.lifetimeValue ?? 0n);
+  },
   sold(sales) {
     chainFish.departed(sales.map((s) => s.fish.assetId));
     hud.setBank(bank);
@@ -917,10 +924,32 @@ function applyPlayerChain() {
     Object.assign(equipment, equipmentFromChain(equipment, snap.player, biteUnsettled()));
     synthesisState = synthesisFromChain(snap.player, snap.config.prices);
     saveSynthesis(synthesisState);
+    // v2: boat-part prices and ship thresholds from ProgressConfig (map thresholds: applyMapProgress).
+    try {
+      const rules = gameProgressRules(snap.progressRules);
+      syncBoatPrices(rules.boatPrices);
+      setShipThresholds(rules.shipThresholds);
+    } catch (e) {
+      console.error('player_state ProgressConfig out of range', e);
+    }
   }
+  // Maps open and the ship sailed follow the chain's Progress (lifetime value, ship); without a
+  // read for this wallet nothing from the local cache opens a map or grants a ship.
+  applyMapProgress(snap, true);
+  shipyard.reload();
+  shipBonus = shipyard.bonus;
+  hud.setNet(net, currentStats().netCapacity);
   refreshEquipment(); // saves the equipment cache; repaints the gear panel, HUD and workbench (the aquarium listens itself)
 }
 onPlayerChainChange(applyPlayerChain);
+
+/** The connected wallet's Progress as last read from the chain (null until read). */
+function chainProgress(): ProgressView | null {
+  const snap = playerChain();
+  return snap ? progressView(snap.progress) : null;
+}
+
+const isBoatId = (id: string): id is BoatId => (BOAT_IDS as readonly string[]).includes(id);
 
 /** Why nothing can be bought or changed yet: the on-chain player state has not been read. */
 function chainBlocked(): string | null {
@@ -945,6 +974,10 @@ const PROGRAM_ERRORS: Partial<Record<PlayerStateErrorName, readonly [string, str
   FullyGrown: ['Every fish here is fully grown', '这里的鱼都长到最大了'],
   FeedCooldown: ['The school is still full', '鱼群还在饱腹冷却'],
   Unauthorized: ['This wallet may not change that player', '此钱包无权修改该玩家'],
+  NotNextLevel: ['Only the next level can be bought', '只能购买下一级'],
+  ShipLocked: ['This ship needs more lifetime banked value', '这艘船需要更多累计入库价值'],
+  InvalidShip: ['Unknown ship', '未知船只'],
+  InvalidBoatSlot: ['Unknown boat part', '未知船只部件'],
 };
 
 const feedBlockText = (why: FeedBlock | null) =>
@@ -1195,6 +1228,97 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
     void syncPearls();
   }
   return failed;
+}
+
+let boatBuying = false;
+/**
+ * Buy the next level of a boat part with player_state buy_boat: it burns the ProgressConfig price
+ * and raises Progress.boat_levels in one instruction (creating Progress on first use). Same
+ * journal and settle rules as buy_upgrade. Resolves with why it didn't happen, or null.
+ */
+async function buyNextBoat(id: BoatId): Promise<string | null> {
+  if (boatBuying || buying) return t('Already upgrading…', '正在升级…');
+  if (phase === 'play') return t('Return to the workbench before upgrading the boat.', '先回到工作台再升级船只。');
+  const blocked = purchaseBlocked();
+  if (blocked) {
+    hud.message(blocked, 1800);
+    return blocked;
+  }
+  const first = playerChain();
+  if (!first) return chainBlocked();
+  const def = UPGRADES.find((u) => u.id === id)!;
+  const quote = boatQuote(first.progressRules, progressView(first.progress).boatLevels, id, spendablePearls(equipment));
+  if (!quote) return t('Already at the top level.', '已是最高等级。');
+  if (quote.short > 0) {
+    const need = t(`Need ${quote.short} more PEARL`, `还差 ${quote.short} PEARL`);
+    hud.message(need, 1500);
+    return need;
+  }
+  boatBuying = true;
+  let bought: number = quote.level;
+  try {
+    await sendPlayerPurchase(({ u, owner, pearl, snap }) => {
+      // Priced and levelled from the accounts just read, never from the cache.
+      const q = boatQuote(snap.progressRules, progressView(snap.progress).boatLevels, id, 0);
+      if (!q) throw new Error(t('Already at the top level', '已是最高等级'));
+      bought = q.level;
+      return {
+        builder: buyBoatIx(u, { owner, ...pearl, boat: id, level: q.level, createsProgress: !snap.progress }),
+        what: { v: 1, kind: 'boat', boat: id, level: q.level },
+        cost: q.cost,
+      };
+    }, 'Boat upgrade');
+    hud.message(t(`${def.name} upgraded: Level ${bought}`, `${def.nameZh} 已升级：${bought} 级`), 1800);
+    return null;
+  } catch (e) {
+    console.error('boat upgrade failed', e);
+    return showPaymentError(e, t('Upgrade failed', '升级失败'));
+  } finally {
+    boatBuying = false;
+    refreshEquipment();
+    void syncPearls();
+  }
+}
+
+let shipBusy = false;
+/**
+ * Sail ship i: free, owner-signed player_state set_ship (the program checks the lifetime value
+ * against ProgressConfig). The boat follows once the re-read Progress shows it (applyPlayerChain).
+ */
+async function sailShip(i: number): Promise<string | null> {
+  if (shipBusy) return t('Already switching ships…', '正在切换船只…');
+  if (phase === 'play') return t('Return to the workbench before switching ships.', '先回到工作台再切换船只。');
+  const blocked = chainBlocked();
+  if (blocked) {
+    hud.message(blocked, 1800);
+    return blocked;
+  }
+  const first = playerChain();
+  if (!first || !SHIPS[i]) return chainBlocked();
+  const view = progressView(first.progress);
+  if (view.ship === i) {
+    shipyard.reload();
+    return null;
+  }
+  if (!first.progress || !shipOpen(view.lifetime, gameProgressRules(first.progressRules), i)) {
+    const more = Math.max(0, Math.ceil(shipThreshold(i) - view.lifetime));
+    return t(`Still locked: bank ${more} more value first.`, `尚未解锁：还差 ${more} 入库价值。`);
+  }
+  shipBusy = true;
+  try {
+    await sendPlayerPurchase(({ u, owner, snap }) => {
+      const v = progressView(snap.progress);
+      if (!snap.progress || !shipOpen(v.lifetime, gameProgressRules(snap.progressRules), i)) throw new Error(t('This ship is still locked', '这艘船尚未解锁'));
+      return { builder: setShipIx(u, { owner, ship: i }), what: { v: 1, kind: 'ship', ship: i }, cost: 0 };
+    }, 'Ship switch');
+    hud.message(t(`Now sailing ${SHIPS[i].en}`, `已换乘${SHIPS[i].cn}`), 1800);
+    return null;
+  } catch (e) {
+    console.error('ship switch failed', e);
+    return showPaymentError(e, t('Ship switch failed', '切换船只失败'));
+  } finally {
+    shipBusy = false;
+  }
 }
 
 let pathBusy = false;
@@ -1495,7 +1619,7 @@ function bankNet() {
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(t(`Banked ${net.length} fish · minting NFTs…`, `已入库 ${net.length} 条鱼 · 正在铸造 NFT…`));
   hud.toast(rarest, t('BANKED', '已入库'));
-  noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
+  // The lifetime value (maps, ships) moves when each fish's co-signed mint records it on chain.
   net = [];
   fieldGuide?.mark('bank');
   hud.setNet(net, currentStats().netCapacity);
@@ -1504,17 +1628,36 @@ function bankNet() {
 }
 
 // ---- Maps ---------------------------------------------------------------
-/** Record progress toward the next map (the lifetime banked value), and say so when a dive opens one. */
-function noteBankValue(announce: boolean, value: number) {
-  if (value <= mapProgress.bestValue) return;
-  const opened = MAP_ORDER.map((id) => MAPS[id]).filter(
-    (m) => !mapProgress.unlockAll && mapProgress.bestValue < m.unlockValue && value >= m.unlockValue,
-  );
-  mapProgress.bestValue = value;
+/**
+ * The lifetime banked value and the unlock thresholds come from the chain (player_state Progress
+ * and ProgressConfig, applyPlayerChain); the saved value is only shown while it loads. A dive that
+ * opened a map says so once the chain shows it.
+ */
+function applyMapProgress(snap: ReturnType<typeof playerChain>, announce: boolean) {
+  if (!snap) {
+    mapProgress.verified = false;
+    mapPicker.render();
+    workbench.progressChanged();
+    return;
+  }
+  // A ProgressConfig value out of range keeps the thresholds already in place; the rest of the
+  // chain listener (the lifetime value below, shipyard.reload, refreshEquipment) still runs.
+  try {
+    setMapThresholds(gameProgressRules(snap.progressRules).mapThresholds);
+  } catch (e) {
+    console.error('player_state ProgressConfig map thresholds out of range', e);
+  }
+  const wasOpen = new Set(MAP_ORDER.filter((id) => isUnlocked(MAPS[id], mapProgress)));
+  const hadRead = mapProgress.verified;
+  mapProgress.bestValue = progressView(snap.progress).lifetime;
+  mapProgress.verified = true;
+  if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   saveMapProgress(mapProgress);
   mapPicker.render();
+  workbench.progressChanged();
+  const opened = MAP_ORDER.filter((id) => !wasOpen.has(id) && isUnlocked(MAPS[id], mapProgress));
   const last = opened.at(-1);
-  if (announce && last) setTimeout(() => hud.message(t(`New waters open: ${last.name}`, `新水域开放：${last.nameZh}`), 3200), 2000);
+  if (announce && hadRead && last) hud.message(t(`New waters open: ${MAPS[last].name}`, `新水域开放：${MAPS[last].nameZh}`), 3200);
 }
 
 /** The maps' zone names (maps.ts keeps them in English) in the UI language. */
@@ -1542,27 +1685,25 @@ function applyMap(id: MapId) {
   showMapOnHud();
 }
 
-/** anyMap: the workbench's chart lets you pick any place, locked or not. */
-function selectMap(id: MapId, anyMap = false) {
-  if (phase !== 'menu' || id === world.map.id || (!anyMap && !isUnlocked(MAPS[id], mapProgress))) return;
-  mapProgress.selected = id;
-  saveMapProgress(mapProgress);
+/**
+ * preview: the workbench's chart shows any place, locked or not, without choosing it. Only an open
+ * map (the chain's lifetime value reached its threshold) is chosen and remembered.
+ */
+function selectMap(id: MapId, preview = false) {
+  if (phase !== 'menu' || id === world.map.id) return;
+  const open = isUnlocked(MAPS[id], mapProgress);
+  if (!open && !preview) return;
+  if (open) {
+    mapProgress.selected = id;
+    saveMapProgress(mapProgress);
+  }
   applyMap(id);
   mapPicker.render();
 }
 
-function setDemoUnlock(on: boolean) {
-  mapProgress.unlockAll = on;
-  // Turning the demo switch off while standing on a locked map sends you back to the first one.
-  if (!isUnlocked(world.map, mapProgress)) selectMap('fjord');
-  saveMapProgress(mapProgress);
-  mapPicker.render();
-}
-
-const mapPicker = new MapPicker(mapProgress, selectMap, setDemoUnlock);
+const mapPicker = new MapPicker(mapProgress, selectMap);
 showMapOnHud();
 onLangChange(showMapOnHud); // the zone names
-noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
 
 function blackout() {
   phase = 'blackout';
@@ -2024,11 +2165,12 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
-const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) => {
+const shipyard = new Shipyard(world.boat, () => chainProgress()?.lifetime ?? 0, (open) => {
   paused = open;
   keys.clear();
   if (!open) breathSince = null;
-}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root),
+  () => chainProgress()?.ship ?? null, (i) => void sailShip(i));
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.25, label: 'START', onClick: startFish }, // MAIN MENU while aboard
@@ -2163,7 +2305,8 @@ const workbench = new Workbench({
     hud.setActiveGear(activeTool, activeLoadout.includes(activeTool));
     applyEquipmentVisuals();
     hud.setNet(net, currentStats().netCapacity);
-    selectMap(id, true);
+    // The chart only dives open places (the chain's lifetime value); never a locked one regardless.
+    selectMap(isUnlocked(MAPS[id], mapProgress) ? id : 'fjord');
     // The preview frame expanding over the screen was taken from exactly here.
     benchPan = 0;
     snapToDiveCamera();
@@ -2177,7 +2320,7 @@ const workbench = new Workbench({
   conditions: workbenchConditions,
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
   owned: ownedGearLevel,
-  buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve(t('Not upgradable here', '这里无法升级'))),
+  buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : isBoatId(id) ? buyNextBoat(id) : Promise.resolve(t('Not upgradable here', '这里无法升级'))),
   pearls: () => spendablePearls(equipment),
   paths: (id) =>
     isEquipmentSlot(id)
@@ -2194,7 +2337,7 @@ const workbench = new Workbench({
         nameZh: s.cn,
         intro: SHIP_INTROS_EN[i],
         introZh: s.intro,
-        threshold: s.threshold,
+        threshold: shipThreshold(i),
         bonuses: [
           s.speed ? t(`+${Math.round(s.speed * 100)}% swim speed`, `游速 +${Math.round(s.speed * 100)}%`) : '',
           s.range ? t(`+${Math.round(s.range * 100)}% catch radius`, `捕捞范围 +${Math.round(s.range * 100)}%`) : '',
@@ -2202,9 +2345,10 @@ const workbench = new Workbench({
         ].filter(Boolean),
       })),
     current: () => shipyard.shipIndex,
-    progress: () => mapProgress.bestValue,
+    progress: () => chainProgress()?.lifetime ?? 0,
     model: (i) => shipyard.modelAt(i),
-    equip: (i) => shipyard.equip(i),
+    equip: (i) => sailShip(i),
+    parts: () => UPGRADES.filter((u) => u.group === 'boat'),
   },
   // The ready tray is saved per wallet whenever it changes, and comes back packed the same.
   savedLoadout() {
@@ -2268,9 +2412,14 @@ function isUpgradeSlot(id: UpgradeId): id is UpgradeSlot {
   return id in EQUIPMENT_TIERS;
 }
 
-/** The highest level owned of a piece (1 = the starting gear). Boat-group pieces are not sold yet, so they stay at 1. */
+/**
+ * The highest level owned of a piece (1 = the starting gear): dive gear from the PlayerState,
+ * boat parts from the chain's Progress.boat_levels (Lv1 until it is read; no cache grants one).
+ */
 function ownedGearLevel(id: UpgradeId): number {
-  return isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1;
+  if (isUpgradeSlot(id)) return ownedLevel(equipment, id);
+  if (isBoatId(id)) return chainProgress()?.boatLevels[id] ?? 1;
+  return 1;
 }
 
 function isEquipmentSlot(id: UpgradeId): id is EquipmentSlot {
@@ -2361,9 +2510,12 @@ let walletOwner: string | null = null;
 // game never waits on it. VITE_GEAR_NFT=0 (not a secret) turns it off; local levels are the truth.
 const GEAR_NFT_ON = (import.meta.env.VITE_GEAR_NFT as string | undefined) !== '0';
 
-/** The levels the NFTs should show now, or null before a wallet's progress has loaded. */
+/**
+ * The levels the NFTs should show now, or null before a wallet's progress has loaded from the
+ * chain (boat parts and the ship come only from Progress; the local cache never stands in).
+ */
 function gearSnapshot(): GearLevels | null {
-  if (!walletOwner) return null;
+  if (!walletOwner || !playerChain()) return null;
   const branches = Object.fromEntries((Object.keys(EQUIPMENT_PATHS) as EquipmentSlot[]).map((slot) => [slot, activePath(equipment, slot)]));
   return {
     boat: normalizeBoat({ ship: shipyard.shipIndex, ...Object.fromEntries(BOAT_IDS.map((id) => [id, ownedGearLevel(id)])) }),
@@ -2427,15 +2579,14 @@ function loadWalletProgress() {
   synthesisState = loadSynthesis();
   // A save from before on-chain player state is test data: show the start until the chain is read.
   if (!chainCached()) Object.assign(equipment, equipmentFromChain(equipment, null));
+  // The saved lifetime value is only shown until this wallet's chain read (applyPlayerChain) says.
   Object.assign(mapProgress, loadMapProgress());
-  if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
   // Still on the title: keep its random backdrop; the workbench sets the dive's map.
-  if (!titleScreen.visible) applyMap(mapProgress.selected); // the same switch the map picker makes
+  if (!titleScreen.visible) applyMap(isUnlocked(MAPS[mapProgress.selected], mapProgress) ? mapProgress.selected : 'fjord');
   hud.setBank(bank);
   refreshEquipment();
-  mapPicker.render();
-  noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
+  applyMapProgress(playerChain(), false);
   shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
