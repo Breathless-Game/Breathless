@@ -144,7 +144,8 @@ export class ChainFishSync {
     if (this.deps.busy()) return this.schedule(BUSY_RETRY_MS, true);
     const incoming = owned.map((o) => bankedFromChain({ ...o, trusted: o.trust === 'collection' }, MAPS)).filter((f): f is BankedFish => f !== null);
     const res = mergeChainFish(this.deps.bank, incoming, { skip: (id) => this.gone.has(id), busy: (f) => this.deps.holds(f) });
-    if (res.missing.length) console.info(`chain fish sync: ${res.missing.length} minted fish not listed for this wallet (kept)`, res.missing);
+    // An empty answer (no collection known, or a stale read) says nothing about the local fish.
+    if (owned.length && res.missing.length) console.info(`chain fish sync: ${res.missing.length} minted fish not listed for this wallet (kept)`, res.missing);
     if (res.added.length || res.adopted.length) this.deps.changed(res);
   }
 }
