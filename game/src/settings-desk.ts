@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { TimeOfDay } from './daylight';
 import type { Settings } from './settings';
-import { connectWallet, disconnectWallet, onWalletChange, walletState } from './wallet';
+import { onWalletChange, walletState } from './wallet';
 import { shortAddress } from './wallet-storage';
 import { drawPlanks } from './workbench';
 
@@ -17,6 +17,9 @@ export interface DeskHooks {
   change(patch: Partial<Settings>): void;
   timeOfDay(): TimeOfDay;
   setTimeOfDay(mode: TimeOfDay): void;
+  /** Not connected: pick a wallet (the login gate). Connected: log out (with its warnings). */
+  connectWallet(): void;
+  logOut(): void;
   /** The camera pan between the title (0) and the table (1); tableY: screen y of the table's back. */
   pan(u: number, tableY: number): void;
 }
@@ -189,7 +192,17 @@ export class SettingsDesk {
     this.state = 'leaving';
     this.hovered = null;
     document.body.style.cursor = '';
-    this.panTween = { from: this.panU, to: 0, t0: this.time, done: () => this.hide() };
+    this.panTween = {
+      from: this.panU,
+      to: 0,
+      t0: this.time,
+      done: () => {
+        // Tell the title the pan is fully back (0) before closing: it relabels its fish on it.
+        this.panU = 0;
+        this.placeCamera();
+        this.hide();
+      },
+    };
   }
 
   // ---- Scene ------------------------------------------------------------
@@ -276,7 +289,7 @@ export class SettingsDesk {
             const w = walletState();
             return w.owner ? `${shortAddress(w.owner)} · click to disconnect` : 'Not connected · click to connect';
           },
-          act: () => void (walletState().owner ? disconnectWallet() : connectWallet().catch(() => {})),
+          act: () => (walletState().owner ? h.logOut() : h.connectWallet()),
         },
         2.3, 1.95, 3.3, 0.85,
       ],

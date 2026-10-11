@@ -8,16 +8,25 @@ import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
 import { WaterSurfaceMaterial } from './water';
 import { waterGeometry } from './water-geometry';
 import { WeatherCycle, type WeatherMode } from './weather';
+import { rogueProfile, type BoatPose } from './storm';
 import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
 import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
+import { auroraGlow } from './aurora';
+import { FLORA, understorySpecies } from './flora';
+import { KelpBed, type KelpPlant } from './kelp';
+import { Shelf, layoutSeabed, plantHeight, type RockSlot, type SeabedLayout } from './seabed-layout';
 
 /** Seconds for one full day/night cycle. */
 const DAY_SECONDS = 180;
 
-export const HALF_WIDTH = 70;
+// Keep the default corridor wide enough for long horizontal swims. The
+// maximum corridor below is used when the player opens a new map edge.
+export const HALF_WIDTH = 140;
+/** Maximum horizontal edge supported by the generated seabed geometry. */
+export const MAX_HALF_WIDTH = HALF_WIDTH + 60;
 /**
  * Every map is a shelf at `seabedY` except a trench straight under the boat:
  * |x| < TRENCH_HALF_WIDTH is open water all the way down.
@@ -34,7 +43,19 @@ const WALL_REACH = 11;
 const CHUNK_HEIGHT = 40;
 /** Below this depth (m) the walls carry glowing specks. */
 const GLOW_DEPTH = 120;
-const SEABED_WIDTH = HALF_WIDTH * 2 + 120;
+// Keep the full generated floor under the maximum interactive corridor.
+// The extra ten metres on each side gives the camera a small visual buffer.
+const SEABED_WIDTH = MAX_HALF_WIDTH * 2 + 20;
+// Preserve the old seabed triangle density while widening the floor to cover
+// the full dynamic corridor plus a small camera buffer.
+const SEABED_SEGMENTS_X = 120;
+/**
+ * `map.kelp.count` and `quality.kelpCount` are tall kelp per this many metres of
+ * shelf (the width of the first corridor). A wider shelf grows more, so the
+ * forest stays as dense wherever the diver swims.
+ */
+const KELP_SPAN = 140;
+const KELP_SCALE = (MAX_HALF_WIDTH * 2) / KELP_SPAN;
 const SEABED_Z = -25;
 
 // Each map lays out its terrain from its own seed. The ocean keeps the seed the
@@ -60,12 +81,6 @@ export function waterColorAt(depth: number, night = false): THREE.Color {
   }
   if (night) c.multiplyScalar(0.35);
   return c;
-}
-
-/** Height of the sand above `seabedY` at world (x, z), before per-vertex noise. It rolls off at the trench edge. */
-function shelfHeight(x: number, z: number) {
-  const edge = Math.max(0, 1 - (Math.abs(x) - TRENCH_HALF_WIDTH) / 4);
-  return Math.sin(x * 0.08) * 2.2 + Math.cos((z - SEABED_Z) * 0.15 + x * 0.03) * 1.5 - edge * 1.5;
 }
 
 /** Re-roll x in [lo, hi] until the span [x + minX, x + maxX] sits on the shelf, clear of the trench. */
@@ -130,12 +145,6 @@ function snowBand(cameraY: number): [number, number] {
   return [Math.min(cameraY - 45, hi - 40), hi];
 }
 
-interface Kelp {
-  root: THREE.Group;
-  segments: THREE.Object3D[];
-  phase: number;
-}
-
 /** One rock slot in a trench-wall chunk. `side` is -1/1 for the side walls, 0 for the back wall. */
 interface WallSlot {
   side: -1 | 0 | 1;
@@ -151,13 +160,30 @@ export class World {
   sun: THREE.DirectionalLight;
   surface: THREE.Mesh;
   boat: THREE.Group;
-  private kelps: Kelp[] = [];
+  // The sand, and where this map's rocks and plants stand on it (see seabed-layout.ts).
+  private shelf!: Shelf;
+  private layout!: SeabedLayout;
+  private rocks: THREE.Group | null = null;
+  private kelp: KelpBed | null = null;
+  private diverPos = new THREE.Vector3(0, 100, 0);
+  private diverVel = new THREE.Vector3();
   readonly shafts = new SunShafts();
   readonly atmosphere = new Atmosphere();
   readonly colorGrade = new SceneColorGrade();
   private snow: THREE.Points;
   private quality: RenderQuality;
   private lightingEffects = true;
+  /**
+   * Set while a world event plays its own lightning (see events.ts), so the
+   * storm's sheet lightning holds off and the two never flash together.
+   */
+  quietWeatherLightning = false;
+  /** How a capsize has left the boat, on top of its bobbing (see storm.ts). Null: upright. */
+  boatPose: BoatPose | null = null;
+  // A rogue wave: where its crest is, which way it travels and how tall it stands (0: none).
+  private rogueX = 0;
+  private rogueDir = 1;
+  private rogueHeight = 0;
   private lastDecorationTime = 0;
   // A whole day in three minutes, starting at a random hour each visit.
   readonly dayCycle = new DayCycle(DAY_SECONDS, Math.random() * 24);
@@ -186,6 +212,10 @@ export class World {
   private daySkyTint: [number, number, number] = [1, 1, 1];
   private nightSkyTint: [number, number, number] = [1, 1, 1];
   private surfaceTint = new THREE.Color(1, 1, 1);
+  private boatLamps: THREE.MeshStandardMaterial[] = [];
+  private boatSurfaceLight?: THREE.PointLight;
+  private readonly boatLampAmber = new THREE.Color('#ff9e3d');
+  private readonly boatLampRed = new THREE.Color('#ef3028');
   private lastSceneTime = 0;
   private lastCameraY = 1.5;
   private lastCameraX = 0;
@@ -219,6 +249,7 @@ export class World {
   setMap(map: MapDef) {
     this.map = map;
     this.seabedY = -mapDepth(map);
+    this.weather.setClimate(map.climate);
     waterColors = toPalette(map);
     // Apply each map's palette relative to the open-ocean reference while
     // preserving the continuous dawn/dusk colors and the weather transition.
@@ -233,20 +264,34 @@ export class World {
     this.surfaceTint.set(map.surface);
     this.surfaceTint.setRGB(this.surfaceTint.r / surfaceBase.r, this.surfaceTint.g / surfaceBase.g, this.surfaceTint.b / surfaceBase.b);
 
-    // Quality hides kelp by detaching it. Reattach it before disposing the old
-    // map so low-quality map switches also release every plant's GPU buffers.
-    for (const kelp of this.kelps) this.terrain.add(kelp.root);
-    disposeTree(this.terrain);
+    disposeTree(this.terrain, this.scene);
     this.terrain.clear();
-    this.kelps = [];
+    this.rocks = null;
+    this.kelp = null;
     // Trench walls of the old map go; update() builds the new ones around the camera.
     this.clearTrench();
     const rng = new Rng(TERRAIN_SEED[map.id]);
+    const outer = SEABED_WIDTH / 2;
+    this.shelf = new Shelf(
+      TERRAIN_SEED[map.id],
+      { trench: TRENCH_HALF_WIDTH, outer, zMin: SEABED_Z - 45, zMax: SEABED_Z + 45 },
+      SEABED_WIDTH / SEABED_SEGMENTS_X,
+    );
+    // Laid out once at full density; quality only shows a prefix, so plants never move.
+    const flora = FLORA[map.id];
+    this.layout = layoutSeabed(this.shelf, {
+      seed: TERRAIN_SEED[map.id] ^ 0x5eabed,
+      depth: -this.seabedY,
+      // Out to the farthest edge a map can open, so a newly opened stretch is not bare.
+      reach: MAX_HALF_WIDTH,
+      canopy: Math.round(map.kelp.count * KELP_SCALE),
+      understory: Array.from({ length: Math.round(map.kelp.count * KELP_SCALE * flora.undergrowth) }, (_, i) => understorySpecies(flora, i)),
+    });
     this.buildSeabed(rng);
-    this.buildRocks(rng);
+    this.buildRocks();
     if (map.life === 'coral') this.buildCoral(rng);
     if (map.life === 'logs') this.buildLogs(rng);
-    this.buildKelp(rng);
+    this.buildKelp();
 
     // Marine snow lives in a band around the camera; respread it there.
     const [lo, hi] = snowBand(this.lastCameraY);
@@ -256,8 +301,10 @@ export class World {
 
     if (this.scenery) {
       this.scene.remove(this.scenery.group);
-      disposeTree(this.scenery.group);
+      disposeTree(this.scenery.group, this.scene);
     }
+    // Only the fjord's sky has an aurora; nothing else would clear what it left behind.
+    auroraGlow.ambient = auroraGlow.surge = 0;
     this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
@@ -265,29 +312,28 @@ export class World {
     this.updateLighting(this.lastSceneTime, this.lastCameraY, this.lastCameraX);
   }
 
+  /** World y of the sand at (x, z). */
+  private groundY(x: number, z: number) {
+    return this.seabedY + this.shelf.heightAt(x, z);
+  }
+
   /** The shelf: two halves of sand with the trench open between them, and a broken lip on each edge. */
   private buildSeabed(rng: Rng) {
-    const width = SEABED_WIDTH / 2 - TRENCH_HALF_WIDTH;
     const sand = new THREE.Color(this.map.sand);
-    for (const side of [-1, 1]) {
-      const cx = side * (TRENCH_HALF_WIDTH + width / 2);
-      const geo = new THREE.PlaneGeometry(width, 90, Math.round((80 * width) / SEABED_WIDTH), 30);
-      geo.rotateX(-Math.PI / 2);
-      const pos = geo.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
-        pos.setY(i, shelfHeight(pos.getX(i) + cx, pos.getZ(i) + SEABED_Z) + rng.range(-0.6, 0.6));
-      }
-      const g = geo.toNonIndexed();
-      geo.dispose();
+    const c = new THREE.Color();
+    for (const side of [0, 1] as const) {
+      const g = new THREE.BufferGeometry();
+      const positions = this.shelf.triangles(side);
+      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       g.computeVertexNormals();
-      const colors: number[] = [];
-      for (let i = 0; i < g.attributes.position.count; i += 3) {
-        const c = sand.clone().multiplyScalar(rng.range(0.75, 1.05));
-        for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
+      const colors = new Float32Array(positions.length);
+      for (let i = 0; i < positions.length; i += 9) {
+        c.copy(sand).multiplyScalar(rng.range(0.75, 1.05));
+        for (let k = 0; k < 3; k++) c.toArray(colors, i + k * 3);
       }
-      g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
       const mesh = new THREE.Mesh(g, flatMat('#ffffff', { vertexColors: true }));
-      mesh.position.set(cx, this.seabedY, SEABED_Z);
+      mesh.position.y = this.seabedY;
       this.terrain.add(mesh);
     }
     this.buildLip(rng);
@@ -305,33 +351,40 @@ export class World {
         const z = -20 + ((i + rng.range(0.1, 0.9)) * span) / perSide;
         const geo = rockGeometry(rng, r, 0, rng.range(0.55, 0.9));
         const x = clearLane(side * (TRENCH_HALF_WIDTH + 0.5 + r * rng.range(0, 0.5)), z, geo.boundingBox!, side, 12.5);
-        const y = this.seabedY + shelfHeight(side * TRENCH_HALF_WIDTH, z) - r * rng.range(0.1, 0.4);
+        const y = this.groundY(side * TRENCH_HALF_WIDTH, z) - r * rng.range(0.1, 0.4);
         batch.add(geo, rng.pick(mats), x, y, z);
       }
     }
     this.terrain.add(batch.build());
   }
 
-  private buildRocks(rng: Rng) {
-    const palette = this.map.rocks;
-    // Back cliff walls at different depths give the 2.5D parallax.
-    for (let i = 0; i < 70; i++) {
-      const r = rng.range(2.5, 9);
-      const geo = jitter(new THREE.IcosahedronGeometry(r, rng.next() < 0.5 ? 0 : 1), rng, r * 0.18);
-      const mesh = new THREE.Mesh(geo, flatMat(rng.pick(palette)));
-      const y = this.seabedY + Math.pow(rng.next(), 1.6) * (-this.seabedY - 10);
-      mesh.position.set(rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20), y, rng.range(-38, -14));
-      mesh.rotation.set(rng.range(0, 6), rng.range(0, 6), rng.range(0, 6));
-      mesh.scale.y = rng.range(0.6, 1.3);
-      this.terrain.add(mesh);
+  /** Outcrops on the near shelf and the stacked wall behind it, every rock resting on sand or on rock. */
+  private buildRocks() {
+    if (this.rocks) {
+      this.terrain.remove(this.rocks);
+      disposeTree(this.rocks);
     }
-    // A few foreground boulders on the shelf, never hanging over the trench.
-    for (let i = 0; i < 16; i++) {
-      const r = rng.range(1.5, 4);
-      const mesh = new THREE.Mesh(jitter(new THREE.IcosahedronGeometry(r, 0), rng, r * 0.2), flatMat(rng.pick(palette)));
-      mesh.position.set(shelfX(rng, -HALF_WIDTH, HALF_WIDTH, -r * 1.2, r * 1.2), this.seabedY + r * 0.4, rng.range(-6, 6));
-      this.terrain.add(mesh);
-    }
+    const palette = this.map.rocks.map((c) => new THREE.Color(c));
+    const material = flatMat('#ffffff', { vertexColors: true });
+    const batch = new Batch();
+    const tint = new THREE.Color();
+    const shade = new THREE.Color();
+    const add = (slot: RockSlot, detail: number) => {
+      if (slot.tier > this.quality.detail) return;
+      const rng = new Rng(slot.seed);
+      const geo = rockGeometry(rng, slot.r, detail, slot.squash);
+      const y = this.seabedY + slot.y;
+      wallTint(rng.pick(palette), -y, tint);
+      // Faces darken toward the buried underside, as on the trench walls.
+      paintFaces(geo, (h) => shade.copy(tint).multiplyScalar((0.74 + 0.26 * h) * rng.range(0.86, 1.06)));
+      batch.add(geo, material, slot.x, y, slot.z);
+    };
+    for (const slot of this.layout.outcrops) add(slot, 0);
+    // The wall's big rocks take a finer cut so their silhouettes are not all the same solid.
+    for (const slot of this.layout.stacks) add(slot, slot.r > 5 && slot.seed % 2 ? 1 : 0);
+    this.rocks = batch.build();
+    this.terrain.add(this.rocks);
+    this.colorGrade.apply(this.rocks);
   }
 
   private buildCoral(rng: Rng) {
@@ -358,11 +411,27 @@ export class World {
         const fan = new THREE.Mesh(new THREE.CircleGeometry(rng.range(0.9, 1.6), 6, 0, Math.PI), flatMat(color, { side: THREE.DoubleSide }));
         group.add(fan);
       }
-      // Coral lives mostly in the reef band. On the floor it keeps to the shelf.
-      const onFloor = rng.next() < 0.45;
-      const y = onFloor ? this.seabedY + 1 : -rng.range(16, 42);
-      const x = onFloor ? shelfX(rng, -HALF_WIDTH, HALF_WIDTH, -2, 2) : rng.range(-HALF_WIDTH, HALF_WIDTH);
-      group.position.set(x, y, onFloor ? rng.range(-12, 4) : rng.range(-16, -9));
+      // Coral lives mostly in the reef band, growing on the wall's rocks. On the floor it keeps to the shelf.
+      const reef = this.layout.stacks.filter((rock) => {
+        const depth = -(this.seabedY + rock.y);
+        return depth > 14 && depth < 46 && Math.abs(rock.x) < MAX_HALF_WIDTH + 12;
+      });
+      if (rng.next() < 0.45 || !reef.length) {
+        const x = shelfX(rng, -MAX_HALF_WIDTH, MAX_HALF_WIDTH, -2, 2);
+        const z = rng.range(-12, 4);
+        group.position.set(x, this.groundY(x, z) + 0.15, z);
+      } else {
+        // A point on the rock's upper face that looks toward the camera.
+        const rock = rng.pick(reef);
+        const around = rng.range(Math.PI * 0.15, Math.PI * 0.85);
+        const lift = rng.range(0.25, 1.2);
+        const out = Math.cos(lift) * rock.r * 0.9;
+        group.position.set(
+          rock.x + Math.cos(around) * out,
+          this.seabedY + rock.y + Math.sin(lift) * rock.r * rock.squash * 0.9,
+          rock.z + Math.sin(around) * out,
+        );
+      }
       group.rotation.y = rng.range(0, Math.PI * 2);
       this.terrain.add(group);
     }
@@ -392,54 +461,52 @@ export class World {
       const standing = rng.next() < 0.3;
       log.rotation.set(rng.range(-0.2, 0.2), rng.range(0, 6), standing ? rng.range(-0.35, 0.35) : Math.PI / 2 + rng.range(-0.15, 0.15));
       box.setFromObject(log);
-      const x = shelfX(rng, -HALF_WIDTH, HALF_WIDTH, box.min.x - 0.5, box.max.x + 0.5);
-      log.position.set(x, this.seabedY + (standing ? 0 : r), rng.range(-14, 4));
+      const x = shelfX(rng, -MAX_HALF_WIDTH, MAX_HALF_WIDTH, box.min.x - 0.5, box.max.x + 0.5);
+      const z = rng.range(-14, 4);
+      log.position.set(x, this.groundY(x, z) + (standing ? -0.3 : r * 0.6), z);
       this.terrain.add(log);
     }
-    for (let i = 0; i < 16; i++) {
+    // Rock ledges jut out of the wall's stacks, toward the camera.
+    const hosts = this.layout.stacks.filter((rock) => rock.r >= 3);
+    for (let i = 0; i < 16 && hosts.length; i++) {
+      const rock = rng.pick(hosts);
       const w = rng.range(7, 16);
-      const shelf = new THREE.Mesh(jitter(new THREE.BoxGeometry(w, rng.range(0.9, 1.8), rng.range(4, 7)), rng, 0.5), flatMat(rng.pick(this.map.rocks)));
-      shelf.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), -rng.range(12, 36), rng.range(-17, -11));
-      shelf.rotation.z = rng.range(-0.08, 0.08);
-      this.terrain.add(shelf);
+      const d = rng.range(4, 7);
+      const ledge = new THREE.Mesh(jitter(new THREE.BoxGeometry(w, rng.range(0.9, 1.8), d), rng, 0.5), flatMat(rng.pick(this.map.rocks)));
+      ledge.position.set(
+        rock.x + rng.range(-0.3, 0.3) * rock.r,
+        this.seabedY + rock.y + rng.range(-0.3, 0.5) * rock.r * rock.squash,
+        rock.z + rock.r * 0.6 + d * 0.15,
+      );
+      ledge.rotation.z = rng.range(-0.08, 0.08);
+      this.terrain.add(ledge);
     }
   }
 
-  private buildKelp(rng: Rng) {
-    const { count: plants, hue } = this.map.kelp;
-    for (let i = 0; i < plants; i++) {
-      const root = new THREE.Group();
-      const z = rng.next() < 0.25 ? rng.range(4, 8) : rng.range(-14, -4);
-      root.position.set(shelfX(rng, -HALF_WIDTH - 10, HALF_WIDTH + 10, -1.5, 1.5), this.seabedY + 0.5, z);
-      const color = new THREE.Color().setHSL(rng.range(hue[0], hue[1]), 0.55, rng.range(0.22, 0.35));
-      const mat = flatMat(color, { side: THREE.DoubleSide });
-      const tall = rng.int(10, 26);
-      const segLen = rng.range(1.4, 2.0);
-      // Never taller than the water is deep.
-      const count = Math.min(tall, Math.floor((-this.seabedY - 6) / segLen));
-      const segments: THREE.Object3D[] = [];
-      let parent: THREE.Object3D = root;
-      for (let s = 0; s < count; s++) {
-        const seg = new THREE.Group();
-        seg.position.y = s === 0 ? 0 : segLen;
-        const w = 0.5 * (1 - s / count) + 0.15;
-        const blade = new THREE.Mesh(new THREE.PlaneGeometry(w, segLen, 1, 1), mat);
-        blade.position.y = segLen / 2;
-        blade.rotation.y = rng.range(-0.8, 0.8);
-        seg.add(blade);
-        if (s % 3 === 1) {
-          const leaf = new THREE.Mesh(new THREE.CircleGeometry(0.5, 3), mat);
-          leaf.position.set(0.4, segLen * 0.6, 0);
-          leaf.rotation.z = -0.6;
-          seg.add(leaf);
-        }
-        parent.add(seg);
-        segments.push(seg);
-        parent = seg;
-      }
-      this.kelps.push({ root, segments, phase: rng.range(0, Math.PI * 2) });
-      this.terrain.add(root);
+  /** Plant the bed for the current quality: the first so many of the layout's kelp and low plants. */
+  private buildKelp() {
+    if (this.kelp) {
+      this.terrain.remove(this.kelp.mesh);
+      this.kelp.dispose();
     }
+    const tall = Math.round(Math.min(this.map.kelp.count, this.quality.kelpCount) * KELP_SCALE);
+    const low = Math.round(tall * FLORA[this.map.id].undergrowth);
+    const plants: KelpPlant[] = [];
+    const plant = (slot: SeabedLayout['canopy'][number], species: KelpPlant['species']) => {
+      const y = this.seabedY + slot.y;
+      plants.push({ x: slot.x, y, z: slot.z, seed: slot.seed, species, height: plantHeight(species, slot.vigor, -y) });
+    };
+    for (const slot of this.layout.canopy.slice(0, tall)) plant(slot, 'giant');
+    for (const slot of this.layout.understory.slice(0, low)) plant(slot, slot.species);
+    this.kelp = new KelpBed(plants, FLORA[this.map.id], this.quality.detail);
+    this.terrain.add(this.kelp.mesh);
+    this.colorGrade.apply(this.kelp.mesh);
+  }
+
+  /** Tell the world where the diver is, so the plants around them part and trail in their wake. */
+  setDiver(position: THREE.Vector3, velocity: THREE.Vector3) {
+    this.diverPos.copy(position);
+    this.diverVel.copy(velocity);
   }
 
   /** Keep the wall chunk the camera is in plus one above and one below; drop the rest. */
@@ -560,7 +627,7 @@ export class World {
     const pos = new Float32Array(n * 3);
     const [lo, hi] = snowBand(this.lastCameraY);
     for (let i = 0; i < n; i++) {
-      pos[i * 3] = rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20);
+      pos[i * 3] = rng.range(-MAX_HALF_WIDTH - 10, MAX_HALF_WIDTH + 10);
       pos[i * 3 + 1] = rng.range(lo, hi);
       pos[i * 3 + 2] = rng.range(-18, 10);
     }
@@ -585,21 +652,19 @@ export class World {
   }
 
   private surfaceGeometry() {
-    return waterGeometry(HALF_WIDTH * 2 + 160, 120, this.quality.surfaceSegments);
+    return waterGeometry(MAX_HALF_WIDTH * 2 + 40, 120, this.quality.surfaceSegments);
   }
 
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
     const detailChanged = this.quality.detail !== quality.detail;
+    const plantsChanged = detailChanged || this.quality.kelpCount !== quality.kelpCount;
     this.quality = quality;
     this.rain.setQuality(quality);
     this.shafts.setQuality(quality);
-    this.kelps.forEach((kelp, i) => {
-      kelp.root.visible = i < quality.kelpCount;
-      // Hidden objects still receive Three.js matrix updates while in the scene.
-      if (kelp.root.visible) this.terrain.add(kelp.root);
-      else this.terrain.remove(kelp.root);
-    });
+    // setMap builds both for the quality in force and then calls this with it unchanged.
+    if (plantsChanged && this.kelp) this.buildKelp();
+    if (detailChanged && this.rocks) this.buildRocks();
     this.snow.geometry.setDrawRange(0, quality.snowCount);
     if (surfaceChanged) {
       const old = this.surface.geometry;
@@ -609,7 +674,7 @@ export class World {
     if (detailChanged && this.scenery) {
       const { visible } = this.scenery.group;
       this.scene.remove(this.scenery.group);
-      disposeTree(this.scenery.group);
+      disposeTree(this.scenery.group, this.scene);
       this.scenery = buildScenery(this.map, quality.detail);
       this.colorGrade.apply(this.scenery.group);
       this.scenery.group.visible = visible;
@@ -628,6 +693,15 @@ export class World {
 
   private buildBoat() {
     const boat = buildFishingBoat();
+    // Its lamps follow the lighting (updateLighting): off by day, lit at night.
+    this.boatLamps = (boat.userData.lamps as THREE.MeshStandardMaterial[]) ?? [];
+    for (const lamp of this.boatLamps) lamp.emissiveIntensity = 0;
+    // The boat remains a surface object while the diver descends. This soft
+    // local fill keeps its hull readable through the water without raising
+    // the global underwater sun intensity that should stay depth attenuated.
+    this.boatSurfaceLight = new THREE.PointLight('#fff0c7', 0, 18, 2);
+    this.boatSurfaceLight.position.set(0, 3.4, 2.6);
+    boat.add(this.boatSurfaceLight);
     boat.position.set(0, 0.2, 0);
     this.scene.add(boat);
     return boat;
@@ -643,6 +717,10 @@ export class World {
 
   setWeather(mode: WeatherMode) {
     this.weather.setMode(mode);
+  }
+
+  get lightingEffectsEnabled(): boolean {
+    return this.lightingEffects;
   }
 
   setLightingEffects(enabled: boolean) {
@@ -679,6 +757,28 @@ export class World {
    * (paused, or a fresh map) re-poses it so a changed setting still shows.
    */
   updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
+    // Float on the sea clock even while the shipyard pauses gameplay physics.
+    // In ordinary weather the boat bobs gently. As a storm piles up the swell it rides the
+    // surface that is really under its keel (the water shader's waves), or the big seas
+    // would wash straight through the hull.
+    const sea = this.swell() * this.map.waves;
+    const riding = this.heavySea();
+    const pose = this.boatPose;
+    const x = pose?.surge ?? 0;
+    // A hull lying keel up does not ride the swell as freely.
+    const afloat = 1 - Math.min(1, (pose?.roll ?? 0) / Math.PI);
+    // A rogue wave lifts the boat and tips it down its face before anything else happens.
+    const ahead = (x - this.rogueX) * this.rogueDir;
+    const rogue = this.rogueHeight * rogueProfile(ahead);
+    const slope = (this.rogueHeight * rogueProfile(ahead + 0.5) - this.rogueHeight * rogueProfile(ahead - 0.5)) * this.rogueDir;
+    const pitch = Math.atan(Math.cos(x * 0.15 + this.waveTime * 1.3) * 0.0525 * sea);
+    this.boat.position.x = x;
+    this.boat.position.y = 0.25 + THREE.MathUtils.lerp(Math.sin(this.waveTime * 1.3) * 0.18 * sea, this.swellAt(x, 0), riding)
+      + rogue * 0.9 - (pose?.sink ?? 0);
+    this.boat.rotation.z = THREE.MathUtils.lerp(Math.sin(this.waveTime * 1.1) * 0.05 * sea, pitch, riding) * (0.35 + 0.65 * afloat)
+      + Math.atan(slope) * 1.3 * afloat + (pose?.pitch ?? 0);
+    this.boat.rotation.x = pose?.roll ?? 0;
+    this.boat.rotation.y = pose?.yaw ?? 0;
     this.lastSceneTime = time;
     this.lastCameraY = cameraY;
     this.lastCameraX = cameraX;
@@ -709,8 +809,13 @@ export class World {
     if (depth < 0) {
       this.scene.background = this.horizonColor;
       fog.color.copy(this.horizonColor);
-      fog.near = this.map.haze[0] * THREE.MathUtils.lerp(1, 0.45, weather.rain);
-      fog.far = this.map.haze[1] * THREE.MathUtils.lerp(1, 0.475, weather.rain);
+      // Keep a readable depth gradient on the low-poly mountain silhouettes.
+      // The old storm range (47.5% of the map far distance) put the fjord's
+      // peaks entirely inside one fog colour, leaving only white snow
+      // triangles visible. Rain still thickens the atmosphere, but never
+      // collapses the whole backdrop into a flat card.
+      fog.near = Math.max(28, this.map.haze[0] * THREE.MathUtils.lerp(1, 0.70, weather.rain));
+      fog.far = Math.max(180, this.map.haze[1] * THREE.MathUtils.lerp(1, 0.72, weather.rain));
     } else {
       this.waterBackground.copy(waterColorAt(depth));
       this.waterBackground.lerp(this.horizonColor, 0.06 * Math.max(0, 1 - depth / 60));
@@ -728,6 +833,26 @@ export class World {
     this.hemi.intensity = lighting.ambientIntensity * light;
     this.sun.position.set(...lighting.direction).multiplyScalar(80);
     this.sun.intensity = lighting.sunIntensity * light * light;
+    // Surface fixtures use the same weather/day state as the global lights,
+    // but do not inherit the camera's underwater attenuation. Otherwise the
+    // boat becomes a dark silhouette as soon as the diver descends.
+    const surfaceWeather = 1 - weather.cloud * 0.78;
+    const surfaceDay = lighting.daylight * surfaceWeather;
+    const surfaceNight = lighting.nightMix * (0.72 + 0.28 * surfaceWeather);
+    const lampScale = this.lightingEffects ? THREE.MathUtils.clamp(surfaceDay * 0.16 + surfaceNight * 1.8, 0, 1.8) : 0;
+    if (this.boatLamps.length >= 2) {
+      this.boatLamps[0].emissiveIntensity = lampScale;
+      this.boatLamps[1].emissiveIntensity = lampScale * 0.72;
+      this.boatLamps[0].emissive.copy(this.sun.color).lerp(this.boatLampAmber, 0.45);
+      this.boatLamps[1].emissive.copy(this.sun.color).lerp(this.boatLampRed, 0.65);
+    }
+    if (this.boatSurfaceLight) {
+      this.boatSurfaceLight.visible = this.lightingEffects && (surfaceDay + surfaceNight) > 0.01;
+      this.boatSurfaceLight.color.copy(this.sun.color).lerp(this.horizonColor, 0.25);
+      this.boatSurfaceLight.intensity = this.lightingEffects
+        ? THREE.MathUtils.clamp(0.08 + surfaceDay * 0.32 + surfaceNight * 0.58, 0, 0.9)
+        : 0;
+    }
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;
@@ -736,9 +861,17 @@ export class World {
     this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
     const waterMaterial = this.surface.material as WaterSurfaceMaterial;
-    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves);
+    // The shader applies the wind's lift itself; a storm on rough seas piles more on top.
+    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves * (1 + weather.storm * this.map.stormSwell));
+    // The sea mirrors the northern lights while they are out.
+    waterMaterial.reflectGlow(auroraGlow.color, this.lightingEffects ? Math.max(auroraGlow.ambient, auroraGlow.surge) : 0);
     waterMaterial.color.multiply(this.surfaceTint);
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
+    if (this.kelp) {
+      // The swell that rocks the boat also moves the water under it.
+      this.kelp.update(time, { wind: weather.wind, waveTime: this.waveTime, surge: 0.5 * this.swell() * this.map.waves });
+      this.kelp.setDiver(this.diverPos, this.diverVel, THREE.MathUtils.smoothstep(-this.diverPos.y, 0.3, 1.8));
+    }
   }
 
   /** Animate the shore by `dt` seconds (0 re-poses it) in the current weather, light setting and swell. */
@@ -746,6 +879,8 @@ export class World {
     if (!this.scenery) return;
     const env = this.sceneryEnv;
     env.weather = this.weather.state;
+    // `state` is a fresh copy, so silencing the storm here touches nothing else.
+    if (this.quietWeatherLightning) env.weather.storm = 0;
     env.lightingEffects = this.lightingEffects;
     env.waveTime = this.waveTime;
     env.swell = this.swell();
@@ -754,35 +889,76 @@ export class World {
 
   /** How much the wind lifts the waves; the scenery's floats ride the same swell. */
   private swell() {
-    return 1 + this.weather.state.wind * 0.75;
+    const weather = this.weather.state;
+    return (1 + weather.wind * 0.75) * (1 + weather.storm * this.map.stormSwell);
+  }
+
+  /** 0 in ordinary weather to 1 once a storm has piled up the swell on a map with rough seas. */
+  private heavySea() {
+    return THREE.MathUtils.clamp(this.weather.state.storm * this.map.stormSwell * 2, 0, 1);
+  }
+
+  /** Height of the swell at world (x, z): the water shader's two waves, without any rogue wave. */
+  private swellAt(x: number, z: number) {
+    return (Math.sin(x * 0.15 + this.waveTime * 1.3) * 0.35 + Math.cos((z + 30) * 0.2 + this.waveTime * 0.9) * 0.25)
+      * this.swell() * this.map.waves;
+  }
+
+  /**
+   * How far (m) heavy seas lift or drop a swimmer at the surface at `x`: 0 in ordinary
+   * weather, where the swell is small enough to swim through as if it were flat.
+   */
+  heaveAt(x: number): number {
+    return this.heavySea() * this.swellAt(x, 0) + this.rogueHeight * rogueProfile((x - this.rogueX) * this.rogueDir);
+  }
+
+  /** World height of the water at (x, z) as it is drawn: the swell plus any rogue wave. */
+  surfaceAt(x: number, z: number): number {
+    // The rogue wave flattens out toward the camera, as in the water shader.
+    const nearCamera = 1 - THREE.MathUtils.smoothstep(z, 4, 16);
+    return this.swellAt(x, z) + this.rogueHeight * rogueProfile((x - this.rogueX) * this.rogueDir) * nearCamera;
+  }
+
+  /**
+   * How much higher than usual (m) the surface camera should ride so the crests stay below it:
+   * nothing in ordinary weather, over a metre in a storm on the open ocean.
+   */
+  get surfaceLift(): number {
+    return Math.max(0, 0.6 * this.swell() * this.map.waves - 0.75);
+  }
+
+  /** Draw a rogue wave with its crest at `x` (null: none), travelling `dir` (+1 or -1) and `height` m tall. */
+  setRogueWave(x: number | null, dir: number, height: number) {
+    this.rogueX = x ?? 0;
+    this.rogueDir = dir < 0 ? -1 : 1;
+    this.rogueHeight = x === null ? 0 : height;
+    (this.surface.material as WaterSurfaceMaterial).setRogueWave(this.rogueX, this.rogueHeight, this.rogueDir);
   }
 
   private updateDecorations(time: number, dt: number, cameraY: number) {
-    // Waves.
-    const waveTime = this.waveTime;
-    const swell = this.swell();
-    const waves = this.map.waves;
-    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
-    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
-
-    for (const k of this.kelps) {
-      if (!k.root.visible) continue;
-      k.segments.forEach((seg, i) => {
-        seg.rotation.z = Math.sin(time * 0.8 + k.phase + i * 0.35) * 0.06;
-        seg.rotation.x = Math.cos(time * 0.6 + k.phase + i * 0.3) * 0.03;
-      });
-    }
-
+    const wind = this.weather.state.wind;
     // Snow that falls out of the bottom of the camera's band re-enters at the top (80 m up
     // when deep, less near the surface). Snow left above the band when the camera sinks
     // fast wraps down the same way, so the band is never empty.
     const [lo, hi] = snowBand(cameraY);
     const span = hi - lo;
     const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
+    const currentX = (0.08 + wind * 0.18) * Math.sin(time * 0.34);
+    const currentZ = (0.05 + wind * 0.1) * Math.cos(time * 0.27);
+    const width = (MAX_HALF_WIDTH + 10) * 2;
+    const depth = 28;
     for (let i = 0; i < this.quality.snowCount; i++) {
       let y = snowPos.getY(i) - 0.24 * dt;
       if (y < lo || y > hi) y = lo + ((((y - lo) % span) + span) % span);
       snowPos.setY(i, y);
+      let x = snowPos.getX(i) + currentX * dt;
+      let z = snowPos.getZ(i) + currentZ * dt;
+      if (x < -MAX_HALF_WIDTH - 10) x += width;
+      else if (x > MAX_HALF_WIDTH + 10) x -= width;
+      if (z < -18) z += depth;
+      else if (z > 10) z -= depth;
+      snowPos.setX(i, x);
+      snowPos.setZ(i, z);
     }
     snowPos.addUpdateRange(0, this.quality.snowCount * 3);
     snowPos.needsUpdate = true;

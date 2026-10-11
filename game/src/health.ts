@@ -21,6 +21,8 @@ export interface DiveRecord {
   peakPulse: number | null;
   pulse: [number, number][]; // [seconds since dive start, bpm], ~1 Hz
   recoveryS: number | null; // seconds after surfacing until bpm is back near rest
+  /** Sharks were in the water: the chase drives the pulse, so the report leaves this dive out of its heart-rate figures. */
+  shark?: true;
 }
 
 const KEY = 'deepbreath.health';
@@ -43,6 +45,8 @@ export class HealthLog {
   private lastSample = 0;
   private current: (DiveRecord & { t0: number }) | null = null;
   private recovering: { rec: DiveRecord; t0: number; inBandSince: number | null } | null = null;
+  /** Set while sharks hunt the diver (main.ts): any dive it is set during is marked. */
+  sharks = false;
 
   /** Call every frame. `diving` is true while the diver is underwater in play. */
   tick(now: number, s: BreathState, depth: number, diving: boolean) {
@@ -51,6 +55,7 @@ export class HealthLog {
     if (cur) {
       cur.maxDepth = Math.max(cur.maxDepth, Math.round(depth));
       cur.holdMs = Math.max(cur.holdMs, s.holdMs);
+      if (this.sharks) cur.shark = true;
     }
     if (now - this.lastSample < 1000) return;
     this.lastSample = now;

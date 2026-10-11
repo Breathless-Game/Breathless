@@ -38,6 +38,22 @@
         <div class="label">OUT OF AIR · SURFACE!</div>
         <div class="bar"><div id="emergency-fill"></div></div>
       </div>
+      <div id="alert" class="hidden"></div>
+      <div id="mash" class="hidden">
+        <div class="ring">
+          <svg viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="track" cx="60" cy="60" r="52" />
+            <circle id="mash-arc" class="arc" cx="60" cy="60" r="52" />
+          </svg>
+          <span class="key">F</span>
+        </div>
+        <div class="label">MASH TO RIGHT THE BOAT</div>
+      </div>
+      <div id="shark" class="hidden">
+        <span id="shark-label">SHARKS</span>
+        <span id="shark-pulse">♥ 68</span>
+        <span class="bar"><i id="shark-fill"></i></span>
+      </div>
 
       <div id="center-msg"></div>
       <div id="board-prompt" class="hidden"><b>F</b> Climb aboard · 上船</div>
@@ -45,6 +61,12 @@
       <section id="net" class="panel">
         <div class="small muted">NET</div>
         <div id="net-slots"></div>
+      </section>
+
+      <section id="active-gear" class="panel" aria-live="polite">
+        <div class="small muted">EQUIPPED · <span id="active-gear-number">1</span></div>
+        <strong id="active-gear-label">捕捞网</strong>
+        <div id="active-gear-hint" class="small">按 1 快速切换 · Tab 轮盘</div>
       </section>
 
       <section id="bank" class="panel">
@@ -57,7 +79,13 @@
       </section>
 
       <div id="toasts"></div>
-      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
+      <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> menu</div>
+
+      <div id="loadout-wheel" class="loadout-wheel hidden" role="dialog" aria-label="Dive gear wheel" aria-hidden="true">
+        <div id="loadout-wheel-center" class="loadout-wheel-center"></div>
+        <div id="loadout-wheel-slots" class="loadout-wheel-slots"></div>
+        <div class="loadout-wheel-caption">松开 Tab 确认 · 方向键 / Q E 选择</div>
+      </div>
     </div>
 
     <div id="title-screen" class="hidden">
@@ -68,7 +96,10 @@
         <div class="zh">屏息</div>
         <div class="en">BREATHLESS</div>
         <div class="title-hint">Grab the fish · click <b>START</b> or press Enter</div>
+        <div class="title-hint">点击船只升级 · Click the boat to upgrade</div>
       </div>
+      <!-- Over the title and the workbench (which sits under this layer): who is logged in, and Log out. -->
+      <div id="wallet-chip" class="wallet-row wallet-chip hidden"></div>
     </div>
 
     <!-- The aquarium (图鉴): banked fish in a glass tank; it rises from below as the title's fish ride up out of sight. -->
@@ -110,6 +141,17 @@
           <div id="wb-place-sub" class="small"></div>
           <p id="wb-place-text"></p>
           <div id="wb-place-gear" class="small muted"></div>
+          <section id="wb-sonar-config" aria-label="Deep sonar settings">
+            <div class="wb-sonar-heading">
+              <span>深潜声纳 · DEEP SONAR</span>
+              <span id="wb-sonar-length" class="small muted">10 m cable</span>
+            </div>
+            <label class="wb-sonar-color">
+              <span class="small">Beacon color · 信标颜色</span>
+              <input id="wb-sonar-color" type="color" value="#42e8d2" aria-label="Deep sonar beacon color" />
+            </label>
+            <p class="wb-sonar-note">Set before diving · weak light + quick guidance</p>
+          </section>
           <button id="wb-dive" class="primary">Dive · 下潜</button>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl">Click outside the chart or press Esc to fold it</div>
@@ -149,14 +191,12 @@
 
     <div id="login" class="hidden">
       <div class="card">
-        <h2>Connect Phantom</h2>
-        <p class="tagline">Your Phantom wallet is your account. Fish you mint belong to it.</p>
-        <div class="buttons">
-          <button id="login-connect" class="primary">Connect Phantom</button>
-          <a id="login-install" class="button primary hidden" href="https://phantom.app" target="_blank" rel="noopener">Get Phantom ↗</a>
-        </div>
-        <p id="login-status" class="small"></p>
-        <p class="small muted">Devnet only. Phantom → Settings → Developer Settings → Testnet Mode → Solana Devnet</p>
+        <h2>Connect a wallet</h2>
+        <p class="tagline">Your wallet is your account. Fish you mint belong to it.</p>
+        <!-- One logo tile per wallet (login.ts): installed ones connect, the others link to their site. -->
+        <div id="login-wallets" class="wallet-pick" role="group" aria-label="Wallets"></div>
+        <p id="login-status" class="small" role="status"></p>
+        <p id="login-hint" class="small muted"></p>
         <button id="login-back" class="link">← Back</button>
       </div>
     </div>
@@ -203,6 +243,22 @@
       </div>
     </div>
 
+    <div id="shark-ask" class="hidden">
+      <div class="card">
+        <h2>Sharks hunt here at night</h2>
+        <p>They home in on your heartbeat. The faster it beats, the more of them come, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
+        <ul>
+          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of twice and keeps the best.</li>
+          <li><b>No heart-rate reading.</b> Dives with sharks in the water are left out of the heart-rate figures in your health report: a chase is not a resting measurement. Breath-hold times still count.</li>
+        </ul>
+        <div class="menu-buttons">
+          <button id="shark-yes" class="primary">Dive with sharks</button>
+          <button id="shark-no">No sharks</button>
+        </div>
+        <p class="small muted">Change it any time: Esc → Settings → Sharks at night.</p>
+      </div>
+    </div>
+
     <div id="pause" class="hidden">
       <div class="card">
         <div id="pause-main">
@@ -212,6 +268,7 @@
             <button id="pause-settings">Settings</button>
             <button id="pause-menu">Main menu</button>
           </div>
+          <div id="pause-wallet" class="wallet-row wallet-pause hidden"></div>
           <p class="small muted">Esc to resume</p>
         </div>
 
@@ -249,7 +306,15 @@
           </label>
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
-          <div class="setting"><span>Phantom wallet</span><span id="set-wallet" class="wallet-row"></span></div>
+          <label class="setting">
+            <span>Sharks at night (Open Ocean)</span>
+            <select id="set-sharks">
+              <option value="ask">Ask before a dive</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <div class="setting"><span>Wallet</span><span id="set-wallet" class="wallet-row"></span></div>
           <div class="menu-buttons">
             <button id="settings-back">Back</button>
           </div>
@@ -279,6 +344,7 @@
           <div id="wallet" class="small"></div>
           <div id="market-bar" class="small"></div>
         </div>
+        <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
         <button id="collection-close">Close (C)</button>
       </div>
       <div id="collection-grid"></div>
@@ -287,16 +353,17 @@
     <div id="gear-panel" class="hidden">
       <div class="gear-head">
         <div>
-          <div class="small muted">FISHING GEAR</div>
-          <h2>Net workshop</h2>
+          <div class="small muted">DIVER LOADOUT</div>
+          <h2>改装工作台</h2>
           <div id="gear-level"></div>
         </div>
         <button id="gear-close">Close (G)</button>
       </div>
+      <div id="gear-slots" class="gear-slots"></div>
       <div class="gear-card">
-        <div class="gear-icon">◌</div>
+        <div id="gear-icon" class="gear-icon">◌</div>
         <div>
-          <div class="small muted">CURRENT LOADOUT</div>
+          <div class="small muted">SELECTED MODULE</div>
           <div id="gear-effect" class="gear-effect"></div>
           <div id="gear-pearls" class="gear-pearls"></div>
         </div>
@@ -310,10 +377,11 @@
           <div id="gear-progress-label" class="small"></div>
         </div>
         <progress id="gear-progress" value="0" max="1"></progress>
+        <div id="gear-compare" class="gear-compare"></div>
         <button id="gear-upgrade" class="primary">Upgrade</button>
         <div id="gear-notice" class="gear-notice hidden"></div>
       </div>
-      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. Upgrades change the net's visible size, capacity and catch radius; they never extend breath time.</p>
+      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. 每次下潜前可自由组合配件；升级只改变装备属性，绝不延长真实憋气时间。气瓶只在水下换气后提供紧急返航窗口。</p>
     </div>
 
     <div id="report" class="hidden"></div>

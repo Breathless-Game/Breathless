@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breathless · events lab</title>
+    <link rel="stylesheet" href="/src/scrollbar.css" />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #071a30; color: #e8f4ff; font: 13px/1.4 system-ui, sans-serif; }
+      #scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+      #panel { position: fixed; top: 12px; left: 12px; width: 270px; max-height: calc(100vh - 24px); overflow: auto; padding: 12px 14px; box-sizing: border-box; border-radius: 10px; background: rgba(4, 14, 28, 0.8); backdrop-filter: blur(6px); }
+      #panel.hidden > :not(#hide) { display: none; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      h2 { font-size: 12px; margin: 12px 0 6px; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.06em; }
+      label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+      label > span:first-child { width: 64px; opacity: 0.8; }
+      input[type='range'] { flex: 1; }
+      .dd { flex: 1; }
+      .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .buttons button { padding: 6px 4px; border-radius: 6px; border: 1px solid #2c4a66; background: #0f2a45; color: inherit; cursor: pointer; }
+      .buttons button:hover { background: #17406a; }
+      .buttons button.on { border-color: #7fd8ff; background: #1d5a8a; }
+      #stats { margin: 12px 0 0; white-space: pre; font: 12px/1.45 ui-monospace, monospace; }
+      #hide { position: absolute; top: 8px; right: 10px; background: none; border: 0; color: inherit; cursor: pointer; opacity: 0.7; }
+      #toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); padding: 8px 16px; border-radius: 8px; background: rgba(4, 14, 28, 0.75); opacity: 0; transition: opacity 0.4s; pointer-events: none; font-size: 15px; }
+      #toast.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="panel">
+      <button id="hide" title="Hide panel">×</button>
+      <h1>Breathless · events lab</h1>
+      <label><span>Map</span><select id="map"></select></label>
+      <label><span>Detail</span>
+        <select id="detail">
+          <option value="1">1 · low</option>
+          <option value="2">2 · medium</option>
+          <option value="3">3 · high</option>
+        </select>
+      </label>
+      <label><span>Depth</span><input id="depth" type="range" min="0" max="60" step="0.5" value="0" /><output id="depthOut">0 m</output></label>
+      <label><span>Camera x</span><input id="camx" type="range" min="-70" max="70" step="1" value="0" /><output id="camxOut">0</output></label>
+      <label><input id="night" type="checkbox" /> Night</label>
+      <label><span>Weather</span>
+        <select id="weather">
+          <option value="clear">clear</option>
+          <option value="cloudy">cloudy</option>
+          <option value="rain">rain</option>
+          <option value="storm">storm</option>
+          <option value="auto">auto cycle</option>
+        </select>
+      </label>
+      <label><input id="lighting" type="checkbox" checked /> Lighting effects (aurora, lightning)</label>
+      <label><input id="auto" type="checkbox" /> Random schedule (20–40 s, then 45–100 s gaps)</label>
+      <h2>Surface</h2>
+      <div id="surface" class="buttons"></div>
+      <h2>Underwater · depth &gt; 6 m</h2>
+      <div id="under" class="buttons"></div>
+      <div id="stats"></div>
+    </div>
+    <div id="toast"></div>
+    <script type="module" src="/src/events-lab.ts"></script>
+  </body>
+</html>

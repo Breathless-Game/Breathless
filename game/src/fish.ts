@@ -427,21 +427,32 @@ export class Fish {
     this.rng = new Rng(spec.seed ^ 0xabcdef);
     this.pos = new THREE.Vector3(x, y, this.rng.range(-4, 2));
     this.phase = this.rng.range(0, Math.PI * 2);
-    this.halfWidth = worldHalfWidth;
+    this.leftBound = -Math.max(0, Number.isFinite(worldHalfWidth) ? worldHalfWidth : 0);
+    this.rightBound = -this.leftBound;
     this.pickTarget();
     this.mesh.group.position.copy(this.pos);
   }
 
-  private halfWidth: number;
+  private leftBound: number;
+  private rightBound: number;
   private readonly profile: SpeciesProfile;
   private readonly toDiver = new THREE.Vector3();
   private readonly toTarget = new THREE.Vector3();
   private readonly desired = new THREE.Vector3();
 
+  /** Update the fish corridor when the player opens a new side of the map. */
+  setWorldBounds(left: number, right: number): void {
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return;
+    this.leftBound = Math.min(left, right);
+    this.rightBound = Math.max(left, right);
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, this.leftBound, this.rightBound);
+    this.target.x = THREE.MathUtils.clamp(this.target.x, this.leftBound, this.rightBound);
+  }
+
   private pickTarget() {
     const span = 18;
     this.target.set(
-      THREE.MathUtils.clamp(this.pos.x + this.rng.range(-span, span), -this.halfWidth, this.halfWidth),
+      THREE.MathUtils.clamp(this.pos.x + this.rng.range(-span, span), this.leftBound, this.rightBound),
       -this.rng.range(this.band.top + 1.5, this.band.bottom - 0.5),
       this.rng.range(-4, 2),
     );
@@ -457,7 +468,13 @@ export class Fish {
     const desired = this.desired;
     if (dist < fleeRadius) {
       // Flee, harder the closer the diver gets.
-      desired.copy(toDiver.normalize()).multiplyScalar(speed * (1.6 + (fleeRadius - dist) / fleeRadius));
+      // Avoid normalising a zero vector when the diver overlaps the fish.
+      if (dist < 1e-4) {
+        desired.set(this.facing || 1, 0, 0);
+      } else {
+        desired.copy(toDiver).multiplyScalar(1 / dist);
+      }
+      desired.multiplyScalar(speed * (1.6 + (fleeRadius - dist) / fleeRadius));
     } else {
       const toTarget = this.toTarget.copy(this.target).sub(this.pos);
       if (toTarget.length() < 1.5) {
@@ -472,16 +489,24 @@ export class Fish {
     const top = -(this.band.top + 0.5);
     const bottom = -(this.band.bottom + 3);
     this.pos.y = THREE.MathUtils.clamp(this.pos.y, bottom, top);
-    this.pos.x = THREE.MathUtils.clamp(this.pos.x, -this.halfWidth, this.halfWidth);
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, this.leftBound, this.rightBound);
 
     if (Math.abs(this.vel.x) > 0.15) this.facing = this.vel.x > 0 ? 1 : -1;
     const g = this.mesh.group;
-    g.position.copy(this.pos);
+    const bob = Math.sin(time * (1.25 + speed * 0.12) + this.phase) * Math.min(0.11, 0.035 + speed * 0.008);
+    g.position.set(this.pos.x, this.pos.y + bob, this.pos.z);
     const targetYaw = this.facing > 0 ? 0 : Math.PI;
-    g.rotation.y += (targetYaw - g.rotation.y) * Math.min(1, dt * 6);
-    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5) * this.facing;
+    const yawDelta = THREE.MathUtils.euclideanModulo(targetYaw - g.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
+    g.rotation.y += yawDelta * Math.min(1, dt * 6);
+    // Rotation around z is a pitch in this side-on model. It should not flip
+    // when the fish turns around, otherwise upward swims point downward.
+    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5)
+      + Math.sin(time * 1.8 + this.phase) * 0.035;
+    g.rotation.x = THREE.MathUtils.clamp(-this.vel.z * 0.1, -0.24, 0.24);
     const wag = (6 + this.vel.length() * 2.5) * (0.85 + this.profile.swimSpeed * 0.15);
-    this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * 0.5;
+    const wagAmount = THREE.MathUtils.clamp(0.3 + this.vel.length() * 0.045, 0.3, 0.66);
+    this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * wagAmount;
+    this.mesh.tail.rotation.z = Math.sin(time * wag * 0.53 + this.phase + 0.8) * 0.08;
     if (this.spec.rarity === 'mythic') {
       this.mesh.material.emissive.setHSL((time * 0.15 + this.phase) % 1, 1, 0.5);
     }

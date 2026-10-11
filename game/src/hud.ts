@@ -1,7 +1,8 @@
 import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
+import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { fishIcon } from './portrait';
-import { totalPearls, type EquipmentState, type RodTier } from './equipment';
+import { totalPearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -42,6 +43,13 @@ export class Hud {
   /** Deepest depth passed to setDepth since page load (no persistence). */
   private bestDepth = 0;
   private emergency = $('emergency');
+  private alert = $('alert');
+  private mash = $('mash');
+  private mashArc = $('mash-arc');
+  private shark = $('shark');
+  private sharkLabel = $('shark-label');
+  private sharkPulse = $('shark-pulse');
+  private sharkFill = $('shark-fill');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
   private boardPrompt = $('board-prompt');
@@ -49,6 +57,10 @@ export class Hud {
   private bankCount = $('bank-count');
   private bankValue = $('bank-value');
   private gearSummary = $('gear-summary');
+  private activeGear = $('active-gear');
+  private activeNumber = $('active-gear-number');
+  private activeGearLabel = $('active-gear-label');
+  private activeGearHint = $('active-gear-hint');
   private toasts = $('toasts');
   private msgTimer = 0;
 
@@ -184,6 +196,44 @@ export class Hud {
     this.boardPrompt.classList.toggle('hidden', !show);
   }
 
+  /** The key to mash, in the middle of the screen, with a ring `progress` (0..1) full. Null hides it. */
+  setMash(progress: number | null) {
+    this.mash.classList.toggle('hidden', progress == null);
+    if (progress != null) this.mashArc.style.strokeDashoffset = `${326.73 * (1 - Math.min(1, Math.max(0, progress)))}`;
+  }
+
+  /** One press landed: the key punches. */
+  punchMash() {
+    this.mash.classList.remove('hit');
+    // Reading the width restarts the animation when presses come faster than it runs.
+    void this.mash.offsetWidth;
+    this.mash.classList.add('hit');
+  }
+
+  /** A warning that stays up until cleared with null. `key` is the key to press, shown as a keycap. */
+  setAlert(text: string | null, key?: string) {
+    this.alert.classList.toggle('hidden', text == null);
+    if (text == null) return;
+    this.alert.textContent = text;
+    if (key) {
+      const cap = document.createElement('b');
+      cap.textContent = key;
+      this.alert.append(' ', cap);
+    }
+  }
+
+  /**
+   * Sharks are out: how many, the pulse they hunt by (`estimated` when no sensor measures it)
+   * and how worked up they are, 0..1. Null hides it.
+   */
+  setSharks(state: { count: number; bpm: number; estimated: boolean; intensity: number } | null) {
+    this.shark.classList.toggle('hidden', state == null);
+    if (!state) return;
+    this.sharkLabel.textContent = state.count > 1 ? `${state.count} SHARKS` : state.count ? 'SHARK' : 'SHARK WATERS';
+    this.sharkPulse.textContent = `♥ ${state.estimated ? '~' : ''}${Math.round(state.bpm)}`;
+    this.sharkFill.style.width = `${Math.round(Math.max(0.04, state.intensity) * 100)}%`;
+  }
+
   message(text: string, ms = 1800) {
     this.centerMsg.textContent = text;
     this.centerMsg.classList.add('show');
@@ -220,10 +270,27 @@ export class Hud {
   }
 
   setEquipment(state: EquipmentState, tier: RodTier) {
-    this.gearSummary.textContent = `ROD Lv${tier.level} · ${tier.capacity} slots · ${totalPearls(state)} ◇`;
+    this.gearSummary.textContent = `NET Lv${tier.level} · 杆身 ${state.rodGearLevel} · 线轮 ${state.reelLevel} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${totalPearls(state)} ◇`;
   }
 
-  toast(spec: FishSpec, title?: string) {
+  /** Show the currently selected quick slot beside the net inventory. */
+  setActiveGear(slot: EquipmentSlot, packed = true) {
+    const labels: Record<EquipmentSlot, string> = {
+      net: '捕捞网',
+      rod: '杆身',
+      reel: '线轮',
+      fins: '脚蹼',
+      tank: '应急气瓶',
+      lamp: '探照灯',
+    };
+    const keys: Record<EquipmentSlot, number> = { net: 1, rod: 2, reel: 3, fins: 4, tank: 5, lamp: 6 };
+    this.activeGear.classList.toggle('unavailable', !packed);
+    this.activeNumber.textContent = String(keys[slot]);
+    this.activeGearLabel.textContent = packed ? labels[slot] : `${labels[slot]} · 未装配`;
+    this.activeGearHint.textContent = `按 ${keys[slot]} 快速切换 · Tab 轮盘`;
+  }
+
+  toast(spec: FishSpec & Numbered, title?: string) {
     const r = RARITY[spec.rarity];
     const el = document.createElement('div');
     const big = spec.rarity === 'legendary' || spec.rarity === 'mythic';
@@ -231,7 +298,15 @@ export class Hud {
     el.style.setProperty('--c', r.color);
     el.innerHTML = `<img alt=""><div><div class="r">${title ?? r.label.toUpperCase()}</div><div class="n"></div></div>`;
     el.querySelector('img')!.src = fishIcon(spec);
-    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
+    const n = el.querySelector('.n')!;
+    n.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
+    // A minted fish (e.g. the SOLD toast) carries its number, dimmed after the name.
+    if (isSerial(spec.serial)) {
+      const tag = document.createElement('span');
+      tag.className = 'serial';
+      tag.textContent = formatSerial(spec.serial);
+      n.replaceChildren(spec.name, ' ', tag, ` · ${spec.weightKg} kg · ${fishValue(spec)} pts`);
+    }
     this.toasts.prepend(el);
     setTimeout(() => el.remove(), 3100);
   }

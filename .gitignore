@@ -22,3 +22,6 @@ sensor/.market-oracle.json
 sensor/.market-keypair.json
 sensor/.market-state.json
 sensor/.market-state.json.tmp
+# Fish number counter (sensor/nft-serial.mjs)
+sensor/.market-serial.json
+sensor/.market-serial.json.tmp

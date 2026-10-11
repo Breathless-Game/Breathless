@@ -42,15 +42,19 @@ interface Stats {
   reflexDrop: number | null;
   reflexPct: number | null;
   recovery: number | null;
+  /** Dives with sharks in the water: counted for breath holds, left out of every heart-rate figure. */
+  sharkDives: number;
 }
 
 function compute(dives: DiveRecord[]): Stats {
-  const vitals = dives.filter((d) => d.pulse.length >= 3 && d.restPulse != null);
+  // A shark chase drives the pulse up: those dives say nothing about rest, the dive reflex or recovery.
+  const steady = dives.filter((d) => !d.shark);
+  const vitals = steady.filter((d) => d.pulse.length >= 3 && d.restPulse != null);
   const holds = dives.map((d) => d.holdMs);
   const recent = holds.slice(-10);
   const earlier = holds.slice(-20, -10);
   const drops = vitals.map((d) => d.restPulse! - d.minPulse!);
-  const restPulse = median(nonNull(dives.map((d) => d.restPulse)));
+  const restPulse = median(nonNull(steady.map((d) => d.restPulse)));
   const reflexDrop = median(drops);
   return {
     n: dives.length,
@@ -63,10 +67,11 @@ function compute(dives: DiveRecord[]): Stats {
     fish: dives.reduce((a, d) => a + (d.outcome === 'blackout' ? 0 : d.fish), 0),
     blackouts: dives.filter((d) => d.outcome === 'blackout').length,
     restPulse,
-    restRate: median(nonNull(dives.map((d) => d.restRate))),
+    restRate: median(nonNull(steady.map((d) => d.restRate))),
     reflexDrop,
     reflexPct: reflexDrop != null && restPulse ? (reflexDrop / restPulse) * 100 : null,
-    recovery: median(nonNull(dives.map((d) => d.recoveryS))),
+    recovery: median(nonNull(steady.map((d) => d.recoveryS))),
+    sharkDives: dives.length - steady.length,
   };
 }
 
@@ -104,8 +109,17 @@ function insights(s: Stats): string[] {
       `${s.blackouts} dive${s.blackouts > 1 ? 's' : ''} ended in a game blackout. That is the game's warning, not a goal: in real life, stop a hold well before you feel dizzy.`,
     );
   }
+  if (s.sharkDives) {
+    out.push(
+      `${s.sharkDives} dive${s.sharkDives > 1 ? 's were' : ' was'} made with sharks in the water. Being hunted raises the pulse, so ${s.sharkDives > 1 ? 'they are' : 'it is'} left out of the heart-rate figures above; ${s.sharkDives > 1 ? 'their' : 'its'} breath-hold time still counts.`,
+    );
+  }
   if (!s.vitals.length) {
-    out.push('Play with the camera to add heart rate and breathing rate to this report.');
+    out.push(
+      s.sharkDives === s.n
+        ? 'Every dive so far had sharks in the water. Dive without them (Esc → Settings) to get heart-rate figures.'
+        : 'Play with the camera to add heart rate and breathing rate to this report.',
+    );
   }
   return out;
 }
@@ -240,7 +254,7 @@ export class Report {
       s.earlierAvg != null ? `${s.recentAvg >= s.earlierAvg ? '▲' : '▼'} from ${sec(s.earlierAvg)}` : 'last 10 dives';
     const longest = s.vitals.length ? s.vitals.reduce((a, d) => (d.holdMs > a.holdMs ? d : a)) : null;
     this.panel.innerHTML = `${head}
-      <div class="small muted basis">Based on ${s.n} dive${s.n > 1 ? 's' : ''}${s.vitals.length ? `, ${s.vitals.length} with heart-rate data` : ''}.</div>
+      <div class="small muted basis">Based on ${s.n} dive${s.n > 1 ? 's' : ''}${s.vitals.length ? `, ${s.vitals.length} with heart-rate data` : ''}${s.sharkDives ? `; ${s.sharkDives} with sharks, not used for heart rate` : ''}.</div>
       <div class="tiles">
         ${tile('Longest breath hold', sec(s.best.holdMs), new Date(s.best.at).toLocaleDateString(), C.hold)}
         ${tile('Average hold', sec(s.recentAvg), trend)}

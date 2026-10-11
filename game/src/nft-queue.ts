@@ -10,6 +10,7 @@ import {
   type NftEvent,
 } from './market';
 import type { MintStep } from './chain';
+import { nftName, requestSerial } from './nft-uri';
 import type { SellResult, SellStep } from './pearl';
 import { walletState } from './wallet';
 
@@ -17,17 +18,24 @@ import { walletState } from './wallet';
 // ones the player asked to sell. The rules live in market.ts; this class only runs them. Solana code
 // is imported lazily on the first job, so it never delays or breaks a dive.
 // Mints are paid by the game (session) wallet, so only they wait for its SOL. Sales are signed and
-// paid by the owner's Phantom wallet, which says so itself if it is short.
-// Nothing runs before Phantom connects; main.ts reloads the page when the wallet changes.
+// paid by the owner's own wallet, which says so itself if it is short.
+// Nothing runs before a wallet connects; logging out stops the queue, and main.ts reloads the page when the wallet changes.
+// Every fish gets its global number (#0042) from our server just before it is minted; if the server
+// cannot answer, the fish stays queued and the queue asks again later. A number is never made up.
 
 type Chain = typeof import('./chain');
 type Pearl = typeof import('./pearl');
 
 /** 'needs-sol': mints paused until the game (session) wallet has devnet SOL. 'offline': the RPC did not answer. */
 export type Funds = 'unknown' | 'ok' | 'needs-sol' | 'offline';
+/** 'waiting': the fish number server did not answer, so mints wait for it. */
+export type Serials = 'ok' | 'waiting';
 
-const MIN_MINT_SOL = 0.02; // Irys upload of the card and metadata plus the Core asset rent, with headroom
+const MIN_MINT_SOL = 0.02; // the Core asset rent and fees, with headroom
+const MIN_REPAIR_SOL = 0.01; // a metadata URI repair: one fee plus a little rent for the longer URI
 const POLL_MS = 60_000;
+const SERIAL_RETRY_MS = 15_000; // the number server is ours: it should be back soon
+const MAX_REPAIR_TRIES = 3; // failed attempts to number an already-minted NFT before giving up on it
 const START_DELAY_MS = 4000;
 
 export interface NftQueueHooks {
@@ -43,8 +51,11 @@ export class NftQueue {
   /** Lazy module loaders. Kept as fields so a browser test can swap in a fake chain. */
   loadChain: () => Promise<Chain> = () => import('./chain');
   loadPearl: () => Promise<Pearl> = () => import('./pearl');
+  /** Asks our server for a fish's number (swappable for tests). */
+  fetchSerial: (id: string, owner: string) => Promise<number> = requestSerial;
 
   funds: Funds = 'unknown';
+  serials: Serials = 'ok';
   balance: number | null = null;
   /** The fish being minted and its step. */
   minting: { fish: BankedFish; step: MintStep | null } | null = null;
@@ -56,9 +67,13 @@ export class NftQueue {
 
   private mintBusy = false;
   private sellBusy = false;
+  private repairBusy = false;
+  private repairsDone = false;
   private airdropTried = false;
   private wakeTimer = 0;
   private pollTimer = 0;
+  private startTimer = 0;
+  private stopped = false;
 
   constructor(
     private bank: BankedFish[],
@@ -68,18 +83,36 @@ export class NftQueue {
 
   /** Resume fish left queued by an earlier session, once the page has settled. */
   start() {
-    window.setTimeout(() => this.kick(), START_DELAY_MS);
+    this.stopped = false;
+    window.clearTimeout(this.startTimer);
+    this.startTimer = window.setTimeout(() => this.kick(), START_DELAY_MS);
+  }
+
+  /**
+   * Logging out: start no new job (mint, sale, repair, number request) and drop every timer, the
+   * number retry included. A number still on its way is ignored; a transaction already sent finishes
+   * or resumes next login.
+   */
+  stop() {
+    this.stopped = true;
+    for (const t of [this.startTimer, this.wakeTimer, this.pollTimer]) window.clearTimeout(t);
+    this.startTimer = this.wakeTimer = this.pollTimer = 0;
+  }
+
+  /** A mint or sale is under way right now. */
+  get busy() {
+    return this.minting !== null || this.selling.size > 0;
   }
 
   kick() {
-    if (!walletState().connected) return;
+    if (this.stopped || !walletState().connected) return;
     void this.runMints();
     void this.runSells();
   }
 
   /** Check the wallet again now (the collection panel opened, or SOL arrived). */
   recheck() {
-    if (this.funds !== 'needs-sol' && this.funds !== 'offline') return;
+    if (this.funds !== 'needs-sol' && this.funds !== 'offline' && this.serials !== 'waiting') return;
     window.clearTimeout(this.pollTimer);
     this.pollTimer = 0;
     this.kick();
@@ -128,6 +161,7 @@ export class NftQueue {
     try {
       const c = await this.loadChain();
       this.balance = await c.balanceSol();
+      if (this.stopped) return false;
       if (this.balance < min && !this.airdropTried) {
         this.airdropTried = true;
         try {
@@ -159,17 +193,46 @@ export class NftQueue {
     }
   }
 
-  private schedulePoll() {
-    if (this.pollTimer) return;
+  private schedulePoll(ms = POLL_MS) {
+    if (this.stopped || this.pollTimer) return;
     this.pollTimer = window.setTimeout(() => {
       this.pollTimer = 0;
-      if (document.hidden) this.schedulePoll();
+      if (document.hidden) this.schedulePoll(ms);
       else this.kick();
-    }, POLL_MS);
+    }, ms);
+  }
+
+  /** Make sure the fish has its number from our server. False (and a retry scheduled) if the server did not answer. */
+  private async ensureSerial(f: BankedFish): Promise<boolean> {
+    if (f.serial) return true;
+    const owner = walletState().owner;
+    if (this.stopped || !owner) return false;
+    try {
+      const serial = await this.fetchSerial(f.id, owner);
+      // Logged out (or the account changed) while the server answered: drop the answer, start nothing.
+      if (this.stopped || walletState().owner !== owner) return false;
+      if (!f.serial) f.serial = serial;
+      this.save();
+      if (this.serials !== 'ok') {
+        this.serials = 'ok';
+        this.hooks.changed();
+      }
+      return true;
+    } catch (e) {
+      if (this.stopped) return false;
+      console.warn('fish number unavailable, waiting', e);
+      if (this.serials !== 'waiting') {
+        this.serials = 'waiting';
+        this.hooks.changed();
+      }
+      this.schedulePoll(SERIAL_RETRY_MS);
+      return false;
+    }
   }
 
   private scheduleWake() {
     window.clearTimeout(this.wakeTimer);
+    if (this.stopped) return;
     const at = nextRetryAt(this.bank);
     if (at !== null) this.wakeTimer = window.setTimeout(() => this.kick(), Math.max(1000, at - Date.now()));
   }
@@ -178,11 +241,15 @@ export class NftQueue {
     if (this.mintBusy) return;
     this.mintBusy = true;
     try {
-      while (nextToMint(this.bank, Date.now())) {
+      while (!this.stopped && nextToMint(this.bank, Date.now())) {
         if (!(await this.ensureFunds(MIN_MINT_SOL))) return;
         // Pick after the await: the player may have sold or cancelled in the meantime.
         const f = nextToMint(this.bank, Date.now());
         if (!f) break;
+        // Its number first: the mint writes it into the on-chain name and the URI. No answer, no mint.
+        if (!(await this.ensureSerial(f))) return;
+        if (nextToMint(this.bank, Date.now()) !== f) continue; // the queue changed during the request
+        if (this.stopped) return; // logged out during the checks above: send nothing
         this.minting = { fish: f, step: null };
         this.apply(f, { type: 'start' });
         try {
@@ -191,6 +258,8 @@ export class NftQueue {
             this.minting = { fish: f, step };
             this.hooks.changed();
           });
+          f.metaFixed = true; // minted with a URI on our host and its number; saved by apply
+          f.nameFixed = true;
           this.apply(f, { type: 'minted', assetId: res.asset, tx: res.signature });
         } catch (e) {
           const msg = errorText(e);
@@ -208,6 +277,64 @@ export class NftQueue {
       this.scheduleWake();
     } finally {
       this.mintBusy = false;
+      void this.runRepairs();
+    }
+  }
+
+  /**
+   * Once per page load, after the mints: give fish minted before numbering their number, and re-point
+   * fish minted with the old Irys URIs (which stopped resolving) at our metadata host. One
+   * session-signed update per fish sets both name and URI, no prompt. A fish we cannot update
+   * (another session key) is marked so it is not fetched again; one that keeps failing is given up
+   * after MAX_REPAIR_TRIES. If the number server is down, repairs wait for it like mints do.
+   */
+  private async runRepairs() {
+    if (this.stopped || this.repairBusy || this.repairsDone || this.mintBusy || !walletState().connected) return;
+    const todo = () =>
+      this.bank.filter(
+        (f) =>
+          f.nft === 'minted' &&
+          f.assetId &&
+          !(f.metaFixed && f.nameFixed) &&
+          (f.repairTries ?? 0) < MAX_REPAIR_TRIES &&
+          !f.sellQueued &&
+          !this.selling.has(f),
+      );
+    if (!todo().length) return;
+    this.repairBusy = true;
+    try {
+      if (await this.balanceBelow(MIN_REPAIR_SOL)) return; // try again after the next mint or top-up
+      if (this.stopped) return;
+      this.repairsDone = true;
+      const c = await this.loadChain();
+      for (const f of todo()) {
+        if (this.stopped) break;
+        if (!todo().includes(f)) continue; // sold or queued for sale meanwhile
+        if (!(await this.ensureSerial(f))) {
+          this.repairsDone = false; // the number server is down (or we logged out): the next run picks these up
+          break;
+        }
+        if (this.stopped) break;
+        try {
+          const result = await c.repairFishUri(f as typeof f & { assetId: string });
+          if (result === 'updated') console.info(`NFT name and metadata updated: ${nftName(f)} (${f.assetId})`);
+          f.metaFixed = true;
+          f.nameFixed = true;
+          delete f.repairTries;
+          this.save();
+          this.hooks.changed();
+        } catch (e) {
+          console.warn('NFT metadata repair failed', f.assetId, e);
+          // Short of SOL is not the fish's fault: stop for now without counting it.
+          if (isFundsError(errorText(e))) break;
+          f.repairTries = (f.repairTries ?? 0) + 1;
+          this.save();
+        }
+      }
+    } catch (e) {
+      console.warn('NFT metadata repair skipped', e);
+    } finally {
+      this.repairBusy = false;
     }
   }
 
@@ -215,8 +342,8 @@ export class NftQueue {
     if (this.sellBusy) return;
     this.sellBusy = true;
     try {
-      // One at a time: each sale is its own Phantom approval.
-      for (let f = nextToSell(this.bank); f; f = nextToSell(this.bank)) await this.sellOne(f);
+      // One at a time: each sale is its own approval in the player's wallet.
+      for (let f = nextToSell(this.bank); f && !this.stopped; f = nextToSell(this.bank)) await this.sellOne(f);
     } finally {
       this.sellBusy = false;
     }
@@ -234,7 +361,7 @@ export class NftQueue {
       const i = this.bank.indexOf(f);
       if (i >= 0) this.bank.splice(i, 1);
       this.save();
-      this.lastSale = { name: f.name, result };
+      this.lastSale = { name: nftName(f), result };
       this.hooks.sold(f, result);
     } catch (e) {
       console.error('sale failed', e);
