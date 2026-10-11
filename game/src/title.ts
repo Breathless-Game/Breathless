@@ -21,6 +21,8 @@ export interface RopeOptions {
   slack?: number;
   /** Pulled nearly straight all the time (like the main rope over a table). */
   taut?: boolean;
+  /** How far a taut rope sags in the middle, fraction of the screen (default BENCH_SAG). */
+  sag?: number;
   /** Fishing line length, and fish size, as fractions of the main rope's. */
   lineScale?: number;
   sizeScale?: number;
@@ -533,7 +535,7 @@ export class TitleScreen {
       const p = this.ps[i];
       if (!p.inv) continue; // held by the pointer
       const s = i / ROPE_SEGS;
-      const y = a.y + (b.y - a.y) * s + Math.sin(s * Math.PI) * this.h * BENCH_SAG;
+      const y = a.y + (b.y - a.y) * s + Math.sin(s * Math.PI) * this.h * (this.opts.sag ?? BENCH_SAG);
       p.y += (y - p.y) * k;
     }
   }

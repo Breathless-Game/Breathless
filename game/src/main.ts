@@ -1476,7 +1476,7 @@ const backRope = new TitleScreen(
     { seed: 0x5eed05, rarity: 'uncommon', species: 'Silver Snapper', hue: 150, sat: 0.55, light: 0.55, at: 0.335, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
     { seed: 0x5eed06, rarity: 'rare', species: 'Ghost Angelfish', hue: 42, sat: 0.35, light: 0.7, at: 0.675, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTour() },
   ],
-  { ropeY: 0.01, slack: 1.004, taut: true, lineScale: 0.18, sizeScale: 0.62, underneath: { cursorOn: document.getElementById('title-canvas')! } },
+  { ropeY: 0.04, slack: 1.01, taut: true, sag: 0.05, lineScale: 0.25, sizeScale: 0.62, underneath: { cursorOn: document.getElementById('title-canvas')! } },
 );
 {
   const front = { show: titleScreen.show.bind(titleScreen), hide: titleScreen.hide.bind(titleScreen), setPan: titleScreen.setPan.bind(titleScreen), setLift: titleScreen.setLift.bind(titleScreen) };
