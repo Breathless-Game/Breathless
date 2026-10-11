@@ -15,6 +15,7 @@ import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps'
 import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import type { WeatherState } from './weather';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -54,6 +55,7 @@ export interface WorkbenchConditions {
   weather: string;
   wind: string;
   rain: string;
+  weatherState: WeatherState;
 }
 
 // The six dive-loadout slots plus the deployable deep sonar, and a model of the
@@ -224,6 +226,7 @@ export class Workbench {
   private pointer = { x: 0.5, y: 0.5, t: 0 }; // fractions of the screen
   private stirFrom: { x: number; z: number; t: number } | null = null; // last pointer spot on the paper (its local x/z)
   private mapTex: THREE.CanvasTexture;
+  private chartWeatherKey = '';
   private mapHover = 0;
   private slotRings: THREE.Mesh[] = [];
   private dust: { mesh: THREE.Mesh; t: number }[] = [];
@@ -478,10 +481,19 @@ export class Workbench {
     return mesh;
   }
 
-  private paintMap() {
+  private paintMap(weather?: WeatherState) {
     // Twice the chart's size: it is held up nearly screen-wide.
     // Every place is open from the chart: no locks painted on.
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...this.hooks.progress(), unlockAll: true }, true);
+    const id = this.picked ?? this.hooks.progress().selected;
+    const snapshot = weather ?? this.hooks.conditions(id).weatherState;
+    // A canvas redraw is only needed when a visible weather bucket changes;
+    // the live note can still update four times a second during a transition.
+    const key = [snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
+      .map((value) => typeof value === 'number' ? Math.round(value * 20) : value)
+      .join(':');
+    if (key === this.chartWeatherKey && this.mapTex.image.width) return;
+    this.chartWeatherKey = key;
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...this.hooks.progress(), unlockAll: true }, true, snapshot);
     this.mapTex.needsUpdate = true;
   }
 
@@ -795,7 +807,10 @@ export class Workbench {
 
     // Refresh the field note at a low rate so the live random front stays readable
     // without touching the chart texture or rebuilding the workbench.
-    if (this.picked && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.renderConditions(this.picked);
+    if (this.state === 'chart' && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) {
+      if (this.picked) this.renderConditions(this.picked);
+      else this.paintMap(this.hooks.conditions(this.hooks.progress().selected).weatherState);
+    }
 
     for (const p of this.pieces) {
       p.hover = lerp(p.hover, this.hovered === p ? 1 : 0, 1 - Math.exp(-dt * 14));
@@ -1424,6 +1439,9 @@ export class Workbench {
     $('wb-entry-weather').textContent = conditions.weather;
     $('wb-entry-wind').textContent = conditions.wind;
     $('wb-entry-rain').textContent = conditions.rain;
+    // The chart shares this snapshot with the field note, so its pencil marks
+    // fade through the same live front rather than staying on the old weather.
+    this.paintMap(conditions.weatherState);
   }
 
   /**

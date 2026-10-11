@@ -776,6 +776,7 @@ function workbenchConditions(id: MapId): WorkbenchConditions {
     weather: WEATHER_LABELS[weather.kind],
     wind: `${Math.round(4 + weather.wind * 30)} km/h`,
     rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+    weatherState: weather,
   };
 }
 
