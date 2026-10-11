@@ -111,7 +111,10 @@ export interface EquipmentState {
   sonarLevel: EquipmentLevel;
   /** On-chain PEARL, as last read with pearlBalance(): a cache for instant UI. */
   pearls: number;
-  /** Pearls earned locally before PEARL went on-chain. Spent before on-chain PEARL. */
+  /**
+   * Pearls earned locally before PEARL went on-chain. Kept in the save untouched, but no longer
+   * spendable or shown: every purchase burns on-chain PEARL only (see spendablePearls()).
+   */
   legacyPearls: number;
   /**
    * One selected module path per slot. Older localStorage records omit this
@@ -243,7 +246,6 @@ const SLOT_LEVELS: Record<UpgradeSlot, readonly SlotTier[]> = {
 
 /** Tier metadata for the multi-slot workshop UI. */
 export const EQUIPMENT_TIERS: Readonly<Record<UpgradeSlot, readonly SlotTier[]>> = SLOT_LEVELS;
-
 function pathDef(
   slot: EquipmentSlot,
   id: EquipmentPathId,
@@ -466,17 +468,32 @@ export function nextRodTier(input?: EquipmentInput): RodTier | null {
   return ROD_TIERS[level] ?? null;
 }
 
-/** Every Pearl the player can spend: legacy local Pearls plus cached on-chain PEARL. */
-export function totalPearls(state: EquipmentState): number {
-  return state.legacyPearls + state.pearls;
+/**
+ * The Pearls the player can spend and is shown: the cached on-chain PEARL balance only.
+ * legacyPearls stay in the save but are deliberately ignored here.
+ */
+export function spendablePearls(state: EquipmentState): number {
+  return normalize(state).pearls;
+}
+
+/**
+ * Plan paying a flat `cost` (fish food, synthesis fees): the PEARL to burn on-chain, which is
+ * always exactly `cost`. Null when unaffordable or the cost is not a positive whole number.
+ */
+export function planPearlSpend(state: EquipmentState, cost: number): number | null {
+  if (!Number.isSafeInteger(cost) || cost <= 0) return null;
+  return spendablePearls(state) >= cost ? cost : null;
+}
+
+/** Take a burned amount off the cached on-chain balance, once the burn has landed. */
+export function applyPearlSpend(state: EquipmentState, burned: number): EquipmentState {
+  const current = normalize(state);
+  return { ...current, pearls: Math.max(0, current.pearls - burned) };
 }
 
 export interface UpgradePlan {
+  /** Its cost must be burned on-chain with spendPearls() before the tier applies. */
   tier: RodTier;
-  /** Taken from the local legacy balance, which is spent first. */
-  fromLegacy: number;
-  /** Must be burned on-chain with spendPearls() before the tier applies. */
-  fromChain: number;
 }
 
 /**
@@ -486,9 +503,8 @@ export interface UpgradePlan {
 export function planUpgrade(state: EquipmentState): UpgradePlan | null {
   const current = normalize(state);
   const tier = nextRodTier(current.rodLevel);
-  if (!tier || totalPearls(current) < tier.cost) return null;
-  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
-  return { tier, fromLegacy, fromChain: tier.cost - fromLegacy };
+  if (!tier || spendablePearls(current) < tier.cost) return null;
+  return { tier };
 }
 
 function slotLevel(state: EquipmentState, slot: UpgradeSlot): EquipmentLevel {
@@ -571,33 +587,27 @@ export function nextSlotTier(state: EquipmentState, slot: UpgradeSlot): SlotTier
 
 export interface SlotUpgradePlan {
   slot: UpgradeSlot;
+  /** Its cost must be burned on-chain with spendPearls() before the tier applies. */
   tier: SlotTier;
-  /** Taken from the local legacy balance, which is spent first. */
-  fromLegacy: number;
-  /** Must be burned on-chain with spendPearls() before the tier applies. */
-  fromChain: number;
 }
 
 /**
  * Plan buying the next tier for one slot, or null when it is maxed out or
- * unaffordable.  Same rule as planUpgrade(): legacy Pearls first, the rest on-chain.
+ * unaffordable (on-chain PEARL only).  Same rule as planUpgrade().
  */
 export function planSlotUpgrade(state: EquipmentState, slot: UpgradeSlot): SlotUpgradePlan | null {
   const current = normalize(state);
   const tier = nextSlotTier(current, slot);
-  if (!tier || totalPearls(current) < tier.cost) return null;
-  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
-  return { slot, tier, fromLegacy, fromChain: tier.cost - fromLegacy };
+  if (!tier || spendablePearls(current) < tier.cost) return null;
+  return { slot, tier };
 }
 
-/** Apply a slot plan once its on-chain part has been spent, preserving all other upgrade levels. */
-export function applySlotUpgrade(state: EquipmentState, plan: SlotUpgradePlan): EquipmentState {
-  const current = normalize(state);
-  return {
-    ...withSlotLevel(current, plan.slot, plan.tier.level),
-    legacyPearls: Math.max(0, current.legacyPearls - plan.fromLegacy),
-    pearls: Math.max(0, current.pearls - plan.fromChain),
-  };
+/**
+ * Apply a slot plan once its cost has been burned on-chain, preserving all other upgrade levels.
+ * `burned` is what was actually burned (defaults to the tier cost; the synthesis station passes its own fee).
+ */
+export function applySlotUpgrade(state: EquipmentState, plan: SlotUpgradePlan, burned = plan.tier.cost): EquipmentState {
+  return applyPearlSpend(withSlotLevel(normalize(state), plan.slot, plan.tier.level), burned);
 }
 
 /** Pure preview of buying the next tier for one slot (no on-chain spend happens here). */

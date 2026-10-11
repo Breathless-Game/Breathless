@@ -14,7 +14,8 @@ import { burn, fetchAsset, fetchCollection } from '@metaplex-foundation/mpl-core
 import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, SoldLedger, appraise, parseQuoteBatchBody, parseQuoteBody } from './market-rules.mjs';
+import { HttpError, SoldLedger, parseQuoteBatchBody, parseQuoteBody } from './market-rules.mjs';
+import { createFishCollection } from './fish-collection.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 import { renderPearlPng } from './pearl-png.mjs';
@@ -30,7 +31,7 @@ const sigStr = (bytes) => base58.deserialize(bytes)[0];
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
 
 /** `u` is a umi whose identity is the market keypair, with mplCore, mplToolbox and mplTokenMetadata installed. */
-export function createServerMode({ u, rpc, dir, log }) {
+export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   const marketKey = u.identity.publicKey.toString();
   const statePath = path.join(dir, '.market-state.json');
 
@@ -143,6 +144,9 @@ export function createServerMode({ u, rpc, dir, log }) {
     return ua?.type === 'Collection' && ua.address ? fetchCollection(u, ua.address) : undefined;
   }
 
+  // The fish collection, the co-signed mint / migration routes and the one price gate (fish-collection.mjs).
+  const fish = createFishCollection({ u, state, save, dir, ledger, balanceSol, log, ...fishOptions });
+
   /** Price check before the player hands the fish over, so the market never holds a fish it refuses. */
   async function quote(body) {
     const { assetId, seller } = parseQuoteBody(body);
@@ -151,14 +155,13 @@ export function createServerMode({ u, rpc, dir, log }) {
     if (asset.owner.toString() !== seller && asset.owner.toString() !== marketKey) {
       throw new HttpError(403, 'This fish is not owned by the seller');
     }
-    const a = appraise(asset.attributes?.attributeList);
-    if (!a.ok) throw new HttpError(422, a.reason);
-    return { pearls: a.pearls };
+    return { pearls: fish.price(asset, seller) }; // only collection fish the generator agrees with; daily cap
   }
 
   /** POST /quote-batch: the same check for several fish at once. */
-  function quoteBatch(body) {
-    return quoteMany(parseQuoteBatchBody(body), quote);
+  async function quoteBatch(body) {
+    const req = parseQuoteBatchBody(body);
+    return fish.capBatch(req.seller, await quoteMany(req, quote));
   }
 
   /**
@@ -218,6 +221,7 @@ export function createServerMode({ u, rpc, dir, log }) {
         () => loadAsset(assetId),
         (a) => a?.owner?.toString() === marketKey,
       ),
+    priceFish: fish.price,
     resolvePending: payout.resolvePending,
     pay: payout.pay,
     burnSold,
@@ -230,6 +234,7 @@ export function createServerMode({ u, rpc, dir, log }) {
       funded = (await balanceSol()) >= FUNDED_SOL;
     } catch {}
     if (!state.mint && funded) ensureMint().catch((e) => log(`[market] PEARL mint not created: ${e.message}`));
+    if (!fish.collection() && funded) fish.ensureCollection().catch((e) => log(`[market] fish collection not created: ${e.message}`));
     return {
       mode: 'server',
       symbol: SYMBOL,
@@ -241,6 +246,10 @@ export function createServerMode({ u, rpc, dir, log }) {
       funded,
       // POST /quote-batch and /sell-batch exist: a client sells many fish with one transfer and two requests.
       batch: true,
+      // Fish are minted through POST /cosign-mint into this collection; only its fish sell.
+      fishCollection: fish.collection(),
+      cosign: true,
+      limits: fish.limits,
     };
   }
 
@@ -252,9 +261,14 @@ export function createServerMode({ u, rpc, dir, log }) {
     } catch (e) {
       log(`[market] PEARL mint not created yet: ${e.message}`);
     }
+    try {
+      await fish.ensureCollection();
+    } catch (e) {
+      log(`[market] fish collection not created yet: ${e.message}`);
+    }
     // Finish burns a crash or RPC hiccup left behind.
     for (const [id, r] of Object.entries(ledger.records)) if (r.status === 'paid') await burnSold(id);
   })();
 
-  return { info, quote, quoteBatch, sell: desk.sell, sellBatch: desk.sellBatch, ready };
+  return { info, quote, quoteBatch, sell: desk.sell, sellBatch: desk.sellBatch, cosignMint: fish.cosignMint, cosignMigrate: fish.cosignMigrate, ready };
 }

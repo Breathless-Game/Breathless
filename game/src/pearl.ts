@@ -15,8 +15,9 @@
 // Either way the owner (wallet.ts) signs and pays the fees.
 
 // Already loaded by main.ts; only the chain libraries below are lazy.
-import { storageKey } from './wallet';
+import { storageKey, walletState } from './wallet';
 import { sellBatches } from './market';
+import { markBalanceStale, readBalances } from './balance-api';
 
 export type SellStep = 'verify' | 'sign' | 'confirm';
 /** What a sale of several fish is doing: the step, how many fish it is at, and (at 'sign') how many transactions the one prompt covers. */
@@ -57,6 +58,12 @@ export interface MarketInfo {
   ready?: boolean;
   /** Server mode: POST /quote-batch and /sell-batch exist (older servers sell one fish per request). */
   batch?: boolean;
+  /** Server mode: the Metaplex Core collection the market buys from (null until created). */
+  fishCollection?: string | null;
+  /** Server mode: POST /cosign-mint and /cosign-migrate exist. */
+  cosign?: boolean;
+  /** Server mode: per-owner mint rate and daily PEARL payout limits. */
+  limits?: { mintsPerHour: number; migrationsPerHour: number; dailyPearls: number };
 }
 type LiveInfo = MarketInfo & { pearlMint: string };
 
@@ -174,6 +181,12 @@ async function pearlAccount(info: LiveInfo) {
 
 /** PEARL held by the owner. 0 before the first sale (no token account yet). */
 export async function pearlBalance(): Promise<number> {
+  // The market reads it for us (one request, no chain code). Older servers lack /balance: read the chain.
+  const { owner, session } = walletState();
+  if (owner) {
+    const b = await readBalances(owner, session);
+    if (b) return b.pearl;
+  }
   const info = await marketInfo();
   if (!info.pearlMint) return 0;
   return (await pearlAccount(info as LiveInfo)).amount;
@@ -247,6 +260,7 @@ async function sellViaProgram(info: LiveInfo, assetId: string, onStep?: (s: Sell
     const [status] = await u.rpc.getSignatureStatuses([base58.serialize(prev.tx)], { searchTransactionHistory: true });
     if (status && !status.error) {
       setPending(assetId, null);
+      markBalanceStale();
       return { pearls: prev.pearls, tx: prev.tx };
     }
   }
@@ -275,10 +289,12 @@ async function sellViaProgram(info: LiveInfo, assetId: string, onStep?: (s: Sell
   setPending(assetId, { mode: 'program', tx: sig, pearls: quote.pearls });
 
   onStep?.('confirm');
-  const res = await u.rpc.confirmTransaction(sigBytes, {
-    commitment: 'confirmed',
-    strategy: { type: 'blockhash', blockhash: m.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight },
-  });
+  const res = await u.rpc
+    .confirmTransaction(sigBytes, {
+      commitment: 'confirmed',
+      strategy: { type: 'blockhash', blockhash: m.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight },
+    })
+    .finally(markBalanceStale); // the server did not pay this one, so its cached balance is old
   setPending(assetId, null);
   if (res.value.err) throw new Error(`Sale failed on-chain: ${JSON.stringify(res.value.err)}`);
   return { pearls: quote.pearls, tx: sig };
@@ -520,6 +536,7 @@ export async function spendPearls(amount: number): Promise<string> {
     .transactionBuilder()
     .add({ instruction: { ...ix, programId: umi.publicKey(info.tokenProgram) }, signers: [signer], bytesCreatedOnChain: 0 })
     .setFeePayer(signer)
-    .sendAndConfirm(u);
+    .sendAndConfirm(u)
+    .finally(markBalanceStale); // a burn the server never saw: the next balance read skips its cache
   return base58.deserialize(signature)[0];
 }

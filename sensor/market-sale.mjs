@@ -7,7 +7,7 @@
 // because the ledger is keyed by asset, not by transaction. Each fish is paid by its own PEARL
 // mint transaction, so a crash or timeout is resolved fish by fish, exactly as for one sale.
 
-import { HttpError, MAX_BATCH, appraise, checkTransferTx, mapLimit, parseSellBatchBody, parseSellBody, withLock } from './market-rules.mjs';
+import { HttpError, MAX_BATCH, checkTransferTx, mapLimit, parseSellBatchBody, parseSellBody, withLock } from './market-rules.mjs';
 
 /** Fish of one batch worked on at once: bounded so the RPC isn't flooded. */
 export const BATCH_CONCURRENCY = 4;
@@ -41,9 +41,11 @@ const errorOf = (assetId, e) => ({
  *   resolvePending(assetId)  -> 'paid' | 'unpaid' | 'in-flight'
  *   pay(assetId, mint, seller, pearls)  sends and confirms one PEARL mint; updates the ledger
  *   burnSold(assetId)  best effort; updates the ledger
+ *   priceFish(asset, seller) -> PEARL for a fetched asset, or throws HttpError (fish-trust.mjs; synchronous)
  *   log(msg)
  */
-export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, loadMarketAsset, resolvePending, pay, burnSold, log = () => {} }) {
+export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, loadMarketAsset, resolvePending, pay, burnSold, priceFish, log = () => {} }) {
+  if (typeof priceFish !== 'function') throw new Error('createSaleDesk: priceFish is required (the trusted-fish gate)');
   const locks = new Map();
 
   /** Sell one fish. `getTransfer` lets a batch fetch each shared transaction once. */
@@ -60,10 +62,11 @@ export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, load
         if (bad) throw new HttpError(400, bad);
         const asset = await loadMarketAsset(assetId);
         if (asset?.owner?.toString() !== market) throw new HttpError(400, 'The market does not own this fish yet');
-        // The price comes from the fish's on-chain attributes, never from the request.
-        const a = appraise(asset.attributes?.attributeList);
-        if (!a.ok) throw new HttpError(422, a.reason);
-        ledger.begin(assetId, { seller, transferTx, pearls: a.pearls });
+        // The price comes from the fish's on-chain attributes, never from the request: priceFish is
+        // fish-trust's gate (collection + generator check) and the daily cap. Synchronous, and nothing
+        // awaits between it and begin(), so a seller's concurrent sales can't both slip under the cap.
+        const pearls = priceFish(asset, seller);
+        ledger.begin(assetId, { seller, transferTx, pearls });
         plan = 'resume';
       }
 

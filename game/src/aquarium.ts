@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { coreAsset } from './explorer-links';
-import { fishValue, RARITY, zoneForDepth } from './fish';
+import { fishValue, rarityLabel, RARITY, zoneForDepth, zoneName } from './fish';
+import { onLangChange, pickName, t } from './i18n';
 import { FISH_FOODS, fishFood, type FishFoodDef, type FishFoodId } from './fish-food';
 import { buildFishFoodModel } from './fish-food-models';
 import { MAPS, type MapId } from './maps';
@@ -18,8 +19,6 @@ import {
   saveAquariumState,
   growthScaleForGrowth,
   activeFoodEffects,
-  FEED_COOLDOWN_MS,
-  FOOD_EFFECT_MS,
   type AquariumState,
 } from './aquarium-state';
 
@@ -44,7 +43,13 @@ const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 
 export interface AquariumHooks {
   /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
   pan(u: number): void;
-  buyFood(food: FishFoodDef): Promise<boolean>;
+  /**
+   * Pay for one food in on-chain PEARL, like gear upgrades.
+   * Resolves with the PEARL burned, or null when nothing was spent: the fish is fed only then.
+   */
+  buyFood(food: FishFoodDef): Promise<number | null>;
+  /** Spendable Pearls (the cached on-chain PEARL balance), for the feed button's affordability state. */
+  pearls(): number;
   message(text: string): void;
 }
 
@@ -109,6 +114,14 @@ interface Bubble {
   v: number;
 }
 
+interface FoodDrop {
+  x: number;
+  y: number;
+  z: number;
+  life: number;
+  count: number;
+}
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
@@ -164,14 +177,24 @@ export class Aquarium {
   private viewTarget = 0;
   private aquariumState: AquariumState = { growth: {}, light: { color: DEFAULT_AQUARIUM_LIGHT } };
   private lightInput = $<HTMLInputElement>('aq-light');
+  private lightRgb = this.parseRgb(DEFAULT_AQUARIUM_LIGHT);
+  private feederModel = $('aq-feeder-model');
+  private feederSelect = $<HTMLSelectElement>('aq-food-select');
+  private feederButton = $<HTMLButtonElement>('aq-feed-all');
+  private feederStatus = $('aq-feed-status');
   private feeding = false;
   private selectedFood: FishFoodId = 'plankton';
   private foodPreview: FoodPreview | null = null;
+  private foodDrop: FoodDrop | null = null;
 
   constructor(
     private bank: BankedFish[],
     private hooks: AquariumHooks,
   ) {
+    onLangChange(() => {
+      this.renderBar();
+      if (this.picked) this.pick(this.picked);
+    });
     $('aq-close').addEventListener('click', () => this.close());
     $('aq-prev').addEventListener('click', () => this.step(-1));
     $('aq-next').addEventListener('click', () => this.step(1));
@@ -180,8 +203,24 @@ export class Aquarium {
         ...this.aquariumState,
         light: { color: normalizeLightColor(this.lightInput.value) },
       };
+      this.setAmbientColor(this.aquariumState.light.color);
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
     });
+    for (const food of FISH_FOODS) {
+      const option = document.createElement('option');
+      option.value = food.id;
+      option.textContent = `${food.nameZh} · ${food.price} ✦`;
+      this.feederSelect.append(option);
+    }
+    this.feederSelect.value = this.selectedFood;
+    this.feederSelect.addEventListener('change', () => {
+      const selected = this.feederSelect.value as FishFoodId;
+      if (!FISH_FOODS.some((food) => food.id === selected)) return;
+      this.selectedFood = selected;
+      this.renderFeeder();
+      this.renderCardFoodHint();
+    });
+    this.feederButton.addEventListener('click', () => void this.feedSchool());
     this.canvas.addEventListener('pointermove', (e) => {
       this.hover = this.fishAt(e);
       this.canvas.style.cursor = this.hover ? 'pointer' : '';
@@ -208,6 +247,33 @@ export class Aquarium {
       else if (e.key === 'ArrowRight') this.step(1);
     });
     new ResizeObserver(() => this.resize()).observe(this.canvas);
+    this.renderFeeder();
+  }
+
+  private parseRgb(hex: string) {
+    const value = hex.replace('#', '');
+    return {
+      r: Number.parseInt(value.slice(0, 2), 16),
+      g: Number.parseInt(value.slice(2, 4), 16),
+      b: Number.parseInt(value.slice(4, 6), 16),
+    };
+  }
+
+  private setAmbientColor(hex: string) {
+    this.lightRgb = this.parseRgb(normalizeLightColor(hex));
+  }
+
+  private ambientCss(alpha: number, mix = 1) {
+    const r = Math.round(255 * (1 - mix) + this.lightRgb.r * mix);
+    const g = Math.round(255 * (1 - mix) + this.lightRgb.g * mix);
+    const b = Math.round(255 * (1 - mix) + this.lightRgb.b * mix);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private mixHex(hex: string, amount: number) {
+    const base = this.parseRgb(hex);
+    const t = clamp(amount, 0, 1);
+    return `rgb(${Math.round(base.r + (this.lightRgb.r - base.r) * t)}, ${Math.round(base.g + (this.lightRgb.g - base.g) * t)}, ${Math.round(base.b + (this.lightRgb.b - base.b) * t)})`;
   }
 
   private stateKey() {
@@ -235,6 +301,21 @@ export class Aquarium {
     if (disposeRenderer) {
       renderer.dispose();
       this.foodPreview = null;
+    }
+  }
+
+  private renderFeeder() {
+    const food = fishFood(this.selectedFood);
+    this.feederSelect.value = food.id;
+    this.feederStatus.textContent = `${food.descriptionZh} · 所有鱼会游来抢食`;
+    this.feederButton.textContent = `Pour into tank · 倒入鱼缸 · ${food.nameZh} · ${food.price} ✦`;
+    this.disposeFoodPreview();
+    this.feederModel.replaceChildren();
+    const modelCanvas = this.makeFoodPreview(food);
+    if (modelCanvas) {
+      modelCanvas.setAttribute('aria-label', `${food.name} · click to pour into the tank`);
+      modelCanvas.addEventListener('click', () => void this.feedSchool());
+      this.feederModel.append(modelCanvas);
     }
   }
 
@@ -294,7 +375,10 @@ export class Aquarium {
       this.favorites = loadFavorites(); // per wallet, so read fresh each time
       this.aquariumState = loadAquariumState(undefined, this.stateKey());
       this.lightInput.value = this.aquariumState.light.color;
+      this.setAmbientColor(this.aquariumState.light.color);
+      this.renderFeeder();
       this.swimmers.clear();
+      this.foodDrop = null;
       this.pick(null);
       this.setTank(0, true);
     }
@@ -318,6 +402,7 @@ export class Aquarium {
     if (!this.open) return;
     this.disposeFoodPreview(true);
     this.state = 'closing';
+    this.foodDrop = null;
     this.animate(0, CLOSE_S);
   }
 
@@ -407,7 +492,7 @@ export class Aquarium {
       const b = document.createElement('button');
       b.className = 'mini';
       b.textContent = `${i + 1}`;
-      b.title = `Tank ${i + 1}`;
+      b.title = t(`Tank ${i + 1}`, `鱼缸 ${i + 1}`);
       b.classList.toggle('on', this.tank === i);
       b.addEventListener('click', () => this.setTank(i));
       return b;
@@ -415,7 +500,7 @@ export class Aquarium {
     const fav = document.createElement('button');
     fav.className = 'mini fav';
     fav.textContent = '★';
-    fav.title = 'Favorites tank';
+    fav.title = t('Favorites tank', '收藏鱼缸');
     fav.classList.toggle('on', this.tank === 'fav');
     fav.addEventListener('click', () => this.setTank('fav'));
     this.tabs.replaceChildren(...tabs, fav);
@@ -423,18 +508,18 @@ export class Aquarium {
 
     const n = this.fishIn(this.tank).length;
     if (this.tank === 'fav') {
-      this.label.textContent = `★ Favorites · 收藏 · ${n} / ${TANK_SIZE}`;
+      this.label.textContent = t(`★ Favorites · ${n} / ${TANK_SIZE}`, `★ 收藏 · ${n} / ${TANK_SIZE}`);
     } else {
       const first = this.tank * TANK_SIZE;
-      this.label.textContent = `Tank ${this.tank + 1} · 鱼缸 · ${n ? `#${first + 1}–${first + n}` : 'empty'} · ${n} / ${TANK_SIZE}`;
+      this.label.textContent = t(`Tank ${this.tank + 1} · ${n ? `#${first + 1}–${first + n}` : 'empty'} · ${n} / ${TANK_SIZE}`, `鱼缸 ${this.tank + 1} · ${n ? `#${first + 1}–${first + n}` : '空'} · ${n} / ${TANK_SIZE}`);
     }
     this.empty.classList.toggle('hidden', n > 0);
     this.empty.textContent =
       this.tank === 'fav'
-        ? 'No favorites yet. Click a fish in a tank and star it to move it here.'
+        ? t('No favorites yet. Click a fish in a tank and star it to move it here.', '还没有收藏。点一条鱼并加星，它就会来到这里。')
         : this.bank.length
-          ? 'This tank is empty.'
-          : 'No fish yet. Dive, and what you bring home swims here.';
+          ? t('This tank is empty.', '这个鱼缸是空的。')
+          : t('No fish yet. Dive, and what you bring home swims here.', '还没有鱼。下潜一趟，带回家的鱼会游在这里。');
   }
 
   // ---- Fish -------------------------------------------------------------
@@ -478,10 +563,17 @@ export class Aquarium {
 
   private swim(s: Swimmer, dt: number) {
     if (Math.hypot(s.tx - s.x, (s.ty - s.y) * 1.5, (s.tz - s.z) * 0.6) < 0.04) {
-      // Mostly sideways, with some drift in height and depth.
-      s.tx = clamp(s.x + (Math.random() - 0.5) * 0.9, SWIM.x0, SWIM.x1);
-      s.ty = clamp(s.y + (Math.random() - 0.5) * 0.35, SWIM.y0, SWIM.y1);
-      s.tz = clamp(s.z + (Math.random() - 0.5) * 0.5, SWIM.z0, SWIM.z1);
+      if (this.foodDrop && this.foodDrop.life > 0 && !s.leaving && this.fishIn(this.tank).includes(s.fish)) {
+        // Keep circling the falling food so the whole school visibly competes for it.
+        s.tx = clamp(this.foodDrop.x + (Math.random() - 0.5) * 0.2, SWIM.x0, SWIM.x1);
+        s.ty = clamp(this.foodDrop.y + 0.12 + (Math.random() - 0.5) * 0.18, SWIM.y0, SWIM.y1);
+        s.tz = clamp(this.foodDrop.z + (Math.random() - 0.5) * 0.2, SWIM.z0, SWIM.z1);
+      } else {
+        // Mostly sideways, with some drift in height and depth.
+        s.tx = clamp(s.x + (Math.random() - 0.5) * 0.9, SWIM.x0, SWIM.x1);
+        s.ty = clamp(s.y + (Math.random() - 0.5) * 0.35, SWIM.y0, SWIM.y1);
+        s.tz = clamp(s.z + (Math.random() - 0.5) * 0.5, SWIM.z0, SWIM.z1);
+      }
     }
     const dx = s.tx - s.x;
     const dy = s.ty - s.y;
@@ -597,12 +689,11 @@ export class Aquarium {
   // ---- Info card --------------------------------------------------------
 
   private pick(s: Swimmer | null) {
-    this.disposeFoodPreview();
     this.picked = s;
     this.card.classList.toggle('hidden', !s);
     if (!s) return;
     const f = s.fish;
-    const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
+    const where = f.map && f.map in MAPS ? pickName(MAPS[f.map as MapId]) : zoneName(zoneForDepth(f.depthM));
     const fav = this.favorites.has(f.id);
     const img = document.createElement('img');
     img.src = fishIcon(f);
@@ -612,7 +703,7 @@ export class Aquarium {
     name.textContent = nftName(f);
     const rarity = document.createElement('div');
     rarity.className = 'aq-rarity';
-    rarity.textContent = RARITY[f.rarity].label;
+    rarity.textContent = rarityLabel(f.rarity);
     rarity.style.color = RARITY[f.rarity].color;
     const meta = document.createElement('div');
     meta.className = 'small muted';
@@ -624,44 +715,17 @@ export class Aquarium {
     if (feeds > 0) {
       const grown = document.createElement('div');
       grown.className = 'aq-growth';
-      grown.textContent = `Grown +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`;
+      grown.textContent = t(`Grown +${Math.round((scale - 1) * 100)}% · fed ${feeds}`, `已长大 +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`);
       body.append(grown);
     }
-    const food = fishFood(this.selectedFood);
-    const foodPanel = document.createElement('div');
-    foodPanel.className = 'aq-food-panel';
-    const modelCanvas = this.makeFoodPreview(food);
-    if (modelCanvas) foodPanel.append(modelCanvas);
-    const foodSelect = document.createElement('select');
-    foodSelect.className = 'aq-food-select';
-    foodSelect.setAttribute('aria-label', 'Fish food · 鱼食');
-    for (const option of FISH_FOODS) {
-      const item = document.createElement('option');
-      item.value = option.id;
-      item.textContent = `${option.nameZh} · ${option.price} ✦`;
-      item.selected = option.id === this.selectedFood;
-      foodSelect.append(item);
-    }
-    foodSelect.addEventListener('change', () => {
-      const selected = foodSelect.value as FishFoodId;
-      if (!FISH_FOODS.some((item) => item.id === selected)) return;
-      this.selectedFood = selected;
-      this.pick(s);
-    });
-    const foodEffect = document.createElement('div');
-    foodEffect.className = 'aq-food-effect';
-    foodEffect.textContent = `${food.descriptionZh} · 成长 ×${food.growthMultiplier} · 饱腹 ${Math.round(FEED_COOLDOWN_MS * food.feedCooldownMultiplier / 1000)}s · 游速/荧光 ${Math.round(FOOD_EFFECT_MS / 1000)}s`;
-    foodEffect.title = food.description;
-    foodPanel.append(foodSelect, foodEffect);
-    body.append(foodPanel);
-    const feed = document.createElement('button');
-    feed.className = 'mini primary aq-feed';
-    feed.textContent = `Feed · ${food.nameZh} · ${food.price} ✦`;
-    feed.addEventListener('click', () => void this.feed(f));
+    const foodHint = document.createElement('div');
+    foodHint.className = 'aq-card-food-hint';
+    foodHint.textContent = t('Choose food beside the tank', '在鱼缸旁选择鱼食');
+    body.append(foodHint);
     const star = document.createElement('button');
     star.className = fav ? 'mini' : 'mini primary';
     const full = !fav && this.favoriteFish().length >= TANK_SIZE;
-    star.textContent = fav ? '☆ Unfavorite · 移出收藏' : full ? 'Favorites tank is full' : '★ Favorite · 收藏';
+    star.textContent = fav ? t('☆ Unfavorite', '☆ 移出收藏') : full ? t('Favorites tank is full', '收藏鱼缸已满') : t('★ Favorite', '★ 收藏');
     star.disabled = full;
     star.addEventListener('click', () => this.toggleFavorite(f));
     const actions = document.createElement('div');
@@ -673,43 +737,66 @@ export class Aquarium {
       link.href = coreAsset(f.assetId);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.textContent = 'View NFT on chain ↗';
+      link.textContent = t('View NFT on chain ↗', '在链上查看 NFT ↗');
       link.addEventListener('click', (e) => e.stopPropagation());
       actions.append(link);
     }
     const x = document.createElement('button');
     x.className = 'mini';
     x.textContent = '✕';
-    x.title = 'Close';
+    x.title = t('Close', '关闭');
     x.addEventListener('click', () => this.pick(null));
-    actions.prepend(feed);
     this.card.replaceChildren(img, body, actions, x);
   }
 
-  private async feed(f: BankedFish) {
+  private renderCardFoodHint() {
+    const hint = this.card.querySelector<HTMLElement>('.aq-card-food-hint');
+    if (hint) hint.textContent = `Selected: ${fishFood(this.selectedFood).nameZh} · click the food beside the tank to feed all fish`;
+  }
+
+  private async feedSchool() {
     const food = fishFood(this.selectedFood);
-    const result = feedAquariumFish(this.aquariumState, f.id, food.id);
-    if (!result.fed) {
-      this.hooks.message(result.reason === 'max' ? 'This fish is fully grown · 已经长到最大' : 'The fish is still full · 稍后再喂');
+    const fish = this.fishIn(this.tank);
+    if (!fish.length) {
+      this.hooks.message(t('There are no fish in this tank', '当前鱼缸没有鱼'));
       return;
     }
     if (this.feeding) return;
+    const now = Date.now();
+    let next = this.aquariumState;
+    let fedCount = 0;
+    let blockedReason: 'max' | 'cooldown' | null = null;
+    for (const f of fish) {
+      const result = feedAquariumFish(next, f.id, food.id, now);
+      if (result.fed) {
+        next = result.state;
+        fedCount++;
+      } else if (result.reason === 'max' || result.reason === 'cooldown') {
+        blockedReason = blockedReason ?? result.reason;
+      }
+    }
+    if (!fedCount) {
+      this.hooks.message(blockedReason === 'max' ? 'Every fish here is fully grown · 这里的鱼都长到最大了' : 'The school is still full · 鱼群还在饱腹冷却');
+      return;
+    }
     this.feeding = true;
     try {
-      const purchased = await this.hooks.buyFood(food);
-      if (!purchased) return;
-      this.aquariumState = { ...result.state, light: { ...this.aquariumState.light } };
+      const paid = await this.hooks.buyFood(food);
+      if (!paid) return;
+      this.aquariumState = { ...next, light: { ...this.aquariumState.light } };
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
-      const swimmer = this.swimmers.get(f);
-      if (swimmer) {
+      this.foodDrop = { x: 0.5, y: SURFACE + 0.04, z: 0.25, life: 4.2, count: fedCount };
+      for (const f of fish) {
+        const swimmer = this.swimmers.get(f);
+        if (!swimmer) continue;
         swimmer.size = this.sizeFor(f);
         swimmer.speed = 0.035 + RARITY[f.rarity].speed * 0.008;
         swimmer.glowIntensity = activeFoodEffects(this.aquariumState.growth[f.id]).glow;
-      }
-      this.hooks.message(`${f.name} grew after a meal · 喂食后长大了`);
-      if (swimmer) {
         swimmer.growthPulse = 1;
-        for (let i = 0; i < 5; i++) this.bubbles.push({
+        swimmer.tx = clamp(this.foodDrop.x + (Math.random() - 0.5) * 0.18, SWIM.x0, SWIM.x1);
+        swimmer.ty = clamp(this.foodDrop.y + 0.12 + (Math.random() - 0.5) * 0.16, SWIM.y0, SWIM.y1);
+        swimmer.tz = clamp(this.foodDrop.z + (Math.random() - 0.5) * 0.18, SWIM.z0, SWIM.z1);
+        for (let i = 0; i < 3; i++) this.bubbles.push({
           x: swimmer.x + (Math.random() - 0.5) * 0.06,
           y: swimmer.y + (Math.random() - 0.5) * 0.04,
           z: swimmer.z,
@@ -717,7 +804,9 @@ export class Aquarium {
           v: 0.12 + Math.random() * 0.1,
         });
       }
-      if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) this.pick(swimmer);
+      this.feederStatus.textContent = `${fedCount} fish are rushing in · ${food.nameZh} 正在下落`;
+      this.hooks.message(t(`${fedCount} fish rushed in for food · ${spentText(paid)}`, `${fedCount} 条鱼正在抢食 · ${spentText(paid)}`));
+      if (this.picked) this.pick(this.picked);
     } finally {
       this.feeding = false;
     }
@@ -775,6 +864,11 @@ export class Aquarium {
     this.view += (this.viewTarget - this.view) * Math.min(1, dt * 4.5);
     if (Math.abs(this.viewTarget - this.view) < 0.001) this.view = this.viewTarget;
     this.slosh = Math.max(0, this.slosh - dt * 0.35);
+    if (this.foodDrop) {
+      this.foodDrop.life -= dt;
+      this.foodDrop.y = Math.min(SURFACE + 0.04, this.foodDrop.y + dt * 0.28);
+      if (this.foodDrop.life <= 0) this.foodDrop = null;
+    }
     let budget = ICONS_PER_FRAME;
     for (const [f, s] of this.swimmers) {
       if (!s.img && !s.leaving && budget-- > 0) {
@@ -830,10 +924,16 @@ export class Aquarium {
     // Back wall: deep water with light shafts.
     const back = [P(0, 0, 1), P(1, 0, 1), P(1, 1, 1), P(0, 1, 1)] as const;
     const wall = ctx.createLinearGradient(0, Math.min(back[0].y, back[1].y), 0, Math.max(back[2].y, back[3].y));
-    wall.addColorStop(0, fav ? '#2a3b6b' : '#1d5a7a');
-    wall.addColorStop(1, fav ? '#120f2e' : '#06233a');
+    wall.addColorStop(0, this.mixHex(fav ? '#2a3b6b' : '#1d5a7a', 0.5));
+    wall.addColorStop(1, this.mixHex(fav ? '#120f2e' : '#06233a', 0.42));
     this.quad(...back);
     ctx.fillStyle = wall;
+    ctx.fill();
+    const ambientGlow = ctx.createRadialGradient(this.w * 0.5, this.h * 0.28, 0, this.w * 0.5, this.h * 0.52, this.w * 0.72);
+    ambientGlow.addColorStop(0, this.ambientCss(0.34, 0.85));
+    ambientGlow.addColorStop(1, this.ambientCss(0, 0.85));
+    this.quad(...back);
+    ctx.fillStyle = ambientGlow;
     ctx.fill();
     ctx.save();
     this.quad(...back);
@@ -844,8 +944,8 @@ export class Aquarium {
       const top = P(u, 0, 1);
       const bottom = P(u + 0.03, 1, 1);
       const g = ctx.createLinearGradient(0, top.y, 0, bottom.y);
-      g.addColorStop(0, 'rgba(160, 230, 255, 0.10)');
-      g.addColorStop(1, 'rgba(160, 230, 255, 0)');
+      g.addColorStop(0, this.ambientCss(0.18, 0.85));
+      g.addColorStop(1, this.ambientCss(0, 0.85));
       ctx.fillStyle = g;
       this.quad(P(u - 0.012, 0, 1), P(u + 0.012, 0, 1), P(u + 0.05, 1, 1), P(u - 0.01, 1, 1));
       ctx.fill();
@@ -856,7 +956,7 @@ export class Aquarium {
     // outside is in front of the fish, so it's drawn after them.
     const sideGlass = (side: 0 | 1) => {
       this.quad(P(side, 0, 0), P(side, 0, 1), P(side, 1, 1), P(side, 1, 0));
-      ctx.fillStyle = fav ? 'rgba(90, 70, 150, 0.35)' : 'rgba(30, 110, 150, 0.35)';
+      ctx.fillStyle = this.ambientCss(0.27, 0.72);
       ctx.fill();
     };
     const outside = ([0, 1] as const).filter((side) => this.sideInFront(side));
@@ -865,8 +965,8 @@ export class Aquarium {
     // Sand floor, lighter toward the glass.
     this.quad(P(0, 1, 0), P(1, 1, 0), P(1, 1, 1), P(0, 1, 1));
     const sand = ctx.createLinearGradient(0, P(0.5, 1, 1).y, 0, P(0.5, 1, 0).y);
-    sand.addColorStop(0, '#6f6450');
-    sand.addColorStop(1, '#c9b48a');
+    sand.addColorStop(0, this.mixHex('#6f6450', 0.24));
+    sand.addColorStop(1, this.mixHex('#c9b48a', 0.2));
     ctx.fillStyle = sand;
     ctx.fill();
     const rng = new Rng(0x5a4d);
@@ -885,6 +985,7 @@ export class Aquarium {
       ...this.plants.map((p) => ({ d: d(p.x, p.z), draw: () => this.drawPlant(p) })),
       ...[...this.swimmers.values()].map((s) => ({ d: d(s.x, s.z), draw: () => this.drawFish(s) })),
       ...this.bubbles.map((b) => ({ d: d(b.x, b.z), draw: () => this.drawBubble(b) })),
+      ...(this.foodDrop ? [{ d: d(this.foodDrop.x, this.foodDrop.z), draw: () => this.drawFoodDrop(this.foodDrop!) }] : []),
     ];
     items.sort((a, b) => b.d - a.d);
     for (const it of items) it.draw();
@@ -903,7 +1004,7 @@ export class Aquarium {
       ctx.lineTo(p.x, p.y);
     }
     ctx.closePath();
-    ctx.fillStyle = 'rgba(190, 240, 255, 0.16)';
+    ctx.fillStyle = this.ambientCss(0.22, 0.82);
     ctx.fill();
     ctx.beginPath();
     for (let i = 0; i <= 24; i++) {
@@ -911,7 +1012,7 @@ export class Aquarium {
       if (i) ctx.lineTo(p.x, p.y);
       else ctx.moveTo(p.x, p.y);
     }
-    ctx.strokeStyle = 'rgba(220, 250, 255, 0.55)';
+    ctx.strokeStyle = this.ambientCss(0.68, 0.9);
     ctx.lineWidth = 2;
     ctx.stroke();
 
@@ -920,19 +1021,19 @@ export class Aquarium {
     // Front glass: a faint tint, two highlights, and the frame.
     const front = [P(0, 0, 0), P(1, 0, 0), P(1, 1, 0), P(0, 1, 0)] as const;
     this.quad(...front);
-    ctx.fillStyle = 'rgba(120, 200, 235, 0.06)';
+    ctx.fillStyle = this.ambientCss(0.14, 0.86);
     ctx.fill();
     ctx.save();
     this.quad(...front);
     ctx.clip();
     for (const [u, wdt, a] of [[0.12, 0.05, 0.07], [0.2, 0.015, 0.09]] as const) {
-      ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
+      ctx.fillStyle = this.ambientCss(a, 0.15);
       this.quad(P(u, 0, 0), P(u + wdt, 0, 0), P(u + wdt - 0.12, 1, 0), P(u - 0.12, 1, 0));
       ctx.fill();
     }
     ctx.restore();
     // The glass edges: along the top, and the back corners.
-    ctx.strokeStyle = 'rgba(200, 240, 255, 0.25)';
+    ctx.strokeStyle = this.ambientCss(0.38, 0.88);
     ctx.lineWidth = 1.5;
     const edges = [
       [P(0, 0, 0), P(0, 0, 1)],
@@ -952,7 +1053,7 @@ export class Aquarium {
     ctx.lineWidth = 6;
     ctx.lineJoin = 'round';
     ctx.stroke();
-    ctx.strokeStyle = fav ? 'rgba(255, 204, 77, 0.55)' : 'rgba(160, 230, 255, 0.3)';
+    ctx.strokeStyle = fav ? 'rgba(255, 204, 77, 0.55)' : this.ambientCss(0.46, 0.9);
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
@@ -997,8 +1098,9 @@ export class Aquarium {
     ctx.scale(s.face * Math.cos(this.yaw) * pulse, pulse);
     ctx.globalAlpha = s.alpha * (1 - s.z * 0.25);
     // Further back is dimmer and bluer, as if through more water.
-    const dim = 1 - s.z * 0.4;
-    ctx.filter = `brightness(${dim.toFixed(2)}) saturate(${(1 - s.z * 0.35).toFixed(2)})`;
+    const ambientLuma = (this.lightRgb.r * 0.299 + this.lightRgb.g * 0.587 + this.lightRgb.b * 0.114) / 255;
+    const dim = (1 - s.z * 0.4) * (0.72 + ambientLuma * 0.48);
+    ctx.filter = `brightness(${dim.toFixed(2)}) saturate(${(1 - s.z * 0.35 + ambientLuma * 0.22).toFixed(2)})`;
     if (s.glowIntensity > 0) {
       ctx.shadowColor = '#7fffe0';
       ctx.shadowBlur = 8 + s.glowIntensity * 24;
@@ -1011,6 +1113,29 @@ export class Aquarium {
     ctx.restore();
   }
 
+  private drawFoodDrop(drop: FoodDrop) {
+    const ctx = this.ctx;
+    const p = this.proj(drop.x, drop.y, drop.z);
+    const pulse = 1 + Math.sin(this.t * 8) * 0.12;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowColor = this.ambientCss(0.9, 0.9);
+    ctx.shadowBlur = 14 * p.s;
+    ctx.fillStyle = this.ambientCss(0.88, 0.82);
+    ctx.beginPath();
+    ctx.arc(0, 0, (5 + Math.min(8, drop.count)) * p.s * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < Math.min(7, drop.count + 2); i++) {
+      const a = this.t * 1.8 + i * 2.399;
+      const r = (7 + (i % 3) * 4) * p.s;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, (1.5 + (i % 2)) * p.s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   private drawBubble(b: Bubble) {
     const ctx = this.ctx;
     const p = this.proj(b.x, b.y, b.z);
@@ -1020,4 +1145,9 @@ export class Aquarium {
     ctx.lineWidth = 1;
     ctx.stroke();
   }
+}
+
+/** What a feeding cost: on-chain PEARL burned. */
+export function spentText(burned: number): string {
+  return `−${burned} PEARL`;
 }

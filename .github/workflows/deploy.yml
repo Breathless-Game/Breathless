@@ -53,6 +53,20 @@ jobs:
           node --check sensor/nft-meta.mjs
           node --check sensor/nft-serial.mjs
           node --check sensor/fish-png.mjs
+          node --check sensor/market-sale.mjs
+          node --check sensor/market-payout.mjs
+          node --check sensor/fish-gen.mjs
+          node --check sensor/fish-trust.mjs
+          node --check sensor/fish-collection.mjs
+          node --check sensor/market-balance.mjs
+
+      # deploy.sh runs on the Dell, where a broken script means a broken site: test its
+      # backup, health checks and rollback here first (fakes for sudo, curl and npm).
+      - name: Test deploy script
+        run: |
+          bash -n deploy/deploy.sh
+          if command -v shellcheck >/dev/null; then shellcheck -S warning deploy/deploy.sh deploy/test-deploy.sh; fi
+          bash deploy/test-deploy.sh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -80,4 +94,7 @@ jobs:
       - name: Sync, install, restart, health check
         env:
           DEPLOY_DIR: /srv/breathless/app
+          # Repository variable HEALTH_MARKET=0 skips the /api/market/info check
+          # (Settings → Secrets and variables → Actions → Variables), without a push.
+          HEALTH_MARKET: ${{ vars.HEALTH_MARKET || '1' }}
         run: bash deploy/deploy.sh

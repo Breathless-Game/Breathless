@@ -1,4 +1,5 @@
 import { MAPS, MAP_ORDER, isUnlocked, type MapId, type MapProgress } from './maps';
+import { t as tr } from './i18n';
 import { weatherArtProfile, type WeatherState } from './weather';
 
 // The sea chart on the workbench: a hand-drawn parchment map with the three
@@ -253,7 +254,7 @@ function weatherGlyphs(c: CanvasRenderingContext2D, weather: WeatherState) {
   c.globalAlpha = 0.82;
   c.font = '700 13px Georgia, serif';
   c.textAlign = 'center';
-  const label = weather.kind === 'storm' ? 'STORM FRONT · 暴风前线' : weather.kind === 'rain' ? 'RAIN · 雨幕' : 'CLOUD BANK · 云层';
+  const label = weather.kind === 'storm' ? tr('STORM FRONT', '暴风前线') : weather.kind === 'rain' ? tr('RAIN', '雨幕') : tr('CLOUD BANK', '云层');
   c.fillText(label, x, y + 105);
   c.restore();
 }
@@ -367,7 +368,7 @@ export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapPro
   c.fillStyle = INK;
   c.textAlign = 'center';
   c.font = 'italic 700 26px Georgia, serif';
-  c.fillText('Sea Chart · 海图', CHART_W / 2, 59);
+  c.fillText(tr('Sea Chart', '海图'), CHART_W / 2, 59);
   c.restore();
 
   if (pins) {

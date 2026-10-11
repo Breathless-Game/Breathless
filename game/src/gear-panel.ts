@@ -1,3 +1,5 @@
+import { lang, onLangChange, setLang, type Lang } from './i18n';
+import { pathName, pathSummary as pathSummaryText } from './equipment-i18n';
 import {
   activePath,
   EQUIPMENT_TIERS,
@@ -7,7 +9,7 @@ import {
   nextSlotTier,
   pathTier,
   slotTier,
-  totalPearls,
+  spendablePearls,
   upgradeSlot,
   type EquipmentSlot,
   type EquipmentPathId,
@@ -51,8 +53,7 @@ const ACCESSORY_SLOT_NAMES: Record<AccessorySlot, { zh: string; en: string }> = 
   chestPlugin: { zh: '胸口插件', en: 'Chest plugin' },
 };
 
-type GearLanguage = 'zh' | 'en';
-const LANGUAGE_KEY = 'deepbreath.language';
+type GearLanguage = Lang;
 
 const COPY = {
   zh: {
@@ -119,14 +120,6 @@ function tierText(tier: { level: number; name: string; effect: string }, slot: U
   return language === 'zh' ? TIER_ZH[slot][tier.level - 1] : tier;
 }
 
-function loadLanguage(): GearLanguage {
-  try { return localStorage.getItem(LANGUAGE_KEY) === 'en' ? 'en' : 'zh'; } catch { return 'zh'; }
-}
-
-function saveLanguage(language: GearLanguage) {
-  try { localStorage.setItem(LANGUAGE_KEY, language); } catch {}
-}
-
 function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot, language: GearLanguage): string {
   switch (slot) {
     case 'net': return language === 'zh' ? `${stats.netCapacity} 条容量 · ${stats.catchRadius.toFixed(1)} m 捕捞范围` : `${stats.netCapacity} capacity · ${stats.catchRadius.toFixed(1)} m catch range`;
@@ -173,7 +166,9 @@ export class GearPanel {
   private assemblyGrid = $('gear-assembly-grid');
   private assemblySummary = $('gear-assembly-summary');
   private assembly: Partial<Record<AccessorySlot, AccessoryId>> = this.loadAssembly();
-  private language: GearLanguage = loadLanguage();
+  private get language(): GearLanguage {
+    return lang();
+  }
   private view: 'upgrades' | 'assembly' = 'upgrades';
   private selectedSlot: UpgradeSlot = 'net';
   private lastState: EquipmentState | null = null;
@@ -185,9 +180,9 @@ export class GearPanel {
     this.onPathChange = onPathChange;
     this.renderLanguage();
     $('gear-close').addEventListener('click', () => this.toggle(false));
-    this.languageButton.addEventListener('click', () => {
-      this.language = this.language === 'zh' ? 'en' : 'zh';
-      saveLanguage(this.language);
+    // The panel's own EN / 中文 button flips the one global language (the same as Settings).
+    this.languageButton.addEventListener('click', () => setLang(this.language === 'zh' ? 'en' : 'zh'));
+    onLangChange(() => {
       this.renderLanguage();
       if (this.lastState) {
         this.renderSlots(this.lastState);
@@ -386,14 +381,12 @@ export class GearPanel {
     const current = slotTier(state, ui.slot);
     const next = nextSlotTier(state, ui.slot);
     const stats = deriveStats(state);
-    const pearls = totalPearls(state);
+    const pearls = spendablePearls(state);
     const currentText = tierText(current, ui.slot, this.language);
     this.icon.textContent = ui.icon;
     this.level.textContent = `${this.language === 'zh' ? ui.titleZh : ui.titleEn} · Lv${current.level} · ${currentText.name}`;
     this.effect.textContent = ui.slot === 'sonar' ? currentText.effect : statSummary(stats, ui.slot, this.language);
-    this.pearls.textContent = this.language === 'zh'
-      ? `${pearlText(pearls)}${state.legacyPearls ? `（${state.legacyPearls} legacy，优先消耗）` : ''} · ${copy.selectedPearls}`
-      : `${pearlText(pearls)}${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · ${copy.selectedPearls}`;
+    this.pearls.textContent = `${pearlText(pearls)} · ${copy.selectedPearls}`;
 
     if (!next) {
       this.progress.max = 1;
@@ -463,7 +456,7 @@ export class GearPanel {
       pathButton.type = 'button';
       pathButton.className = 'gear-path-button';
       pathButton.textContent = this.language === 'zh' ? path.nameZh : path.name;
-      pathButton.title = this.language === 'zh' ? path.nameZh : `${path.name}: ${path.summary}`;
+      pathButton.title = `${pathName(path)}: ${pathSummaryText(path)}`;
       const pathSelected = level >= 2 && path.id === selectedPath;
       pathButton.setAttribute('aria-pressed', String(pathSelected));
       pathButton.disabled = level < 2;
@@ -545,7 +538,7 @@ export class GearPanel {
         button.textContent = copy.max;
         button.disabled = true;
       } else {
-        const missing = Math.max(0, next.cost - totalPearls(state));
+        const missing = Math.max(0, next.cost - spendablePearls(state));
         nextLine.textContent = `${copy.nextLevel}: ${nextText!.name} · ${nextText!.effect}`;
         button.textContent = this.busy ? copy.spending : missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} · ${next.cost} ◇`;
         button.disabled = this.busy || missing > 0;

@@ -1,5 +1,22 @@
 @import './scrollbar.css';
 
+.wb-fishing-advice {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  color: #23734f;
+  background: rgba(35, 115, 79, 0.08);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.wb-fishing-advice b::before { content: '● '; }
+.wb-fishing-advice span { font-size: 10px; opacity: 0.85; }
+.wb-fishing-advice[data-level="caution"] { color: #8a601b; background: rgba(178, 127, 34, 0.1); }
+.wb-fishing-advice[data-level="poor"] { color: #a13f35; background: rgba(161, 63, 53, 0.08); }
+
 :root {
   --ink: #eaf8ff;
   --muted: rgba(234, 248, 255, 0.6);
@@ -1278,11 +1295,37 @@ button.link {
 
 #wb-place {
   width: min(300px, 100%);
-  padding: 20px 22px;
+  padding: 0;
   border-radius: 18px;
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
+  /* Never taller than the room the chart leaves (16px above, 56px below for the
+     hint). The card is a column: the body scrolls, the Dive footer never does,
+     so nothing can ever sit underneath the button. */
+  max-height: calc(100vh - 80px);
+  max-height: calc(100dvh - 80px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#wb-place-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 22px 16px;
+  /* soft fade where the content runs out above the footer */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
+
+#wb-place-foot {
+  flex: 0 0 auto;
+  padding: 12px 22px 16px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
 }
 
 #wb-chart.ready #wb-place {
@@ -1397,6 +1440,30 @@ button.link {
   width: 100%;
 }
 
+/* Short viewports: a smaller preview and tighter rhythm so more of the card shows. */
+@media (max-height: 800px) {
+  #wb-place-preview {
+    aspect-ratio: 16 / 7;
+    margin-bottom: 10px;
+  }
+
+  #wb-place-scroll {
+    padding-top: 16px;
+  }
+
+  #wb-place-text {
+    margin: 8px 0;
+  }
+
+  #wb-place-conditions {
+    margin: 8px 0 10px;
+  }
+
+  #wb-place-foot {
+    padding: 10px 22px 12px;
+  }
+}
+
 #wb-place.empty #wb-place-text {
   display: none;
 }
@@ -1408,10 +1475,14 @@ button.link {
   }
 }
 
+/* Centered in the 56px strip under the chart that #wb-chart's padding keeps free,
+   so it can never land on the place card. */
 #wb-chart-hint {
   position: absolute;
+  left: 16px;
   right: 16px;
   bottom: 18px;
+  text-align: center;
   color: var(--muted);
 }
 
@@ -1425,6 +1496,25 @@ button.link {
 
   #wb-paper {
     width: 100%;
+  }
+
+  /* The overlay scrolls here, so the card is simply as tall as its content. */
+  #wb-place {
+    max-height: none;
+    overflow: visible;
+  }
+
+  #wb-place-scroll {
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  /* Dive stays reachable while the chart scrolls; it has its own solid background. */
+  #wb-place-foot {
+    position: sticky;
+    bottom: 0;
+    border-radius: 0 0 18px 18px;
   }
 
   .wb-pin-label {
@@ -2994,6 +3084,79 @@ button:disabled {
   position: relative;
 }
 
+.aq-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  align-items: stretch;
+  gap: 12px;
+}
+
+#aq-feeder {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(170, 235, 255, 0.28);
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(17, 57, 76, 0.82), rgba(5, 18, 31, 0.88));
+  box-shadow: inset 0 1px 0 rgba(240, 255, 255, 0.12), 0 14px 35px rgba(0, 10, 18, 0.28);
+}
+
+.aq-feeder-title {
+  color: var(--ink);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.aq-feeder-model {
+  display: grid;
+  place-items: center;
+  min-height: 126px;
+  border: 1px solid rgba(164, 238, 230, 0.3);
+  border-radius: 12px;
+  background: radial-gradient(circle at 50% 42%, rgba(94, 255, 216, 0.24), rgba(4, 22, 34, 0.72) 72%);
+  cursor: pointer;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s;
+}
+
+.aq-feeder-model:hover,
+.aq-feeder-model:focus-within {
+  border-color: rgba(190, 255, 237, 0.8);
+  box-shadow: 0 0 24px rgba(82, 244, 206, 0.22);
+  transform: translateY(-1px);
+}
+
+.aq-feeder-model .aq-food-model {
+  width: 138px;
+  height: 122px;
+  background: transparent;
+}
+
+#aq-food-select {
+  min-width: 0;
+  padding: 7px 8px;
+  color: var(--ink);
+  background: rgba(2, 13, 23, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.aq-feed-status,
+.aq-feeder-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+#aq-feed-all {
+  width: 100%;
+  white-space: normal;
+}
+
 #aq-canvas {
   display: block;
   width: 100%;
@@ -3075,6 +3238,31 @@ button:disabled {
 }
 
 @media (max-width: 560px) {
+  .aq-layout {
+    grid-template-columns: 1fr;
+  }
+
+  #aq-feeder {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .aq-feeder-title,
+  .aq-feeder-hint,
+  #aq-feed-all {
+    grid-column: 1 / -1;
+  }
+
+  .aq-feeder-model {
+    min-height: 72px;
+  }
+
+  .aq-feeder-model .aq-food-model {
+    width: 72px;
+    height: 68px;
+  }
+
   #aq-card > .aq-actions {
     width: 84px;
   }
