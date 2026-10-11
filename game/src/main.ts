@@ -9,6 +9,7 @@ import { HealthLog } from './health';
 import { Report } from './report';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
+import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
@@ -526,6 +527,8 @@ function nextSlotLabel(slot: EquipmentSlot) {
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  // An open settings dropdown has the keyboard. It stops its own keys; this is the backstop.
+  if (dropdownOpen()) return;
   if (e.key === 'Escape') {
     if (loadoutWheel.open) {
       loadoutWheel.closeWheel(false);

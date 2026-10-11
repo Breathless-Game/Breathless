@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { EVENT_DEFS, SURFACE_VIEW_DEPTH, UNDERWATER_DEPTH } from './event-schedule';
+import { enhanceSelect } from './dropdown';
 import { WorldEvents, type Detail, type EventContext } from './events';
 import { MAPS, MAP_ORDER, mapDepth, type MapId } from './maps';
 import { RENDER_QUALITY } from './render-quality';
@@ -55,6 +56,7 @@ const nightInput = $<HTMLInputElement>('night');
 const weatherSelect = $<HTMLSelectElement>('weather');
 const lightingInput = $<HTMLInputElement>('lighting');
 const autoInput = $<HTMLInputElement>('auto');
+for (const select of [mapSelect, detailSelect, weatherSelect]) enhanceSelect(select);
 
 function setMap(id: MapId) {
   mapId = id;
