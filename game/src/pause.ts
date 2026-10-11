@@ -7,7 +7,7 @@ import type { TimeOfDay } from './daylight';
 import type { WeatherMode } from './weather';
 import { type Quality, type Settings, type SharkChoice, saveSettings } from './settings';
 import { closeDropdown, enhanceSelect } from './dropdown';
-import { orbNfts } from './chain';
+import { orbNfts } from './explorer-links';
 import { onWalletChange, walletState } from './wallet';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
