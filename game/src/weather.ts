@@ -18,9 +18,13 @@ const PRESETS: Record<WeatherKind, WeatherAmounts> = {
   storm: { cloud: 1, rain: 1, wind: 1, storm: 1 },
 };
 
+/** How a map's natural weather runs: `stormy` spends a third of its time in a storm. */
+export type Climate = 'temperate' | 'stormy';
+type WeatherKeys = readonly { second: number; kind: WeatherKind }[];
+
 // A nine-minute front with a longer calm spell and a shorter storm peak.
 // Identical clear keys at both ends make the loop smooth, including its slope.
-const WEATHER_KEYS: readonly { second: number; kind: WeatherKind }[] = [
+const WEATHER_KEYS: WeatherKeys = [
   { second: 0, kind: 'clear' },
   { second: 75, kind: 'clear' },
   { second: 135, kind: 'cloudy' },
@@ -31,6 +35,27 @@ const WEATHER_KEYS: readonly { second: number; kind: WeatherKind }[] = [
   { second: 495, kind: 'clear' },
   { second: 540, kind: 'clear' },
 ];
+
+// The same nine minutes on the open ocean: the calm is short, the storm holds for over a
+// minute, eases to rain and comes back before the front finally clears.
+const STORMY_KEYS: WeatherKeys = [
+  { second: 0, kind: 'clear' },
+  { second: 35, kind: 'clear' },
+  { second: 80, kind: 'cloudy' },
+  { second: 125, kind: 'rain' },
+  { second: 170, kind: 'storm' },
+  { second: 250, kind: 'storm' },
+  { second: 295, kind: 'rain' },
+  { second: 340, kind: 'rain' },
+  { second: 385, kind: 'storm' },
+  { second: 415, kind: 'storm' },
+  { second: 460, kind: 'rain' },
+  { second: 500, kind: 'cloudy' },
+  { second: 525, kind: 'clear' },
+  { second: 540, kind: 'clear' },
+];
+
+const CLIMATES: Record<Climate, WeatherKeys> = { temperate: WEATHER_KEYS, stormy: STORMY_KEYS };
 
 function smoothstep(t: number): number {
   return t * t * (3 - 2 * t);
@@ -52,17 +77,18 @@ function blend(a: WeatherAmounts, b: WeatherAmounts, t: number): WeatherState {
   });
 }
 
-function sampleWeather(second: number): WeatherState {
+function sampleWeather(second: number, keys: WeatherKeys = WEATHER_KEYS): WeatherState {
   let index = 0;
-  while (index < WEATHER_KEYS.length - 2 && second >= WEATHER_KEYS[index + 1].second) index++;
-  const a = WEATHER_KEYS[index];
-  const b = WEATHER_KEYS[index + 1];
+  while (index < keys.length - 2 && second >= keys[index + 1].second) index++;
+  const a = keys[index];
+  const b = keys[index + 1];
   return blend(PRESETS[a.kind], PRESETS[b.kind], smoothstep((second - a.second) / (b.second - a.second)));
 }
 
 /** Elapsed game time drives weather; no wall clock, random source or frame-rate dependency. */
 export class WeatherCycle {
   private currentMode: WeatherMode = 'auto';
+  private currentClimate: Climate = 'temperate';
   private cycleSecond = 0;
   private currentState = sampleWeather(0);
   private transitionFrom: WeatherState | null = null;
@@ -76,6 +102,18 @@ export class WeatherCycle {
     return { ...this.currentState };
   }
 
+  get climate(): Climate {
+    return this.currentClimate;
+  }
+
+  /** Another map's weather: the natural front follows that climate from where the clock stands, blending over 5 s. */
+  setClimate(climate: Climate): void {
+    if (climate === this.currentClimate || !(climate in CLIMATES)) return;
+    this.transitionFrom = this.state;
+    this.transitionSecond = 0;
+    this.currentClimate = climate;
+  }
+
   setMode(mode: WeatherMode): void {
     if (mode === this.currentMode || !(mode === 'auto' || mode === 'clear' || mode === 'cloudy' || mode === 'rain' || mode === 'storm')) return;
     this.transitionFrom = this.state;
@@ -87,7 +125,9 @@ export class WeatherCycle {
     if (!Number.isFinite(seconds) || seconds <= 0) return this.state;
     if (running) this.cycleSecond = (this.cycleSecond + seconds % 540) % 540;
 
-    const target = this.currentMode === 'auto' ? sampleWeather(this.cycleSecond) : state(PRESETS[this.currentMode]);
+    const target = this.currentMode === 'auto'
+      ? sampleWeather(this.cycleSecond, CLIMATES[this.currentClimate])
+      : state(PRESETS[this.currentMode]);
     if (this.transitionFrom) {
       // Manual previews settle while paused. Returning to auto blends into the
       // continuing front, then follows it exactly without a persistent delay.
