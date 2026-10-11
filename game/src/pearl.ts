@@ -16,6 +16,7 @@
 
 // Already loaded by main.ts; only the chain libraries below are lazy.
 import { storageKey } from './wallet';
+import { sellBatches } from './market';
 
 export type SellStep = 'verify' | 'sign' | 'confirm';
 /** What a sale of several fish is doing: the step, how many fish it is at, and (at 'sign') how many transactions the one prompt covers. */
@@ -92,6 +93,8 @@ const FISH_PER_TX = 20;
 const TX_BYTE_BUDGET = 1232 - 150;
 /** The server's MAX_BATCH (sensor/market-rules.mjs): fish per /quote-batch or /sell-batch request. */
 const MARKET_BATCH = 24;
+/** The server's MAX_BATCH_TXS: different transfer transactions per /sell-batch request. */
+const MARKET_BATCH_TXS = 2;
 
 const offline = () =>
   new Error(import.meta.env?.DEV ? 'PEARL market is offline (run `npm run market`)' : 'PEARL market is offline, try again later');
@@ -479,7 +482,8 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
     };
     const asError = (e: unknown) => (e instanceof Error ? e : new Error(messageOf(e)));
     if (info.batch) {
-      for (const batch of chunks(sales, MARKET_BATCH)) {
+      // Fish resumed from older transfers can name many transactions: the market takes 2 per request.
+      for (const batch of sellBatches(sales, MARKET_BATCH, MARKET_BATCH_TXS)) {
         try {
           const { results } = await api<{ results: (SellResult & { assetId: string; error?: string })[] }>('/sell-batch', {
             seller: owner,
