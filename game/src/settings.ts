@@ -12,10 +12,14 @@ export interface Settings {
   weather: WeatherMode;
   showCamera: boolean;
   showHelp: boolean;
+  /** Sharks on the Open Ocean at night: on, off, or ask the player before the next dive there. */
+  sharks: SharkChoice;
 }
 
+export type SharkChoice = 'ask' | 'on' | 'off';
+
 const KEY = 'deepbreath.settings';
-const DEFAULTS: Settings = { quality: 'auto', lightingEffects: true, weather: 'auto', showCamera: true, showHelp: true };
+const DEFAULTS: Settings = { quality: 'auto', lightingEffects: true, weather: 'auto', showCamera: true, showHelp: true, sharks: 'ask' };
 
 export function loadSettings(): Settings {
   try {
@@ -23,6 +27,7 @@ export function loadSettings(): Settings {
     if (!['auto', 'high', 'medium', 'low'].includes(settings.quality)) settings.quality = 'auto';
     if (typeof settings.lightingEffects !== 'boolean') settings.lightingEffects = DEFAULTS.lightingEffects;
     if (!['auto', 'clear', 'cloudy', 'rain', 'storm'].includes(settings.weather)) settings.weather = 'auto';
+    if (!['ask', 'on', 'off'].includes(settings.sharks)) settings.sharks = DEFAULTS.sharks;
     return settings;
   } catch {
     return { ...DEFAULTS };
