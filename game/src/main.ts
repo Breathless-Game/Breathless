@@ -802,6 +802,7 @@ async function spendPearlsFor(cost: number, failure: string, what = ''): Promise
     return burn;
   } catch (e) {
     hud.message(`${failure} · ${(e as Error).message ?? e}`, 1800);
+    void syncPearls();
     return null;
   }
 }
@@ -1647,7 +1648,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.17, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => aquarium.show() },
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); } },
   { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.83, label: 'SETTINGS', onClick: openSettingsDesk },
   // The field guide (B) and the tutorial hang on the rope too, instead of buttons in the corner.
   { seed: 0x5eed04, rarity: 'legendary', species: 'Ember Triggerfish', hue: 14, sat: 0.8, light: 0.55, at: 0.5, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
@@ -1777,6 +1778,7 @@ const workbench = new Workbench({
   },
   synthesisOpen() {
     synthPanel.show();
+    void syncPearls();
   },
   synthesisClose() {
     synthPanel.hide();
