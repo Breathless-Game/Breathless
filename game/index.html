@@ -131,7 +131,7 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the map to dive · Esc back</div>
+      <div id="wb-hint" class="small">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the hidden green station to synthesize · click the map to dive · Esc back</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
@@ -166,6 +166,18 @@
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl">Click outside the chart or press Esc to fold it</div>
       </div>
+      <section id="wb-synth" class="hidden" aria-label="Synthesis workbench">
+        <header class="wb-synth-head">
+          <div><div class="small muted">FIELD MANUAL · 合成教学</div><h2>物资合成台</h2><p class="small muted">Click a part or drag it into the centre. A complete recipe crafts automatically.</p></div>
+          <div class="wb-synth-head-right"><span id="wb-synth-balance" class="small"></span><button id="wb-synth-close" class="mini" title="Fold workbench">×</button></div>
+        </header>
+        <div class="wb-synth-layout">
+          <section class="wb-synth-crate"><div class="wb-synth-crate-title">SUPPLY A · 左箱</div><div id="wb-synth-materials"></div></section>
+          <section class="wb-synth-centre"><div class="wb-synth-centre-label">AUTO ASSEMBLY · 自动合成</div><div id="wb-synth-working" class="wb-synth-working" aria-label="Crafting drop zone"></div><div class="small muted">Drop or click parts here</div><div id="wb-synth-recipes"></div></section>
+          <section class="wb-synth-crate dark"><div class="wb-synth-crate-title">SUPPLY B · 右箱</div><div id="wb-synth-materials-right"></div></section>
+        </div>
+        <section class="wb-synth-upgrade-wrap"><div class="wb-synth-centre-label">MODULE UPGRADES · 模块升级 <span class="small muted">38–899 Pearls</span></div><div id="wb-synth-upgrades"></div></section>
+      </section>
       <!-- A closer look at one piece of gear: info left, the model in the middle, the upgrade right. -->
       <div id="wb-inspect" class="hidden">
         <div id="wb-inspect-bg"></div>
