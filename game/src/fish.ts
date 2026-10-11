@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { rarityOdds } from './depth-odds';
 import { Rng } from './rng';
 
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
@@ -17,34 +18,23 @@ export const RARITY: Record<
 
 export const RARITY_ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
 
-// Deeper water = rarer fish, so how long you can really hold your breath is
-// what gates the good catches. Deeper fish are also worth more: a fish's catch
-// value is its rarity value times the zone's rewardMultiplier.
+// Named depth bands near the surface. Rarity no longer comes from the band:
+// it is a smooth function of depth (see depth-odds.ts). Below the shelf the
+// sea keeps going as The Trench with no bottom. Deeper fish are also worth
+// more: a fish's catch value is its rarity value times rewardMultiplierAt(depth).
 export const ZONES = [
-  {
-    name: 'Shallows',
-    rewardMultiplier: 1,
-    top: 0,
-    bottom: 18,
-    odds: [['common', 70], ['uncommon', 25], ['rare', 5]] as [Rarity, number][],
-  },
-  {
-    name: 'Coral Reef',
-    rewardMultiplier: 1.6,
-    top: 18,
-    bottom: 38,
-    odds: [['common', 20], ['uncommon', 35], ['rare', 30], ['epic', 13], ['legendary', 2]] as [Rarity, number][],
-  },
-  {
-    name: 'The Abyss',
-    rewardMultiplier: 2.5,
-    top: 38,
-    bottom: 58,
-    odds: [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]] as [Rarity, number][],
-  },
+  { name: 'Shallows', rewardMultiplier: 1, top: 0, bottom: 18 },
+  { name: 'Coral Reef', rewardMultiplier: 1.6, top: 18, bottom: 38 },
+  { name: 'The Abyss', rewardMultiplier: 2.5, top: 38, bottom: 60 },
 ] as const;
 
 export type Zone = (typeof ZONES)[number];
+
+/** A vertical strip a fish lives in; depths in metres, positive down. */
+export interface Band {
+  top: number;
+  bottom: number;
+}
 
 export type Archetype = 'slim' | 'perch' | 'disc' | 'long' | 'bulky';
 
@@ -169,7 +159,7 @@ export interface FishSpec {
   accentHue: number;
   stripes: number;
   scale: number;
-  /** Catch value: rarity value × the zone's rewardMultiplier. Fish banked before this field existed have none; read it with fishValue(). */
+  /** Catch value: rarity value × rewardMultiplierAt(depth). Fish banked before this field existed have none; read it with fishValue(). */
   value?: number;
   /** The map the fish was caught on (a MapId from maps.ts). Missing on fish banked before maps. */
   map?: string;
@@ -177,9 +167,9 @@ export interface FishSpec {
   assetId?: string;
 }
 
-export function rollFish(seed: number, zone: Zone, depthM: number): FishSpec {
+export function rollFish(seed: number, depthM: number, odds = rarityOdds(depthM)): FishSpec {
   const rng = new Rng(seed);
-  const rarity = rng.weighted(zone.odds);
+  const rarity = rng.weighted(odds);
   const profile = rng.pick(SPECIES_BY_RARITY[rarity]);
   const { species, archetype } = profile;
   const pal = PALETTE[rarity];
@@ -197,20 +187,45 @@ export function rollFish(seed: number, zone: Zone, depthM: number): FishSpec {
     archetype,
     lengthCm,
     weightKg,
-    depthM: Math.round(depthM),
+    depthM: recordedDepth(depthM),
     hue,
     sat: rng.range(...pal.sat),
     light: rng.range(...pal.light),
     accentHue: (hue + rng.range(140, 220)) % 360,
     stripes: rng.next() < 0.55 ? rng.int(2, 5) : 0,
     scale,
-    value: Math.round(RARITY[rarity].value * zone.rewardMultiplier),
+    value: Math.round(RARITY[rarity].value * rewardMultiplierAt(depthM)),
   };
 }
 
 /** Catch value of a fish, falling back to the plain rarity value for old saves. */
 export function fishValue(fish: FishSpec): number {
   return fish.value ?? RARITY[fish.rarity].value;
+}
+
+// In the trench the multiplier keeps climbing past the Abyss's 2.5: +1 every 50 m, up to 6.
+// sensor/market-rules.mjs mirrors these (MAX_MULTIPLIER, TRENCH_STEP_M) to price a sale.
+const TRENCH_TOP = ZONES[ZONES.length - 1].bottom;
+export const MAX_REWARD_MULTIPLIER = 6;
+const TRENCH_STEP_M = 50;
+
+/**
+ * The sea has no bottom, but the depth recorded on a caught fish (and written on-chain)
+ * stops here. Odds and value stop changing far above it (350 m and 235 m), so nothing is
+ * lost; the HUD still shows the real depth. The market rejects deeper fish:
+ * MAX_DEPTH_M in sensor/market-rules.mjs must stay equal (its tests check).
+ */
+export const MAX_RECORDED_DEPTH_M = 1000;
+
+/** Catch value multiplier for a fish caught at this depth. */
+export function rewardMultiplierAt(depthM: number): number {
+  if (depthM < TRENCH_TOP) return zoneForDepth(depthM).rewardMultiplier;
+  return Math.min(MAX_REWARD_MULTIPLIER, ZONES[ZONES.length - 1].rewardMultiplier + (depthM - TRENCH_TOP) / TRENCH_STEP_M);
+}
+
+/** The depth to record for a fish caught `depthM` metres down: whole metres, at most MAX_RECORDED_DEPTH_M. */
+export function recordedDepth(depthM: number): number {
+  return Math.min(MAX_RECORDED_DEPTH_M, Math.max(0, Math.round(depthM)));
 }
 
 /** The depth zone a depth falls in, so callers do not repeat the cutoffs. */
@@ -382,15 +397,15 @@ export class Fish {
   pos: THREE.Vector3;
   vel = new THREE.Vector3();
   target = new THREE.Vector3();
-  zone: Zone;
+  band: Band;
   facing = 1;
   phase: number;
   private rng: Rng;
 
-  constructor(spec: FishSpec, zone: Zone, x: number, y: number, worldHalfWidth: number) {
+  constructor(spec: FishSpec, band: Band, x: number, y: number, worldHalfWidth: number) {
     this.spec = spec;
     this.profile = speciesProfile(spec);
-    this.zone = zone;
+    this.band = band;
     this.mesh = buildFishMesh(spec);
     this.rng = new Rng(spec.seed ^ 0xabcdef);
     this.pos = new THREE.Vector3(x, y, this.rng.range(-4, 2));
@@ -410,7 +425,7 @@ export class Fish {
     const span = 18;
     this.target.set(
       THREE.MathUtils.clamp(this.pos.x + this.rng.range(-span, span), -this.halfWidth, this.halfWidth),
-      -this.rng.range(this.zone.top + 1.5, this.zone.bottom - 0.5),
+      -this.rng.range(this.band.top + 1.5, this.band.bottom - 0.5),
       this.rng.range(-4, 2),
     );
   }
@@ -436,9 +451,9 @@ export class Fish {
     }
     this.vel.lerp(desired, Math.min(1, dt * this.profile.turnRate));
     this.pos.addScaledVector(this.vel, dt);
-    // Stay inside the zone band (fish can be chased a little out of it).
-    const top = -(this.zone.top + 0.5);
-    const bottom = -(this.zone.bottom + 3);
+    // Stay inside the band (fish can be chased a little out of it).
+    const top = -(this.band.top + 0.5);
+    const bottom = -(this.band.bottom + 3);
     this.pos.y = THREE.MathUtils.clamp(this.pos.y, bottom, top);
     this.pos.x = THREE.MathUtils.clamp(this.pos.x, -this.halfWidth, this.halfWidth);
 

@@ -7,6 +7,7 @@ import {
   nextSlotTier,
   pathTier,
   slotTier,
+  totalPearls,
   upgradeSlot,
   type EquipmentSlot,
   type EquipmentPathId,
@@ -71,6 +72,7 @@ export class GearPanel {
   private onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void;
   private selectedSlot: EquipmentSlot = 'net';
   private lastState: EquipmentState | null = null;
+  private busy = false;
 
   constructor(onUpgrade: (slot: EquipmentSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
     this.onUpgrade = onUpgrade;
@@ -105,6 +107,12 @@ export class GearPanel {
     window.setTimeout(() => this.notice.classList.add('hidden'), 2400);
   }
 
+  /** While an upgrade's on-chain PEARL spend is in flight. */
+  setBusy(busy: boolean) {
+    this.busy = busy;
+    if (this.lastState) this.render(this.lastState);
+  }
+
   render(state: EquipmentState) {
     this.lastState = state;
     this.renderSlots(state);
@@ -116,10 +124,11 @@ export class GearPanel {
     const current = slotTier(state, ui.slot);
     const next = nextSlotTier(state, ui.slot);
     const stats = deriveStats(state);
+    const pearls = totalPearls(state);
     this.icon.textContent = ui.icon;
     this.level.textContent = `${ui.title} · Lv${current.level} · ${current.name}`;
     this.effect.textContent = statSummary(stats, ui.slot);
-    this.pearls.textContent = `${state.pearls} Pearls · 选择模块后再打包下潜`;
+    this.pearls.textContent = `${pearls} Pearls${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · 选择模块后再打包下潜`;
 
     if (!next) {
       this.progress.max = 1;
@@ -134,16 +143,16 @@ export class GearPanel {
 
     // Give a real preview even when the player cannot yet afford the tier.
     const preview = upgradeSlot({ ...state, pearls: Math.max(state.pearls, next.cost) }, ui.slot);
-    const missing = Math.max(0, next.cost - state.pearls);
+    const missing = Math.max(0, next.cost - pearls);
     this.progress.max = next.cost;
-    this.progress.value = Math.min(next.cost, state.pearls);
-    this.progressLabel.textContent = `${Math.min(next.cost, state.pearls)} / ${next.cost} Pearls`;
+    this.progress.value = Math.min(next.cost, pearls);
+    this.progressLabel.textContent = `${Math.min(next.cost, pearls)} / ${next.cost} Pearls`;
     this.next.textContent = `Lv${next.level} · ${next.name} · ${next.effect}`;
     this.compare.textContent = preview
       ? `升级预览：${statCompare(stats, deriveStats(preview), ui.slot)}`
       : '升级预览暂不可用';
-    this.upgrade.textContent = missing ? `还差 ${missing} ◇` : `升级 ${next.cost} ◇`;
-    this.upgrade.disabled = missing > 0;
+    this.upgrade.textContent = this.busy ? 'Spending PEARL…' : missing ? `还差 ${missing} ◇` : `升级 ${next.cost} ◇`;
+    this.upgrade.disabled = this.busy || missing > 0;
   }
 
   private offsetSlot(delta: number): EquipmentSlot {
@@ -257,10 +266,10 @@ export class GearPanel {
         button.textContent = 'MAX';
         button.disabled = true;
       } else {
-        const missing = Math.max(0, next.cost - state.pearls);
+        const missing = Math.max(0, next.cost - totalPearls(state));
         nextLine.textContent = `下一级：${next.name} · ${next.effect}`;
-        button.textContent = missing ? `还差 ${missing} ◇` : `升级 · ${next.cost} ◇`;
-        button.disabled = missing > 0;
+        button.textContent = this.busy ? 'Spending PEARL…' : missing ? `还差 ${missing} ◇` : `升级 · ${next.cost} ◇`;
+        button.disabled = this.busy || missing > 0;
         button.addEventListener('click', () => {
           this.selectSlot(ui.slot);
           this.onUpgrade(ui.slot);

@@ -3,6 +3,13 @@ import { ROD_TIERS } from './equipment';
 
 export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
 export type UpgradeLevel = 1 | 2 | 3;
+export {
+  ACCESSORIES,
+  buildAccessoryModel,
+  type AccessoryId,
+  type AccessorySlot,
+  type AccessoryDef,
+} from './accessories';
 
 export interface UpgradeDef {
   id: UpgradeId;
