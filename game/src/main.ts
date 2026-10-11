@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { pathEffect, pathSummary } from './equipment-i18n';
 import { Shipyard, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
@@ -1765,7 +1766,7 @@ const workbench = new Workbench({
   pearls: () => totalPearls(equipment),
   paths: (id) =>
     isEquipmentSlot(id)
-      ? EQUIPMENT_PATHS[id].map((p) => ({ id: p.id, name: p.name, nameZh: p.nameZh, summary: p.summary, effects: p.tiers.map((t) => t.effect) }))
+      ? EQUIPMENT_PATHS[id].map((p) => ({ id: p.id, name: p.name, nameZh: p.nameZh, summary: pathSummary(p), effects: [1, 2, 3].map((lv) => pathEffect(p, lv)) }))
       : null,
   activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
   selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),

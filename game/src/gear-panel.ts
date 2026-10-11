@@ -1,4 +1,5 @@
 import { lang, onLangChange, setLang, type Lang } from './i18n';
+import { pathName, pathSummary as pathSummaryText } from './equipment-i18n';
 import {
   activePath,
   EQUIPMENT_TIERS,
@@ -457,7 +458,7 @@ export class GearPanel {
       pathButton.type = 'button';
       pathButton.className = 'gear-path-button';
       pathButton.textContent = this.language === 'zh' ? path.nameZh : path.name;
-      pathButton.title = this.language === 'zh' ? path.nameZh : `${path.name}: ${path.summary}`;
+      pathButton.title = `${pathName(path)}: ${pathSummaryText(path)}`;
       const pathSelected = level >= 2 && path.id === selectedPath;
       pathButton.setAttribute('aria-pressed', String(pathSelected));
       pathButton.disabled = level < 2;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildUpgradeModel, type UpgradeDef, type UpgradeLevel } from './upgrades';
+import { buildUpgradeModel, upgradeEffect, type UpgradeDef, type UpgradeLevel } from './upgrades';
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { t, lang, onLangChange } from './i18n';
@@ -315,7 +315,7 @@ export class GearInspector {
     $('wb-inspect-kind').textContent = def.group === 'dive' ? t('Dive gear', '潜水装备') : t('Boat gear', '船上装备');
     $('wb-inspect-level').textContent = t(`Level ${lv} / 3${unlocked ? '' : ' · locked'}`, `${lv} / 3 级${unlocked ? '' : ' · 未解锁'}`);
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
-    $('wb-inspect-effect').textContent = def.effects[lv - 1];
+    $('wb-inspect-effect').textContent = upgradeEffect(def, lv);
     const sonarColor = $<HTMLLabelElement>('wb-inspect-sonar-color');
     const sonarInput = $<HTMLInputElement>('wb-inspect-sonar-input');
     const isSonar = def.id === 'sonar';
@@ -325,7 +325,7 @@ export class GearInspector {
     $('wb-inspect-levels').replaceChildren(
       ...LEVELS.map((l) => {
         const li = document.createElement('li');
-        li.textContent = `Lv ${l} · ${def.effects[l - 1]}`;
+        li.textContent = `Lv ${l} · ${upgradeEffect(def, l)}`;
         li.classList.toggle('on', l === lv);
         li.classList.toggle('locked', l > owned);
         return li;
@@ -344,7 +344,7 @@ export class GearInspector {
     const pearls = this.hooks.pearls();
     const short = !maxed && pearls < price;
     $('wb-inspect-up-title').textContent = maxed ? t('Fully upgraded', '已满级') : t(`Upgrade to level ${nextLv}`, `升级到 ${nextLv} 级`);
-    $('wb-inspect-up-effect').textContent = maxed ? def.effects[2] : def.effects[nextLv - 1];
+    $('wb-inspect-up-effect').textContent = maxed ? upgradeEffect(def, 3) : upgradeEffect(def, nextLv);
     $('wb-inspect-up-price').textContent = maxed ? '' : t(`${price} Pearls`, `${price} 珍珠`);
     const buy = $<HTMLButtonElement>('wb-inspect-buy');
     buy.disabled = maxed || short || this.buying;
