@@ -36,7 +36,7 @@ export interface InspectHooks {
   sonarColor?(color: string): void;
   /** Buy the next level. Resolves with why it didn't happen, or null once it did. */
   buy(def: UpgradeDef): Promise<string | null>;
-  /** Pearls to spend (on-chain PEARL plus any legacy local ones). */
+  /** Pearls to spend: the cached on-chain PEARL balance. */
   pearls(): number;
   /** The two branches this gear can run from Lv2 (null: it has none), and which one it runs. */
   paths(def: UpgradeDef): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
