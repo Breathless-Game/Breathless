@@ -164,7 +164,7 @@ export class FieldGuide {
       const r = el.getBoundingClientRect();
       start = { id: event.pointerId, x: event.clientX, y: event.clientY, left: r.left, top: r.top };
       dragging = false; suppress = false;
-      try { el.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+      // No pointer capture yet: capturing here would retarget a plain click to this container.
     });
     el.addEventListener('pointermove', event => {
       if (!start || event.pointerId !== start.id) return;
@@ -172,6 +172,8 @@ export class FieldGuide {
       if (!dragging) {
         if (!exceedsDragThreshold(dx, dy)) return;
         dragging = true; el.classList.add('dragging');
+        // Capture only once the gesture is a real drag so it keeps tracking outside the button.
+        try { el.setPointerCapture(event.pointerId); } catch { /* ignore */ }
       }
       const w = el.offsetWidth, h = el.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
       const p = clampPosition(start.left + dx, start.top + dy, w, h, vw, vh);

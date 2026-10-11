@@ -50,3 +50,16 @@ test('field guide wires pointer events and storage safely', async () => {
   const fg = await readFile(new URL('../src/field-guide.ts', import.meta.url), 'utf8');
   for (const s of ['pointerdown', 'setPointerCapture', 'stopPropagation', 'LAUNCHER_POS_KEY', 'dblclick']) assert.ok(fg.includes(s), s);
 });
+
+test('pointer capture starts only after the drag threshold, never on pointerdown', async () => {
+  const fg = await readFile(new URL('../src/field-guide.ts', import.meta.url), 'utf8');
+  const downStart = fg.indexOf("addEventListener('pointerdown'");
+  const moveStart = fg.indexOf("addEventListener('pointermove'");
+  assert.ok(downStart >= 0 && moveStart > downStart, 'handlers found in order');
+  const downBody = fg.slice(downStart, moveStart);
+  assert.ok(!downBody.includes('setPointerCapture('), 'capture in pointerdown would retarget plain clicks');
+  const moveEnd = fg.indexOf("const end =", moveStart);
+  const moveBody = fg.slice(moveStart, moveEnd);
+  assert.ok(moveBody.includes('setPointerCapture('), 'capture must start in pointermove');
+  assert.ok(moveBody.indexOf('exceedsDragThreshold') < moveBody.indexOf('setPointerCapture('), 'capture after threshold check');
+});
