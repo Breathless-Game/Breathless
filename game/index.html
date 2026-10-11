@@ -250,17 +250,17 @@
 
     <div id="shark-ask" class="hidden">
       <div class="card">
-        <h2>Sharks hunt here at night</h2>
-        <p>They home in on your heartbeat. The faster it beats, the more of them come, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
+        <h2>One shark by day. Two at night.</h2>
+        <p>They home in on your heartbeat. The faster it beats, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
         <ul>
-          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of twice and keeps the best.</li>
+          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of the usual one by day or two at night and keeps the best.</li>
           <li><b>No heart-rate reading.</b> Dives with sharks in the water are left out of the heart-rate figures in your health report: a chase is not a resting measurement. Breath-hold times still count.</li>
         </ul>
         <div class="menu-buttons">
           <button id="shark-yes" class="primary">Dive with sharks</button>
           <button id="shark-no">No sharks</button>
         </div>
-        <p class="small muted">Change it any time: Esc → Settings → Sharks at night.</p>
+        <p class="small muted">Change it any time: Esc → Settings → Sharks.</p>
       </div>
     </div>
 
@@ -313,7 +313,7 @@
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
           <label class="setting">
-            <span>Sharks at night (Open Ocean)</span>
+            <span>Sharks (Open Ocean)</span>
             <select id="set-sharks">
               <option value="ask">Ask before a dive</option>
               <option value="on">On</option>
@@ -345,14 +345,25 @@
 
     <div id="collection" class="hidden">
       <div class="collection-head">
-        <div>
+        <div class="collection-title">
           <h2>Collection</h2>
-          <div id="wallet" class="small"></div>
-          <div id="market-bar" class="small"></div>
+          <span id="collection-count" class="collection-count"></span>
         </div>
-        <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
-        <button id="collection-close">Close (C)</button>
+        <button id="collection-close" class="mini collection-close" title="Close (C)">Close <kbd>C</kbd></button>
       </div>
+      <!-- The two devnet wallets: the player's (owns the fish, signs sales) and the game's (pays mint fees). -->
+      <div class="wallet-cards">
+        <section class="wallet-card">
+          <div class="wallet-card-label">Your wallet</div>
+          <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
+        </section>
+        <section class="wallet-card">
+          <div class="wallet-card-label">Game wallet · pays mint fees</div>
+          <div id="wallet" class="small"></div>
+        </section>
+      </div>
+      <div id="collection-notice" role="status"></div>
+      <div id="market-bar" class="small"></div>
       <div id="collection-grid"></div>
     </div>
 
