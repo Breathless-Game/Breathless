@@ -945,6 +945,136 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   };
 }
 
+// ---- Mist ----------------------------------------------------------------
+
+interface MistSheet {
+  /** Depth the sheet stands at, and how tall its top billows (m). */
+  z: number;
+  height: number;
+  /** Opacity where it is thickest, just over the water. */
+  density: number;
+  /** How fast its lumps travel along it (m/s); the sign is the direction. */
+  drift: number;
+}
+
+/** Something a sheet of mist must pass in front of or behind, never through. */
+interface MistObstacle {
+  x: number;
+  z: number;
+  foot: number;
+}
+
+/**
+ * Mist lying on a lake: sheets of it standing on the water one behind another, each
+ * thickest just over the surface and thinning to nothing at a billowing top. Lumps of
+ * thicker, taller mist travel along every sheet at its own pace. Looking through them, the
+ * nearest shore is barely veiled and the furthest feet are buried. Each sheet weaves
+ * between the obstacles, so none is cut by one: the mist has no edge anywhere.
+ * One draw call; the motion is all in the shader.
+ */
+class MistVeils {
+  readonly mesh: THREE.Mesh;
+  private uniforms = { uMistTime: { value: 0 }, uMistStrength: { value: 1 } };
+  private clock = 0;
+  private strength = 1;
+
+  /** `sheets` are drawn in the order given: the furthest first. */
+  constructor(sheets: readonly MistSheet[], obstacles: readonly MistObstacle[], halfWidth: number, rng: Rng) {
+    const step = 6;
+    const pos: number[] = [];
+    const mist: number[] = [];
+    const rise: number[] = [];
+    // Rows from the water up: tucked under the surface, the thick belly, the top. Each has
+    // its opacity and how much of a passing lump's height it takes on.
+    const rows = [
+      { alpha: 0.5, rise: 0 },
+      { alpha: 1, rise: 0.3 },
+      { alpha: 0, rise: 1 },
+    ];
+    for (const sheet of sheets) {
+      const phase = rng.range(0, 40);
+      const columns: [number, number][] = [];
+      for (let x = -halfWidth; x <= halfWidth; x += step) {
+        // Hold the sheet in front of whatever stands behind it here and behind whatever stands
+        // in front; in a gap too narrow for both, down its middle.
+        let [back, front] = [-Infinity, Infinity];
+        for (const o of obstacles) {
+          if (Math.abs(x - o.x) > o.foot + step) continue;
+          if (o.z <= sheet.z) back = Math.max(back, o.z + o.foot + 0.5);
+          else front = Math.min(front, o.z - o.foot - 0.5);
+        }
+        columns.push([x + rng.range(-1.5, 1.5), back > front ? (back + front) / 2 : THREE.MathUtils.clamp(sheet.z, back, front)]);
+      }
+      const heights = [-0.5, 1.7, sheet.height];
+      const corner = (column: number, row: number) => {
+        const [x, z] = columns[column];
+        pos.push(x, heights[row], z);
+        mist.push(rows[row].alpha, sheet.density, sheet.drift, phase);
+        rise.push(rows[row].rise);
+      };
+      for (let i = 0; i < columns.length - 1; i++) {
+        for (let row = 0; row < 2; row++) {
+          for (const [c, r] of [[i, row], [i + 1, row], [i + 1, row + 1], [i, row], [i + 1, row + 1], [i, row + 1]]) corner(c, r);
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('aMist', new THREE.Float32BufferAttribute(mist, 4));
+    geo.setAttribute('aMistRise', new THREE.Float32BufferAttribute(rise, 1));
+
+    const mat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, depthWrite: false });
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, this.uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+          attribute vec4 aMist;
+          attribute float aMistRise;
+          uniform float uMistTime;
+          varying float vMist;
+        `)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          // Two slow waves of different length: lumps that never quite repeat.
+          float mistAlong = (position.x + uMistTime * aMist.z) * 0.012 + aMist.w;
+          float mistLump = 0.5 + 0.3 * sin(mistAlong * 2.1) + 0.2 * sin(mistAlong * 5.3 + aMist.w * 4.0);
+          // Banks the sheets share: stretches of the lake lie thick while others clear, and
+          // the pattern leans across the depths so it reads as one body of mist.
+          float mistBank = 0.5 + 0.5 * sin((position.x + uMistTime * 0.45) * 0.021 + position.z * 0.017);
+          float mistBody = mistLump * mix(0.4, 1.1, mistBank);
+          // Where it is thicker it also stands taller.
+          transformed.y *= mix(1.0, 0.5 + 0.75 * mistBody, aMistRise);
+          vMist = aMist.x * aMist.y * (0.25 + 0.95 * mistBody);
+        `);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          uniform float uMistStrength;
+          varying float vMist;
+        `)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          // Mist is the haze itself, lit a little brighter by day: it takes the air's colour.
+          #ifdef USE_FOG
+            float mistLight = dot(fogColor, vec3(0.2126, 0.7152, 0.0722));
+            diffuseColor.rgb = fogColor + (vec3(1.0) - fogColor) * (0.04 + 0.26 * mistLight);
+          #endif
+          diffuseColor.a *= vMist * uMistStrength;
+        `)
+        .replace('#include <fog_fragment>', '');
+    };
+    mat.customProgramCacheKey = () => 'scenery-mist-veils-v1';
+    this.mesh = new THREE.Mesh(geo, mat);
+    // The sheets reach far outside the geometry's own idea of where it is.
+    this.mesh.frustumCulled = false;
+  }
+
+  /** Move the mist on by `dt` seconds. `wind` hurries it; it lies thicker at night. */
+  update(dt: number, night: boolean, wind = 0) {
+    this.clock += dt * (1 + wind * 1.5);
+    this.strength += ((night ? 1.3 : 1) - this.strength) * Math.min(1, dt * 0.4);
+    this.uniforms.uMistTime.value = this.clock;
+    this.uniforms.uMistStrength.value = this.strength;
+  }
+}
+
 // ---- Heaven Lake (Zhangjiajie / Changbai) -------------------------------
 
 function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
@@ -1282,15 +1412,20 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   lamp.position.set(34, 3.9, -50);
   group.add(lamp);
 
-  // Mist banks drifting over the water. Thicker at night. One draw call for all of them.
-  const mistMat = new THREE.MeshBasicMaterial({ color: '#f2f7f4', transparent: true, opacity: 0.18, depthWrite: false });
-  const mist: { x: number; y: number; z: number; r: number; speed: number }[] = [];
-  for (let i = 0; i < 9; i++) {
-    const r = rng.range(16, 30);
-    mist.push({ r, x: rng.range(-180, 180), y: rng.range(1.5, 7), z: rng.range(-95, -38), speed: rng.range(0.6, 1.6) * (i % 2 ? 1 : -1) });
-  }
-  const mistMesh = instanced(new THREE.IcosahedronGeometry(1, 1), mistMat, mist.length);
-  group.add(mistMesh);
+  // Mist on the lake: sheets of it between and among the pillars, from behind the rim to just
+  // beyond the lanterns. The far ones stand taller; the pavilion's rock is in their way too.
+  const mistRng = stream(0x71a2c1, 9);
+  const sheetDepths = [-153, -137, -124, -112, -98, -85, -72, -60, -48];
+  const sheets = sheetDepths
+    .filter((_, i) => detail > 1 || i % 2 === 0)
+    .map((z, i) => ({
+      z,
+      height: 5.5 + (22 - z) * 0.06 + mistRng.range(-1, 1),
+      density: 0.24 * (detail > 1 ? 1 : 1.5),
+      drift: mistRng.range(0.5, 1.4) * (i % 2 ? 1 : -1),
+    }));
+  const mist = new MistVeils(sheets, [...spires, { x: 34, z: -50, foot: 8 }], 440, mistRng);
+  group.add(mist.mesh);
 
   // Lamps: paper lanterns floating on the lake, sky lanterns rising at night, the pavilion's glow.
   const lanternGeo = shadeByHeight(new THREE.CylinderGeometry(0.55, 0.42, 1, 4).rotateY(Math.PI / 4), 1, 0.62);
@@ -1363,15 +1498,7 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
       const shine = night && (env?.lightingEffects ?? true);
       setRainMist(env);
       lantern.emissiveIntensity = shine ? 2 : 0;
-      mistMat.opacity = night ? 0.3 : 0.18;
-      for (let i = 0; i < mist.length; i++) {
-        const m = mist[i];
-        m.x += m.speed * dt;
-        if (m.x > 210) m.x = -210;
-        if (m.x < -210) m.x = 210;
-        mistMesh.setMatrixAt(i, _m.compose(_p.set(m.x, m.y, m.z), _q.identity(), _s.set(m.r, m.r * 0.1, m.r * 0.45)));
-      }
-      mistMesh.instanceMatrix.needsUpdate = true;
+      mist.update(dt, night, env?.weather?.wind ?? 0);
       floats.update(time, env);
       for (let k = 0; k < skyLanterns.length; k++) {
         // Released from the far shore, they rise and drift until they wink out above the view.
