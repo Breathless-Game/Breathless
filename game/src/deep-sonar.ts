@@ -119,8 +119,16 @@ function flatMaterial(color: THREE.Color, extra: THREE.MeshStandardMaterialParam
   return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.72, ...extra });
 }
 
+const SONAR_ACCENT = 'deepSonarAccent';
+
+function accentMaterial(color: THREE.Color, extra: THREE.MeshStandardMaterialParameters = {}) {
+  const material = flatMaterial(color, extra);
+  material.userData[SONAR_ACCENT] = true;
+  return material;
+}
+
 function glowMaterial(color: THREE.Color, opacity: number) {
-  return new THREE.MeshBasicMaterial({
+  const material = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
     opacity,
@@ -128,31 +136,88 @@ function glowMaterial(color: THREE.Color, opacity: number) {
     depthWrite: false,
     fog: false,
   });
+  material.userData[SONAR_ACCENT] = true;
+  return material;
+}
+
+/** Update the accent materials on a workbench/catalog sonar model in place. */
+export function setDeepSonarColor(root: THREE.Object3D, color: THREE.ColorRepresentation): void {
+  const accent = safeColor(color);
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material.userData[SONAR_ACCENT]) continue;
+      material.color.copy(accent);
+      if ('emissive' in material && material.emissive instanceof THREE.Color) material.emissive.copy(accent);
+    }
+  });
 }
 
 function makeBuoy(accent: THREE.Color, detail: 1 | 2 | 3): THREE.Group {
   const group = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.44, detail >= 3 ? 1 : 0), flatMaterial(accent, { roughness: 0.66 }));
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.44, detail >= 3 ? 1 : 0), accentMaterial(accent, { roughness: 0.66 }));
   body.scale.set(1.25, 0.62, 0.9);
   body.position.y = 0.02;
   const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.31, 0.12, detail >= 2 ? 8 : 6), flatMaterial(new THREE.Color('#8b6b4a')));
   cap.position.y = 0.28;
   const aerial = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.34, 5), flatMaterial(new THREE.Color('#c7d7d4'), { metalness: 0.35, roughness: 0.45 }));
   aerial.position.y = 0.5;
-  const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.045, 6), flatMaterial(accent, { emissive: accent, emissiveIntensity: 0.18 }));
+  const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.045, 6), accentMaterial(accent, { emissive: accent, emissiveIntensity: 0.18 }));
   marker.position.y = 0.69;
   group.add(body, cap, aerial, marker);
   return group;
 }
 
 function makeCable(length: number, detail: 1 | 2 | 3) {
-  const radius = detail === 1 ? 0.035 : 0.027;
-  const cable = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius, radius * 1.1, length, detail >= 2 ? 6 : 5),
-    flatMaterial(new THREE.Color('#586e72'), { roughness: 0.88 }),
+  // A single dark cylinder reads as a rod in the deep water.  Give it a
+  // braided silhouette instead: a sturdy core with three contrasting strands
+  // wrapped around it.  The low segment counts keep the upgrade cheap while
+  // the alternating facets remain visible at dive distance.
+  const group = new THREE.Group();
+  group.position.y = -0.08;
+  const coreRadius = detail === 1 ? 0.043 : 0.05;
+  const core = new THREE.Mesh(
+    new THREE.CylinderGeometry(coreRadius, coreRadius * 1.06, length, detail >= 2 ? 6 : 5),
+    flatMaterial(new THREE.Color('#324b50'), { roughness: 0.92, emissive: new THREE.Color('#0b191b'), emissiveIntensity: 0.16 }),
   );
-  cable.position.y = -length * 0.5 - 0.08;
-  return cable;
+  core.position.y = -length * 0.5;
+  group.add(core);
+
+  const points = detail === 1 ? 9 : detail === 2 ? 13 : 17;
+  const radialSegments = detail === 3 ? 4 : 3;
+  const strandRadius = detail === 1 ? 0.010 : 0.012;
+  const braidRadius = detail === 1 ? 0.032 : 0.038;
+  const turns = Math.max(5, length * 0.52);
+  const strandMaterials = [
+    flatMaterial(new THREE.Color('#8ea5a0'), { roughness: 0.78, emissive: new THREE.Color('#132526'), emissiveIntensity: 0.12 }),
+    flatMaterial(new THREE.Color('#597277'), { roughness: 0.86, emissive: new THREE.Color('#0d1d20'), emissiveIntensity: 0.1 }),
+  ];
+  for (let strand = 0; strand < 3; strand++) {
+    const path: THREE.Vector3[] = [];
+    const phase = strand * Math.PI * 2 / 3;
+    for (let i = 0; i <= points; i++) {
+      const t = i / points;
+      const angle = phase + turns * Math.PI * 2 * t;
+      path.push(new THREE.Vector3(Math.cos(angle) * braidRadius, -length * t, Math.sin(angle) * braidRadius));
+    }
+    const curve = new THREE.CatmullRomCurve3(path, false, 'centripetal');
+    const strandMesh = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, points, strandRadius, radialSegments, false),
+      strandMaterials[strand % strandMaterials.length],
+    );
+    group.add(strandMesh);
+  }
+
+  // Short collars make both ends of the cable read as mechanically attached,
+  // rather than fading into the float and transducer.
+  const collarMaterial = flatMaterial(new THREE.Color('#253e42'), { roughness: 0.84, metalness: 0.2 });
+  const topCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.085, 0.12, detail >= 2 ? 7 : 6), collarMaterial);
+  topCollar.position.y = -0.035;
+  const bottomCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.09, 0.12, detail >= 2 ? 7 : 6), collarMaterial);
+  bottomCollar.position.y = -length + 0.035;
+  group.add(topCollar, bottomCollar);
+  return group;
 }
 
 function makeAnchor(length: number, accent: THREE.Color, detail: 1 | 2 | 3): THREE.Group {
@@ -164,7 +229,7 @@ function makeAnchor(length: number, accent: THREE.Color, detail: 1 | 2 | 3): THR
   weight.scale.set(1.1, 0.62, 0.88);
   weight.position.y = y - 0.37;
   // Three small fins make the bottom read as a weighted sonar transducer from the side.
-  const finMaterial = flatMaterial(accent, { roughness: 0.8 });
+  const finMaterial = accentMaterial(accent, { roughness: 0.8 });
   for (let i = 0; i < 3; i++) {
     const fin = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 4), finMaterial);
     fin.position.set(Math.cos(i * Math.PI * 2 / 3) * 0.26, y - 0.3, Math.sin(i * Math.PI * 2 / 3) * 0.26);
@@ -212,6 +277,7 @@ export class DeepSonar implements DeepSonarMesh {
   private nodeGlows: THREE.Mesh[] = [];
   private pulseMats: THREE.MeshStandardMaterial[] = [];
   private buoyMarker: THREE.Mesh | null = null;
+  private buoyLight: THREE.PointLight | null = null;
 
   constructor(options: DeepSonarOptions = {}) {
     this._customization = normalizeDeepSonarCustomization(options);
@@ -233,10 +299,17 @@ export class DeepSonar implements DeepSonarMesh {
     this.nodeGlows = [];
     this.pulseMats = [];
     this.buoyMarker = null;
+    this.buoyLight = null;
     const tier = tierFor(this._customization.lengthLevel);
     const accent = safeColor(this._customization.color);
     const buoy = makeBuoy(accent, this._detail);
     this.buoyMarker = buoy.children[3] as THREE.Mesh;
+    // A local point light makes the buoy's signal illuminate nearby cable and
+    // anchor facets. It lives under the buoy so it follows carried/deployed
+    // transforms without adding another top-level sonar child.
+    this.buoyLight = new THREE.PointLight(accent, 2.8, 8, 2);
+    this.buoyLight.position.y = 0.1;
+    buoy.add(this.buoyLight);
     this.group.add(buoy, makeCable(tier.length, this._detail));
 
     const nodeRoot = new THREE.Group();
@@ -249,7 +322,7 @@ export class DeepSonar implements DeepSonarMesh {
     for (let i = 0; i < nodeCount; i++) {
       const t = (i + 1) / (nodeCount + 1);
       const y = -0.08 - tier.length * t;
-      const pulse = flatMaterial(accent, { emissive: accent, emissiveIntensity: 0.22 });
+      const pulse = accentMaterial(accent, { emissive: accent, emissiveIntensity: 0.22 });
       // All pulse nodes share one low-poly buffer; only transforms and materials differ.
       const node = new THREE.Mesh(nodeShape, pulse);
       node.position.y = y;
@@ -272,6 +345,10 @@ export class DeepSonar implements DeepSonarMesh {
     if (this.buoyMarker) {
       const material = this.buoyMarker.material as THREE.MeshStandardMaterial;
       material.emissiveIntensity = enabled ? 0.16 : 0;
+    }
+    if (this.buoyLight) {
+      this.buoyLight.visible = enabled;
+      this.buoyLight.intensity = enabled ? 2.8 : 0;
     }
   }
 
@@ -338,7 +415,9 @@ export class DeepSonar implements DeepSonarMesh {
     }
     if (this.buoyMarker) {
       const material = this.buoyMarker.material as THREE.MeshStandardMaterial;
-      material.emissiveIntensity = this._customization.lighting ? 0.1 + 0.1 * (0.5 + 0.5 * Math.sin(phase + 0.4)) : 0;
+      const glow = 0.5 + 0.5 * Math.sin(phase + 0.4);
+      material.emissiveIntensity = this._customization.lighting ? 0.1 + 0.1 * glow : 0;
+      if (this.buoyLight) this.buoyLight.intensity = this._customization.lighting ? 2.5 + glow * 1.8 : 0;
     }
   }
 
@@ -348,6 +427,7 @@ export class DeepSonar implements DeepSonarMesh {
     this.nodeGlows = [];
     this.pulseMats = [];
     this.buoyMarker = null;
+    this.buoyLight = null;
   }
 }
 

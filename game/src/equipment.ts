@@ -6,6 +6,7 @@
  */
 
 import { storageKey } from './wallet';
+import { lampProfile } from './lamp-lighting';
 
 export type RodLevel = 1 | 2 | 3;
 export type EquipmentLevel = RodLevel;
@@ -131,6 +132,12 @@ export interface EquipmentStats {
   lampDistance: number;
   lampIntensity: number;
   lampAngle: number;
+  /** Fraction of the beam rendered as visible suspended-particle scatter. */
+  lampScatter: number;
+  /** Physical falloff and water absorption controls used by the diver light. */
+  lampDecay: number;
+  lampPenumbra: number;
+  lampExtinction: number;
 }
 
 export interface SlotTier {
@@ -626,7 +633,8 @@ export function deriveStats(state: EquipmentState, loadout?: readonly string[]):
   const reelPath = pathModifier(safe, 'reel', reelLevel);
   const finsPath = pathModifier(safe, 'fins', finsLevel);
   const tankPath = pathModifier(safe, 'tank', tankLevel);
-  const lampPath = pathModifier(safe, 'lamp', lampLevel);
+  const lampPath = activePath(safe, 'lamp');
+  const lampOptics = lampProfile(lampLevel, lampPath === 'wideLamp' ? 'wideLamp' : 'focus');
   return {
     netCapacity: Math.max(1, tier.capacity + (netPath.netCapacity ?? 0)),
     catchRadius: Math.max(0.5, tier.catchRadius + (rodLevel - 1) * 0.18 + (netPath.catchRadius ?? 0)),
@@ -638,9 +646,44 @@ export function deriveStats(state: EquipmentState, loadout?: readonly string[]):
     // detector has confirmed an underwater breath. They never touch the true
     // breath threshold or the player's normal hold time.
     emergencySeconds: Math.max(0.1, [3.2, 4.2, 5.2][tankLevel - 1] + (tankPath.emergencySeconds ?? 0)),
-    lampDistance: Math.max(1, [18, 28, 38][lampLevel - 1] + (lampPath.lampDistance ?? 0)),
-    lampIntensity: Math.max(1, [48, 64, 82][lampLevel - 1] + (lampPath.lampIntensity ?? 0)),
-    lampAngle: Math.min(1.5, Math.max(0.2, [0.65, 0.85, 1.05][lampLevel - 1] + (lampPath.lampAngle ?? 0))),
+    // The optical profile is the single source for lamp distance, direct
+    // intensity and beam shape. It keeps focus and wide diffuser paths
+    // physically distinct instead of applying a cosmetic angle-only bonus.
+    lampDistance: lampOptics.distance,
+    lampIntensity: lampOptics.intensity,
+    lampAngle: lampOptics.angle,
+    lampScatter: lampOptics.scatter,
+    lampDecay: lampOptics.decay,
+    lampPenumbra: lampOptics.penumbra,
+    lampExtinction: lampOptics.extinction,
   };
+}
+
+/**
+ * The dive-kit upgrades a shark bite on the Open Ocean takes back (main.ts
+ * resetDiveGearAfterBite): every `group: 'dive'` piece in upgrades.ts. The boat
+ * pieces (bait, boat, boatSpeed, boatHull, boatDeck) are not in EquipmentState
+ * at all (the boat is the shipyard's), so a reset never touches them.
+ */
+export const DIVE_GEAR_SLOTS: readonly UpgradeSlot[] = Object.freeze(['rod', 'reel', 'net', 'fins', 'tank', 'lamp', 'sonar'] as const);
+
+export interface DiveGearReset {
+  /** The new state: every dive slot at level 1, its module path back to the default, Pearls untouched. */
+  state: EquipmentState;
+  /** The slots that were above level 1, with the level they had. */
+  dropped: { slot: UpgradeSlot; from: EquipmentLevel }[];
+}
+
+/**
+ * Pure: every dive slot back to level 1 and its branch back to the default
+ * path, so no path bonus survives and buying Lv2 again starts from the
+ * default branch. Pearls spent are not refunded; both balances are kept.
+ */
+export function resetDiveGear(state: EquipmentState): DiveGearReset {
+  const safe = normalize(state);
+  const dropped = DIVE_GEAR_SLOTS.filter((slot) => slotLevel(safe, slot) > 1).map((slot) => ({ slot, from: slotLevel(safe, slot) }));
+  let next = safe;
+  for (const slot of DIVE_GEAR_SLOTS) next = withSlotLevel(next, slot, 1);
+  return { state: { ...next, paths: { ...DEFAULT_EQUIPMENT_PATHS } }, dropped };
 }
 

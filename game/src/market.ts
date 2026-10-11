@@ -160,6 +160,28 @@ export function nextToSell(bank: readonly BankedFish[]): BankedFish | null {
   return bank.find((f) => f.sellQueued && f.nft === 'minted' && !f.legacy) ?? null;
 }
 
+/**
+ * A banked fish that has not started settling: its NFT is only queued (never sent to mint, never
+ * failed a mint, no asset or transaction), and it is in no sale flow. Only such a fish can be taken
+ * back; anything minting, minted, failed or sale-pending is out of reach for good.
+ */
+export function unsettled(f: BankedFish): boolean {
+  return f.nft === 'pending' && !f.legacy && !f.sellQueued && !f.assetId && !f.mintTx && !f.mintTries;
+}
+
+/**
+ * What a shark bite takes from the bank: the fish banked during this dive (`thisDive`, by identity)
+ * that are still unsettled and that the NFT queue is not working on right now (`busy`: minting or
+ * selling it). Fish from earlier dives are never in `thisDive`, so they are never taken.
+ */
+export function biteForfeit(
+  bank: readonly BankedFish[],
+  thisDive: ReadonlySet<BankedFish>,
+  busy: (f: BankedFish) => boolean = () => false,
+): BankedFish[] {
+  return bank.filter((f) => thisDive.has(f) && unsettled(f) && !busy(f));
+}
+
 export type SellQuote =
   | { ok: true; pearls: number; mintFirst: boolean }
   | { ok: false; reason: 'paid-out' | 'minting' | 'blocked' };

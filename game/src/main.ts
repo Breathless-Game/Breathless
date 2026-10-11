@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { Shipyard, SHIPS } from './ships';
+import { Shipyard, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
+import { SkinPicker } from './skins';
+import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
@@ -13,9 +15,10 @@ import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Aquarium } from './aquarium';
+import { fishFood, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
-import type { UpgradeId } from './upgrades';
-import { loadSettings, saveSettings, type Settings } from './settings';
+import { UPGRADES, type UpgradeId } from './upgrades';
+import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import {
   advanceWorldBounds,
@@ -23,25 +26,30 @@ import {
   clampWorldXToBounds,
   createWorldBounds,
 } from './bounds';
-import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, markSharkWarningSeen, saveMapProgress, sharkWarningSeen, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { addBankedValue, bankEntry, biteForfeit, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
+import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
-import { PulseEstimate, RestingPulse, SHARK, SharkPack, biteFish, sharkIntensity, type SharkEvent } from './shark';
+import { PulseEstimate, RestingPulse, SHARK, SharkPack, sharkIntensity, type SharkEvent } from './shark';
 import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { SynthesisPanel } from './synthesis-panel';
+import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
+import { FieldGuide } from './field-guide';
+import type { LessonId } from './tutorial';
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
@@ -98,9 +106,11 @@ diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 diver.setWaterSurface((x, z) => world.surfaceAt(x, z));
 // Between dives the diver sits on the bow (it rocks with the boat); a dive starts with a jump off it.
 const bowSeat = new THREE.Object3D();
-bowSeat.position.set(3.38, 0.66, 0);
+bowSeat.position.set(3.02, 0.66, 0);
 world.boat.add(bowSeat);
 diver.sit(bowSeat);
+// Not on the title or the menus: the workbench has its own diver figure. It shows from the jump in (startGame).
+diver.group.visible = false;
 const JUMP_OUT = 2.6; // where the jump lands: this far past the bow, and this deep
 const JUMP_DEPTH = 1.4;
 // Floating at the surface this close to the boat, F climbs aboard and goes back to the workbench.
@@ -108,6 +118,9 @@ const JUMP_DEPTH = 1.4;
 const BOARD_REACH = 6.5;
 const BOARD_AFTER_M = 3;
 let wentDown = false;
+let guideWasPaused = false;
+let tutorialDescended = false;
+let fieldGuide: FieldGuide | null = null;
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -320,6 +333,7 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+let synthesisState: SynthesisState = loadSynthesis();
 // The persistent inventory is filtered by the workbench for each dive. A null
 // loadout means the debug/title state where all owned upgrades are available.
 let activeLoadout: readonly UpgradeId[] | null = null;
@@ -331,8 +345,9 @@ const currentStats = () => {
   return {
     ...stats,
     netCapacity: stats.netCapacity + shipBonus.capacity,
-    catchRadius: stats.catchRadius * (1 + shipBonus.range),
-    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed),
+    catchRadius: stats.catchRadius * (1 + shipBonus.range) * (diver.skinIndex===1&&world.map.id==='tianchi'?1.1:1),
+    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed) * (diver.skinIndex===0&&world.map.id==='fjord'?1.1:1),
+    lampDistance: stats.lampDistance * (diver.skinIndex===2&&world.map.id==='ocean'?1.15:1),
   };
 };
 const activeLevel = (slot: EquipmentSlot): number => {
@@ -353,12 +368,21 @@ function applyEquipmentVisuals() {
   diver.setFinsLevel(activeLevel('fins'));
   diver.setTankLevel(activeLevel('tank'));
   diver.setLampLevel(activeLevel('lamp'));
-  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
+  diver.setLampStats(
+    stats.lampDistance,
+    stats.lampIntensity,
+    stats.lampAngle,
+    stats.lampScatter,
+    stats.lampDecay,
+    stats.lampPenumbra,
+    stats.lampExtinction,
+  );
   diver.setReelLevel(activeLevel('reel'));
   diver.setReelRecovery(stats.reelRecovery);
 }
 const sonar = new DeepSonar({ color: loadSonarConfig().color, lengthLevel: equipment.sonarLevel, detail: renderQuality.settings.detail, startsCarried: false });
 scene.add(sonar.group);
+world.colorGrade.apply(sonar.group);
 sonar.group.visible = false;
 let sonarCarried = false;
 let sonarGuiding = false;
@@ -366,45 +390,93 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On the Open Ocean, if the player said yes: one to two by day, two to four at night.
+// Always on the Open Ocean (the only map with sharks): one to two by day, two to
+// four at night. A bite there ends the dive: this dive's unsettled catch is lost
+// and the dive gear drops back to level 1 (see sharkBite).
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
 const restingPulse = new RestingPulse();
 const pulseEstimate = new PulseEstimate();
 const sharkEvents: SharkEvent[] = [];
-const sharkAsk = document.getElementById('shark-ask')!;
+const sharkWarn = document.getElementById('shark-warn')!;
+const sharkBitten = document.getElementById('shark-bitten')!;
+document.getElementById('shark-warn-en')!.textContent = SHARK_WARNING.en;
+document.getElementById('shark-warn-zh')!.textContent = SHARK_WARNING.zh;
+/** How long the bite's knockback and shake play before the dive ends. */
+const BITE_END_MS = 1400;
+/**
+ * Fish banked during this dive (since startGame), by identity: the only bank
+ * entries a bite may take back. Fish from earlier dives are never in it.
+ */
+const diveBanked = new Set<BankedFish>();
+/** What a bite cost, shown once the dive has ended. */
+interface BiteLoss {
+  net: number;
+  banked: number;
+  /** This dive's banked fish that were already minting, minted or for sale, and stay. */
+  safe: number;
+  dropped: DiveGearReset['dropped'];
+}
+let bitten = false; // the first bite of a dive settles it: nothing bites twice
+let biteLoss: BiteLoss | null = null;
+let biteTimer = 0;
 
-/** Do sharks hunt right now? */
+/** Do sharks hunt right now? On shark waters, during a dive: there is no opting out. */
 function sharksOut() {
-  return settings.sharks === 'on' && world.map.sharks && phase === 'play';
+  return world.map.sharks && phase === 'play';
 }
 
-/** Before a dive on shark waters, the player chooses once; Settings can change it later. */
-function askAboutSharks() {
-  if (!world.map.sharks || settings.sharks !== 'ask') return;
+/** Before the first dive on shark waters, one warning per wallet; the chart's place card repeats it every time. */
+function warnAboutSharks() {
+  if (!world.map.sharks || sharkWarningSeen()) return;
   paused = true;
   keys.clear();
-  sharkAsk.classList.remove('hidden');
+  sharkWarn.classList.remove('hidden');
 }
 
-function answerSharks(on: boolean) {
-  settings.sharks = on ? 'on' : 'off';
-  saveSettings(settings);
-  sharkAsk.classList.add('hidden');
+function closeSharkWarning(dive: boolean) {
+  sharkWarn.classList.add('hidden');
   paused = false;
-  // The pause was not a breath taken underwater.
-  breathSince = null;
-  hud.message(on ? 'One to two sharks by day, two to four at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  if (dive) {
+    markSharkWarningSeen();
+    // The pause was not a breath taken underwater.
+    breathSince = null;
+    hud.message('One to two sharks by day, two to four at night. Keep your heart rate down.', 2600);
+    return;
+  }
+  // Not diving after all: the dive that just began ends, back at the workbench.
+  goToMenu();
+  workbench.show(true);
 }
-document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
-document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
+document.getElementById('shark-warn-dive')!.addEventListener('click', () => closeSharkWarning(true));
+document.getElementById('shark-warn-back')!.addEventListener('click', () => closeSharkWarning(false));
+document.getElementById('shark-bitten-ok')!.addEventListener('click', () => sharkBitten.classList.add('hidden'));
 
-/** A shark reached the diver: it tears fish out of the net (more, the faster the heart beats) and knocks them aside. */
-function sharkBite(intensity: number) {
-  const taken = biteFish(net.length, intensity);
-  for (const i of taken) net.splice(i, 1);
-  hud.setNet(net, currentStats().netCapacity);
+/**
+ * The one place a shark bite takes the dive gear back. It goes through the same
+ * path as buying an upgrade (refreshEquipment: saveEquipment, the sonar config,
+ * the workbench's onGearChange, the gear panel and the HUD), so anything that
+ * follows upgrade levels sees a reset exactly as it sees a purchase.
+ */
+function resetDiveGearAfterBite(): DiveGearReset['dropped'] {
+  const { state, dropped } = resetDiveGear(equipment);
+  Object.assign(equipment, state);
+  refreshEquipment();
+  return dropped;
+}
+
+/**
+ * A shark reached the diver. Once per dive: the net and this dive's unsettled
+ * banked fish are lost, the dive gear resets to level 1, the diver is knocked
+ * aside, and a moment later the dive ends the normal way, back at the workbench.
+ */
+function sharkBite() {
+  if (bitten || phase !== 'play') return;
+  bitten = true;
+  // Out of play at once: no second bite, no catching, banking or boarding while the dive ends.
+  phase = 'blackout';
+  keys.clear();
   // Thrown away from the nearest shark: the one that bit.
   let nearest = Infinity, from = 0;
   for (const shark of sharkPack.sharks) {
@@ -414,7 +486,52 @@ function sharkBite(intensity: number) {
   diver.vel.x += (diver.pos.x >= from ? 1 : -1) * 7;
   diver.vel.y += 2;
   stormShake = Math.max(stormShake, 0.4);
-  hud.message(taken.length ? `SHARK BITE · ${taken.length} fish torn from your net` : 'A shark rams you!', 2200);
+
+  const fromNet = net.length;
+  net = [];
+  // Only fish the NFT queue has not started on (market.ts unsettled) and does not hold right now.
+  const lost = nftQueue.forfeit(biteForfeit(bank, diveBanked, (f) => nftQueue.holds(f)));
+  const safe = [...diveBanked].filter((f) => bank.includes(f)).length;
+  hud.setBank(bank);
+  const dropped = resetDiveGearAfterBite(); // also redraws the (now empty) net at the new capacity
+  biteLoss = { net: fromNet, banked: lost.length, safe, dropped };
+  hud.message(`SHARK BITE · ${fromNet + lost.length} fish lost · dive gear reset`, BITE_END_MS + 400);
+  biteTimer = window.setTimeout(() => {
+    biteTimer = 0;
+    if (phase !== 'blackout') return; // the dive was already left another way (logout)
+    goToMenu(); // the normal end of a dive: health log, sea, sharks, net, loadout, sonar, camera
+    workbench.show(true); // and back aboard at the workbench
+  }, BITE_END_MS);
+}
+
+/** What the bite cost, over the workbench once the dive has ended. */
+function showBiteReport(loss: BiteLoss) {
+  const total = loss.net + loss.banked;
+  const fish = (n: number) => `${n} fish`;
+  const en = document.createElement('b');
+  en.textContent = `Bitten by a shark: lost ${fish(total)}, dive gear reset to level 1.`;
+  document.getElementById('shark-bitten-summary')!.replaceChildren(en, document.createElement('br'), `被鲨鱼咬了：损失 ${total} 条鱼，潜水装备升级重置为 1 级。`);
+  const gearName = (slot: string) => {
+    const def = UPGRADES.find((u) => u.id === slot);
+    return def ? `${def.name} ${def.nameZh}` : slot;
+  };
+  const items = [
+    `From your net: ${fish(loss.net)} · 网中损失 ${loss.net} 条`,
+    `Banked this dive, not yet minting: ${fish(loss.banked)} · 本次入库、尚未铸造：${loss.banked} 条`,
+    ...(loss.safe ? [`Kept: ${fish(loss.safe)} from this dive already minting, minted or for sale · 已开始铸造或出售的 ${loss.safe} 条保留`] : []),
+    loss.dropped.length
+      ? `Reset to level 1 · 重置为 1 级: ${loss.dropped.map((d) => `${gearName(d.slot)} Lv${d.from} → 1`).join(', ')}`
+      : 'Your dive gear was already at level 1 · 潜水装备本已是 1 级',
+    'Kept: your boat and boat upgrades, Pearls, and fish from earlier dives · 保留：船与船只升级、珍珠、以往渔获',
+  ];
+  document.getElementById('shark-bitten-list')!.replaceChildren(
+    ...items.map((text) => {
+      const li = document.createElement('li');
+      li.textContent = text;
+      return li;
+    }),
+  );
+  sharkBitten.classList.remove('hidden');
 }
 
 /** Runs every frame of a dive: learns the pulse, moves the sharks and shows what they are doing. */
@@ -429,7 +546,7 @@ function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: 
   sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents, world.night);
   for (const event of sharkEvents) {
     if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
-    else if (event === 'bite') sharkBite(intensity);
+    else if (event === 'bite') sharkBite();
   }
   sharkFx.update(dt, sharkPack.sharks, intensity, world.dayCycle.state.nightMix, settings.lightingEffects);
   health.sharks = out;
@@ -563,6 +680,10 @@ const aquarium = new Aquarium(bank, {
     aquariumPan = u;
     titleScreen.setLift(u);
   },
+  buyFood: buyAquariumFood,
+  message(text) {
+    hud.message(text, 1600);
+  },
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
@@ -596,6 +717,7 @@ function refreshEquipment() {
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
+  nudgePearlBalance(equipment.pearls);
   const sonarConfig = saveSonarConfig({ ...loadSonarConfig(), lengthLevel: equipment.sonarLevel });
   sonar.setLengthLevel(equipment.sonarLevel);
   sonar.setColor(sonarConfig.color);
@@ -613,12 +735,106 @@ async function syncPearls(earned = 0) {
   }
   try {
     equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    setPearlBalance(equipment.pearls);
     refreshEquipment();
   } catch (e) {
     console.warn('PEARL balance unavailable', e);
+    setPearlsUnavailable(e);
   }
 }
 
+let foodBuying = false;
+/** Buy one selected aquarium food. Legacy Pearls are spent first; chain PEARL covers the rest. */
+async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<boolean> {
+  if (foodBuying) return false;
+  const cost = food.price;
+  const available = totalPearls(equipment);
+  if (available < cost) {
+    hud.message(`Need ${cost - available} more Pearls for ${food.nameZh}`, 1600);
+    return false;
+  }
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
+  foodBuying = true;
+  try {
+    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
+    equipment.legacyPearls -= fromLegacy;
+    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    refreshEquipment();
+    if (fromChain > 0) void syncPearls();
+    return true;
+  } catch (e) {
+    hud.message(`Food purchase failed · ${(e as Error).message ?? e}`, 1800);
+    return false;
+  } finally {
+    foodBuying = false;
+  }
+}
+
+let synthesisBusy = false;
+/** Spend a synthesis station fee with the same legacy-first accounting as gear upgrades. */
+async function spendSynthesisPearls(cost: number): Promise<boolean> {
+  if (totalPearls(equipment) < cost) {
+    hud.message(`Need ${cost - totalPearls(equipment)} more Pearls`, 1500);
+    return false;
+  }
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
+  try {
+    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
+    equipment.legacyPearls -= fromLegacy;
+    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    refreshEquipment();
+    if (fromChain > 0) void syncPearls();
+    return true;
+  } catch (e) {
+    hud.message(`Synthesis payment failed · ${(e as Error).message ?? e}`, 1800);
+    return false;
+  }
+}
+
+async function synthCraft(id: RecipeDef['id']) {
+  if (synthesisBusy) return;
+  if (!canCraft(synthesisState, id)) {
+    hud.message('Materials missing · 材料不足', 1400);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id])) return;
+    const next = craftRecipe(synthesisState, id);
+    if (!next) return;
+    synthesisState = next;
+    saveSynthesis(synthesisState);
+    hud.message(id === 'bait' ? 'Tide bait crafted · 鱼饵已合成' : 'Composite plate crafted · 护板已合成', 1600);
+  } finally {
+    synthesisBusy = false;
+  }
+}
+
+async function synthUpgrade(slot: UpgradeSlot) {
+  if (synthesisBusy) return;
+  const level = slot === 'rod' ? equipment.rodGearLevel : equipment[`${slot}Level` as keyof EquipmentState] as number;
+  if (level >= 3) return;
+  const cost = SYNTHESIS_UPGRADE_COSTS[slot][level - 1];
+  const tier = nextSlotTier(equipment, slot);
+  if (!tier) return;
+  if (synthesisState.crafted.composite < 1) {
+    hud.message('Craft one composite plate first · 先合成复合护板', 1800);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(cost)) return;
+    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost }, fromLegacy: 0, fromChain: 0 }));
+    synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
+    saveSynthesis(synthesisState);
+    refreshEquipment();
+    hud.message(`${nextSlotLabel(slot)} upgraded in synthesis station`, 1800);
+  } finally {
+    synthesisBusy = false;
+  }
+ }
 let buying = false;
 /** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
 async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
@@ -682,6 +898,7 @@ function nextSlotLabel(slot: UpgradeSlot) {
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  if(skinPicker.open)return;
   // An open settings dropdown has the keyboard. It stops its own keys; this is the backstop.
   if (dropdownOpen()) return;
   if (e.key === 'Escape') {
@@ -708,6 +925,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     gear.toggle();
     if (gear.open) void syncPearls();
+    if (gear.open) fieldGuide?.mark('upgrade');
     return;
   }
   if (phase !== 'play') return;
@@ -716,6 +934,7 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+    if (vault.open) fieldGuide?.mark('collection');
     if (vault.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
@@ -776,6 +995,7 @@ function workbenchConditions(id: MapId): WorkbenchConditions {
     weather: WEATHER_LABELS[weather.kind],
     wind: `${Math.round(4 + weather.wind * 30)} km/h`,
     rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+    weatherState: weather,
   };
 }
 
@@ -877,6 +1097,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
+  fieldGuide?.mark('catch');
   hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
@@ -891,13 +1112,17 @@ function tryCatch() {
 // Banking pays nothing: every fish is queued to become an NFT, and Pearls come only from selling one.
 function bankNet() {
   if (!net.length) return;
-  bank.push(...net.map(bankEntry));
+  const entries = net.map(bankEntry);
+  bank.push(...entries);
+  // Into the Collection now, minted in the background; until minting starts a shark bite can still take it back.
+  for (const entry of entries) diveBanked.add(entry);
   saveBank();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(`Banked ${net.length} fish · minting NFTs…`);
   hud.toast(rarest, 'BANKED');
   noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
+  fieldGuide?.mark('bank');
   hud.setNet(net, currentStats().netCapacity);
   hud.setBank(bank);
   nftQueue.kick();
@@ -995,7 +1220,11 @@ function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
-  askAboutSharks();
+  fieldGuide?.mark('launch');
+  // A fresh dive: nothing banked on it yet, and no bite taken.
+  diveBanked.clear();
+  bitten = false;
+  warnAboutSharks();
   resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
@@ -1005,7 +1234,9 @@ function startGame() {
   hud.message('Hold your breath and dive!', 2400);
   const bow = bowSeat.getWorldPosition(new THREE.Vector3());
   diver.jumpTo(new THREE.Vector3(bow.x + JUMP_OUT, -JUMP_DEPTH, 0));
+  visitSkinMap(world.map.id);
   wentDown = false;
+  tutorialDescended = false;
 }
 
 /** Beside the boat at the surface, not in trouble: close enough to climb aboard. */
@@ -1097,17 +1328,79 @@ function updateCalibration() {
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
 let paused = false;
+let trialSkinActive=false;
+const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
+const endSkinTrial=()=>{if(!trialSkinActive)return;trialSkinActive=false;diver.setSkin(0);skinPicker.resetChoice();applyEquipmentVisuals();};
+const skinHint=document.createElement('div');skinHint.className='skin-hint';skinHint.textContent='长按角色或 E 换装 · Hold diver or E';skinHint.hidden=true;document.body.append(skinHint);
+setInterval(()=>{skinHint.hidden=phase!=='play'||diver.seated||diver.jumping||paused||-diver.pos.y>SURFACE_DEPTH;},400);
+let skinHold:ReturnType<typeof setTimeout>|null=null;
+const skinRing=document.createElement('div');skinRing.style.cssText='position:fixed;width:30px;height:30px;transform:translate(-50%,-50%);pointer-events:none;z-index:9999;filter:drop-shadow(0 0 2px #7aead9);display:none';
+skinRing.innerHTML='<svg viewBox="0 0 64 64" width="30" height="30"><circle cx="32" cy="32" r="26" fill="#0b273850" stroke="#ffffff40" stroke-width="3"/><circle data-progress cx="32" cy="32" r="26" fill="none" stroke="#b6fff0" stroke-width="3" stroke-linecap="round" stroke-dasharray="163.363" stroke-dashoffset="163.363" transform="rotate(-90 32 32)"/></svg>';document.body.append(skinRing);
+let skinProgressFrame=0;
+let skinPointer:number|null=null,skinX=0,skinY=0,skinOpened=false;
+let skinHoldMode:'pointer'|'keyboard'|null=null;
+const clearSkinHold=()=>{if(skinHold!==null)clearTimeout(skinHold);skinHold=null;skinPointer=null;skinHoldMode=null;cancelAnimationFrame(skinProgressFrame);skinRing.style.display='none';};
+const canHoldSkin=()=>phase==='play'&&!paused&&!diver.seated&&!diver.jumping&&-diver.pos.y<=SURFACE_DEPTH;
+const startSkinProgress=(mode:'pointer'|'keyboard')=>{
+  skinHoldMode=mode;
+  const rect=canvas.getBoundingClientRect();
+  const holdStarted=performance.now();skinRing.style.display='block';
+  const drawProgress=()=>{
+    if(!canHoldSkin()){clearSkinHold();return;}
+    const center=diver.group.getWorldPosition(new THREE.Vector3()).project(camera);
+    skinRing.style.left=`${rect.left+(center.x+1)*rect.width/2}px`;skinRing.style.top=`${rect.top+(1-center.y)*rect.height/2}px`;
+    skinRing.querySelector('[data-progress]')!.setAttribute('stroke-dashoffset',String(163.363*(1-Math.min(1,(performance.now()-holdStarted)/500))));
+    skinProgressFrame=requestAnimationFrame(drawProgress);
+  };drawProgress();
+  skinHold=setTimeout(()=>{const pointer=skinHoldMode==='pointer';clearSkinHold();if(!canHoldSkin())return;skinOpened=pointer;skinPicker.show();},500);
+};
+canvas.addEventListener('pointerdown',e=>{
+  if(!canHoldSkin()||e.button!==0||skinHoldMode==='keyboard')return;
+  const rect=canvas.getBoundingClientRect();
+  const screen=diver.group.getWorldPosition(new THREE.Vector3()).project(camera);
+  const x=rect.left+(screen.x+1)*rect.width/2,y=rect.top+(1-screen.y)*rect.height/2;
+  if(screen.z>1||Math.hypot(e.clientX-x,e.clientY-y)>55)return;
+  clearSkinHold();skinPointer=e.pointerId;skinX=e.clientX;skinY=e.clientY;skinOpened=false;
+  startSkinProgress('pointer');
+},true);
+window.addEventListener('keydown',e=>{
+  if(e.code!=='KeyE'||!canHoldSkin())return;
+  const target=e.target as HTMLElement;
+  if(target.closest('input,textarea,select,[contenteditable="true"]'))return;
+  e.preventDefault();e.stopImmediatePropagation();
+  if(e.repeat)return;
+  clearSkinHold();startSkinProgress('keyboard');
+},true);
+window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('e');}},true);
+window.addEventListener('pointermove',e=>{if(e.pointerId===skinPointer&&Math.hypot(e.clientX-skinX,e.clientY-skinY)>14)clearSkinHold();},true);
+window.addEventListener('pointerup',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
+window.addEventListener('pointercancel',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
+window.addEventListener('blur',()=>clearSkinHold());
+let catchClickStart=-Infinity,catchClickX=0,catchClickY=0,catchClickReady=false;
+canvas.addEventListener('pointerdown',e=>{
+  catchClickReady=e.button===0&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickStart=performance.now();catchClickX=e.clientX;catchClickY=e.clientY;
+},true);
+window.addEventListener('pointermove',e=>{if(Math.hypot(e.clientX-catchClickX,e.clientY-catchClickY)>14)catchClickReady=false;},true);
+window.addEventListener('pointercancel',()=>{catchClickReady=false;},true);
+window.addEventListener('blur',()=>{catchClickReady=false;});
+canvas.addEventListener('click',e=>{
+  if(skinOpened){e.preventDefault();e.stopImmediatePropagation();skinOpened=false;catchClickReady=false;return;}
+  const catchNow=catchClickReady&&e.button===0&&performance.now()-catchClickStart<350&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickReady=false;
+  if(catchNow){e.preventDefault();e.stopImmediatePropagation();tryCatch();}
+},true);
 let resetDayClock = false;
 
+/**
+ * The tab was hidden mid-dive: rather than a pause menu, the same as Esc — up to
+ * the rope's fish and the workbench, the dive held where it was (Esc on the table
+ * carries it on from there; MAIN MENU ends the trip).
+ */
 function pause() {
   if (phase !== 'play' || paused) return;
-  paused = true;
-  keys.clear();
   loadoutWheel.closeWheel(false);
-  vault.toggle(false);
-  gear.toggle(false);
-  report.toggle(false);
-  pauseMenu.show();
+  climbAboard();
 }
 
 // ---- Back aboard ---------------------------------------------------------
@@ -1123,6 +1416,7 @@ let aboard: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
 let leavingBoat = false;
 
 function climbAboard() {
+  endSkinTrial();
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
@@ -1206,7 +1500,10 @@ function labelStartFish(pan: number) {
 }
 
 function onEscape() {
-  if (shipyard.open) shipyard.close();
+  // The shark cards first: Esc on the warning is its Back, on the bite report its OK.
+  if (!sharkWarn.classList.contains('hidden')) closeSharkWarning(false);
+  else if (!sharkBitten.classList.contains('hidden')) sharkBitten.classList.add('hidden');
+  else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
   else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
@@ -1226,9 +1523,11 @@ function onEscape() {
 
 /** Ends the dive: back to the title, with the diver sitting back on the bow. */
 function goToMenu() {
+  endSkinTrial();
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   diver.sit(bowSeat);
+  diver.group.visible = false; // back on the title: no diver on the bow
   hud.setBoardPrompt(false);
   calmSea();
   net = [];
@@ -1262,6 +1561,15 @@ function goToMenu() {
   camWrap.style.visibility = 'hidden';
   hud.hide();
   showTitle(true);
+  // A shark bite's dive ends here too (or was left another way during its knockback): say what it cost.
+  window.clearTimeout(biteTimer);
+  biteTimer = 0;
+  diveBanked.clear();
+  sharkWarn.classList.add('hidden');
+  if (biteLoss) {
+    showBiteReport(biteLoss);
+    biteLoss = null;
+  }
 }
 
 function applySettings(s: Settings) {
@@ -1271,6 +1579,7 @@ function applySettings(s: Settings) {
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   sonar.setDetail(renderQuality.settings.detail);
+  sonar.setLightingEnabled(s.lightingEffects);
   syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -1319,9 +1628,12 @@ document.addEventListener('pointermove', (e) => {
 });
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => aquarium.show() },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.17, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => aquarium.show() },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.83, label: 'SETTINGS', onClick: openSettingsDesk },
+  // The field guide (B) and the tutorial hang on the rope too, instead of buttons in the corner.
+  { seed: 0x5eed04, rarity: 'legendary', species: 'Ember Triggerfish', hue: 14, sat: 0.8, light: 0.55, at: 0.5, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
+  { seed: 0x5eed05, rarity: 'uncommon', species: 'Ghost Angelfish', hue: 150, sat: 0.5, light: 0.6, at: 0.665, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTutorial() },
 ]);
 
 // Gear set in the workbench's READY tray for this dive. The selected slots are
@@ -1352,6 +1664,15 @@ function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
   labelStartFish(benchPan);
 }
 
+const synthPanel = new SynthesisPanel({
+  state: () => synthesisState,
+  equipment: () => equipment,
+  pearls: () => totalPearls(equipment),
+  craft: synthCraft,
+  upgrade: synthUpgrade,
+  close: () => workbench.escape(),
+});
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
@@ -1361,8 +1682,9 @@ const workbench = new Workbench({
   },
   preview: mapPreview,
   dive(id, gear) {
-    loadout = gear;
-    activeLoadout = [...gear];
+    // The net shaft isn't on the workbench: it always goes down with the diver, at the level owned.
+    loadout = gear.includes('rod') ? gear : [...gear, 'rod'];
+    activeLoadout = [...loadout];
     const firstPacked = QUICK_SLOTS.find((item) => gear.includes(item.slot));
     activeTool = firstPacked?.slot ?? 'net';
     loadoutWheel.setActive(activeTool);
@@ -1392,10 +1714,74 @@ const workbench = new Workbench({
   activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
   selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),
   ship: () => ({ key: shipyard.shipIndex, model: shipyard.shipModel() }),
-  openShipyard: () => shipyard.show(),
+  // The boat opens the ships in the inspector (the same as gear): the shipyard's ships, unlocks and equip.
+  ships: {
+    list: () =>
+      SHIPS.map((s, i) => ({
+        name: s.en,
+        nameZh: s.cn,
+        intro: SHIP_INTROS_EN[i],
+        introZh: s.intro,
+        threshold: s.threshold,
+        bonuses: [
+          s.speed ? `+${Math.round(s.speed * 100)}% swim speed` : '',
+          s.range ? `+${Math.round(s.range * 100)}% catch radius` : '',
+          s.capacity ? `+${s.capacity} net slot${s.capacity > 1 ? 's' : ''}` : '',
+        ].filter(Boolean),
+      })),
+    current: () => shipyard.shipIndex,
+    progress: () => mapProgress.bestValue,
+    model: (i) => shipyard.modelAt(i),
+    equip: (i) => shipyard.equip(i),
+  },
+  // The ready tray is saved per wallet whenever it changes, and comes back packed the same.
+  savedLoadout() {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(storageKey('loadout')) ?? 'null');
+      return Array.isArray(saved) ? saved.filter((id): id is UpgradeId => typeof id === 'string') : null;
+    } catch {
+      return null;
+    }
+  },
+  saveLoadout(gear) {
+    try {
+      localStorage.setItem(storageKey('loadout'), JSON.stringify(gear));
+    } catch {
+      // Private mode or full storage: it just isn't remembered.
+    }
+  },
   sonarColor(color) {
     sonar.setColor(color);
+    world.colorGrade.apply(sonar.group);
   },
+  tutorial(id: LessonId) {
+    fieldGuide?.mark(id);
+  },
+  synthesisOpen() {
+    synthPanel.show();
+  },
+  synthesisClose() {
+    synthPanel.hide();
+  },
+});
+
+fieldGuide = new FieldGuide({
+  canOpen: () => phase !== 'calibrating' && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
+  toggled(open) {
+    if (open) {
+      guideWasPaused = paused;
+      paused = true;
+      keys.clear();
+    } else {
+      paused = guideWasPaused;
+      keys.clear();
+      breathSince = null;
+    }
+  },
+  syncTutorial() {
+    if (workbench.packed.includes('net')) fieldGuide?.mark('pack');
+  },
+  packed: () => workbench.packed,
 });
 // The gear panel (G) buys too: whatever buys or picks a ship, the pieces on the table follow.
 onGearChange = () => workbench.visible && workbench.refreshGear();
@@ -1518,6 +1904,7 @@ async function logOut() {
 function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());
   Object.assign(equipment, loadEquipment());
+  synthesisState = loadSynthesis();
   Object.assign(mapProgress, loadMapProgress());
   if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
@@ -1540,6 +1927,7 @@ onWalletChange((s) => {
   }
   walletOwner = s.owner;
   loadWalletProgress();
+  void syncPearls(); // first read after login feeds the title badge
   if (loginGate.visible) {
     loginGate.hide();
     workbench.show(true);
@@ -1640,7 +2028,13 @@ function update(dt: number, time: number) {
   }
 
   if (!flying) swimPhysics(dt, s);
-  if (playing && -diver.pos.y > BOARD_AFTER_M) wentDown = true;
+  if (playing && -diver.pos.y > BOARD_AFTER_M) {
+    wentDown = true;
+    if (!tutorialDescended) {
+      tutorialDescended = true;
+      fieldGuide?.mark('descend');
+    }
+  }
   hud.setBoardPrompt(canBoard());
   const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench (as in swimPhysics)
 
@@ -1667,6 +2061,7 @@ function update(dt: number, time: number) {
 
   // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
   // depth, air and banking still count from the mean waterline).
+  diver.setLampEnvironment(world.dayCycle.state.nightMix, world.lightingEffectsEnabled);
   diver.update(dt, time, -diver.pos.y, world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6)));
   sonar.update(time, dt);
   if (!sonarCarried && sonar.mode === 'anchored' && !sonarGuiding && sonar.group.visible) {
@@ -1688,6 +2083,19 @@ function update(dt: number, time: number) {
   }
   world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
+  // Read the post-swell hull pose so the wake follows the same crest that is
+  // visible in this frame, including the rogue-wave pitch and roll.
+  if (phase === 'play') {
+    stormFx.boatWake(
+      dt,
+      time,
+      world.boat.position.x,
+      world.boat.position.y,
+      world.boat.rotation.x,
+      world.boat.rotation.z,
+      seaSurface,
+    );
+  }
 
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
   cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);

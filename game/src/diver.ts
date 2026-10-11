@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { DiverConcept } from './diver-designs';
 import { Splash } from './fx';
 import { buildFishingNetMesh } from './gear';
+import { lampActivation, lampDistanceAttenuation, lampProfile, type LampProfile } from './lamp-lighting';
 import type { RenderQuality } from './render-quality';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
@@ -9,6 +11,7 @@ function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterial
 
 /** Where the head sits along the body: the point that breaks the surface first. */
 const HEAD_X = 0.9;
+const DIVER_SCALE = 0.5;
 /**
  * How far under the water (m) the head is when a dive splashes and when a climb
  * does (its crown touches the surface), and where it counts as under or out
@@ -23,7 +26,6 @@ const HEAD_CLEAR = -0.1;
 // over the edge, hands empty (the net is put away). The jump off arcs out and down
 // into the water, turning head first on the way; the net comes out mid-jump.
 const SIT_TORSO = Math.PI / 2;
-const SIT_HIPS = 0.75; // torso centre above the hips, so the hips rest on the seat
 const SIT_LEGS = 0.7; // from straight down toward forward
 const SIT_ARM = Math.PI + 0.3; // hanging at the side, a little forward, empty-handed
 const SIT_HEAD = -1.1; // tipped forward from the spine, so the mask looks out to sea
@@ -41,7 +43,25 @@ export class Diver {
   vel = new THREE.Vector3();
   facing = 1;
   headlamp: THREE.SpotLight;
+  /** A faint volumetric cone makes the otherwise invisible SpotLight readable underwater. */
   private body = new THREE.Group();
+  private playtestModel = new DiverConcept(0);
+  private modelTime = 0;
+  skinIndex = 0;
+  setSkin(index:number) {
+    if(index===this.skinIndex)return;
+    const old=this.playtestModel;
+    this.skinIndex=THREE.MathUtils.clamp(Math.round(index),0,2);
+    this.body.remove(old.group);
+    this.playtestModel=new DiverConcept(this.skinIndex);
+    this.body.add(this.playtestModel.group);
+    this.playtestModel.attachTool(this.netArm);
+    this.playtestModel.update(this.modelTime,0);
+    this.materialBinder?.(this.playtestModel.group);
+    old.group.traverse(obj=>{if(obj instanceof THREE.Mesh){obj.geometry.dispose();const mats=Array.isArray(obj.material)?obj.material:[obj.material];mats.forEach(mat=>mat.dispose());}});
+  }
+  private originalSuit: THREE.Object3D[] = [];
+  private customSuitActive = false;
   private head = new THREE.Group();
   private legL: THREE.Group;
   private legR: THREE.Group;
@@ -57,7 +77,12 @@ export class Diver {
   /** Small head-mounted lamp housing, separate from the actual PointLight. */
   private lampGroup = new THREE.Group();
   private lampLens: THREE.Mesh | null = null;
+  private lampBeam: THREE.Mesh;
+  private lampBeamMaterial: THREE.MeshBasicMaterial;
+  private lampOptics: LampProfile = lampProfile(1);
   private lampLevel = 1;
+  private lampNight = 0;
+  private lampEffects = true;
   private breathPoint: THREE.Object3D;
   private breathOrigin = new THREE.Vector3();
   private bubbleOffset = new THREE.Vector3();
@@ -163,10 +188,23 @@ export class Diver {
     this.lampGroup.rotation.x = Math.PI / 2;
     this.lampLens = new THREE.Mesh(
       new THREE.CylinderGeometry(0.1, 0.12, 0.18, 6),
-      mat('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 2.4, metalness: 0.1, roughness: 0.25 }),
+      mat('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 0, metalness: 0.1, roughness: 0.25 }),
     );
     this.lampGroup.add(this.lampLens);
     this.head.add(this.lampGroup);
+
+    // A single low-poly cone makes suspended particles visible in the beam.
+    // The real SpotLight still provides direct illumination; this mesh only
+    // represents the volume between the lens and the water.
+    this.lampBeamMaterial = new THREE.MeshBasicMaterial({
+      color: '#bcecff', transparent: true, opacity: 0, depthWrite: false,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+    this.lampBeam = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 8, 1, true), this.lampBeamMaterial);
+    this.lampBeam.name = 'diver-lamp-scatter';
+    this.lampBeam.rotation.z = -Math.PI / 2;
+    this.lampBeam.renderOrder = 1;
+    this.body.add(this.lampBeam);
 
     // The old design called this item a fishing rod; the fused game design
     // uses its shaft and hoop as an underwater net. Keep the model pivot at
@@ -177,6 +215,9 @@ export class Diver {
     this.netArm.position.set(0.6, 0, 0.3);
     this.netTip = net.tip;
     this.body.add(this.netArm);
+    this.originalSuit=[torso,stripe,hood,head,mask,snorkel,this.legL,this.legR,this.freeArm];
+    this.body.add(this.playtestModel.group);
+    this.useCustomSuit(true);
 
     this.group.add(this.body);
     // White water stays where it was thrown, so it lives in the scene, not on the diver.
@@ -189,6 +230,7 @@ export class Diver {
     this.headlamp.position.set(1.4, 0.2, 0.6);
     this.headlamp.target.position.set(4.5, 0.05, 0.6);
     this.body.add(this.headlamp, this.headlamp.target);
+    this.headlamp.decay = this.lampOptics.decay;
     scene.add(this.group);
   }
 
@@ -228,11 +270,11 @@ export class Diver {
   private updateWaterContact(dt: number, heave: number): void {
     const yaw = this.group.rotation.y;
     const pitch = this.body.rotation.z;
-    const reach = HEAD_X * Math.cos(pitch);
+    const reach = HEAD_X * this.body.scale.x * Math.cos(pitch);
     const headX = this.pos.x + Math.cos(yaw) * reach;
     const headZ = this.pos.z - Math.sin(yaw) * reach;
     // How far under the head is as drawn, against the waves rather than y = 0.
-    const under = this.waterAt(headX, headZ) - (this.pos.y + heave + HEAD_X * Math.sin(pitch));
+    const under = this.waterAt(headX, headZ) - (this.pos.y + heave + HEAD_X * this.body.scale.x * Math.sin(pitch));
     // The diver's own climb: it has to be swimming that way and actually moving
     // (at the surface the buoyancy still pushes up, a respawn moves without swimming,
     // and the swell that heaves a swimmer is not a climb at all).
@@ -453,17 +495,69 @@ export class Diver {
   /** Set lamp visual tier and its light reach; intensity still follows depth. */
   setLampLevel(level: number) {
     this.lampLevel = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
-    this.headlamp.distance = [18, 28, 38][this.lampLevel - 1];
-    this.headlamp.angle = [0.65, 0.85, 1.05][this.lampLevel - 1];
-    this.lampMaxIntensity = [48, 64, 82][this.lampLevel - 1];
+    this.lampOptics = lampProfile(this.lampLevel);
+    this.headlamp.distance = this.lampOptics.distance;
+    this.headlamp.angle = this.lampOptics.angle;
+    this.headlamp.penumbra = this.lampOptics.penumbra;
+    this.headlamp.decay = this.lampOptics.decay;
+    this.lampMaxIntensity = this.lampOptics.intensity;
     this.lampGroup.scale.setScalar(this.lampLevel === 3 ? 1.18 : this.lampLevel === 2 ? 1.08 : 1);
   }
 
   /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
-  setLampStats(distance: number, intensity: number, angle: number) {
-    this.headlamp.distance = THREE.MathUtils.clamp(distance, 1, 100);
-    this.headlamp.angle = THREE.MathUtils.clamp(angle, 0.2, 1.5);
-    this.lampMaxIntensity = Math.max(1, intensity);
+  setLampStats(distance: number, intensity: number, angle: number, scatter = this.lampOptics.scatter, decay = this.lampOptics.decay, penumbra = this.lampOptics.penumbra, extinction = this.lampOptics.extinction) {
+    this.lampOptics = {
+      distance: THREE.MathUtils.clamp(Number.isFinite(distance) ? distance : 18, 1, 100),
+      intensity: Math.max(1, Number.isFinite(intensity) ? intensity : 48),
+      angle: THREE.MathUtils.clamp(Number.isFinite(angle) ? angle : 0.65, 0.2, 1.5),
+      scatter: THREE.MathUtils.clamp(Number.isFinite(scatter) ? scatter : 0.12, 0, 1),
+      decay: THREE.MathUtils.clamp(Number.isFinite(decay) ? decay : 2, 0, 4),
+      penumbra: THREE.MathUtils.clamp(Number.isFinite(penumbra) ? penumbra : 0.55, 0, 1),
+      extinction: Math.max(0, Number.isFinite(extinction) ? extinction : 0.03),
+    };
+    this.headlamp.distance = this.lampOptics.distance;
+    this.headlamp.angle = this.lampOptics.angle;
+    this.headlamp.penumbra = this.lampOptics.penumbra;
+    this.headlamp.decay = this.lampOptics.decay;
+    this.lampMaxIntensity = this.lampOptics.intensity;
+  }
+
+  /** Set the environmental mix used by the beam's depth transmission. */
+  setLampEnvironment(nightMix: number, effectsEnabled = true) {
+    this.lampNight = THREE.MathUtils.clamp(Number.isFinite(nightMix) ? nightMix : 0, 0, 1);
+    this.lampEffects = effectsEnabled;
+  }
+
+  /**
+   * Drive the direct spotlight and its low-poly suspended-particle volume.
+   * Three.js applies the inverse-square falloff to the SpotLight itself; the
+   * shared attenuation curve keeps the visible scatter beam in step with it.
+   */
+  private updateLamp(depth: number) {
+    const activation = this.lampEffects ? lampActivation(depth, this.lampNight) : 0;
+    this.headlamp.intensity = this.lampMaxIntensity * activation;
+
+    const beamLength = Math.max(0.5, this.lampOptics.distance * 0.48);
+    const beamRadius = Math.max(0.045, Math.tan(Math.min(this.lampOptics.angle, 1.3)) * beamLength * 0.1);
+    this.lampBeam.position.set(1.4 + beamLength * 0.5, 0.2, 0.6);
+    this.lampBeam.scale.set(beamRadius, beamLength, beamRadius);
+
+    const transmission = lampDistanceAttenuation(beamLength * 0.55, this.lampOptics);
+    const scatter = activation * this.lampOptics.scatter * (0.55 + transmission * 0.45);
+    this.lampBeamMaterial.opacity = THREE.MathUtils.clamp(scatter * 0.68, 0, 0.22);
+    this.lampBeam.visible = this.lampBeamMaterial.opacity > 0.001;
+
+    if (this.lampLens) {
+      const material = this.lampLens.material as THREE.MeshStandardMaterial;
+      material.emissiveIntensity = activation > 0 ? 0.35 + activation * 1.7 : 0;
+    }
+  }
+
+  private setLampOff() {
+    this.headlamp.intensity = 0;
+    this.lampBeamMaterial.opacity = 0;
+    this.lampBeam.visible = false;
+    if (this.lampLens) (this.lampLens.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
   }
 
   /** Configure how quickly the net can be swung again after a catch attempt. */
@@ -475,6 +569,23 @@ export class Diver {
   /** Apply branch-adjusted recovery to the visible swing animation. */
   setReelRecovery(recovery: number) {
     this.reelRecovery = THREE.MathUtils.clamp(recovery, 0.25, 3);
+  }
+
+  /**
+   * Shows or hides what the diver has on, for the workbench's figure (a dress-up
+   * view): the fins, the tank (still only from its tier 2), the head lamp's
+   * housing, and the net on its shaft.
+   */
+  setWorn(worn: { fins: boolean; tank: boolean; lamp: boolean; net: boolean }) {
+    this.finL.visible = this.finR.visible = worn.fins;
+    if (!worn.tank) this.tankGroup.visible = false;
+    this.lampGroup.visible = worn.lamp;
+    this.netArm.visible = worn.net;
+  }
+
+  /** Stood up as a figure: the net held down at its side like a staff, not up over its head. */
+  holdNetDown() {
+    this.netArm.rotation.z = Math.PI * 0.9;
   }
 
   /** Sit on `seat` (an object on the boat) until jumpTo(). */
@@ -514,7 +625,7 @@ export class Diver {
   }
 
   swing() {
-    if (this.netSwing <= 0) this.netSwing = 1;
+    if (this.netSwing <= 0.45) {this.netSwing = 1;this.playtestModel.swing(true);}
   }
 
   get swinging() {
@@ -546,6 +657,7 @@ export class Diver {
 
   /** `heave` lifts the drawn diver (m) without moving `pos`: a swimmer riding heavy seas. */
   update(dt: number, time: number, depth: number, heave = 0) {
+    this.useCustomSuit(true);
     if (this.seat) {
       this.updateSeated(time);
       return;
@@ -557,6 +669,7 @@ export class Diver {
     this.body.position.y += (0 - this.body.position.y) * Math.min(1, dt * 8);
     this.head.rotation.z += (0 - this.head.rotation.z) * Math.min(1, dt * 8);
     const speed = this.vel.length();
+    this.modelTime+=dt*(0.75+Math.min(speed,6)*0.18);
     if (Math.abs(this.vel.x) > 0.2) this.facing = this.vel.x > 0 ? 1 : -1;
 
     this.group.position.copy(this.pos);
@@ -579,14 +692,15 @@ export class Diver {
     this.freeArm.rotation.z = -0.1 + Math.sin(this.armPhase) * (0.08 + Math.min(speed, 5) * 0.018);
 
     if (this.netSwing > 0) {
-      this.netSwing = Math.max(0, this.netSwing - dt * 3.2 * this.reelRecovery);
+      this.netSwing = Math.max(0, this.netSwing - dt * 2.65 * this.reelRecovery);
       const s = Math.sin(this.netSwing * Math.PI);
-      this.netArm.rotation.z = -0.9 + s * 1.6;
+      this.netArm.rotation.z = -0.35 + s * 0.18;
     } else {
-      this.netArm.rotation.z = -0.35 + Math.sin(time * 1.5) * 0.05;
+      this.netArm.rotation.z = -0.35;
     }
+    this.playtestModel.update(this.modelTime,this.netSwing);
 
-    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
+    this.updateLamp(depth);
     this.updateWaterContact(dt, heave);
 
     this.bubbleUpdateAccumulator += dt;
@@ -614,23 +728,37 @@ export class Diver {
     }
   }
 
+  /** Replace the legacy suit while retaining gameplay gear and effects. */
+  private useCustomSuit(active:boolean) {
+    if(this.customSuitActive===active) return;
+    this.customSuitActive=active;
+    this.originalSuit.forEach(part=>part.visible=!active);
+    this.playtestModel.group.visible=active;
+    this.body.scale.setScalar(active?DIVER_SCALE:1);
+    if(active) this.playtestModel.attachTool(this.netArm);
+    else {this.body.add(this.netArm);this.netArm.position.set(0.6,0,0.3);}
+  }
+
   /** On the bow, rocking with the boat; the legs swing idly over the edge. */
   private updateSeated(time: number) {
     const seat = this.seat!;
     seat.getWorldPosition(this.group.position);
     seat.getWorldQuaternion(this.group.quaternion);
-    this.body.rotation.z = SIT_TORSO;
-    this.body.position.y = SIT_HIPS;
+    this.body.rotation.z = SIT_TORSO-0.08;
+    this.body.position.y = 0.57*DIVER_SCALE;
+    this.playtestModel.update(time,0);
+    this.playtestModel.restPose(1.48,Math.PI+0.1,-1.38,-1.12,time);
     this.legL.rotation.z = SIT_LEGS + Math.sin(time * 1.3) * 0.12;
     this.legR.rotation.z = SIT_LEGS + Math.sin(time * 1.3 + 1.9) * 0.12;
     this.netArm.rotation.z = SIT_ARM + Math.sin(time * 0.9) * 0.04;
     this.showNet(false);
     this.head.rotation.z = SIT_HEAD + Math.sin(time * 0.5) * 0.06;
-    this.headlamp.intensity = 0;
+    this.setLampOff();
   }
 
   /** The arc off the bow: up and out, then down into the water, rolling head first. */
   private updateJump(dt: number) {
+    this.setLampOff();
     const j = this.jump!;
     j.t = Math.min(1, j.t + dt / JUMP_S);
     const u = j.t;
@@ -638,8 +766,10 @@ export class Diver {
     this.pos.y += Math.sin(Math.PI * u) * JUMP_HEIGHT;
     this.group.position.copy(this.pos);
     const e = easeInOut(u);
-    this.body.rotation.z = SIT_TORSO + (DIVE_PITCH - SIT_TORSO) * e;
-    this.body.position.y = SIT_HIPS * (1 - e);
+    this.playtestModel.update(this.modelTime,0);
+    this.playtestModel.restPose(1.48*(1-e),(Math.PI+0.1)*(1-e),-1.38*(1-e)-0.22*e,-1.12*(1-e));
+    this.body.rotation.z = (SIT_TORSO-0.08) + (DIVE_PITCH - (SIT_TORSO-0.08)) * e;
+    this.body.position.y = 0.57 * DIVER_SCALE * (1 - e);
     // Legs straighten out behind, net tucks in.
     this.legL.rotation.z = this.legR.rotation.z = SIT_LEGS * (1 - e);
     this.netArm.rotation.z = SIT_ARM + (-0.35 - SIT_ARM) * e;
@@ -654,6 +784,7 @@ export class Diver {
 
   /** The net in hand or put away; the arm it hangs from (the group's first part) always shows. */
   private showNet(on: boolean) {
+    this.netArm.visible=on;
     this.netArm.children.forEach((part, i) => {
       if (i > 0) part.visible = on;
     });

@@ -1,4 +1,5 @@
 import { MAPS, MAP_ORDER, isUnlocked, type MapId, type MapProgress } from './maps';
+import { weatherArtProfile, type WeatherState } from './weather';
 
 // The sea chart on the workbench: a hand-drawn parchment map with the three
 // places, one per chapter. The same drawing is the folded map's texture on the
@@ -155,11 +156,113 @@ function pin(c: CanvasRenderingContext2D, x: number, y: number, label: string, l
   c.restore();
 }
 
+/** A weather stamp in the same pencil language as the coastlines and route. */
+function weatherGlyphs(c: CanvasRenderingContext2D, weather: WeatherState) {
+  const art = weatherArtProfile(weather);
+  if (art.cloudInk <= 0 && art.windMarks === 0 && art.rainMarks === 0 && art.lightning === 0) return;
+
+  // Keep the mark in open water below the cartouche. Its fixed seed makes it
+  // feel drawn on paper instead of jittering as the live front advances.
+  const x = 555;
+  const y = 124;
+  const ink = 'rgba(91, 58, 28, 0.78)';
+  c.save();
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+
+  if (art.cloudInk > 0) {
+    const opacity = 0.26 + art.cloudInk * 0.30;
+    c.fillStyle = `rgba(191, 202, 194, ${opacity})`;
+    c.strokeStyle = ink;
+    c.lineWidth = 3;
+    c.beginPath();
+    c.moveTo(x - 74, y + 14);
+    c.quadraticCurveTo(x - 68, y - 8, x - 46, y - 5);
+    c.quadraticCurveTo(x - 34, y - 29, x - 9, y - 12);
+    c.quadraticCurveTo(x + 13, y - 43, x + 36, y - 12);
+    c.quadraticCurveTo(x + 65, y - 16, x + 72, y + 12);
+    c.quadraticCurveTo(x + 59, y + 31, x + 33, y + 25);
+    c.quadraticCurveTo(x + 7, y + 39, x - 15, y + 25);
+    c.quadraticCurveTo(x - 39, y + 36, x - 56, y + 23);
+    c.quadraticCurveTo(x - 72, y + 29, x - 74, y + 14);
+    c.fill();
+    c.stroke();
+    // A second, lighter pass gives the outline the uneven pressure of pencil.
+    c.globalAlpha = 0.34 * art.cloudInk;
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(x - 69, y + 17);
+    c.quadraticCurveTo(x - 45, y + 8, x - 30, y + 15);
+    c.quadraticCurveTo(x - 3, y + 24, x + 23, y + 13);
+    c.quadraticCurveTo(x + 50, y + 23, x + 67, y + 14);
+    c.stroke();
+    c.globalAlpha = 1;
+  }
+
+  if (art.rainMarks > 0) {
+    c.strokeStyle = 'rgba(83, 119, 133, 0.78)';
+    c.lineWidth = 2;
+    const count = Math.max(4, art.rainMarks);
+    for (let i = 0; i < count; i++) {
+      const dx = -58 + i * (116 / Math.max(1, count - 1));
+      const length = 15 + (i % 3) * 4;
+      c.beginPath();
+      c.moveTo(x + dx, y + 31);
+      c.lineTo(x + dx - 7, y + 31 + length);
+      c.stroke();
+    }
+  }
+
+  if (art.windMarks > 0) {
+    c.strokeStyle = 'rgba(91, 58, 28, 0.64)';
+    c.lineWidth = 2;
+    const count = Math.max(2, art.windMarks);
+    for (let i = 0; i < count; i++) {
+      const yy = y - 36 + i * 15;
+      const start = x + 88 + (i % 2) * 8;
+      c.beginPath();
+      c.moveTo(start, yy);
+      c.quadraticCurveTo(start + 19, yy - 8, start + 39, yy);
+      c.quadraticCurveTo(start + 49, yy + 4, start + 58, yy - 4);
+      c.stroke();
+      c.beginPath();
+      c.moveTo(start + 51, yy - 8);
+      c.lineTo(start + 59, yy - 4);
+      c.lineTo(start + 51, yy + 1);
+      c.stroke();
+    }
+  }
+
+  if (art.lightning > 0) {
+    c.fillStyle = 'rgba(244, 207, 92, 0.85)';
+    c.strokeStyle = ink;
+    c.lineWidth = 2.5;
+    c.beginPath();
+    c.moveTo(x + 9, y + 35);
+    c.lineTo(x - 4, y + 59);
+    c.lineTo(x + 8, y + 56);
+    c.lineTo(x - 3, y + 83);
+    c.lineTo(x + 27, y + 49);
+    c.lineTo(x + 14, y + 51);
+    c.closePath();
+    c.fill();
+    c.stroke();
+  }
+
+  c.fillStyle = ink;
+  c.globalAlpha = 0.82;
+  c.font = '700 13px Georgia, serif';
+  c.textAlign = 'center';
+  const label = weather.kind === 'storm' ? 'STORM FRONT · 暴风前线' : weather.kind === 'rain' ? 'RAIN · 雨幕' : 'CLOUD BANK · 云层';
+  c.fillText(label, x, y + 105);
+  c.restore();
+}
+
 /**
  * Draws the chart into `cv` at `scale` × (CHART_W × CHART_H) pixels.
  * pins: paint the three place markers (the texture); the open chart uses buttons instead.
  */
-export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapProgress, pins: boolean) {
+export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapProgress, pins: boolean, weather?: WeatherState) {
   cv.width = Math.round(CHART_W * scale);
   cv.height = Math.round(CHART_H * scale);
   const c = cv.getContext('2d')!;
@@ -244,6 +347,11 @@ export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapPro
   c.quadraticCurveTo(bx - 40, cy2 + 40, cx2, cy2);
   c.stroke();
   c.restore();
+
+  // Weather is a live field note layered over the fixed geography. It is
+  // intentionally drawn before the title, pins and frame so important map
+  // controls stay crisp and the stamp reads as ink on the chart.
+  if (weather) weatherGlyphs(c, weather);
 
   compass(c, 96, CHART_H - 96, 54);
 
