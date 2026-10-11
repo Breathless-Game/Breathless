@@ -12,7 +12,7 @@ export interface Settings {
   weather: WeatherMode;
   showCamera: boolean;
   showHelp: boolean;
-  /** Sharks on the Open Ocean at night: on, off, or ask the player before the next dive there. */
+  /** Sharks on the Open Ocean (one by day, two at night): on, off, or ask the player before the next dive there. */
   sharks: SharkChoice;
 }
 

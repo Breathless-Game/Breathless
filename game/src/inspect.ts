@@ -4,8 +4,8 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 
 // A closer look at one piece of gear from the workbench: it grows from where it
 // lies on the table to the middle of the screen over the blurred table, turning
-// slowly. What it does is on the left; the upgrade (not wired up yet) is on the
-// right. ← / → or a sideways swipe flips through its three levels; levels not
+// slowly. What it does is on the left; the upgrade (equipment.ts, through main's
+// buyNextUpgrade) and, from Lv2, its branch are on the right. ← / → or a sideways swipe flips through its three levels; levels not
 // owned yet show as a dark silhouette with their price.
 
 const LEVELS: UpgradeLevel[] = [1, 2, 3];
@@ -26,6 +26,14 @@ export interface InspectHooks {
   setReady(def: UpgradeDef, ready: boolean): void;
   /** Apply the sonar beacon color to the live dive model. */
   sonarColor?(color: string): void;
+  /** Buy the next level. Resolves with why it didn't happen, or null once it did. */
+  buy(def: UpgradeDef): Promise<string | null>;
+  /** Pearls to spend (on-chain PEARL plus any legacy local ones). */
+  pearls(): number;
+  /** The two branches this gear can run from Lv2 (null: it has none), and which one it runs. */
+  paths(def: UpgradeDef): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
+  activePath(def: UpgradeDef): string | null;
+  selectPath(def: UpgradeDef, id: string): void;
   closed(): void;
 }
 
@@ -47,6 +55,8 @@ export class GearInspector {
   private drag = 0; // follows a swipe in progress, in screen px
   private raf = 0;
   private last = 0;
+  private buying = false;
+  private notice = '';
 
   constructor(private hooks: InspectHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
@@ -64,6 +74,7 @@ export class GearInspector {
     $('wb-inspect-prev').addEventListener('click', () => this.step(-1));
     $('wb-inspect-next').addEventListener('click', () => this.step(1));
     $('wb-inspect-close').addEventListener('click', () => this.close());
+    $('wb-inspect-buy').addEventListener('click', () => void this.buy());
     $('wb-inspect-ready').addEventListener('click', () => {
       if (!this.def) return;
       this.hooks.setReady(this.def, !this.hooks.isReady(this.def));
@@ -114,6 +125,7 @@ export class GearInspector {
   /** Look at `def`, growing it out of the screen point `from` (where it lies on the table). */
   show(def: UpgradeDef, from: { x: number; y: number }) {
     this.def = def;
+    this.notice = '';
     this.level = Math.min(3, Math.max(1, this.hooks.owned(def))) as UpgradeLevel;
     this.models.forEach((m) => this.turntable.remove(m));
     this.models.clear();
@@ -218,16 +230,22 @@ export class GearInspector {
     readyBtn.classList.toggle('primary', !ready);
     readyBtn.classList.toggle('hidden', def.group !== 'dive'); // the boat isn't packed for a dive
 
-    // The upgrade panel: what the next level gives and what it costs. Buying isn't wired in yet.
+    // The upgrade panel: what the next level gives, what it costs, and the button to buy it.
     const nextLv = Math.min(3, owned + 1);
     const maxed = owned >= 3;
+    const price = def.prices[nextLv - 1];
+    const pearls = this.hooks.pearls();
+    const short = !maxed && pearls < price;
     $('wb-inspect-up-title').textContent = maxed ? 'Fully upgraded · 已满级' : `Upgrade to level ${nextLv} · 升级`;
     $('wb-inspect-up-effect').textContent = maxed ? def.effects[2] : def.effects[nextLv - 1];
-    $('wb-inspect-up-price').textContent = maxed ? '' : `${def.prices[nextLv - 1]} Pearls`;
+    $('wb-inspect-up-price').textContent = maxed ? '' : `${price} Pearls`;
     const buy = $<HTMLButtonElement>('wb-inspect-buy');
-    buy.disabled = true;
-    buy.textContent = maxed ? 'Maxed' : 'Coming soon · 即将开放';
+    buy.disabled = maxed || short || this.buying;
+    buy.classList.toggle('primary', !buy.disabled);
+    buy.textContent = this.buying ? 'Upgrading… · 升级中' : short ? `Need ${price - pearls} more · 珍珠不足` : `Upgrade · 升级 (${price})`;
     buy.classList.toggle('hidden', maxed);
+    $('wb-inspect-pearls').textContent = this.notice || `You have ${Math.floor(pearls)} Pearls · 珍珠`;
+    this.renderPaths(def, owned);
 
     $('wb-inspect-dots').replaceChildren(
       ...LEVELS.map((l) => {
@@ -241,6 +259,50 @@ export class GearInspector {
     $<HTMLButtonElement>('wb-inspect-next').disabled = lv === 3;
     this.stage.classList.toggle('locked', !unlocked);
     $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${def.prices[lv - 1]} Pearls`;
+  }
+
+  /** Buys the next level; the piece on the table and the dots follow (the workbench rebuilds its model). */
+  private async buy() {
+    const def = this.def;
+    if (!def || this.buying) return;
+    this.buying = true;
+    this.notice = '';
+    this.renderInfo();
+    const failed = await this.hooks.buy(def);
+    this.buying = false;
+    if (this.def !== def) return;
+    this.notice = failed ?? '';
+    // Show the level just bought: its model slides in.
+    const owned = this.hooks.owned(def);
+    if (!failed && owned > this.level) this.step(owned - this.level);
+    this.renderInfo();
+  }
+
+  /** From Lv2, the two branches: what each does at the level you're looking at; click to switch (free). */
+  private renderPaths(def: UpgradeDef, owned: number) {
+    const paths = this.hooks.paths(def);
+    const box = $('wb-inspect-paths');
+    box.classList.toggle('hidden', !paths);
+    if (!paths) return;
+    const active = this.hooks.activePath(def);
+    $('wb-inspect-path-list').replaceChildren(
+      ...paths.map((p) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `wb-path${p.id === active && owned >= 2 ? ' on' : ''}`;
+        b.disabled = owned < 2;
+        const name = document.createElement('b');
+        name.textContent = `${p.name} · ${p.nameZh}`;
+        const effect = document.createElement('small');
+        effect.textContent = owned < 2 ? `Unlocks at Lv2 · ${p.summary}` : p.effects[this.level - 1] ?? p.summary;
+        b.append(name, effect);
+        b.addEventListener('click', () => {
+          this.hooks.selectPath(def, p.id);
+          this.renderInfo();
+        });
+        return b;
+      }),
+    );
   }
 
   private resize() {

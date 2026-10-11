@@ -1,6 +1,8 @@
+import { coreAsset } from './explorer-links';
 import { fishValue, RARITY, zoneForDepth } from './fish';
 import { MAPS, type MapId } from './maps';
 import type { BankedFish } from './market';
+import { nftName } from './nft-uri';
 import { fishIcon } from './portrait';
 import { Rng } from './rng';
 import { storageKey } from './wallet';
@@ -201,6 +203,7 @@ export class Aquarium {
     const e = easeInOut(u);
     this.stage.style.transform = e < 1 ? `translateY(${((1 - e) * 110).toFixed(2)}vh)` : 'none';
     this.bar.style.opacity = String(clamp((u - 0.75) / 0.25, 0, 1));
+    this.root.style.setProperty('--aq-bg', e.toFixed(3)); // the scene behind blurs as the tank comes up
     this.hooks.pan(e);
   }
 
@@ -431,7 +434,8 @@ export class Aquarium {
     img.src = fishIcon(f);
     const body = document.createElement('div');
     const name = document.createElement('b');
-    name.textContent = f.name;
+    // Same label the NFT and the Collection use (name plus #serial once minted).
+    name.textContent = nftName(f);
     const rarity = document.createElement('div');
     rarity.className = 'aq-rarity';
     rarity.textContent = RARITY[f.rarity].label;
@@ -446,12 +450,25 @@ export class Aquarium {
     star.textContent = fav ? '☆ Unfavorite · 移出收藏' : full ? 'Favorites tank is full' : '★ Favorite · 收藏';
     star.disabled = full;
     star.addEventListener('click', () => this.toggleFavorite(f));
+    const actions = document.createElement('div');
+    actions.className = 'aq-actions';
+    actions.append(star);
+    if (f.nft === 'minted' && f.assetId) {
+      const link = document.createElement('a');
+      link.className = 'aq-chain';
+      link.href = coreAsset(f.assetId);
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'View NFT on chain ↗';
+      link.addEventListener('click', (e) => e.stopPropagation());
+      actions.append(link);
+    }
     const x = document.createElement('button');
     x.className = 'mini';
     x.textContent = '✕';
     x.title = 'Close';
     x.addEventListener('click', () => this.pick(null));
-    this.card.replaceChildren(img, body, star, x);
+    this.card.replaceChildren(img, body, actions, x);
   }
 
   /** Starring moves the fish to the Favorites tank; it swims out of this one. */
