@@ -270,7 +270,7 @@ Every dive key can be rebound in **Settings → Controls** (on the Settings desk
   | 12… | u8[] | Raw: RGBA, width × height × 4. JPEG: one JPEG image of width × height |
   - Format 0 leaves the width field as it always was, so raw frames are byte-for-byte the original protocol. The sensor decodes JPEG to RGBA and hands Presage exactly what raw frames gave it. Decoding runs one frame at a time with one newer frame waiting; a frame that arrives while one waits replaces it, so a slow server drops frames instead of queueing them.
   - Backpressure: the browser skips frames while `ws.bufferedAmount` is over 100 kB (JPEG) or 4 frames (raw), and encodes one JPEG at a time.
-- **JSON commands**: `{ "t": "sim", "on": true }` turns simulation on or off; `{ "t": "simHold", "holding": true }` sets the simulated hold.
+- **JSON commands**: `{ "t": "sim", "on": true }` turns simulation on or off; `{ "t": "simHold", "holding": true }` sets the simulated hold; `{ "t": "seed", "baseline": 0.8 }` (`"type": "seed"` also works) hands back a live baseline from an earlier connection's `state`. It is used only if this connection has no baseline yet and only if it is a finite number in [0.001, 1000]; anything else is ignored. It stays in memory: never logged or written to disk.
 
 **Sensor → browser** (every 80 ms)
 
@@ -282,7 +282,9 @@ Every dive key can be rebound in **Settings → Controls** (on the Settings desk
   "rate":  { "value": 15, "confidence": 90 },     // breathing rate (needs a ~30 s window)
   "pulse": { "value": 72, "confidence": 90 },     // heart rate
   "frames": 1234,
-  "holding": true, "holdMs": 8200, "calibrated": true,
+  "holding": true, "holdMs": 8200,
+  "calibrated": true,  // a hold can be called: baseline known and "warm" (past the start-up swings)
+  "warm": true, "baseline": 0.8,  // baseline: null until learned or seeded; the game keeps it for its next seed
   "flatness": 0.93, "apnea": false, "talking": false,
   "trace": [ /* the last 90 chest-movement samples */ ]
 }
@@ -307,7 +309,7 @@ File: `sensor/breath-detector.mjs`. The input is Presage's chest-movement trace,
 
 **What the detector does now: holds are found by "activity"**, which is the distance the trace travels per second (path length). **Releases are found by the exhale.**
 
-1. **Calibrate a baseline once**: nothing is learned in the first 8 seconds after start; then take the activity over the next 10 seconds of normal breathing and use the **median** as the baseline B, so an occasional spike (or a short pause) does not affect it. B is then **frozen** for the rest of the session, so the deep breaths and gasps around dives cannot drag it around. A new session (reconnect, camera or Presage restart) calibrates again.
+1. **Learn a baseline once**: nothing is learned in the first 8 seconds after start; then take the activity over the next 6 seconds of normal breathing and use the **median** as the baseline B, so an occasional spike does not affect it. B is then **frozen**, so the deep breaths and gasps around dives cannot drag it around, and it is **never relearned**: a Presage restart in the same connection (camera reopen, stall, error) keeps it, and the game sends it back as a `seed` when it reconnects, so a new dive skips learning and only waits 3 s for the new pipeline.
 2. **Call a hold**: the activity over the last 2 seconds is below `0.38 × B`.
 3. **Call a release, mainly on the exhale**: the detector tracks a "hold level". It follows the slow settling after the inhale, but freezes while the trace jumps around, so a glitch can't drag it along. The hold ends when the trace drops more than `1.1 × B` below that level, and also below the highest point of the last 1.5 seconds, for 0.1 seconds. A jump up of more than `2 × B` also counts; that covers someone who held with empty lungs and breathes in first.
 4. **In the first 2 seconds of a hold**, which may just be a pause between breaths, activity alone still ends it: the activity over 0.75 seconds is above `0.5 × B` for 0.2 seconds.
@@ -339,7 +341,8 @@ Releases are about 0.6 seconds slower. In return, a diver is never wrongly told 
 | `releaseWindowUs` / `releaseRatio` / `releaseHoldUs` | 0.75 s / 0.5 / 0.2 s | What "activity" means in the line above |
 | `sustainedRatio` / `sustainedUs` | 0.8 / 4 s | Fallback: this much breathing for this long always ends a hold |
 | `warmupUs` | 8 s | Ignores the seconds when Presage swings wildly at start-up |
-| `calibrationUs` | 10 s | How much normal breathing is learned, once, before any hold is called; the baseline is fixed after that |
+| `minBaselineUs` | 6 s | How much normal breathing is learned, once, before any hold is called; the baseline is fixed after that |
+| `seededWarmupUs` | 3 s | Warmup when the baseline is already known: the start-up swings can't read as a hold then, so only one 2-s activity window plus margin is needed |
 | `useApnea` | false | Whether to use Presage's apnea flag |
 
 Note: the thresholds have been checked against one person and two recordings only. **On a new person, run the breath test once to confirm them**, and check especially that "down is exhale" holds on their camera too. `analyze.mjs` prints `release reasons`; normally most should be `exhale`.
