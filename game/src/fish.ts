@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { rarityOdds } from './depth-odds';
 import { Rng } from './rng';
+import { buildMarineCreature, swimmingAnimation } from './marine';
+import { lang } from './i18n';
 
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
 
@@ -54,6 +56,8 @@ export type FishPattern = 'solid' | 'stripes' | 'spots' | 'mask' | 'glow';
  * visually and behaviourally distinct while preserving seed determinism.
  */
 export interface SpeciesProfile {
+  /** Species-specific silhouette; absent for the original 17 species. */
+  ornament?: string;
   species: string;
   archetype: Archetype;
   /** Multipliers applied to the archetype body at the tail and head. */
@@ -77,30 +81,55 @@ const SPECIES_BY_RARITY: Record<Rarity, SpeciesProfile[]> = {
     { species: 'Mud Goby', archetype: 'slim', tailTaper: 0.8, headVolume: 1.2, bodyWidth: 1.15, dorsal: 0.5, pectoral: 1.3, tailSpread: 0.8, pattern: 'spots', swimSpeed: 0.78, turnRate: 2.1, fleeRadius: 0.9 },
   ],
   uncommon: [
+    { species: 'Atlantic Salmon', archetype: 'disc', ornament: 'ribbon', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.3, pectoral: 1.1, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Bluefin Tuna', archetype: 'long', ornament: 'spear', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 0.6, pectoral: 0.7, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Reef Octopus', archetype: 'perch', ornament: 'fan', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.5, pectoral: 1.5, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
     { species: 'Striped Wrasse', archetype: 'slim', tailTaper: 0.62, headVolume: 0.98, bodyWidth: 0.9, dorsal: 1.2, pectoral: 0.9, tailSpread: 1.05, pattern: 'stripes', swimSpeed: 1.12, turnRate: 3.2, fleeRadius: 1.05 },
     { species: 'Coral Chromis', archetype: 'perch', tailTaper: 0.7, headVolume: 0.92, bodyWidth: 0.86, dorsal: 1.0, pectoral: 0.85, tailSpread: 1.1, pattern: 'glow', swimSpeed: 1.08, turnRate: 3.0, fleeRadius: 1.1 },
     { species: 'Silver Snapper', archetype: 'perch', tailTaper: 0.65, headVolume: 1.14, bodyWidth: 1.05, dorsal: 0.85, pectoral: 1.05, tailSpread: 0.95, pattern: 'mask', swimSpeed: 0.98, turnRate: 2.7, fleeRadius: 1.02 },
   ],
   rare: [
+    { species: 'Manta Ray', archetype: 'disc', ornament: 'ray', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 0.5, pectoral: 2.4, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Lantern Angler', archetype: 'bulky', ornament: 'lantern', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 0.8, pectoral: 0.8, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Ribbon Moray', archetype: 'slim', ornament: 'crescent', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.8, pectoral: 1.2, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
     { species: 'Azure Tang', archetype: 'disc', tailTaper: 0.7, headVolume: 0.9, bodyWidth: 1.0, dorsal: 1.2, pectoral: 0.85, tailSpread: 1.2, pattern: 'mask', swimSpeed: 1.06, turnRate: 2.8, fleeRadius: 1.05 },
     { species: 'Neon Cardinal', archetype: 'slim', tailTaper: 0.56, headVolume: 0.85, bodyWidth: 0.78, dorsal: 0.8, pectoral: 0.8, tailSpread: 1.25, pattern: 'stripes', swimSpeed: 1.25, turnRate: 3.7, fleeRadius: 1.14 },
-    { species: 'Spotted Grouper', archetype: 'bulky', tailTaper: 0.82, headVolume: 1.22, bodyWidth: 1.08, dorsal: 0.8, pectoral: 1.1, tailSpread: 0.85, pattern: 'spots', swimSpeed: 0.82, turnRate: 2.0, fleeRadius: 0.96 },
+    { species: 'Green Sea Turtle', archetype: 'bulky', tailTaper: 0.82, headVolume: 1.22, bodyWidth: 1.08, dorsal: 0.8, pectoral: 1.1, tailSpread: 0.85, pattern: 'spots', swimSpeed: 0.82, turnRate: 2.0, fleeRadius: 0.96 },
   ],
   epic: [
+    { species: 'Hammerhead Shark', archetype: 'bulky', ornament: 'thorns', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.5, pectoral: 1.1, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Moon Jellyfish', archetype: 'long', ornament: 'veil', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.2, pectoral: 1.8, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Chambered Nautilus', archetype: 'disc', ornament: 'shell', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 0.5, pectoral: 1, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
     { species: 'Violet Lionfish', archetype: 'perch', tailTaper: 0.72, headVolume: 0.96, bodyWidth: 0.95, dorsal: 1.9, pectoral: 1.45, tailSpread: 1.0, pattern: 'stripes', swimSpeed: 0.9, turnRate: 2.4, fleeRadius: 1.15 },
     { species: 'Ember Triggerfish', archetype: 'disc', tailTaper: 0.74, headVolume: 1.18, bodyWidth: 1.12, dorsal: 1.0, pectoral: 0.9, tailSpread: 0.9, pattern: 'mask', swimSpeed: 0.88, turnRate: 2.2, fleeRadius: 1.1 },
     { species: 'Ghost Angelfish', archetype: 'disc', tailTaper: 0.64, headVolume: 0.88, bodyWidth: 0.92, dorsal: 1.45, pectoral: 1.25, tailSpread: 1.08, pattern: 'glow', swimSpeed: 1.0, turnRate: 2.6, fleeRadius: 1.2 },
   ],
   legendary: [
+    { species: 'Lionmane Jellyfish', archetype: 'long', ornament: 'phoenix', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.8, pectoral: 2.2, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Sawshark', archetype: 'long', ornament: 'trident', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.3, pectoral: 1.3, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Golden Sea Turtle', archetype: 'disc', ornament: 'crownray', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 0.7, pectoral: 2.8, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
     { species: 'Golden Koi Dragon', archetype: 'long', tailTaper: 0.5, headVolume: 1.14, bodyWidth: 0.9, dorsal: 0.7, pectoral: 1.1, tailSpread: 1.35, pattern: 'stripes', swimSpeed: 0.94, turnRate: 2.0, fleeRadius: 1.12 },
-    { species: 'Abyssal Sunfish', archetype: 'bulky', tailTaper: 0.9, headVolume: 1.28, bodyWidth: 1.2, dorsal: 0.65, pectoral: 0.8, tailSpread: 0.72, pattern: 'glow', swimSpeed: 0.7, turnRate: 1.6, fleeRadius: 1.25 },
+    { species: 'Whale Shark', archetype: 'bulky', tailTaper: 0.9, headVolume: 1.28, bodyWidth: 1.2, dorsal: 0.65, pectoral: 0.8, tailSpread: 0.72, pattern: 'glow', swimSpeed: 0.7, turnRate: 1.6, fleeRadius: 1.25 },
     { species: 'Crowned Sailfish', archetype: 'long', tailTaper: 0.46, headVolume: 0.82, bodyWidth: 0.72, dorsal: 2.1, pectoral: 0.85, tailSpread: 1.5, pattern: 'mask', swimSpeed: 1.2, turnRate: 2.3, fleeRadius: 1.3 },
   ],
   mythic: [
-    { species: 'Moonfin Leviathan', archetype: 'long', tailTaper: 0.42, headVolume: 1.2, bodyWidth: 0.88, dorsal: 1.35, pectoral: 1.2, tailSpread: 1.55, pattern: 'glow', swimSpeed: 0.88, turnRate: 1.8, fleeRadius: 1.35 },
-    { species: 'Prism Coelacanth', archetype: 'bulky', tailTaper: 0.78, headVolume: 1.12, bodyWidth: 1.08, dorsal: 1.15, pectoral: 1.35, tailSpread: 1.05, pattern: 'spots', swimSpeed: 0.76, turnRate: 1.9, fleeRadius: 1.3 },
+    { species: 'Starcoil Eel', archetype: 'long', ornament: 'orbit', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.1, pectoral: 1.5, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Vampire Squid', archetype: 'bulky', ornament: 'cathedral', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 2, pectoral: 1.8, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Coralback Titan Turtle', archetype: 'long', ornament: 'worldtree', tailTaper: 0.55, headVolume: 1.05, bodyWidth: 0.95, dorsal: 1.5, pectoral: 2, tailSpread: 1.2, pattern: 'glow', swimSpeed: 0.95, turnRate: 2.6, fleeRadius: 1.15 },
+    { species: 'Abyssal Giant Octopus', archetype: 'long', tailTaper: 0.42, headVolume: 1.2, bodyWidth: 0.88, dorsal: 1.35, pectoral: 1.2, tailSpread: 1.55, pattern: 'glow', swimSpeed: 0.88, turnRate: 1.8, fleeRadius: 1.35 },
+    { species: 'Prism Crown Jellyfish', archetype: 'bulky', tailTaper: 0.78, headVolume: 1.12, bodyWidth: 1.08, dorsal: 1.15, pectoral: 1.35, tailSpread: 1.05, pattern: 'spots', swimSpeed: 0.76, turnRate: 1.9, fleeRadius: 1.3 },
   ],
 };
+
+// Keep the three incidental menu designs as independent, catchable species.
+for (const [rarity,source,name] of [
+  ['legendary','Hammerhead Shark','Suncrest Spearfish'],
+  ['rare','Coralback Titan Turtle','Jade Shell Turtle'],
+  ['epic','Neon Cardinal','Amethyst Cardinal'],
+] as [Rarity,string,string][]) {
+  const profile=Object.values(SPECIES_BY_RARITY).flat().find(p=>p.species===source)!;
+  SPECIES_BY_RARITY[rarity].push({...profile,species:name});
+}
 
 const SPECIES_BY_NAME = new Map(
   Object.values(SPECIES_BY_RARITY).flat().map((profile) => [profile.species, profile]),
@@ -233,6 +262,58 @@ export function zoneForDepth(depthM: number): Zone {
   return ZONES.find((zone) => depthM >= zone.top && depthM < zone.bottom) ?? ZONES[ZONES.length - 1];
 }
 
+// ---- Display names -------------------------------------------------------
+// The stored English `name` / `species` never change (they are saved and go into NFT
+// metadata); these helpers only translate what the player reads.
+const SPECIES_ZH: Record<string, string> = {
+  'Sand Minnow': '沙鲦', 'Grey Perch': '灰鲈', 'Mud Goby': '泥虾虎',
+  'Atlantic Salmon': '大西洋鲑', 'Bluefin Tuna': '蓝鳍金枪鱼', 'Reef Octopus': '礁章鱼',
+  'Striped Wrasse': '条纹隆头鱼', 'Coral Chromis': '珊瑚雀鲷', 'Silver Snapper': '银鲷',
+  'Manta Ray': '蝠鲼', 'Lantern Angler': '灯笼鮟鱇', 'Ribbon Moray': '带纹海鳗',
+  'Azure Tang': '蓝倒吊', 'Neon Cardinal': '霓虹天竺鲷', 'Green Sea Turtle': '绿海龟',
+  'Hammerhead Shark': '双髻鲨', 'Moon Jellyfish': '海月水母', 'Chambered Nautilus': '鹦鹉螺',
+  'Violet Lionfish': '紫狮子鱼', 'Ember Triggerfish': '炽炭鳞鲀', 'Ghost Angelfish': '幽灵神仙鱼',
+  'Lionmane Jellyfish': '狮鬃水母', 'Sawshark': '锯鲨', 'Golden Sea Turtle': '金海龟',
+  'Golden Koi Dragon': '金锦鲤龙', 'Whale Shark': '鲸鲨', 'Crowned Sailfish': '冠旗鱼',
+  'Starcoil Eel': '星环鳗', 'Vampire Squid': '吸血鬼乌贼', 'Coralback Titan Turtle': '珊瑚背巨龟',
+  'Abyssal Giant Octopus': '深渊巨章鱼', 'Prism Crown Jellyfish': '棱冠水母',
+  'Suncrest Spearfish': '日冠枪鱼', 'Jade Shell Turtle': '玉甲龟', 'Amethyst Cardinal': '紫晶天竺鲷',
+};
+const EPITHET_ZH: Record<string, string> = {
+  Plain: '素色', Dusty: '尘灰', Little: '小', Shy: '怕羞',
+  Banded: '条纹', Lively: '活泼', Bright: '明亮', Speckled: '斑点',
+  Glimmering: '微光', Deepwater: '深水', Royal: '皇家', Twilight: '暮色',
+  Phantom: '幻影', Venomous: '毒刺', Storm: '风暴', Midnight: '子夜',
+  Sunforged: '日铸', Ancient: '远古', Crowned: '加冕', Gilded: '鎏金',
+  Prismatic: '棱彩', Eternal: '永恒', Starborn: '星生',
+};
+const ZONE_ZH: Record<string, string> = { Shallows: '浅滩', 'Coral Reef': '珊瑚礁', 'The Abyss': '深渊' };
+const RARITY_ZH: Record<Rarity, string> = {
+  common: '普通', uncommon: '少见', rare: '稀有', epic: '史诗', legendary: '传说', mythic: '神话',
+};
+
+/** Zone name in the player's language. */
+export function zoneName(zone: { name: string }): string {
+  return lang() === 'zh' ? ZONE_ZH[zone.name] ?? zone.name : zone.name;
+}
+/** Rarity label in the player's language (RARITY[r].label stays English). */
+export function rarityLabel(r: Rarity): string {
+  return lang() === 'zh' ? RARITY_ZH[r] : RARITY[r].label;
+}
+/** Species name in the player's language. */
+export function speciesName(species: string): string {
+  return lang() === 'zh' ? SPECIES_ZH[species] ?? species : species;
+}
+/** A generated fish's name in the player's language; 中文 is epithet + species with no space. */
+export function fishDisplayName(fish: { name: string; species: string }): string {
+  if (lang() !== 'zh') return fish.name;
+  const suffix = ` ${fish.species}`;
+  if (!fish.name.endsWith(suffix)) return SPECIES_ZH[fish.name] ?? fish.name;
+  const epithet = EPITHET_ZH[fish.name.slice(0, -suffix.length)];
+  const sp = SPECIES_ZH[fish.species];
+  return epithet && sp ? epithet + sp : sp ?? fish.name;
+}
+
 // ---- Mesh ---------------------------------------------------------------
 
 function hsl(h: number, s: number, l: number): THREE.Color {
@@ -246,7 +327,9 @@ class FaceBuilder {
 
   tri(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, color: THREE.Color) {
     this.pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-    for (let i = 0; i < 3; i++) this.col.push(color.r, color.g, color.b);
+    const grain = Math.sin((a.x+b.x+c.x)*61+(a.y+b.y+c.y)*93+(a.z+b.z+c.z)*37)*43758.5453;
+    const shade = 0.86+(grain-Math.floor(grain))*0.2;
+    for (let i = 0; i < 3; i++) this.col.push(color.r*shade, color.g*shade, color.b*shade);
   }
 
   build(): THREE.BufferGeometry {
@@ -259,6 +342,7 @@ class FaceBuilder {
 }
 
 export interface FishMesh {
+  animate?: (time: number, speed: number) => void;
   group: THREE.Group;
   tail: THREE.Object3D;
   material: THREE.MeshStandardMaterial;
@@ -276,14 +360,17 @@ export interface FishDetail {
 export const LOW_POLY: FishDetail = { rings: 6, sides: 6 };
 
 export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): FishMesh {
+  const marine = buildMarineCreature(spec, RARITY[spec.rarity].emissive);
+  if (marine) return marine;
+
   const shape = SHAPES[spec.archetype];
   const profile = speciesProfile(spec);
   const L = shape.len;
-  const body = hsl(spec.hue, spec.sat, spec.light);
-  const back = hsl(spec.hue, spec.sat, spec.light * 0.7);
+  const body = hsl(spec.hue, spec.sat * 0.65, spec.light * 0.9);
+  const back = hsl(spec.hue, spec.sat * 0.65, spec.light * 0.63);
   const belly = hsl(spec.hue, spec.sat * 0.5, Math.min(0.92, spec.light * 1.45));
-  const accent = hsl(spec.accentHue, Math.min(1, spec.sat + 0.2), 0.55);
-  const fin = hsl(spec.hue + 15, spec.sat, spec.light * 0.85);
+  const accent = hsl(spec.accentHue, Math.min(0.7, spec.sat * 0.8), 0.48);
+  const fin = hsl(spec.hue + 15, spec.sat * 0.65, spec.light * 0.75);
 
   // Body: rings (hexagonal at the default detail) from tail root (t=0) to nose (t=1).
   const RINGS = detail.rings;
@@ -364,14 +451,13 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
     finFaces.tri(p2, p1, p3, fin);
   }
 
-  const emissive = RARITY[spec.rarity].emissive;
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     flatShading: true,
-    roughness: 0.55,
-    metalness: spec.rarity === 'legendary' ? 0.45 : 0.1,
+    roughness: 1,
+    metalness: 0,
     emissive: hsl(spec.hue, 1, 0.5),
-    emissiveIntensity: Math.max(emissive, profile.pattern === 'glow' ? 0.18 : 0),
+    emissiveIntensity: 0,
     side: THREE.DoubleSide,
   });
   const bodyMesh = new THREE.Mesh(fb.build(), material);
@@ -394,7 +480,7 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
 
   // Eyes.
   const eyeGeo = new THREE.IcosahedronGeometry(Math.max(0.05, shape.height * 0.09), 0);
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0b0b12, flatShading: true, roughness: 0.2 });
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0b0b12, flatShading: true, roughness: 0.85 });
   const group = new THREE.Group();
   for (const side of [1, -1]) {
     const eye = new THREE.Mesh(eyeGeo, eyeMat);
@@ -402,11 +488,144 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
     group.add(eye);
   }
   group.add(bodyMesh, fins, tail);
-  group.scale.setScalar(spec.scale);
-  return { group, tail, material, body: bodyMesh, size: { len: L, height: shape.height, width: shape.width * profile.bodyWidth } };
+  addSpeciesSilhouette(group, profile, shape, material, accent);
+  group.scale.setScalar(spec.scale * 0.9 * 0.92);
+  return { group, tail, material, animate: swimmingAnimation(group, tail, 'fish'), body: bodyMesh, size: { len: L, height: shape.height, width: shape.width * profile.bodyWidth } };
+
 }
 
 // ---- Behaviour ----------------------------------------------------------
+
+/** Faceted structures, not palette swaps. All attachments share the body pivot. */
+function addSpeciesSilhouette(
+  group: THREE.Group,
+  profile: SpeciesProfile,
+  shape: { len: number; height: number; width: number },
+  material: THREE.MeshStandardMaterial,
+  accent: THREE.Color,
+): void {
+  const kind = profile.ornament;
+  if (!kind) return;
+  const L = shape.len;
+  const H = shape.height;
+  const fb = new FaceBuilder();
+  const v = (x: number, y: number, z = 0) => new THREE.Vector3(x, y, z);
+  const tri = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) => fb.tri(a, b, c, accent);
+  const blade = (x: number, y: number, dx: number, dy: number, z = 0) =>
+    tri(v(x - 0.1, y, z), v(x + 0.1, y, z), v(x + dx, y + dy, z));
+  const branch = (a: THREE.Vector3, b: THREE.Vector3, radius = 0.035) => {
+    const direction = b.clone().sub(a);
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.4, radius, direction.length(), 5), material);
+    mesh.position.copy(a).add(b).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(v(0, 1), direction.normalize());
+    group.add(mesh);
+  };
+  const jewel = (position: THREE.Vector3, radius: number) => {
+    const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(radius, 0), material);
+    mesh.position.copy(position); group.add(mesh);
+  };
+  const ribbon = (x: number, y: number, direction: number, length: number, z = 0) => {
+    for (let i = 0; i < 6; i++) {
+      const t = i / 6, n = (i + 1) / 6;
+      const a = v(x - t * length, y + direction * (0.35 * t + Math.sin(t * 5) * 0.12), z);
+      const b = v(x - n * length, y + direction * (0.35 * n + Math.sin(n * 5) * 0.12), z);
+      tri(a, b, b.clone().add(v(0, direction * 0.09 * (1 - n), 0)));
+    }
+  };
+  switch (kind) {
+    case 'ribbon':
+      ribbon(0, H * 0.45, 1, L * 0.75);
+      ribbon(0, -H * 0.4, -1, L * 0.6);
+      break;
+    case 'spear':
+      tri(v(L * 0.4, 0.08), v(L * 0.9, 0), v(L * 0.4, -0.08));
+      break;
+    case 'fan':
+      for (let i = 0; i < 7; i++) blade(-L * 0.3 + i * L * 0.09, H * 0.25, -0.16, 0.3 + Math.sin(i / 6 * Math.PI) * 0.35);
+      break;
+    case 'ray':
+    case 'crownray':
+      for (const side of [-1, 1]) {
+        tri(v(L * 0.35, 0, side * 0.08), v(-L * 0.4, -0.08, side * 0.1), v(-L * 0.2, 0.2, side * 1.1));
+        // Visible wing tips in the game's side-on view as well as in 3D.
+        blade(-0.1, side * H * 0.3, -0.2, side * H * 0.55, side * 0.5);
+      }
+      branch(v(-L * 0.4, 0), v(-L * 1.4, -0.15), 0.025);
+      if (kind === 'crownray') for (let i = 0; i < 5; i++) {
+        const x = (i - 2) * 0.16, y = H * 0.45;
+        branch(v(x, y), v(x, y + 0.35 + (2 - Math.abs(i - 2)) * 0.12));
+        jewel(v(x, y + 0.35 + (2 - Math.abs(i - 2)) * 0.12), 0.09);
+      }
+      break;
+    case 'lantern':
+      branch(v(L * 0.25, H * 0.3), v(L * 0.35, H * 0.85));
+      branch(v(L * 0.35, H * 0.85), v(L * 0.65, H * 0.65));
+      jewel(v(L * 0.65, H * 0.65), 0.14);
+      break;
+    case 'crescent':
+      for (const side of [-1, 1]) {
+        tri(v(-L * 0.1, 0), v(-L * 0.6, side * H * 0.4), v(-L * 0.35, side * H * 1.6));
+      }
+      break;
+    case 'thorns':
+      for (let i = 0; i < 8; i++) for (const side of [-1, 1])
+        blade(-L * 0.35 + i * L * 0.1, side * H * 0.3, -0.12, side * (0.3 + (i % 3) * 0.12));
+      break;
+    case 'veil':
+      for (let i = 0; i < 5; i++) for (const side of [-1, 1])
+        ribbon(L * 0.15 - i * 0.12, side * H * 0.3, side, L * (0.65 + i * 0.12), (i - 2) * 0.08);
+      break;
+    case 'shell':
+      for (let i = 0; i < 13; i++) {
+        const a = i * 0.58, r = 0.06 + i * 0.035;
+        jewel(v(Math.cos(a) * r, Math.sin(a) * r, shape.width * 0.65), 0.09 + i * 0.004);
+      }
+      for (let i = 0; i < 4; i++) ribbon(L * 0.4, -i * 0.1, -1, -L * 0.65);
+      break;
+    case 'phoenix':
+      for (const side of [-1, 1]) for (let i = 0; i < 6; i++) {
+        blade(L * 0.1 - i * 0.14, side * H * 0.2, -0.35 - i * 0.05, side * (0.9 - i * 0.08), side * 0.2);
+        ribbon(-L * 0.4, side * 0.12, side, L * 0.7, i * 0.05);
+      }
+      break;
+    case 'trident':
+      for (let i = -1; i <= 1; i++)
+        tri(v(L * 0.4, i * 0.1), v(L * 0.95, i * 0.24), v(L * 0.4, i * 0.1 + 0.06));
+      for (let i = 0; i < 5; i++) jewel(v(-L * 0.25 + i * 0.22, H * 0.4), 0.12);
+      break;
+    case 'orbit':
+      for (let i = 0; i < 3; i++) {
+        const mesh = new THREE.Mesh(new THREE.TorusGeometry(0.48 + i * 0.09, 0.035, 4, 12), material);
+        mesh.position.x = -L * 0.3 + i * L * 0.3;
+        mesh.rotation.y = 0.55 + i * 0.3; group.add(mesh);
+        jewel(v(mesh.position.x, 0.65, 0), 0.08);
+      }
+      ribbon(-L * 0.4, 0, 1, L);
+      break;
+    case 'cathedral':
+      for (const side of [-1, 1]) for (let i = 0; i < 5; i++) {
+        const x = -L * 0.3 + i * L * 0.15, height = 0.55 + Math.sin(i / 4 * Math.PI) * 0.55;
+        branch(v(x, side * H * 0.25), v(x, side * (H * 0.25 + height)), 0.065);
+        blade(x, side * (H * 0.25 + height), 0, side * 0.22);
+        if (i < 4) branch(v(x, side * (H * 0.25 + height * 0.75)), v(x + L * 0.15, side * (H * 0.25 + height * 0.75)), 0.035);
+      }
+      break;
+    case 'worldtree':
+      for (let i = 0; i < 5; i++) {
+        const x = -L * 0.3 + i * L * 0.15, height = 0.45 + Math.sin(i / 4 * Math.PI) * 0.55;
+        const tip = v(x, H * 0.3 + height);
+        branch(v(x, H * 0.2), tip);
+        for (const side of [-1, 1]) {
+          const end = tip.clone().add(v(side * 0.25, 0.18));
+          branch(tip.clone().add(v(0, -0.18)), end);
+          jewel(end, 0.12);
+          ribbon(x, -H * 0.25, -1, 0.6 + i * 0.15);
+        }
+      }
+      break;
+  }
+  group.add(new THREE.Mesh(fb.build(), material));
+}
 
 export class Fish {
   spec: FishSpec;
@@ -507,6 +726,7 @@ export class Fish {
     const wagAmount = THREE.MathUtils.clamp(0.3 + this.vel.length() * 0.045, 0.3, 0.66);
     this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * wagAmount;
     this.mesh.tail.rotation.z = Math.sin(time * wag * 0.53 + this.phase + 0.8) * 0.08;
+    this.mesh.animate?.(time + this.phase, this.vel.length());
     if (this.spec.rarity === 'mythic') {
       this.mesh.material.emissive.setHSL((time * 0.15 + this.phase) % 1, 1, 0.5);
     }

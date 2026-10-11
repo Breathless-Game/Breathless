@@ -1,3 +1,4 @@
+import { lang } from './i18n';
 /** Original pen-and-wash diagrams for the field notebook; no downloaded game assets. */
 export type GuideArt = 'bench' | 'net' | 'gear' | 'dive' | 'return' | 'sonar';
 const paths: Record<GuideArt, string> = {
@@ -8,6 +9,17 @@ const paths: Record<GuideArt, string> = {
   return: `<path d="M15 56q19-10 38 0t38 0 38 0 38 0 38 0 38 0 38 0" stroke="#668e95"/><path fill="#b99571" d="m157 29 81 2-18 27h-48z"/><path d="m183 30 2-20h21v20"/><circle cx="118" cy="102" r="11" fill="#d6b35b"/><path d="m110 113-19 20m19-15 26 1m-32 7-5 24m-1-17-18 12" stroke-width="6"/><ellipse cx="151" cy="123" rx="18" ry="12" fill="#91a899"/><path d="m138 122-10-8v15z"/><path class="guide-dash" d="m117 82 1-38"/><path d="m109 55 9-12 9 12"/><text x="39" y="70">W / ↑</text><text x="196" y="93">存入 ✓</text>`,
   sonar: `<path d="M22 33q17-8 34 0t34 0 34 0 34 0 34 0 34 0 34 0" stroke="#668e95"/><rect x="126" y="23" width="38" height="17" rx="6" fill="#d6b35b"/><path d="m145 40v88"/><circle cx="145" cy="133" r="12" fill="#709c96"/><circle cx="145" cy="60" r="4" fill="#709c96"/><circle cx="145" cy="85" r="4" fill="#709c96"/><circle cx="145" cy="110" r="4" fill="#709c96"/><path class="guide-dash" d="m123 121q-18 13 0 26m-14-36q-33 22 0 45m58-35q18 13 0 26m14-36q33 22 0 45"/><text x="44" y="80">V 投放</text><text x="192" y="80">脉冲指路</text>`,
 };
+// The sketches' pencilled labels are written in Chinese; English swaps them at render time.
+const LABELS_EN: Record<string, string> = {
+  '1 × 杆身': '1 × Rod', '1 × 线轮': '1 × Reel', '1 × 网圈': '1 × Net hoop',
+  '脚蹼': 'Fins', '气瓶': 'Tank', '探照灯': 'Lamp', '存入 ✓': 'Banked ✓', 'V 投放': 'V to drop', '脉冲指路': 'Pulse path',
+};
+
 export function guideArt(kind: GuideArt) {
+  const svg = guideSvg(kind);
+  return lang() === 'zh' ? svg : svg.replace(/>([^<]+)<\/text>/g, (m, label: string) => (LABELS_EN[label] ? `>${LABELS_EN[label]}</text>` : m));
+}
+
+function guideSvg(kind: GuideArt) {
   return `<svg viewBox="0 0 300 180" class="guide-sketch" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${paths[kind]}</svg>`;
 }

@@ -36,6 +36,10 @@ export interface BankedFish extends FishSpec {
   nameFixed?: true;
   /** Failed attempts to write the number onto an already-minted NFT; repairs stop after a few. */
   repairTries?: number;
+  /** The NFT is in the market's fish collection (minted into it, or migrated): the market will buy it. */
+  trusted?: true;
+  /** Why the market can never buy this NFT from here (e.g. minted by a game wallet on another device). */
+  sellBlock?: string;
 }
 
 /** Same range as isSerial in nft-uri.ts (kept import-free here for the tests). */
@@ -60,6 +64,8 @@ export type NftEvent =
   | { type: 'failed'; error: string; now: number }
   /** The wallet ran out of SOL mid-mint: not the fish's fault, so no attempt is counted. */
   | { type: 'no-funds' }
+  /** The market's per-wallet mint limit: back to the queue, no attempt counted, the queue waits. */
+  | { type: 'paused' }
   /** The player's Retry on a failed mint. */
   | { type: 'retry' }
   /** The player's Mint on a legacy fish. */
@@ -84,13 +90,14 @@ export function nftStep(f: BankedFish, e: NftEvent): BankedFish {
       return { ...f, nft: 'failed', mintTries: tries, mintError: e.error, retryAt };
     }
     case 'no-funds':
+    case 'paused':
       return s === 'minting' ? { ...f, nft: 'pending' } : f;
     case 'retry':
       return s === 'failed' ? { ...f, nft: 'pending', mintTries: undefined, mintError: undefined, retryAt: undefined } : f;
     case 'enqueue':
       return s === undefined ? { ...f, nft: 'pending' } : f;
     case 'sell':
-      if (f.legacy || s === undefined || s === 'minting') return f;
+      if (f.legacy || f.sellBlock || s === undefined || s === 'minting') return f;
       // Mint & sell on a failed fish is also a retry.
       return s === 'failed' ? { ...nftStep(f, { type: 'retry' }), sellQueued: true } : { ...f, sellQueued: true };
     case 'cancel-sell':
@@ -153,9 +160,31 @@ export function nextToSell(bank: readonly BankedFish[]): BankedFish | null {
   return bank.find((f) => f.sellQueued && f.nft === 'minted' && !f.legacy) ?? null;
 }
 
+/**
+ * A banked fish that has not started settling: its NFT is only queued (never sent to mint, never
+ * failed a mint, no asset or transaction), and it is in no sale flow. Only such a fish can be taken
+ * back; anything minting, minted, failed or sale-pending is out of reach for good.
+ */
+export function unsettled(f: BankedFish): boolean {
+  return f.nft === 'pending' && !f.legacy && !f.sellQueued && !f.assetId && !f.mintTx && !f.mintTries;
+}
+
+/**
+ * What a shark bite takes from the bank: the fish banked during this dive (`thisDive`, by identity)
+ * that are still unsettled and that the NFT queue is not working on right now (`busy`: minting or
+ * selling it). Fish from earlier dives are never in `thisDive`, so they are never taken.
+ */
+export function biteForfeit(
+  bank: readonly BankedFish[],
+  thisDive: ReadonlySet<BankedFish>,
+  busy: (f: BankedFish) => boolean = () => false,
+): BankedFish[] {
+  return bank.filter((f) => thisDive.has(f) && unsettled(f) && !busy(f));
+}
+
 export type SellQuote =
   | { ok: true; pearls: number; mintFirst: boolean }
-  | { ok: false; reason: 'paid-out' | 'minting' };
+  | { ok: false; reason: 'paid-out' | 'minting' | 'blocked' };
 
 /**
  * What selling pays: the fish's catch value (`fishValue`, passed in), exactly what banking used to pay.
@@ -163,6 +192,7 @@ export type SellQuote =
  */
 export function sellQuote(f: BankedFish, value: (f: BankedFish) => number): SellQuote {
   if (f.legacy) return { ok: false, reason: 'paid-out' };
+  if (f.sellBlock) return { ok: false, reason: 'blocked' };
   if (f.nft === 'minting') return { ok: false, reason: 'minting' };
   return { ok: true, pearls: value(f), mintFirst: f.nft !== 'minted' };
 }

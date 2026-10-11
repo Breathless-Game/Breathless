@@ -1,8 +1,9 @@
 import './field-guide.css';
 import { guideArt, type GuideArt } from './guide-art';
 import { currentLesson, LESSONS, loadTutorial, recordLesson, saveTutorial, type LessonId } from './tutorial';
+import { lang, onLangChange, t } from './i18n';
 
-type ChapterId = 'prepare' | 'assembly' | 'gear' | 'dive' | 'return' | 'sonar';
+type ChapterId = 'prepare' | 'assembly' | 'gear' | 'synthesis' | 'dive' | 'return' | 'sonar';
 interface Chapter {
   id: ChapterId; tab: string; title: string; subtitle: string; art: GuideArt;
   caption: string; steps: readonly [string, string][]; note: string;
@@ -17,16 +18,41 @@ const CHAPTERS: readonly Chapter[] = [
   { id: 'gear', tab: '装备', title: '按任务，带合适的装备', subtitle: '03 / PACK LIGHT', art: 'gear', caption: '游得顺 · 返航有余地 · 看得清',
     steps: [['脚蹼', '改善普通游速与加速度；不会提高紧急上浮速度。'], ['应急气瓶', '只延长游戏里水下换气后的返航窗口。它不改变真实憋气能力。'], ['探照灯', '改善黑暗中的光距和亮度。1–6 快切装备，按住 Tab 打开轮盘，松开确认。']],
     note: '快捷键顺序：1 网 · 2 杆 · 3 线轮 · 4 脚蹼 · 5 气瓶 · 6 灯。未打包的装备不能切换。' },
-  { id: 'dive', tab: '下潜', title: '慢慢下潜，先去浅水练习', subtitle: '04 / YOUR FIRST FISH', art: 'dive', caption: 'HOLDING → 方向键 → Space',
+  { id: 'synthesis', tab: '合成', title: '先做材料，再升级模块', subtitle: '04 / SYNTHESIS STATION', art: 'bench', caption: '鱼鳞片 + 纤维 → 鱼饵 · 铁屑 + 晶体 → 护板',
+    steps: [['打开合成台', '在工作台点击半隐藏的绿色合成台；点击材料或拖进中央区域，配方刚好齐全时自动合成。'], ['合成两种成品', '潮汐鱼饵 = 鱼鳞片 ×2 + 珊瑚纤维 ×1 + 38 Pearl；复合护板 = 铁屑 ×3 + 深度晶体 ×1 + 珊瑚纤维 ×2 + 128 Pearl。'], ['升级模块', '先准备 1 个复合护板，再支付对应 Pearl：灯具 58/299、杆身 68/329、线轮 78/389、网具 89/499、脚蹼 99/549、气瓶 119/699、声纳 149/899（Lv2/Lv3）。']],
+    note: '物资库存按钱包保存；支付或链上扣款失败时材料、护板和等级都保持原样。鱼饵与护板是合成台产物，合成台设置不影响装配箱。' },
+  { id: 'dive', tab: '下潜', title: '慢慢下潜，先去浅水练习', subtitle: '05 / YOUR FIRST FISH', art: 'dive', caption: 'HOLDING → 方向键 → Space',
     steps: [['选择输入', '键盘 / 模拟模式：按住 Shift 表示 HOLDING。摄像头模式：以呼吸检测信号为准。'], ['向下游', 'WASD / 方向键移动；只有 HOLDING 才能从水面向下游。先在 3 米附近练习。'], ['找一条鱼', '靠近鱼，让鱼进入网口，再按 Space。错过时等网恢复后再试。']],
     note: '键盘模式无需真实憋气。打开这本书时游戏暂停；关闭后恢复，先确认呼吸状态再行动。' },
-  { id: 'return', tab: '返航', title: '到水面，才算带回收获', subtitle: '05 / COME HOME', art: 'return', caption: 'W / ↑ 上浮 → 自动存鱼 → C 收藏',
+  { id: 'return', tab: '返航', title: '到水面，才算带回收获', subtitle: '06 / COME HOME', art: 'return', caption: 'W / ↑ 上浮 → 自动存鱼 → C 收藏',
     steps: [['及时回头', '保持游戏中的 HOLDING，按 W / ↑ 上浮；到水面自动存鱼。不要等到网满才返航。'], ['紧急返航', '水下变成 BREATHING 会触发倒计时和自动上浮。错过窗口会 BLACKOUT，失去这次网里的鱼。'], ['收藏与升级', '按 C 查看存下的鱼。NFT 与交易需要额外网络和链上费用；卖鱼所得 Pearls 可用于工作台升级。']],
     note: '靠近船、到水面且本次曾潜到 3 米以下时，按 F 上船。Esc 也可回工作台。' },
-  { id: 'sonar', tab: '声纳', title: '沿着脉冲，找到返航路线', subtitle: '06 / FOLLOW THE SIGNAL', art: 'sonar', caption: '打包声纳 → 海图设颜色 → V 投放',
+  { id: 'sonar', tab: '声纳', title: '沿着脉冲，找到返航路线', subtitle: '07 / FOLLOW THE SIGNAL', art: 'sonar', caption: '打包声纳 → 海图设颜色 → V 投放',
     steps: [['准备信标', '把声纳放入托盘，出发前在海图旁设置颜色。'], ['投放声纳', '下潜中按 V 投放。缆绳与脉冲节点提供微光和路线提示。'], ['循光返航', '声纳不是空气补给，也不会延长憋气。结合深度和网内收获判断何时回头。']],
     note: '声纳可升级缆绳长度：10 / 17 / 26 米。它不占用 1–6 的快捷装备位。' },
 ];
+// The same chapters in English (ids, art and order match CHAPTERS).
+const CHAPTERS_EN: readonly Chapter[] = [
+  { id: 'prepare', tab: 'Prepare', title: 'Before you go, set out the desk', subtitle: '01 / BEFORE THE DIVE', art: 'bench', caption: 'Inspect gear → put it on the tray → unfold the chart',
+    steps: [['Open the workbench', 'Click the START fish or press Enter, and connect a wallet to enter.'], ['Get your gear ready', 'Click a piece of gear to see what it does, and put it on the READY tray on the right; you can also drag it there.'], ['Pick a water', 'Unfold the chart on the desk; the Fjord is best for a first dive. Click "Dive", then pick your breath input.']],
+    note: 'Missing parts fall back to basic stats. Only the gear in the ready area comes along on this dive.' },
+  { id: 'assembly', tab: 'Assemble', title: 'One net, three parts', subtitle: '02 / CATCHING TOOL', art: 'net', caption: 'Rod + reel + net hoop / mesh',
+    steps: [['Net hoop / mesh', 'Sets capacity and catch range. Once a fish is in the net mouth, press Space to swing.'], ['Rod + reel', 'The rod adds reach; the reel speeds recovery after a swing. Put each of them in the ready area.'], ['Upgrade and pack', 'Press G to compare levels and branches; after upgrading at the workbench, check again what you are taking.']],
+    note: 'This shows how the parts combine; no wood to collect. Upgrades cost Pearls, and a specialisation branch opens at Lv2.' },
+  { id: 'gear', tab: 'Gear', title: 'Pack the right gear for the job', subtitle: '03 / PACK LIGHT', art: 'gear', caption: 'Swim smooth · room to get home · see clearly',
+    steps: [['Fins', 'Improve normal swim speed and acceleration; they do not speed up an emergency ascent.'], ['Emergency tank', 'Only lengthens the in-game return window after you breathe underwater. It does not change your real breath hold.'], ['Lamp', 'Improves range and brightness in the dark. 1–6 switch gear quickly; hold Tab for the wheel and release to confirm.']],
+    note: 'Quick keys: 1 net · 2 rod · 3 reel · 4 fins · 5 tank · 6 lamp. Gear you did not pack cannot be switched to.' },
+  { id: 'dive', tab: 'Dive', title: 'Go down slowly; practise in the shallows', subtitle: '04 / YOUR FIRST FISH', art: 'dive', caption: 'HOLDING → arrow keys → Space',
+    steps: [['Pick an input', 'Keyboard / simulator: hold Shift for HOLDING. Camera: the detected breathing decides.'], ['Swim down', 'WASD / arrow keys move; only while HOLDING can you swim down from the surface. Practise around 3 m first.'], ['Find a fish', 'Get close so the fish is in the net mouth, then press Space. If you miss, wait for the net to recover and try again.']],
+    note: 'Keyboard mode needs no real breath hold. The game pauses while this book is open; when you close it, check your breathing before you move.' },
+  { id: 'return', tab: 'Return', title: 'Your catch only counts at the surface', subtitle: '05 / COME HOME', art: 'return', caption: 'W / ↑ to rise → fish bank on their own → C collection',
+    steps: [['Turn back in time', 'Keep HOLDING in the game and press W / ↑ to rise; fish bank on their own at the surface. Do not wait for a full net.'], ['Emergency return', 'BREATHING underwater starts a countdown and an automatic ascent. Miss the window and you BLACKOUT, losing the fish in your net.'], ['Collection and upgrades', 'Press C to see the fish you banked. NFTs and trading need a network connection and on-chain fees; Pearls from selling fish pay for workbench upgrades.']],
+    note: 'Near the boat, at the surface, after going below 3 m this dive: press F to climb aboard. Esc also takes you back to the workbench.' },
+  { id: 'sonar', tab: 'Sonar', title: 'Follow the pulses home', subtitle: '06 / FOLLOW THE SIGNAL', art: 'sonar', caption: 'Pack the sonar → set a colour on the chart → V to drop',
+    steps: [['Ready the beacon', 'Put the sonar on the tray and set its colour by the chart before you leave.'], ['Drop the sonar', 'Press V during a dive to drop it. The cable and pulse nodes give off a glow and show the way.'], ['Follow the light home', 'The sonar is not an air supply and does not lengthen your hold. Use depth and your net to judge when to turn back.']],
+    note: 'Sonar upgrades lengthen the cable: 10 / 17 / 26 m. It does not take one of the 1–6 quick gear slots.' },
+];
+const chapters = () => (lang() === 'zh' ? CHAPTERS : CHAPTERS_EN);
 interface GuideHooks {
   canOpen(): boolean;
   toggled(open: boolean): void;
@@ -49,17 +75,18 @@ export class FieldGuide {
     this.root.className = 'field-guide hidden';
     this.root.innerHTML = `<section class="guide-book" role="dialog" aria-modal="true" aria-labelledby="guide-title">
       <div class="guide-binding" aria-hidden="true">${'<i></i>'.repeat(12)}</div>
-      <header class="guide-cover"><span>BREATHLESS · 潜水员随身手册</span><button type="button" id="guide-close" aria-label="合上手册 (B / Esc)">合上 <kbd>B</kbd> ×</button></header>
-      <nav class="guide-tabs" aria-label="手册章节">${CHAPTERS.map((c, i) => `<button type="button" data-chapter="${i}" aria-controls="guide-pages"><span>${String(i + 1).padStart(2, '0')}</span>${c.tab}</button>`).join('')}</nav>
+      <header class="guide-cover"><span data-cover></span><button type="button" id="guide-close"></button></header>
+      <nav class="guide-tabs">${CHAPTERS.map((_, i) => `<button type="button" data-chapter="${i}" aria-controls="guide-pages"></button>`).join('')}</nav>
       <div id="guide-pages" class="guide-pages"></div>
-      <footer class="guide-footer"><button type="button" id="guide-prev" aria-label="上一章">← 上一页</button><span id="guide-page-number"></span><button type="button" id="guide-next" aria-label="下一章">下一页 →</button></footer>
+      <footer class="guide-footer"><button type="button" id="guide-prev"></button><span id="guide-page-number"></span><button type="button" id="guide-next"></button></footer>
     </section>`;
     this.launcher.className = 'guide-launcher';
-    this.launcher.innerHTML = `<button type="button" id="guide-open" aria-label="打开潜水手册 (B)" aria-controls="field-guide" aria-expanded="false"><span aria-hidden="true">▤</span> 手册 <kbd>B</kbd></button><button type="button" id="tour-toggle" aria-controls="dive-tutorial">新手引导</button>`;
+    this.launcher.innerHTML = `<button type="button" id="guide-open" aria-controls="field-guide" aria-expanded="false"></button><button type="button" id="tour-toggle" aria-controls="dive-tutorial">新手引导</button>`;
     this.tour.id = 'dive-tutorial';
     this.tour.className = 'dive-tutorial';
-    this.tour.setAttribute('aria-label', '新手教程');
-    document.body.append(this.launcher, this.tour, this.root);
+    // The launcher's buttons aren't shown: the GUIDE and TUTORIAL fish on the title rope
+    // open the book and switch the tutorial (main.ts). It's kept off-page for its state.
+    document.body.append(this.tour, this.root);
     this.root.querySelector('#guide-close')!.addEventListener('click', () => this.close());
     this.launcher.querySelector('#guide-open')!.addEventListener('click', () => this.toggle());
     this.launcher.querySelector('#tour-toggle')!.addEventListener('click', () => this.setEnabled(!this.state.enabled));
@@ -70,7 +97,33 @@ export class FieldGuide {
     }));
     this.root.addEventListener('click', event => { if (event.target === this.root) this.close(); });
     window.addEventListener('keydown', event => this.handleKey(event), true);
+    this.renderChrome();
     this.renderTutorial();
+    onLangChange(() => {
+      this.renderChrome();
+      this.renderTutorial();
+      if (this.open) this.renderBook();
+    });
+  }
+  /** The book's fixed text (cover, tabs, page buttons) and the launcher, in the current language. */
+  private renderChrome() {
+    const q = <T extends Element = HTMLElement>(sel: string, root: ParentNode = this.root) => root.querySelector<T>(sel)!;
+    q('[data-cover]').textContent = t('BREATHLESS · Diver field manual', '屏息 · 潜水员随身手册');
+    const close = q('#guide-close');
+    close.setAttribute('aria-label', t('Close the manual (B / Esc)', '合上手册 (B / Esc)'));
+    close.innerHTML = `${t('Close', '合上')} <kbd>B</kbd> ×`;
+    q('.guide-tabs').setAttribute('aria-label', t('Manual chapters', '手册章节'));
+    this.root.querySelectorAll<HTMLButtonElement>('[data-chapter]').forEach((button, i) => {
+      button.innerHTML = `<span>${String(i + 1).padStart(2, '0')}</span>${chapters()[i].tab}`;
+    });
+    q('#guide-prev').setAttribute('aria-label', t('Previous chapter', '上一章'));
+    q('#guide-prev').textContent = t('← Previous', '← 上一页');
+    q('#guide-next').setAttribute('aria-label', t('Next chapter', '下一章'));
+    q('#guide-next').textContent = t('Next →', '下一页 →');
+    const open = q('#guide-open', this.launcher);
+    open.setAttribute('aria-label', t('Open the dive manual (B)', '打开潜水手册 (B)'));
+    open.innerHTML = `<span aria-hidden="true">▤</span> ${t('Manual', '手册')} <kbd>B</kbd>`;
+    this.tour.setAttribute('aria-label', t('Tutorial', '新手教程'));
   }
   get open() { return !this.root.classList.contains('hidden'); }
   mark(id: LessonId) {
@@ -107,6 +160,10 @@ export class FieldGuide {
     if (this.previousFocus?.isConnected && !this.previousFocus.closest('.hidden')) this.previousFocus.focus();
     else this.launcher.querySelector<HTMLButtonElement>('#guide-open')!.focus();
   }
+  /** The TUTORIAL fish: switches the step-by-step tutorial on or off. */
+  toggleTutorial() {
+    this.setEnabled(!this.state.enabled);
+  }
   private setEnabled(enabled: boolean) {
     this.state = { ...this.state, enabled, chosen: true };
     this.collapsed = false;
@@ -133,16 +190,16 @@ export class FieldGuide {
     this.renderBook();
   }
   private renderBook() {
-    const chapter = CHAPTERS[this.chapter];
+    const chapter = chapters()[this.chapter];
     const packed = new Set(this.hooks.packed());
     this.root.querySelector('#guide-pages')!.innerHTML = `<article class="guide-page guide-picture">
       <p class="guide-eyebrow">${chapter.subtitle}</p><h1 id="guide-title">${chapter.title}</h1>
       <div class="guide-illustration">${guideArt(chapter.art)}</div><p class="guide-caption">${chapter.caption}</p>
-      <div class="guide-pencil-note"><span>随手记 / FIELD NOTE</span><p>${chapter.note}</p></div>
-    </article><article class="guide-page guide-instructions"><p class="guide-eyebrow">小步骤，大收获 / STEP BY STEP</p>
+      <div class="guide-pencil-note"><span>${t('FIELD NOTE', '随手记')}</span><p>${chapter.note}</p></div>
+    </article><article class="guide-page guide-instructions"><p class="guide-eyebrow">${t('STEP BY STEP', '小步骤，大收获')}</p>
       <ol>${chapter.steps.map(([title, body], i) => `<li><b class="guide-step-number">${i + 1}</b><div><h2>${title}</h2><p>${body}</p></div></li>`).join('')}</ol>
-      ${chapter.id === 'assembly' || chapter.id === 'gear' ? `<div class="guide-pack-list" aria-label="当前准备区">${(chapter.id === 'assembly' ? [['rod', '杆身'], ['reel', '线轮'], ['net', '网圈']] : [['fins', '脚蹼'], ['tank', '气瓶'], ['lamp', '灯']]).map(([id, label]) => `<span class="${packed.has(id) ? 'packed' : ''}">${packed.has(id) ? '✓' : '○'} ${label} <small>${packed.has(id) ? '已打包' : '未打包'}</small></span>`).join('')}</div>` : ''}
-      <div class="guide-tour-control"><div><strong>新手全程引导</strong><small>${this.state.completed.length} / ${LESSONS.length} 项已完成 · 可随时关闭</small></div><button type="button" id="guide-tour-switch" role="switch" aria-checked="${this.state.enabled}">${this.state.enabled ? '开启中 ✓' : '已关闭'}</button><button type="button" id="guide-tour-restart">重新学习 ↺</button></div>
+      ${chapter.id === 'assembly' || chapter.id === 'gear' ? `<div class="guide-pack-list" aria-label="${t('Ready area now', '当前准备区')}">${(chapter.id === 'assembly' ? [['rod', t('Rod', '杆身')], ['reel', t('Reel', '线轮')], ['net', t('Net hoop', '网圈')]] : [['fins', t('Fins', '脚蹼')], ['tank', t('Tank', '气瓶')], ['lamp', t('Lamp', '灯')]]).map(([id, label]) => `<span class="${packed.has(id) ? 'packed' : ''}">${packed.has(id) ? '✓' : '○'} ${label} <small>${packed.has(id) ? t('packed', '已打包') : t('not packed', '未打包')}</small></span>`).join('')}</div>` : ''}
+      <div class="guide-tour-control"><div><strong>${t('Full beginner tutorial', '新手全程引导')}</strong><small>${t(`${this.state.completed.length} / ${LESSONS.length} done · turn off any time`, `${this.state.completed.length} / ${LESSONS.length} 项已完成 · 可随时关闭`)}</small></div><button type="button" id="guide-tour-switch" role="switch" aria-checked="${this.state.enabled}">${this.state.enabled ? t('On ✓', '开启中 ✓') : t('Off', '已关闭')}</button><button type="button" id="guide-tour-restart">${t('Start over ↺', '重新学习 ↺')}</button></div>
     </article>`;
     this.root.querySelector('#guide-tour-switch')!.addEventListener('click', () => {
       this.setEnabled(!this.state.enabled);
@@ -163,10 +220,10 @@ export class FieldGuide {
   private renderTutorial() {
     const toggle = this.launcher.querySelector<HTMLButtonElement>('#tour-toggle')!;
     toggle.setAttribute('aria-pressed', String(this.state.enabled));
-    toggle.textContent = this.state.enabled ? '引导：开启' : '新手引导';
+    toggle.textContent = this.state.enabled ? t('Tutorial: on', '引导：开启') : t('Tutorial', '新手引导');
     this.tour.classList.toggle('hidden', this.state.chosen && !this.state.enabled);
     if (!this.state.chosen) {
-      this.tour.innerHTML = `<p class="guide-eyebrow">FIRST DIVE / 初次下潜</p><h2>第一次出海？一起练习吧。</h2><p>从准备装备到带回第一条鱼，一步一步来。随时可以关闭。</p><div class="tour-actions"><button type="button" id="tour-start">开始引导 →</button><button type="button" id="tour-dismiss">自由探索</button></div>`;
+      this.tour.innerHTML = `<p class="guide-eyebrow">${t('FIRST DIVE', '初次下潜')}</p><h2>${t('First time out? Let’s practise together.', '第一次出海？一起练习吧。')}</h2><p>${t('From packing your gear to bringing home your first fish, one step at a time. Turn it off any time.', '从准备装备到带回第一条鱼，一步一步来。随时可以关闭。')}</p><div class="tour-actions"><button type="button" id="tour-start">${t('Start tutorial →', '开始引导 →')}</button><button type="button" id="tour-dismiss">${t('Explore freely', '自由探索')}</button></div>`;
       this.tour.querySelector('#tour-start')!.addEventListener('click', () => {
         this.setEnabled(true);
         this.toggle();
@@ -176,10 +233,10 @@ export class FieldGuide {
     }
     if (!this.state.enabled) return;
     const lesson = currentLesson(this.state);
-    this.tour.innerHTML = `<div class="tour-heading"><span>潜水练习 · ${lesson ? LESSONS.indexOf(lesson) + 1 : LESSONS.length} / ${LESSONS.length}</span><button type="button" id="tour-collapse" aria-label="${this.collapsed ? '展开' : '收起'}引导" aria-expanded="${!this.collapsed}">${this.collapsed ? '+' : '−'}</button><button type="button" id="tour-off" aria-label="关闭新手引导">×</button></div>
-      <div class="tour-body${this.collapsed ? ' hidden' : ''}"><div class="tour-progress" role="progressbar" aria-label="教程进度" aria-valuenow="${this.state.completed.length}" aria-valuemin="0" aria-valuemax="${LESSONS.length}"><i style="width:${this.state.completed.length / LESSONS.length * 100}%"></i></div>
-      <div class="tour-copy" aria-live="polite"><h2>${lesson?.title ?? '第一趟练习，完成！'}</h2><p>${lesson?.body ?? '现在可以自由探索。按 B 查阅手册，或从书里重新开始练习。'}</p><strong>${lesson?.action ?? '记得及时返航，带回你的收获。'}</strong></div>
-      <button type="button" id="tour-read">${lesson ? '查看这一页' : '翻开手册'} <kbd>B</kbd> ↗</button></div>`;
+    this.tour.innerHTML = `<div class="tour-heading"><span>${t('Dive practice', '潜水练习')} · ${lesson ? LESSONS.indexOf(lesson) + 1 : LESSONS.length} / ${LESSONS.length}</span><button type="button" id="tour-collapse" aria-label="${this.collapsed ? t('Expand tutorial', '展开引导') : t('Collapse tutorial', '收起引导')}" aria-expanded="${!this.collapsed}">${this.collapsed ? '+' : '−'}</button><button type="button" id="tour-off" aria-label="${t('Turn off the tutorial', '关闭新手引导')}">×</button></div>
+      <div class="tour-body${this.collapsed ? ' hidden' : ''}"><div class="tour-progress" role="progressbar" aria-label="${t('Tutorial progress', '教程进度')}" aria-valuenow="${this.state.completed.length}" aria-valuemin="0" aria-valuemax="${LESSONS.length}"><i style="width:${this.state.completed.length / LESSONS.length * 100}%"></i></div>
+      <div class="tour-copy" aria-live="polite"><h2>${lesson ? t(lesson.titleEn, lesson.title) : t('First practice run, done!', '第一趟练习，完成！')}</h2><p>${lesson ? t(lesson.bodyEn, lesson.body) : t('Explore freely now. Press B for the manual, or restart the practice from the book.', '现在可以自由探索。按 B 查阅手册，或从书里重新开始练习。')}</p><strong>${lesson ? t(lesson.actionEn, lesson.action) : t('Remember to turn back in time and bring your catch home.', '记得及时返航，带回你的收获。')}</strong></div>
+      <button type="button" id="tour-read">${lesson ? t('Read this page', '查看这一页') : t('Open the manual', '翻开手册')} <kbd>B</kbd> ↗</button></div>`;
     this.tour.querySelector('#tour-off')!.addEventListener('click', () => this.setEnabled(false));
     this.tour.querySelector('#tour-collapse')!.addEventListener('click', () => { this.collapsed = !this.collapsed; this.renderTutorial(); this.tour.querySelector<HTMLButtonElement>('#tour-collapse')!.focus(); });
     this.tour.querySelector('#tour-read')!.addEventListener('click', () => this.openLesson());

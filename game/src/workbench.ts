@@ -11,10 +11,15 @@
 
 import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
-import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
+import { lang, onLangChange, pickName, t } from './i18n';
 import { SoftPaper } from './paper';
+import { Diver } from './diver';
 import { GearInspector, type ShipHooks } from './inspect';
-import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { UPGRADES, buildUpgradeModel, upgradeName, upgradeEffect, type UpgradeDef, type UpgradeId } from './upgrades';
+import type { WeatherState } from './weather';
+import { setDeepSonarColor } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
 import { synthesisCost } from './synthesis';
 
@@ -37,6 +42,8 @@ export interface WorkbenchHooks {
   conditions(map: MapId): WorkbenchConditions;
   /** The workbench sonar piece applies its chosen beacon color to the dive model. */
   sonarColor?(color: string): void;
+  synthesisOpen?(): void;
+  synthesisClose?(): void;
   /** Optional progress hooks for the action-driven field guide. */
   tutorial?(id: LessonId): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
@@ -50,6 +57,9 @@ export interface WorkbenchHooks {
   ship(): { key: number; model: THREE.Object3D | null };
   /** The ships the boat on the table opens on (in the inspector). */
   ships: ShipHooks;
+  /** The gear in the ready tray last time (null: never packed), and saving it whenever the tray changes. */
+  savedLoadout(): UpgradeId[] | null;
+  saveLoadout(gear: UpgradeId[]): void;
 }
 
 export interface WorkbenchConditions {
@@ -58,41 +68,50 @@ export interface WorkbenchConditions {
   weather: string;
   wind: string;
   rain: string;
+  fishing: { level: 'good' | 'caution' | 'poor'; label: string; reason: string };
+  weatherState: WeatherState;
 }
 
-// The six dive-loadout slots plus the deployable deep sonar, and a model of the
-// boat (for upgrading the boat; it never goes in the ready tray). The rod carries
-// the net and the reel changes its recovery; bait is a boat upgrade and is not
-// packed on this workbench.
-const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar', 'boat'];
+// The six pieces of dive gear you pack (five loadout slots plus the deployable
+// deep sonar), and a model of the boat (for picking the ship; it never goes in the
+// ready tray). The net shaft (rod) isn't on the table: it always goes down with
+// the net (main.ts adds it to the dive). Bait is a boat upgrade and is not packed here.
+const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'sonar', 'boat'];
 
-/** Where each piece lands, in table units (x right, z toward the camera). */
-// Kept off the back strip of the table: the title fish hang over it and would take the clicks.
+/**
+ * Where each piece lies when it isn't packed, in table units (x right, z toward
+ * the camera): all of them on the left of the table, the gear three to a row and
+ * the boat behind it (standing up, it would hide whatever lay behind it).
+ */
 const SPOTS: [number, number][] = [
-  [-3.9, -0.85],
-  [-3.9, 0.45],
-  [-3.6, 1.8],
-  [1.5, -0.65],
-  [1.55, 0.8],
-  [-0.9, 1.95],
-  [1.05, 1.95],
-  [-0.6, -1.75], // the boat, behind the chart
+  [-4.4, -0.35],
+  [-3.05, -0.35],
+  [-1.7, -0.35],
+  [-4.4, 1.15],
+  [-3.05, 1.15],
+  [-1.7, 1.15],
+  [-3.05, -1.75], // the boat
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
-const TRAY = { x0: 2.55, x1: 4.85, z0: -2.5, z1: 2.5 };
-// Toward the front of the tray: the SETTINGS fish hangs over its back.
+const TRAY = { x0: 2.2, x1: 4.9, z0: -2.5, z1: 2.5 };
+// One ring per piece of dive gear (GEAR's order), its silhouette cut into the felt
+// so you can see what goes where. The front strip is kept clear for the label.
 const SLOTS: [number, number][] = [
-  // Keep the front strip clear for the label. Six slots are also the hard
-  // loadout limit: a seventh dive item cannot be packed onto the boat.
-  [3.15, -0.9],
-  [4.25, -0.9],
-  [3.15, 0.05],
-  [4.25, 0.05],
-  [3.15, 1.0],
-  [4.25, 1.0],
+  [2.85, -0.6], // fins
+  [2.85, 0.45], // tank
+  [2.85, 1.5], // lamp
+  [4.25, -0.6], // net
+  [4.25, 0.45], // reel
+  [4.25, 1.5], // sonar
 ];
-const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
+// Packed until the player changes it (then whatever was in the tray last time):
+// the starting gear, every piece, so a first dive needs no packing.
+const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'sonar'];
+// The diver figure stands at the back of the tray, between the two rows of rings: it wears what's in them.
+const FIGURE_AT = new THREE.Vector3(3.55, 0.05, -1.65);
+const FIGURE_H = 1.25; // standing height, table units: its head stays under the SETTINGS fish
+const MAP_AT = new THREE.Vector3(0.4, 0, 0.1);
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
@@ -269,6 +288,7 @@ export class Workbench {
   private pointer = { x: 0.5, y: 0.5, t: 0 }; // fractions of the screen
   private stirFrom: { x: number; z: number; t: number } | null = null; // last pointer spot on the paper (its local x/z)
   private mapTex: THREE.CanvasTexture;
+  private chartWeatherKey = '';
   private mapHover = 0;
   private slotRings: THREE.Mesh[] = [];
   private dust: { mesh: THREE.Mesh; t: number }[] = [];
@@ -294,15 +314,28 @@ export class Workbench {
   private last = 0;
   private raf = 0;
   private tweens: Tween[] = [];
-  private press: { piece: Piece | null; material: SynthMaterial | null; map: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
+  private press: { piece: Piece | null; material: SynthMaterial | null; map: boolean; figure: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
   private held: Piece | null = null;
   private heldMaterial: SynthMaterial | null = null;
   private holdTarget = new THREE.Vector3();
-  private hovered: Piece | SynthMaterial | 'map' | 'synth' | null = null;
+  private hovered: Piece | SynthMaterial | 'map' | 'figure' | 'synth' | null = null;
   private picked: MapId | null = null;
   private inspector: GearInspector;
+  // The diver figure on its stand (not a piece: it never moves). It wears what's in the tray.
+  private figure = new THREE.Group();
+  private figureDiver!: Diver;
+  private figureHit!: THREE.Mesh;
+  private figureHover = 0;
 
   constructor(private hooks: WorkbenchHooks) {
+    // A language switch: the open chart's panel and its painted labels redraw in the new one.
+    onLangChange(() => {
+      this.chartWeatherKey = '';
+      if (this.state === 'chart') {
+        this.renderPins();
+        this.renderPlace();
+      }
+    });
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
@@ -327,6 +360,8 @@ export class Workbench {
     key.position.set(-4, 10, 5);
     this.chartScene.add(key);
     GEAR.forEach((id, i) => this.pieces.push(this.buildPiece(id, i)));
+    this.cutSilhouettes();
+    this.buildFigure();
     const piece = (def: UpgradeDef) => this.pieces.find((p) => p.def === def)!;
     this.inspector = new GearInspector({
       owned: (def) => this.hooks.owned(def.id),
@@ -337,6 +372,7 @@ export class Workbench {
         else if (!ready && p.mode === 'ready') this.unready(p);
       },
       sonarColor: (color) => {
+        this.setSonarColor(color);
         this.hooks.sonarColor?.(color);
       },
       buy: async (def) => {
@@ -349,6 +385,24 @@ export class Workbench {
       activePath: (def) => this.hooks.activePath(def.id),
       selectPath: (def, path) => this.hooks.selectPath(def.id, path),
       ships: this.hooks.ships,
+      diver: {
+        gear: () => this.pieces.filter((p) => p.def.group === 'dive').map((p) => p.def),
+        slots: SLOTS.length,
+        model: () => this.figureModel().group,
+        wearAll: () => {
+          for (const p of this.pieces) if (p.def.group === 'dive' && p.mode === 'free') this.makeReady(p);
+        },
+        takeOffAll: () => {
+          // One after another, so they don't all land on the left at once and pile up.
+          this.pieces
+            .filter((p) => p.mode === 'ready')
+            .forEach((p, i) => {
+              p.slot = -1; // off the figure and out of the save at once; the toss follows
+              this.tween(i * 0.1, () => {}, () => p.mode === 'ready' && this.unready(p));
+            });
+          this.trayChanged();
+        },
+      },
       closed: () => {
         if (this.state === 'inspect') this.state = 'idle';
       },
@@ -409,9 +463,6 @@ export class Workbench {
     this.sheet.curl = 0; // lying on the table, its edges rest on the tabletop
     this.sheet.reset();
     this.tweens = [];
-    this.held = null;
-    this.heldMaterial = null;
-    this.press = null;
     this.resetSynthesisVisuals();
     this.synthesisLift = -0.65;
     this.synthesisRig.position.y = this.synthesisLift;
@@ -419,10 +470,16 @@ export class Workbench {
     this.synthesisCrates[1]?.position.set(3.48, 0.55, 0.05);
     this.synthesisLids[0]?.rotation.set(0, 0, 0);
     this.synthesisLids[1]?.rotation.set(0, 0, 0);
+    this.hooks.synthesisClose?.();
+    this.held = null;
+    this.heldMaterial = null;
+    this.press = null;
+    this.chartWeatherKey = '';
     this.paintMap();
     this.resize();
     // Levels bought (or a ship picked, or a wallet's save loaded) since the pieces were last built.
     this.refreshGear();
+    this.setSonarColor(loadSonarConfig().color);
     if (intro || !this.placed) this.scatter(intro);
     this.placed = true;
     this.time = 0;
@@ -452,6 +509,7 @@ export class Workbench {
     this.inspector.close();
     this.resetSynthesisVisuals();
     this.restoreWorkbenchPieces();
+    this.hooks.synthesisClose?.();
     this.state = 'closed';
     cancelAnimationFrame(this.raf);
     this.root.classList.add('hidden');
@@ -540,10 +598,9 @@ export class Workbench {
       this.slotRings.push(ring);
     }
 
-    // A half-hidden military-green case sits behind the table.  When opened it
-    // rises into view and unfolds into the two black/grey material crates and a
-    // stitched centre mat, matching the field-kit reference rather than a flat
-    // menu panel.
+    // A half-hidden military-green case sits behind the table. It rises into
+    // view and unfolds into two black/grey supply crates plus a stitched grey
+    // centre mat, matching the field-kit reference.
     const metal = (color: string, roughness = 0.78) => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.5, flatShading: true });
     const green = metal('#46543c');
     const greenEdge = metal('#263128', 0.88);
@@ -556,7 +613,6 @@ export class Workbench {
     const back = new THREE.Mesh(new THREE.BoxGeometry(7.1, 1.35, 0.14), greenEdge);
     back.position.set(0, 0.78, -0.42);
     this.synthesisRig.add(back);
-    // Low-poly corner braces make the backboard read as folded sheet metal.
     for (const x of [-3.35, 3.35]) {
       const brace = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.15, 0.24), green);
       brace.position.set(x, 0.78, -0.29);
@@ -568,7 +624,6 @@ export class Workbench {
     pad.receiveShadow = true;
     this.synthesisPadMat = pad.material as THREE.MeshStandardMaterial;
     this.synthesisRig.add(pad);
-    // Seams and a darker edge sell the mat as four stitched panels.
     for (const x of [-1.08, 0, 1.08]) {
       const seam = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.014, 2.05), new THREE.MeshBasicMaterial({ color: '#5f625f' }));
       seam.position.set(x, 0.133, 1.25);
@@ -577,7 +632,6 @@ export class Workbench {
     const padEdge = new THREE.Mesh(new THREE.BoxGeometry(4.48, 0.035, 2.38), new THREE.MeshStandardMaterial({ color: '#5d625f', roughness: 0.95, flatShading: true }));
     padEdge.position.set(0, 0.025, 1.25);
     this.synthesisRig.add(padEdge);
-
     for (const sideSign of [-1, 1]) {
       const crate = new THREE.Group();
       crate.position.set(sideSign * 3.48, 0.55, 0.05);
@@ -586,7 +640,6 @@ export class Workbench {
       const inner = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.08, 0.95), crateEdge);
       inner.position.y = 0.43;
       crate.add(body, inner);
-      // Hinged lids open outward with the crate animation.
       const hinge = new THREE.Group();
       hinge.position.set(0, 0.46, -0.52);
       const lid = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.1, 0.98), crateMat);
@@ -600,10 +653,7 @@ export class Workbench {
       this.synthesisLids.push(hinge);
       this.synthesisRig.add(crate);
     }
-    this.synthesisHit = new THREE.Mesh(
-      new THREE.BoxGeometry(8.5, 1.55, 3.2),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
-    );
+    this.synthesisHit = new THREE.Mesh(new THREE.BoxGeometry(8.5, 1.55, 3.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     this.synthesisHit.position.set(0, 0.55, 0.7);
     this.synthesisRig.add(this.synthesisHit);
     this.synthesisRig.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
@@ -621,10 +671,115 @@ export class Workbench {
     return mesh;
   }
 
-  private paintMap() {
+  /**
+   * Each ring gets its piece's silhouette pressed dark into the felt, lying the
+   * way the piece sits there once packed: an icon of what goes in it.
+   */
+  private cutSilhouettes() {
+    const mat = new THREE.MeshBasicMaterial({ color: '#12352b' });
+    this.pieces.forEach((p, i) => {
+      const at = SLOTS[i];
+      if (!at || p.def.group !== 'dive') return;
+      const shape = p.obj.children[0].clone(); // the centred, sized model (shares its geometry)
+      shape.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.material = mat;
+          o.castShadow = o.receiveShadow = false;
+        }
+      });
+      shape.quaternion.copy(p.flat);
+      const icon = new THREE.Group();
+      icon.add(shape);
+      icon.scale.set(TRAY_SCALE * 0.92, 0.002, TRAY_SCALE * 0.92); // flattened onto the felt
+      icon.position.set(at[0], 0.053, at[1]);
+      this.scene.add(icon);
+    });
+  }
+
+  /** The diver figure: the dive's own diver model, stood up on a little wooden stand. */
+  private buildFigure() {
+    const wood = new THREE.MeshStandardMaterial({ color: '#5a3a1e', roughness: 0.8 });
+    const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.46, 0.1, 24), wood);
+    stand.position.y = 0.05;
+    stand.castShadow = stand.receiveShadow = true;
+    const { group, diver } = this.figureModel();
+    group.position.y = 0.1 + FIGURE_H / 2;
+    this.figureDiver = diver;
+    this.figureHit = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, FIGURE_H + 0.1, 12), new THREE.MeshBasicMaterial({ visible: false }));
+    this.figureHit.position.y = (FIGURE_H + 0.1) / 2;
+    this.figure.add(stand, group, this.figureHit);
+    this.figure.position.copy(FIGURE_AT);
+    this.figure.rotation.y = 0.6; // facing us, the net out to the side
+    this.scene.add(this.figure);
+  }
+
+  /**
+   * A diver (diver.ts) wearing what's in the tray now, at the levels owned,
+   * standing up, centred and FIGURE_H tall. The workbench keeps one on its stand;
+   * the inspector asks for a fresh one each time it changes.
+   */
+  private figureModel(): { group: THREE.Group; diver: Diver } {
+    const diver = new Diver(new THREE.Scene());
+    diver.holdNetDown();
+    this.dress(diver);
+    const upright = new THREE.Group();
+    upright.add(diver.group);
+    // It's built lying along +x (head first, as it swims): head up, and facing us.
+    diver.group.rotation.z = Math.PI / 2;
+    upright.rotation.y = -Math.PI / 2;
+    upright.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true;
+    });
+    const group = new THREE.Group();
+    group.add(upright);
+    // Sized and centred on its body, fins included but not the net held out at its side
+    // (it would pull the figure off its stand).
+    diver.setWorn({ fins: true, tank: false, lamp: true, net: false });
+    group.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    group.traverseVisible((o) => {
+      if (o instanceof THREE.Mesh) box.expandByObject(o);
+    });
+    this.dress(diver);
+    const size = box.getSize(new THREE.Vector3());
+    const k = FIGURE_H / size.y;
+    upright.scale.setScalar(k);
+    upright.position.copy(box.getCenter(new THREE.Vector3())).multiplyScalar(-k);
+    return { group, diver };
+  }
+
+  /** What the diver has on: the packed gear at the level owned; the rest it goes without. */
+  private dress(d: Diver) {
+    const packed = new Set(this.packed);
+    const level = (id: UpgradeId) => (packed.has(id) ? Math.min(3, Math.max(1, this.hooks.owned(id))) : 1);
+    d.setFinsLevel(level('fins'));
+    d.setTankLevel(level('tank'));
+    d.setLampLevel(level('lamp'));
+    d.setNetLevel(level('net'));
+    d.setRodLevel(Math.min(3, Math.max(1, this.hooks.owned('rod')))); // the shaft always comes with the net
+    d.setWorn({ fins: packed.has('fins'), tank: packed.has('tank'), lamp: packed.has('lamp'), net: packed.has('net') });
+  }
+
+  /** The tray changed: the figure wears what's in it now, and it's saved for next time. */
+  private trayChanged() {
+    this.dress(this.figureDiver);
+    this.hooks.saveLoadout(this.packed);
+  }
+
+  private paintMap(weather?: WeatherState) {
     // Twice the chart's size: it is held up nearly screen-wide.
     // Every place is open from the chart: no locks painted on.
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...this.hooks.progress(), unlockAll: true }, true);
+    const id = this.picked ?? this.hooks.progress().selected;
+    const snapshot = weather ?? this.hooks.conditions(id).weatherState;
+    // A canvas redraw is only needed when a visible weather bucket changes;
+    // the live note can still update four times a second during a transition.
+    const progress = this.hooks.progress();
+    const key = [id, progress.selected, progress.bestValue, snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
+      .map((value) => typeof value === 'number' ? Math.round(value * 20) : value)
+      .join(':');
+    if (key === this.chartWeatherKey && this.mapTex.image.width) return;
+    this.chartWeatherKey = key;
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...progress, unlockAll: true }, true, snapshot);
     this.mapTex.needsUpdate = true;
   }
 
@@ -637,6 +792,12 @@ export class Workbench {
     }
     const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
     return { model: buildUpgradeModel(id, level), key: level };
+  }
+
+  /** Apply the persisted beacon accent to the table piece and open inspector. */
+  private setSonarColor(color: string) {
+    const piece = this.pieces.find((item) => item.id === 'sonar');
+    if (piece) setDeepSonarColor(piece.obj, color);
   }
 
   private buildPiece(id: UpgradeId, i: number): Piece {
@@ -778,13 +939,22 @@ export class Workbench {
       if (this.hovered === old) this.hovered = null;
       this.pieces[i] = p;
     });
+    this.dress(this.figureDiver); // a level bought shows on the figure too
   }
 
-  /** Back to the starting layout. intro: everything waits above the table to drop in. */
+  /**
+   * Back to the starting layout, with last time's loadout (or the default one)
+   * already in the tray. intro: everything waits above the table to drop in, the
+   * packed gear straight into its slot.
+   */
   private scatter(intro: boolean) {
+    for (const ring of this.slotRings) this.lightSlot(ring, false);
+    const dive = new Set(this.pieces.filter((p) => p.def.group === 'dive').map((p) => p.id));
+    const packed = (this.hooks.savedLoadout() ?? DEFAULT_LOADOUT).filter((id) => dive.has(id));
     this.pieces.forEach((p, i) => {
-      const [x, z] = SPOTS[i];
-      p.slot = -1;
+      const slot = packed.includes(p.id) ? i : -1; // its own ring
+      const [x, z] = slot >= 0 ? SLOTS[slot] : SPOTS[i];
+      p.slot = slot;
       p.hover = 0;
       p.touching = false;
       p.still = 0;
@@ -793,14 +963,37 @@ export class Workbench {
       p.vel.set(0, 0, 0);
       p.spin.set(0, 0, 0);
       if (intro) {
+        // Packed gear falls straight down into its slot (dropInSlot); the rest tumbles onto the table.
+        // Gentle enough that each lands about where it lies, not rolling into its neighbours.
+        const spread = slot >= 0 ? 0 : 0.2;
         p.mode = 'wait';
         p.obj.visible = false;
         p.dropAt = DROP_START_S + i * DROP_GAP_S;
-        p.pos.set(x + (Math.random() - 0.5) * 0.4, 6 + Math.random() * 2, z + (Math.random() - 0.5) * 0.4);
+        // Packed gear falls from high over the tray; the rest from lower, so its thud doesn't
+        // knock its close neighbours on the left all over the table.
+        const high = slot >= 0 ? 6 : 2.6;
+        p.pos.set(x + (Math.random() - 0.5) * spread, high + Math.random() * 1.2, z + (Math.random() - 0.5) * spread);
         p.q.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
-        p.spin.set((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 9);
-        p.vel.set((Math.random() - 0.5) * 1.5, -2, (Math.random() - 0.5) * 1.5);
+        p.spin.set((Math.random() - 0.5) * 4.5, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 4.5);
+        p.vel.set((Math.random() - 0.5) * 0.6, -2, (Math.random() - 0.5) * 0.6);
+        if (p.id === 'boat') {
+          // The boat is set down on its keel from not far up: dropped from the height of the
+          // rest (or tumbling), its narrow keel kicks it off across the table.
+          p.q.copy(this.restQ(p));
+          p.pos.y = this.standY(p) + 1.2;
+          p.spin.set(0, 0, 0);
+          p.vel.set(0, -1, 0);
+        }
         p.grounded = false;
+      } else if (slot >= 0) {
+        p.mode = 'ready';
+        p.obj.visible = true;
+        p.yaw = 0;
+        p.tray = TRAY_SCALE;
+        p.pos.set(x, p.restY * TRAY_SCALE + 0.05, z);
+        p.q.copy(this.restQ(p, 0));
+        p.grounded = true;
+        this.lightSlot(this.slotRings[slot], true);
       } else {
         p.mode = 'free';
         p.obj.visible = true;
@@ -809,7 +1002,7 @@ export class Workbench {
         p.grounded = true;
       }
     });
-    for (const ring of this.slotRings) this.lightSlot(ring, false);
+    this.dress(this.figureDiver);
   }
 
   /**
@@ -969,7 +1162,10 @@ export class Workbench {
 
     // Refresh the field note at a low rate so the live random front stays readable
     // without touching the chart texture or rebuilding the workbench.
-    if (this.picked && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.renderConditions(this.picked);
+    if (this.state === 'chart' && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) {
+      if (this.picked) this.renderConditions(this.picked);
+      else this.paintMap(this.hooks.conditions(this.hooks.progress().selected).weatherState);
+    }
 
     for (const p of this.pieces) {
       p.hover = lerp(p.hover, this.hovered === p ? 1 : 0, 1 - Math.exp(-dt * 14));
@@ -989,6 +1185,17 @@ export class Workbench {
       if (m.mode === 'home') m.obj.rotation.y += dt * 0.35;
     }
     this.mapHover = lerp(this.mapHover, this.hovered === 'map' ? 1 : 0, 1 - Math.exp(-dt * 12));
+    // Carrying a piece over the tray lights the ring it will drop into.
+    const aim = this.held && this.held.def.group === 'dive' && this.inTray(this.held.pos) ? GEAR.indexOf(this.held.id) : -1;
+    this.slotRings.forEach((ring, i) => {
+      if (i === aim) {
+        const m = ring.material as THREE.MeshBasicMaterial;
+        m.color.set('#ffd27a');
+        m.opacity = 0.6 + 0.25 * Math.sin(this.time * 8);
+      } else this.lightSlot(ring, this.pieces.some((p) => p.slot === i && p.mode === 'ready'));
+    });
+    this.figureHover = lerp(this.figureHover, this.hovered === 'figure' ? 1 : 0, 1 - Math.exp(-dt * 14));
+    this.figure.scale.setScalar(1 + this.figureHover * 0.06);
     this.mapMat.emissiveIntensity = this.mapHover * (0.12 + 0.06 * Math.sin(this.time * 6));
     for (const d of [...this.dust]) {
       d.t += dt;
@@ -1057,8 +1264,12 @@ export class Workbench {
     for (const p of this.pieces) {
       if (p.mode === 'wait') {
         if (this.time < p.dropAt) continue;
-        p.mode = 'free';
         p.obj.visible = true;
+        if (p.slot >= 0) {
+          this.dropInSlot(p);
+          continue;
+        }
+        p.mode = 'free';
       }
       if (p.mode === 'held') {
         this.swingHeld(p, dt);
@@ -1213,11 +1424,10 @@ export class Workbench {
 
   // ---- Ready tray -------------------------------------------------------
 
+  /** Into its own ring (each piece of dive gear has one). */
   private makeReady(p: Piece) {
-    if (this.packed.length >= SLOTS.length) return;
-    const used = new Set(this.pieces.map((q) => q.slot));
-    const slot = SLOTS.findIndex((_, i) => !used.has(i));
-    if (slot < 0) return;
+    const slot = GEAR.indexOf(p.id);
+    if (p.def.group !== 'dive' || !SLOTS[slot]) return;
     p.slot = slot;
     p.mode = 'moving';
     const [x, z] = SLOTS[slot];
@@ -1233,28 +1443,63 @@ export class Workbench {
         p.pos.y += Math.sin(u * Math.PI) * 1.3;
         p.q.slerpQuaternions(q0, q1, e);
       },
+      () => this.seated(p),
+    );
+  }
+
+  /** Packed last time: it falls straight down into its slot, squaring up as it comes. */
+  private dropInSlot(p: Piece) {
+    const [x, z] = SLOTS[p.slot];
+    const from = p.pos.clone();
+    const to = new THREE.Vector3(x, p.restY * TRAY_SCALE + 0.05, z);
+    const q0 = p.q.clone();
+    const q1 = this.restQ(p, 0);
+    p.mode = 'moving';
+    p.vel.set(0, 0, 0);
+    p.spin.set(0, 0, 0);
+    this.tween(
+      0.55,
+      (u) => {
+        p.pos.lerpVectors(from, to, u * u); // speeding up as it falls
+        p.q.slerpQuaternions(q0, q1, easeOut(u));
+      },
       () => {
-        p.mode = 'ready';
-        this.hooks.tutorial?.('pack');
-        p.yaw = 0;
-        this.puff(x, z, 0.5);
-        this.lightSlot(this.slotRings[slot], true);
+        this.shake = Math.min(0.22, this.shake + 0.05);
+        this.seated(p);
       },
     );
   }
 
-  /** Out of the tray: tossed back onto a free spot on the table. */
+  /** In its slot: the ring lights up, and the figure puts it on. */
+  private seated(p: Piece) {
+    p.mode = 'ready';
+    p.yaw = 0;
+    const [x, z] = SLOTS[p.slot];
+    this.puff(x, z, 0.5);
+    this.lightSlot(this.slotRings[p.slot], true);
+    this.trayChanged();
+    // The tutorial's "net in the READY tray": done however it got there (a first visit starts packed).
+    if (p.id === 'net') this.hooks.tutorial?.('pack');
+  }
+
+  /** Out of the tray: tossed back to its spot on the left of the table. */
   private unready(p: Piece) {
     if (p.slot >= 0) this.lightSlot(this.slotRings[p.slot], false);
     p.slot = -1;
     p.mode = 'free';
     p.grounded = false;
-    const tx = lerp(TABLE.x0 + 1, TRAY.x0 - 1.2, Math.random());
-    const tz = lerp(TABLE.z0 + 0.8, TABLE.z1 - 0.8, Math.random());
-    const t = 0.65;
-    p.vel.set((tx - p.pos.x) / t, 0.5 * GRAVITY * t, (tz - p.pos.z) / t);
+    // Back to its own spot on the left of the table.
+    const [hx, hz] = SPOTS[GEAR.indexOf(p.id)];
+    const tx = hx + (Math.random() - 0.5) * 0.2;
+    const tz = hz + (Math.random() - 0.5) * 0.2;
+    // Lifted first: low in the tray, the table's walls (step) would stop it at the tray's edge.
+    const lift = 0.6;
+    p.pos.y += lift;
+    const t = 0.75;
+    p.vel.set((tx - p.pos.x) / t, (0.5 * GRAVITY * t * t - lift) / t, (tz - p.pos.z) / t);
     p.spin.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 8);
     p.yaw = (Math.random() - 0.5) * 1.6;
+    this.trayChanged();
   }
 
   private lightSlot(ring: THREE.Mesh, on: boolean) {
@@ -1474,7 +1719,7 @@ export class Workbench {
     result.scale.setScalar(0.05);
     this.synthesisResult = result;
     this.scene.add(result);
-    const label = recipe === 'bait' ? '潮汐鱼饵完成 · 38 TOKENS' : '复合护板完成 · 128 TOKENS';
+    const label = recipe === 'bait' ? `${t('Tide bait complete', '潮汐鱼饵完成')} · 38 TOKENS` : `${t('Composite plate complete', '复合护板完成')} · 128 TOKENS`;
     this.updateSynthesisHud(label);
     this.tween(0.55, (u) => {
       const e = easeOut(u);
@@ -1490,16 +1735,18 @@ export class Workbench {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1), this.camera);
   }
 
-  private pick(e: PointerEvent): Piece | SynthMaterial | 'map' | 'synth' | null {
+  private pick(e: PointerEvent): Piece | SynthMaterial | 'map' | 'figure' | 'synth' | null {
     this.setRay(e);
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
     targets.push(...this.synthesisMaterials.filter((m) => m.obj.visible && m.mode !== 'moving').map((m) => m.hit));
     if (this.map.visible) targets.push(this.mapMesh);
+    targets.push(this.figureHit);
     if (this.synthesisRig.visible) targets.push(this.synthesisHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
-    if (hit.object === this.mapMesh) return 'map';
+    if (hit.object === this.figureHit) return 'figure';
     if (hit.object === this.synthesisHit) return 'synth';
+    if (hit.object === this.mapMesh) return 'map';
     return this.synthesisMaterials.find((m) => m.hit === hit.object)
       ?? this.pieces.find((p) => p.hit === hit.object)
       ?? null;
@@ -1517,15 +1764,9 @@ export class Workbench {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
     if (this.blocked() || (this.state !== 'idle' && this.state !== 'synth') || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
-    this.press = {
-      piece: hit && typeof hit !== 'string' && !('home' in hit) ? hit : null,
-      material: hit && typeof hit !== 'string' && 'home' in hit ? hit : null,
-      map: hit === 'map',
-      synth: hit === 'synth',
-      x: e.clientX,
-      y: e.clientY,
-      t: performance.now(),
-    };
+    const material = hit && typeof hit !== 'string' && 'home' in hit ? hit : null;
+    const piece = hit && typeof hit !== 'string' && !('home' in hit) ? hit : null;
+    this.press = { piece, material, map: hit === 'map', figure: hit === 'figure', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
@@ -1554,9 +1795,11 @@ export class Workbench {
     if (press?.piece && Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_MOVE_PX) {
       // Picked up: a ready piece leaves its slot while it's carried.
       const p = press.piece;
-      if (p.slot >= 0) this.lightSlot(this.slotRings[p.slot], false);
+      const packed = p.slot >= 0;
+      if (packed) this.lightSlot(this.slotRings[p.slot], false);
       p.slot = -1;
       p.mode = 'held';
+      if (packed) this.trayChanged(); // the figure takes it off
       this.held = p;
       this.press = null;
       this.hovered = null;
@@ -1645,7 +1888,10 @@ export class Workbench {
     const click = Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS;
     if (!click) return;
     if (press.map) this.openChart();
-    else if (press.piece) {
+    else if (press.figure) {
+      this.setHover(null, e);
+      this.inspectDiver();
+    } else if (press.piece) {
       this.setHover(null, e);
       this.inspect(press.piece);
     } else if (press.synth) this.openSynthesis();
@@ -1664,7 +1910,16 @@ export class Workbench {
     else this.inspector.show(p.def, from);
   }
 
-  private setHover(hit: Piece | SynthMaterial | 'map' | 'synth' | null, e: PointerEvent) {
+  /** The diver figure, up close: dress it (what it wears goes in the tray, and down on the dive). */
+  private inspectDiver() {
+    this.state = 'inspect';
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const at = this.figure.position.clone().setY(FIGURE_H / 2).project(this.camera);
+    this.inspector.showDiver({ x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
+  }
+
+  private setHover(hit: Piece | SynthMaterial | 'map' | 'figure' | 'synth' | null, e: PointerEvent) {
     this.hovered = hit;
     document.body.style.cursor = hit ? 'pointer' : '';
     if (!hit) {
@@ -1673,15 +1928,25 @@ export class Workbench {
     }
     const lines =
       hit === 'map'
-        ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
+        ? [t('Sea chart', '海图'), t('Three places, one per chapter', '三处海域，每章一处'), t('Click to open', '点击打开')]
+        : hit === 'figure'
+        ? [
+            t('Your diver', '潜水员'),
+            t(`Wearing ${this.packed.length} / ${SLOTS.length} · saved for next time`, `已装备 ${this.packed.length} / ${SLOTS.length} · 下次沿用`),
+            t('Click to dress · drop gear on the tray to put it on', '点击更衣 · 把装备放到托盘上即可穿戴'),
+          ]
         : hit === 'synth'
-          ? ['Field workbench · 合成工作台', '左右物资箱 + 中央工作垫', 'Click to raise and open']
-          : 'home' in hit
-            ? [`${hit.def.nameZh} · ${hit.def.name}`, '拖到中央工作垫', 'Click or drag to place']
+        ? [t('Field workbench', '合成工作台'), t('Military steel', '军用钢板'), t('Click to raise and open', '点击升起并打开')]
+        : 'home' in hit
+        ? [hit.def.nameZh, t('Drag to the centre mat', '拖到中央工作垫'), t('Click or drag to place', '点击或拖拽放置')]
         : [
-            `${hit.def.name} · ${hit.def.nameZh}`,
-            hit.id === 'boat' ? 'Your ship · 当前船只 — click to see the ships' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
-            hit.mode === 'ready' ? 'Ready · click for a closer look' : hit.def.group === 'dive' ? 'Click for a closer look · drag to the tray' : 'Click to upgrade the boat',
+            upgradeName(hit.def),
+            hit.id === 'boat' ? t('Your ship · click to see the ships', '当前船只 · 点击查看船只') : `Lv ${hit.key} · ${upgradeEffect(hit.def, hit.key)}`,
+            hit.mode === 'ready'
+              ? t('Ready · click for a closer look', '已就绪 · 点击细看')
+              : hit.def.group === 'dive'
+              ? t('Click for a closer look · drag to the tray', '点击细看 · 拖到托盘上')
+              : t('Click to upgrade the boat', '点击升级船只'),
           ];
     this.tip.replaceChildren(
       ...lines.map((text, i) => {
@@ -1821,9 +2086,9 @@ export class Workbench {
         const label = document.createElement('span');
         label.className = 'wb-pin-label';
         const name = document.createElement('b');
-        name.textContent = `${map.name} · ${map.nameZh}`;
+        name.textContent = pickName(map);
         const sub = document.createElement('small');
-        sub.textContent = map.difficulty;
+        sub.textContent = mapDifficulty(map);
         label.append(name, sub);
         pin.append(dot, label);
         pin.addEventListener('click', () => this.pickPlace(id));
@@ -1850,30 +2115,55 @@ export class Workbench {
     if (!id) {
       this.previewBox.replaceChildren();
       this.hooks.preview(null);
-      $('wb-place-title').textContent = 'Where to? · 去哪儿？';
-      $('wb-place-sub').textContent = 'Pick a place on the chart';
+      $('wb-place-title').textContent = t('Where to?', '去哪儿？');
+      $('wb-place-sub').textContent = t('Pick a place on the chart', '在海图上选一处');
       $('wb-place-text').textContent = '';
+      $('wb-place-warn').classList.add('hidden');
     } else {
       const map = MAPS[id];
       // A live view; turning it on also turns the world behind the table to that place, ready for the dive.
       this.previewBox.replaceChildren(this.hooks.preview(id)!);
-      $('wb-place-title').textContent = `${map.name} · ${map.nameZh}`;
-      $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · Shelf ${mapDepth(map)} m · Trench ∞ · ${map.place}`;
-      $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
+      const roman = ROMAN[MAP_ORDER.indexOf(id)];
+      const zones = map.zoneLabels.map((z) => mapZoneLabel(z));
+      $('wb-place-title').textContent = pickName(map);
+      $('wb-place-sub').textContent = t(
+        `Chapter ${roman} · ${mapDifficulty(map)} · Shelf ${mapDepth(map)} m · Trench ∞ · ${mapPlace(map)}`,
+        `第${roman}章 · ${mapDifficulty(map)} · 浅海 ${mapDepth(map)} m · 海沟 ∞ · ${mapPlace(map)}`,
+      );
+      $('wb-place-text').textContent = t(
+        `${mapBlurb(map)} Zones: ${zones.join(', ')}, then the Trench with no bottom.`,
+        `${mapBlurb(map)} 区域：${zones.join('、')}，再往下是深不见底的海沟。`,
+      );
+      // Shark waters say what a bite costs every time the place is picked, before Dive.
+      const warn = $('wb-place-warn');
+      warn.classList.toggle('hidden', !map.sharks);
+      if (map.sharks) {
+        const en = document.createElement('b');
+        en.textContent = SHARK_WARNING[lang()];
+        warn.replaceChildren(en);
+      }
     }
-    const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
-    $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
+    const ready = this.packed.map((g) => upgradeName(UPGRADES.find((u) => u.id === g)!));
+    $('wb-place-gear').textContent = ready.length
+      ? t(`Ready: ${ready.join(', ')}`, `已备好：${ready.join('、')}`)
+      : t('Nothing packed: you dive with the basics', '未装备：只带基础装备下潜');
     if (id) this.renderConditions(id);
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
   }
 
   private renderConditions(id: MapId) {
     const conditions = this.hooks.conditions(id);
+    $('wb-fishing-advice').dataset.level = conditions.fishing.level;
+    $('wb-fishing-label').textContent = conditions.fishing.label;
+    $('wb-fishing-reason').textContent = conditions.fishing.reason;
     $('wb-entry-time').textContent = conditions.time;
     $('wb-entry-temp').textContent = `${conditions.temperatureC > 0 ? '+' : ''}${conditions.temperatureC.toFixed(1)}°C`;
     $('wb-entry-weather').textContent = conditions.weather;
     $('wb-entry-wind').textContent = conditions.wind;
     $('wb-entry-rain').textContent = conditions.rain;
+    // The chart shares this snapshot with the field note, so its pencil marks
+    // fade through the same live front rather than staying on the old weather.
+    this.paintMap(conditions.weatherState);
   }
 
   /**
@@ -1982,6 +2272,6 @@ function drawTray(w: number, d: number): HTMLCanvasElement {
   c.fillStyle = 'rgba(18, 47, 39, 0.82)';
   c.fillRect(16, cv.height - 43, cv.width - 32, 33);
   c.fillStyle = 'rgba(255, 240, 210, 0.86)';
-  c.fillText('READY · 准备区', cv.width / 2, cv.height - 16);
+  c.fillText(t('READY', '准备区'), cv.width / 2, cv.height - 16);
   return cv;
 }

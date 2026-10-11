@@ -1,6 +1,7 @@
 import { ZONES, fishValue, type FishSpec, type Zone } from './fish';
 import { storageKey } from './wallet';
 import type { Climate } from './weather';
+import { t } from './i18n';
 
 // The three waters from the design doc (design/game-design-document.md, section 6).
 // A map is pure data: how deep its shelf goes (which shallow zones it has),
@@ -39,7 +40,10 @@ export interface MapDef {
    * only bring wind and rain). Above 0, rogue waves can capsize the boat (see storm.ts).
    */
   stormSwell: number;
-  /** One to two sharks hunt here by day, two to four at night, if opted in (see shark.ts). */
+  /**
+   * Sharks always hunt here: one to two by day, two to four at night (see shark.ts). A bite
+   * costs this dive's unsettled catch and resets the dive gear upgrades (main.ts sharkBite).
+   */
   sharks: boolean;
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
@@ -158,6 +162,34 @@ export function mapDepth(map: MapDef): number {
   return ZONES[map.zoneCount - 1].bottom + 2;
 }
 
+// Display text in the player's language. The data above stays English (chain.ts reads
+// zoneLabels); screens call these at render time.
+const PLACE_ZH: Record<string, string> = {
+  'Norway / Iceland': '挪威 / 冰岛',
+  'Zhangjiajie / Changbai': '张家界 / 长白山',
+  'The deep sea': '深海',
+};
+const BLURB_ZH: Record<string, string> = {
+  'Calm glacial water between snow peaks. A shallow shelf, then a sheer drop.': '雪峰间平静的冰川水域。浅浅的大陆架，之后是陡直的断崖。',
+  'A misty mountain lake ringed by stone pillars. Drowned trees below.': '石柱环绕的雾锁山湖，水下是沉没的树林。',
+  'Open water under a storm front. Reef and abyss on the widest shelf.': '暴风前线下的开阔海面，最宽的大陆架上有礁区和深渊。',
+};
+const ZONE_ZH: Record<string, string> = { Shallows: '浅滩', 'Sunken Forest': '沉林', Reef: '礁区', Abyss: '深渊' };
+const DIFFICULTY_ZH = { Casual: '休闲', Normal: '普通', Hard: '困难' } as const;
+
+export function mapPlace(map: MapDef): string {
+  return t(map.place, PLACE_ZH[map.place] ?? map.place);
+}
+export function mapBlurb(map: MapDef): string {
+  return t(map.blurb, BLURB_ZH[map.blurb] ?? map.blurb);
+}
+export function mapDifficulty(map: MapDef): string {
+  return t(map.difficulty, DIFFICULTY_ZH[map.difficulty]);
+}
+export function mapZoneLabel(label: string): string {
+  return t(label, ZONE_ZH[label] ?? label);
+}
+
 // ---- Progress -----------------------------------------------------------
 
 export interface MapProgress {
@@ -184,6 +216,29 @@ export function loadMapProgress(): MapProgress {
 export function saveMapProgress(progress: MapProgress) {
   try {
     localStorage.setItem(storageKey(KEY), JSON.stringify(progress));
+  } catch {}
+}
+
+/** What shark waters say before you dive there (the chart's place card and the one-time warning). */
+export const SHARK_WARNING = {
+  en: "Sharks hunt here. A bite costs this dive's catch and resets your dive gear upgrades.",
+  zh: '鲨鱼在此出没。被咬一口，本次下潜的渔获全部损失，潜水装备升级重置为 1 级。',
+} as const;
+
+const SHARK_WARNED_KEY = 'sharkWarned';
+
+/** Has this wallet acknowledged the shark warning once? Then later dives on shark waters don't ask again. */
+export function sharkWarningSeen(): boolean {
+  try {
+    return localStorage.getItem(storageKey(SHARK_WARNED_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markSharkWarningSeen() {
+  try {
+    localStorage.setItem(storageKey(SHARK_WARNED_KEY), '1');
   } catch {}
 }
 
