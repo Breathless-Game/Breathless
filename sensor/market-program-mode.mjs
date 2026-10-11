@@ -8,6 +8,7 @@ import { createNoopSigner, publicKey, transactionBuilder } from '@metaplex-found
 import { fetchAsset } from '@metaplex-foundation/mpl-core';
 import { findAssociatedTokenPda } from '@metaplex-foundation/mpl-toolbox';
 import { HttpError, appraise, parseQuoteBody } from './market-rules.mjs';
+import { assertTrustedFish } from './fish-trust.mjs';
 import { PROGRAMS, SEEDS, buildSellFish, decodeConfig } from './fish-market.mjs';
 
 const SYMBOL = 'PEARL';
@@ -40,13 +41,15 @@ export async function composeQuoteTx(u, { instruction, seller, blockhash }) {
 }
 
 /** `u` is a umi whose identity is the oracle keypair, with mplCore installed. */
-export function createProgramMode({ u, programId, layout, log }) {
+export function createProgramMode({ u, programId, layout, log, fishCollection = null }) {
   const oracle = u.identity.publicKey.toString();
   const { pearlMint, mintAuthority, config: configPda } = fishMarketPdas(u.eddsa, programId);
 
   log(`[market] mode: program (fish_market ${programId})`);
   log(`[market] oracle ${oracle}  <- config.oracle must be this key`);
   log(`[market] PEARL mint (PDA) ${pearlMint}`);
+  if (fishCollection) log(`[market] buying only fish in the collection ${fishCollection}`);
+  else log('[market] WARNING: no fish collection in this market dir: fish NFTs are priced from their attributes without a mint check (run server mode once to create it)');
 
   // ---- On-chain config + the mint's token program, refreshed every minute.
   let chain = { at: 0, config: null, tokenProgram: PROGRAMS.token };
@@ -88,6 +91,8 @@ export function createProgramMode({ u, programId, layout, log }) {
       throw new HttpError(410, 'Fish not found: already sold (burned) or never minted');
     }
     if (asset.owner.toString() !== seller) throw new HttpError(403, 'This fish is not owned by the seller');
+    // The same gate as server mode (fish-trust.mjs) when a fish collection exists; config.max_value still clamps.
+    if (fishCollection) assertTrustedFish(asset, { collection: fishCollection });
     const a = appraise(asset.attributes?.attributeList, { maxValue: config.maxValue });
     if (!a.ok) throw new HttpError(422, a.reason);
 
