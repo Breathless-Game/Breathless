@@ -44,7 +44,6 @@ export class Diver {
   facing = 1;
   headlamp: THREE.SpotLight;
   /** A faint volumetric cone makes the otherwise invisible SpotLight readable underwater. */
-  private headlampBeam: THREE.Mesh;
   private body = new THREE.Group();
   private playtestModel = new DiverConcept(0);
   private modelTime = 0;
@@ -230,27 +229,6 @@ export class Diver {
     this.headlamp = new THREE.SpotLight('#fff1c4', 0, 22, 0.65, 0.55, 1.6);
     this.headlamp.position.set(1.4, 0.2, 0.6);
     this.headlamp.target.position.set(4.5, 0.05, 0.6);
-    // Three.js lights illuminate surfaces but do not show a beam in the water.
-    // A restrained additive cone gives the diver a hand-drawn beam silhouette;
-    // its opacity follows the same depth fade as the real light below.
-    const beamGeometry = new THREE.CylinderGeometry(2.25, 0.1, 9, 12, 1, true);
-    beamGeometry.rotateZ(-Math.PI / 2);
-    // The cone is a child of the lamp (whose local x is 1.4), so start its
-    // narrow end at the lamp rather than leaving a floating gap in front.
-    beamGeometry.translate(4.5, 0.08, 0);
-    this.headlampBeam = new THREE.Mesh(
-      beamGeometry,
-      new THREE.MeshBasicMaterial({
-        color: '#fff1c4',
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    this.headlampBeam.renderOrder = 2;
-    this.headlamp.add(this.headlampBeam);
     this.body.add(this.headlamp, this.headlamp.target);
     this.headlamp.decay = this.lampOptics.decay;
     scene.add(this.group);
@@ -723,9 +701,6 @@ export class Diver {
     this.playtestModel.update(this.modelTime,this.netSwing);
 
     this.updateLamp(depth);
-    // The PR lamp model draws its own scatter cone (lampBeam); keep the older
-    // headlamp cone hidden so the beam is not drawn twice.
-    this.headlampBeam.visible = false;
     this.updateWaterContact(dt, heave);
 
     this.bubbleUpdateAccumulator += dt;
@@ -779,7 +754,6 @@ export class Diver {
     this.showNet(false);
     this.head.rotation.z = SIT_HEAD + Math.sin(time * 0.5) * 0.06;
     this.setLampOff();
-    this.headlampBeam.visible = false;
   }
 
   /** The arc off the bow: up and out, then down into the water, rolling head first. */
