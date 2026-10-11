@@ -2,12 +2,11 @@ import * as THREE from 'three';
 import type { LightingState } from './daylight';
 import type { RenderQuality } from './render-quality';
 import type { WeatherState } from './weather';
-import { WATER_WAVES_GLSL } from './water-waves';
 
-/** Continuous waves with an illustrated, flat-face blue/green palette. */
+/** Colored low-poly facets and broken celestial highlights in one water draw. */
 export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
-  private readonly dayWater = new THREE.Color('#287f96');
-  private readonly nightWater = new THREE.Color('#133346');
+  private readonly dayWater = new THREE.Color('#367f91');
+  private readonly nightWater = new THREE.Color('#17364d');
   private readonly waterUniforms = {
     uWaterTime: { value: 0 },
     uWaterEffects: { value: 1 },
@@ -24,39 +23,41 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
 
   constructor() {
     super({
-      color: '#287f96', flatShading: true, roughness: 0.7, metalness: 0,
-      transparent: true, opacity: 1, depthWrite: false, side: THREE.DoubleSide,
+      color: '#367f91', flatShading: true, roughness: 0.85, metalness: 0,
+      transparent: true, opacity: 0.78, depthWrite: false, side: THREE.DoubleSide,
     });
     this.forceSinglePass = true;
     this.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.waterUniforms);
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
-          varying vec3 vWaterWorldPosition;
-          flat varying vec2 vWaterPigment;
+          attribute vec4 aWaterFacet;
+          attribute vec4 aWaterPatch;
+          varying vec4 vWaterPatch;
+          varying vec3 vWaterFacetCenter;
+          varying vec2 vWaterFacetTone;
           uniform float uWaterTime;
           uniform float uWaterWind;
           uniform float uWaterMapWaves;
-          uniform float uWaterDetail;
-          ${WATER_WAVES_GLSL}
         `)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
-          // Flat interpolation keeps the illustrated pigment within triangle
-          // edges while indexed neighboring faces can share a color patch.
-          // The spatial field is fixed, so wave motion never flickers colors.
-          vWaterPigment = vec2(
-            sin(dot(position.xz, vec2(0.71, 0.47))),
-            sin(dot(position.xz, vec2(-0.39, 0.63)) + 1.7));
-          transformed.y += waterWaveHeight(position.xz, uWaterTime, uWaterDetail)
+          // Shared corners evaluate the same two waves on the GPU. No per-frame
+          // geometry upload or CPU normal rebuild is needed at any quality.
+          transformed.y += (sin(position.x * 0.15 + uWaterTime * 1.3) * 0.35
+            + cos(position.z * 0.2 + uWaterTime * 0.9) * 0.25)
             * (1.0 + uWaterWind * 0.75) * uWaterMapWaves;
         `)
         .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
-          vWaterWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
+          vWaterPatch = aWaterPatch;
+          vWaterFacetCenter = (modelMatrix * vec4(aWaterFacet.x, 0.0, aWaterFacet.y, 1.0)).xyz;
+          vWaterFacetTone = aWaterFacet.zw;
         `);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
-          varying vec3 vWaterWorldPosition;
-          flat varying vec2 vWaterPigment;
+          varying vec4 vWaterPatch;
+          varying vec3 vWaterFacetCenter;
+          varying vec2 vWaterFacetTone;
+          uniform float uWaterTime;
           uniform float uWaterEffects;
           uniform float uWaterDetail;
           uniform float uWaterWind;
@@ -67,60 +68,75 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           uniform vec3 uWaterLightDirection;
           uniform float uWaterLightStrength;
         `)
-        .replace('#include <lights_physical_fragment>', `
-          // The geometric face normal is constant across each triangle. Let
-          // that slope select a blue/green pigment before scene lighting, so
-          // facets remain legible away from the sun's narrow reflection path.
-          // Smooth palette transitions avoid colors popping as a wave turns.
-          vec3 facetNormal = inverseTransformDirection(normal, viewMatrix);
-          facetNormal *= facetNormal.y < 0.0 ? -1.0 : 1.0;
-          vec2 facetSlope = facetNormal.xz / max(facetNormal.y, 0.2);
-          float facetTone = smoothstep(-0.07, 0.07,
-            dot(facetSlope, vec2(-0.65, 0.76)));
-          float facetHue = smoothstep(-0.065, 0.065,
-            dot(facetSlope, vec2(0.76, 0.65)));
-          vec3 facetShade = mix(vec3(0.54, 0.68, 0.86),
-            vec3(1.36, 1.31, 1.07), facetTone);
-          facetShade *= mix(vec3(0.85, 1.04, 1.03),
-            vec3(1.09, 1.01, 0.93), facetHue);
-          facetShade *= 1.0 + vWaterPigment.x * 0.30;
-          facetShade *= mix(vec3(0.79, 1.01, 1.10),
-            vec3(1.16, 1.07, 0.91), vWaterPigment.y * 0.5 + 0.5);
-          diffuseColor.rgb *= mix(vec3(1.0), facetShade,
-            mix(0.5, 1.0, uWaterAbove));
-          #include <lights_physical_fragment>
-        `)
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-          // One celestial lobe below. Diffuse/hemisphere light still uses
-          // Three's derivative normal of the displaced triangle.
+          // Celestial reflection below supplies the stylized highlight. A
+          // second smooth specular lobe would erase the triangle silhouettes.
           reflectedLight.directSpecular = vec3(0.0);
         `)
         .replace('#include <opaque_fragment>', `
-          if (uWaterEffects > 0.5) {
-            vec3 waterNormal = inverseTransformDirection(normal, viewMatrix);
-            vec3 waterView = normalize(cameraPosition - vWaterWorldPosition);
-            float facing = clamp(dot(waterNormal, waterView), 0.0, 1.0);
-            float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
-            vec3 reflectedView = reflect(-waterView, waterNormal);
-            // Neighboring faces reflect the same sky at different angles.
-            // Color boundaries follow slopes instead of random tint.
-            vec3 skyReflection = mix(uWaterHorizon, uWaterSky,
-              smoothstep(0.0, 0.55, max(reflectedView.y, 0.0)));
-            outgoingLight = mix(outgoingLight, skyReflection * 0.20,
-              fresnel * 0.27 * uWaterAbove);
+          vec3 waterNormal = inverseTransformDirection(normal, viewMatrix);
+          // All three vertices carry the same seed: hue and brightness belong
+          // to a whole face, never a screen-space noise or smooth wave stripe.
+          float facetTone = vWaterFacetTone.x;
+          vec3 facetCool = vec3(0.82, 0.96, 1.08);
+          vec3 facetWarm = vec3(1.02, 1.02, 0.94);
+          vec3 facetPalette = mix(facetCool, facetWarm, facetTone);
+          float facetValue = mix(0.86, 1.08, facetTone);
+          outgoingLight *= mix(vec3(1.0), facetPalette * facetValue, 0.82 * uWaterAbove + 0.18);
 
-            // Per-pixel view attaches light to the moving surface. Flat normals
-            // naturally break the reflected disc's contour at triangle edges.
-            float alignment = max(dot(reflectedView, uWaterLightDirection), 0.0);
-            float sharpness = mix(600.0, 1000.0, uWaterDetail * 0.5) * mix(1.0, 0.72, uWaterWind);
-            float glint = pow(alignment, sharpness);
-            float halo = pow(alignment, 28.0) * 0.025;
-            float reflection = (glint + halo) * (0.25 + fresnel * 0.75)
-              * uWaterLightStrength * uWaterAbove;
-            outgoingLight += uWaterLightColor * reflection;
-            // Absorb distant seabed silhouettes above water; ease into a
-            // translucent underside as the camera crosses the waterline.
-            diffuseColor.a = min(1.0, diffuseColor.a + fresnel * 0.06 * uWaterAbove);
+          if (uWaterEffects > 0.5) {
+            vec3 waterView = normalize(cameraPosition - vWaterFacetCenter);
+            float waterFacing = clamp(dot(waterNormal, waterView), 0.0, 1.0);
+            float waterFresnel = 0.035 + 0.60 * pow(1.0 - waterFacing, 5.0);
+            vec3 waterReflection = reflect(-waterView, waterNormal);
+            vec3 waterSky = mix(uWaterHorizon, uWaterSky, smoothstep(0.0, 0.6, abs(waterReflection.y)));
+            // Retain blue-green body color at grazing angles so reflected sky
+            // paints facets instead of washing the sea into a pale mirror.
+            vec3 reflectedFacet = waterSky * facetPalette * mix(0.35, 0.51, facetTone);
+            outgoingLight = mix(outgoingLight, reflectedFacet, waterFresnel * mix(0.04, 0.48, uWaterAbove));
+
+            // Reflect each polygon's average view and normal. A broad source
+            // path selects faces; sparse thresholds turn it into angular shards.
+            vec3 waterHalf = normalize(waterView + uWaterLightDirection);
+            float alignment = max(dot(waterNormal, waterHalf), 0.0);
+            float reflectionPath = pow(alignment, 72.0);
+            vec2 towardSource = normalize(uWaterLightDirection.xz);
+            vec2 toFacet = vWaterFacetCenter.xz - cameraPosition.xz;
+            float sourceDistance = max(0.0, dot(toFacet, towardSource));
+            float acrossSource = abs(toFacet.x * towardSource.y - toFacet.y * towardSource.x);
+            float laneWidth = (2.0 + sourceDistance * 0.075) * mix(1.6, 1.0, uWaterDetail * 0.5);
+            float sourceLane = (1.0 - smoothstep(laneWidth * 0.4, laneWidth, acrossSource))
+              * smoothstep(0.0, 4.0, sourceDistance);
+            // A tapered path keeps the light readable on coarse geometry as
+            // well. Individual facet slopes still vary its colored fragments.
+            reflectionPath = max(reflectionPath, sourceLane * mix(0.58, 0.90, facetTone));
+            float facetPulse = 0.5 + 0.5 * sin(uWaterTime * (0.65 + uWaterWind * 0.25)
+              + vWaterFacetTone.y * 6.283 + vWaterFacetCenter.x * 0.13);
+            float shard = smoothstep(0.34, 0.72, reflectionPath)
+              * smoothstep(0.40, 0.64, vWaterFacetTone.y + facetPulse * 0.16);
+            if (uWaterDetail > 0.5) {
+              // Medium adds a gentler second family of colored faces.
+              shard += smoothstep(0.12, 0.48, reflectionPath) * 0.20
+                * smoothstep(0.68, 0.86, facetTone + facetPulse * 0.12);
+            }
+            if (uWaterDetail > 1.5) {
+              // High adds sparse bright tips, still constant across each face.
+              shard += pow(reflectionPath, 3.0) * smoothstep(0.88, 0.98, facetPulse) * 0.22;
+            }
+            // Slice an inset triangle into a short trapezoid or wedge. Thin
+            // angular patches read as light on water instead of solid ice tiles.
+            float inset = min(min(vWaterPatch.x, vWaterPatch.y), vWaterPatch.z);
+            float edgeAA = max(fwidth(inset), 0.002);
+            float polygon = smoothstep(0.045, 0.045 + edgeAA, inset);
+            float bandCenter = 0.38 + vWaterFacetTone.x * 0.22;
+            float bandDistance = abs(vWaterPatch.w - bandCenter);
+            float bandWidth = mix(0.045, 0.09, uWaterDetail * 0.5);
+            float bandAA = max(fwidth(vWaterPatch.w), 0.002);
+            polygon *= 1.0 - smoothstep(bandWidth, bandWidth + bandAA, bandDistance);
+            float highlight = clamp(shard * polygon * uWaterLightStrength * uWaterAbove, 0.0, 0.88);
+            vec3 highlightColor = mix(uWaterLightColor * 0.70, vec3(1.0, 0.97, 0.86), 0.12);
+            outgoingLight = mix(outgoingLight, max(outgoingLight, highlightColor), highlight);
+            diffuseColor.a = clamp(diffuseColor.a + highlight * 0.08, 0.0, 0.9);
           }
           #include <opaque_fragment>
         `);
@@ -128,7 +144,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   }
 
   customProgramCacheKey(): string {
-    return 'deepbreath-water-facet-palette-v3';
+    return 'deepbreath-water-facets-v1';
   }
 
   setEffectsEnabled(enabled: boolean): void {
@@ -146,9 +162,9 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     uniforms.uWaterHorizon.value.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
     uniforms.uWaterLightColor.value.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
     uniforms.uWaterLightDirection.value.set(...lighting.direction).normalize();
-    uniforms.uWaterLightStrength.value = Math.min(1.8, lighting.sunIntensity * 0.85)
+    uniforms.uWaterLightStrength.value = Math.min(1.1, 0.52 + lighting.sunIntensity * 0.28)
       * (1 - (weather?.cloud ?? 0) * 0.93);
     this.color.copy(this.dayWater).lerp(this.nightWater, lighting.nightMix);
-    this.opacity = THREE.MathUtils.lerp(0.30, 1.0, uniforms.uWaterAbove.value);
+    this.opacity = THREE.MathUtils.lerp(0.30, 0.78, uniforms.uWaterAbove.value);
   }
 }

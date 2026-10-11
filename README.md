@@ -389,14 +389,8 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── sky.ts          atmospheric sky, time-driven sun / moon and layered clouds
         ├── color-grade.ts  shared morning / afternoon / night color balance in scene materials
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
-        ├── water.ts        flat wave-face lighting and sun / moon reflections
-        ├── water-waves.ts  shared CPU / GPU directional waves for the surface, boat and buoys
-        ├── water-geometry.ts indexed, watertight triangles with varied facet sizes
-        ├── seabed-layout.ts spaced outcrops, rooted habitats and terrain-height sampling
-        ├── rock-geometry.ts clipped low-poly rock shapes with coherent fracture planes
-        ├── kelp.ts         three seeded water-plant forms batched into one GPU draw
-        ├── biome-colors.ts fixed multicolor triangle pigments from map palettes
-        ├── kelp-motion.ts  shared bend and tip-lag model
+        ├── water.ts        GPU waves, facet color and polygonal sun / moon reflection patches
+        ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
         ├── maps.ts         the three map definitions (open zones and shelf depth, unlock value, palette) and the saved map progress
@@ -606,12 +600,11 @@ The game picks the starting quality from the CPU logical core count and the devi
 | --- | --- | --- | --- |
 | DPR cap | 1 | 1.5 | 2 |
 | Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
-| Kelp / light rays / particles | 16 / 4 / 300 | 40 / 8 / 700 | 72 / 14 / 1400 |
-| Water surface segments | 64 × 32 | 96 × 48 | 128 × 72 |
+| Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
-| Water triangles | 4096 | 9216 | 18432 |
-| Shared water vertices | 2145 | 4753 | 9417 |
-| Directional wave layers | 2 broad waves | + fine wave | + smaller fine wave |
+| Water triangles | 480 | 1920 | 4320 |
+| Reflection detail | Polygon patches | + secondary colored facets | + bright tips |
 | Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
@@ -619,12 +612,10 @@ The game picks the starting quality from the CPU logical core count and the devi
 
 A large screen may use a DPR below 1 to stay within the pixel budget; the HUD still uses the browser's native resolution. After a start-up grace period, two consecutive 3-second windows that average below 45 FPS lower the quality by one level. A drop is followed by a 6-second cooldown, and within one session the quality only goes down, never up. Hidden tabs and isolated long stalls are not counted, but a sustained very low frame rate still triggers a drop.
 
-Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver, fish, breath and lighting; the headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and kelp uses one merged, GPU-animated mesh with a quality-dependent plant and frond budget.
+Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver, fish, breath and lighting; the headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and hidden kelp is removed from the scene to avoid matrix updates.
 
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
-
-Rock outcrops use large buried anchors, nearby smaller talus and open sand channels. The rear reef and trench walls form connected bedrock; plants and coral follow the rendered terrain instead of floating at random depths. Kelp mixes three seeded forms: taller classic straps with triangular side leaves as the dominant form, thin flowing ribbons, and curved broad fronds. Roots stay fixed while tips lag behind the shared current. Fixed multicolor triangle pigments and distinct map palettes keep the illustrated underwater look. Quality controls plant count, frond subdivisions and small stones, preserving the main outcrop locations. [Habitat rendering references and budgets](docs/habitat-rendering.md).
 
 ### Natural daylight and water reflections
 
@@ -634,7 +625,7 @@ Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Ni
 
 Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
 
-The sea is one continuous, gently rolling triangle mesh. Face normals come from the displaced surface, so neighboring facets share a wave and reflect the sun/moon according to their slope and viewing angle. A stable blue/teal/green pigment field keeps the polygon artwork visible away from the reflection, while face slopes change its lighting continuously. Staggered vertices and variable mesh spacing create differently sized facets; low/medium/high evaluate 2/3/4 directional waves in the vertex shader. Boat and buoy height/tilt use the same coefficients and frozen wave clock, including paused weather/quality previews. Shared corners stay watertight, and no vertex buffers or normals are rebuilt on the CPU each frame. The existing water draw handles sky and celestial reflections without an extra render target or reflection camera; boats and fish do not have live mirror reflections. [Implementation references and budgets](docs/water-rendering.md).
+The sea keeps a low-poly silhouette: slightly irregular triangles have separate blue-green facet colors and flat normals. Sun and moon reflections appear as short angular wedges and trapezoids, arranged along a path toward the visible source. Low quality retains this shape; medium adds another family of colored facets and high adds sparse bright tips. Waves run in the vertex shader, eliminating per-frame water vertex uploads and CPU normal rebuilding. Shared corners remain watertight. The existing water draw handles the reflections without a reflection camera or extra scene render; boats and fish do not have live mirror reflections.
 
 Large luminous sun and moon discs use warm gold and cool silver-blue layered halos. Low keeps the core and primary halos; higher settings add softer transitions. Clouds attenuate their light before compositing so a thick storm can hide the bright core. No fullscreen bloom pass or render target is allocated. Their compressed elevation keeps the enlarged discs within the side-on camera at noon.
 
