@@ -97,9 +97,13 @@ const ROLL_DAMP = 2.6; // turning slows while it touches, 1/s
 const SLIDE_DAMP = 1.2;
 const STICK_W = 2; // turning slower than this (rad/s) on the table, it is held more and more
 const STICK_DAMP = 6;
-const SLEEP_V = 0.25; // slower than this (and turning slower than SLEEP_W) …
-const SLEEP_W = 0.6;
+const SLEEP_V = 0.4; // slower than this (and turning slower than SLEEP_W) …
+const SLEEP_W = 1.5;
+const REST_MOVE = 0.02; // … and over that time it has moved less than this (table units) …
+const REST_TURN = 0.04; // … and turned less than this (radians)
 const SLEEP_S = 0.5; // … for this long, and it comes to rest
+const CALM_V = 0.25; // this slow (and turning slower than CALM_W) counts as still wherever it drifts
+const CALM_W = 0.6;
 // Carried pieces hang this far under the hand and swing like a pendulum.
 const SWING_L = 0.35;
 const SWING_DAMP = 3.2;
@@ -148,6 +152,8 @@ interface Piece {
   invI: number;
   /** Seconds it has lain still: past SLEEP_S it sleeps until something knocks it. */
   still: number;
+  /** Where it was when it started to look still (see SLEEP_S). */
+  restAt: { pos: THREE.Vector3; q: THREE.Quaternion } | null;
   /** Touching the table last step (a thud only on first touch). */
   touching: boolean;
   /** Carried: it hangs under the hand like a pendulum (null when not held). */
@@ -538,6 +544,7 @@ export class Workbench {
       // A point cloud's inertia about a typical axis is about 2/3 of its mean squared radius.
       invI: 1 / Math.max(0.02, (hull.reduce((s, v) => s + v.lengthSq(), 0) / Math.max(1, hull.length)) * (2 / 3)),
       still: 0,
+      restAt: null,
       touching: false,
       swing: null,
       yaw: 0,
@@ -880,8 +887,18 @@ export class Workbench {
         const k = Math.exp(-dt * SLIDE_DAMP);
         p.vel.x *= k;
         p.vel.z *= k;
-        if (p.vel.length() < SLEEP_V && p.spin.length() < SLEEP_W) p.still += dt;
-        else p.still = 0;
+        // At rest is judged by net motion over a window, not the instant: resting contact
+        // jitters (gravity in, impulse out) without going anywhere.
+        // Still: barely moving right now, or (jittering in place) not getting anywhere.
+        const v = p.vel.length();
+        const w = p.spin.length();
+        if (v < SLEEP_V && w < SLEEP_W) {
+          if (p.still === 0) p.restAt = { pos: p.pos.clone(), q: p.q.clone() };
+          p.still += dt;
+          const r = p.restAt!;
+          const calm = v < CALM_V && w < CALM_W;
+          if (!calm && (r.pos.distanceTo(p.pos) > REST_MOVE || r.q.angleTo(p.q) > REST_TURN)) p.still = 0; // it is going somewhere
+        } else p.still = 0;
         if (p.still > SLEEP_S) {
           p.vel.set(0, 0, 0);
           p.spin.set(0, 0, 0);
