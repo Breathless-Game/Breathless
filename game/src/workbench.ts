@@ -16,6 +16,7 @@ import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
 import { setDeepSonarColor } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -355,6 +356,7 @@ export class Workbench {
     this.resize();
     // Levels bought (or a ship picked, or a wallet's save loaded) since the pieces were last built.
     this.refreshGear();
+    this.setSonarColor(loadSonarConfig().color);
     if (intro || !this.placed) this.scatter(intro);
     this.placed = true;
     this.time = 0;
