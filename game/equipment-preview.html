@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HackRU · 装备多边体 3D 素材库</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #252725; color: #eeeee6; font: 14px/1.6 system-ui, sans-serif; }
+      main { max-width: 1500px; margin: auto; padding: 28px; }
+      .eyebrow { color: #b3ac83; letter-spacing: .15em; font-size: 12px; }
+      h1 { margin: 8px 0; font-size: 30px; } p { color: #b5b5a7; margin: 0; }
+      .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 12px; align-items: center; }
+      button, select, .download { padding: 8px 14px; border: 1px solid #575b54; border-radius: 8px; background: #393d37; color: #f0f0e8; cursor: pointer; font: inherit; }
+      button[aria-pressed="true"] { border-color: #b3ac83; background: #565844; }
+      #viewport { height: 440px; border: 1px solid #55594f; border-radius: 14px; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #effect { margin-top: 10px; } #status { margin: 14px 0; color: #c8c3a1; }
+      h2 { margin: 28px 0 12px; font-size: 19px; }
+      #catalog { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+      figure { margin: 0; border: 1px solid #4d5248; border-radius: 12px; overflow: hidden; background: #8f948b; }
+      figure img { width: 100%; display: block; cursor: pointer; }
+      figcaption { padding: 12px; } figcaption b { display: block; } figcaption p { font-size: 12px; }
+      figcaption a { color: #c8c3a1; margin-right: 14px; }
+      #exports { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
+      .download { color: #d2cbb0; text-decoration: none; }
+      #manifest-link { display: none; }
+      @media (max-width: 740px) { main { padding: 18px; } h1 { font-size: 25px; } #viewport { height: 350px; } #catalog { gap: 8px; } figcaption { padding: 8px; } figcaption p { display: none; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">HACKRU / EQUIPMENT ASSET LIBRARY</div>
+      <h1>装备多边体 3D · 全部三档</h1>
+      <p>大切面 · 硬轮廓 · 哑光自然材质 · 10 类装备各三档</p>
+      <div class="toolbar">
+        <label for="equipment">装备</label><select id="equipment"></select>
+        <button data-level="1" aria-pressed="true">Lv1</button>
+        <button data-level="2" aria-pressed="false">Lv2</button>
+        <button data-level="3" aria-pressed="false">Lv3</button>
+        <button id="reset-view">重置视角</button>
+        <button id="export-all">生成全部 PNG / GLB</button>
+      </div>
+      <div id="viewport" aria-label="可旋转的装备 3D 预览"></div>
+      <p id="effect"></p>
+      <p>拖动旋转 · 滚轮缩放 · 三档结构对照</p>
+      <p id="status" role="status">正在生成模型预览…</p>
+      <div id="exports"></div>
+      <div id="catalog"></div>
+    </main>
+    <script type="module" src="/src/equipment-preview.ts"></script>
+  </body>
+</html>

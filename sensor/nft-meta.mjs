@@ -2,12 +2,16 @@
 // alone. No storage, so the URIs minted on chain resolve as long as this server runs, across
 // restarts and redeploys. Serve mode (index.mjs) and the dev market (market-server.mjs) mount it.
 //
-//   GET /api/nft/meta/v1/<id>/<rarity>/<stats>/<look>/<zone>/<name>.json   Metaplex JSON
-//   GET /api/nft/img/v1/<id>/<rarity>/<look>/<species>.png                 512x512 PNG
+//   GET /api/nft/meta/v2/<serial>/<id>/<rarity>/<stats>/<look>/<zone>/<name>.json   Metaplex JSON
+//   GET /api/nft/img/v2/<serial>/<id>/<rarity>/<look>/<species>.png                 512x512 PNG
 //
-//   stats = <depthM>-<value>-<lengthCm>-<weightKg>
-//   look  = <archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>
+//   serial = the fish's number (nft-serial.mjs), 1-9 digits; the JSON name is "<name> #0042"
+//   stats  = <depthM>-<value>-<lengthCm>-<weightKg>
+//   look   = <archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>
 //   zone, name, species: encodeURIComponent'd
+//
+// v1 is the same without <serial>: fish minted before numbering. Those URIs are on chain, so v1
+// must keep resolving.
 //
 // game/src/nft-uri.ts builds these paths; keep the two in step (game/tests/nft-uri.test.mjs checks).
 // The JSON's image URL uses PUBLIC_ORIGIN when set, else the request's Host (cloudflared passes
@@ -17,8 +21,8 @@ import { ARCHETYPES, RARITIES, renderFishPng } from './fish-png.mjs';
 
 export const DEFAULT_ORIGIN = 'https://breathless.gotclass.xyz';
 const SYMBOL = 'DIVE';
-const META = '/api/nft/meta/v1/';
-const IMG = '/api/nft/img/v1/';
+const META = '/api/nft/meta/';
+const IMG = '/api/nft/img/';
 const MAX_TEXT = 64;
 const PNG_CACHE = 256;
 // Each new image is ~0.1 s of CPU on the box that also runs the breath sensor. Cached images (here
@@ -54,12 +58,27 @@ const seedOf = (id) => Number.parseInt(id.slice(-8), 16) >>> 0;
 /** Species from a fish name: names are "<Epithet> <Species>" (fish.ts rollFish). */
 export const speciesOf = (name) => name.split(' ').slice(1).join(' ') || name;
 
-/** Parse a metadata path; null unless every field is well formed. */
+/** A fish number: 1 to 999999999, no leading zeros in the path. */
+const parseSerial = (s) => (/^[1-9]\d{0,8}$/.test(s) ? Number(s) : null);
+/** "#0042": at least four digits, more when the number needs them (#10000, #1234567). game/src/nft-uri.ts formatSerial agrees. */
+export const formatSerial = (serial) => `#${String(serial).padStart(4, '0')}`;
+
+/** The path after `<prefix>v1/` or `<prefix>v2/<serial>/`, split on '/'; null for anything else. */
+function versioned(pathname, prefix, ext) {
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(ext)) return null;
+  const parts = pathname.slice(prefix.length, -ext.length).split('/');
+  const version = parts.shift();
+  if (version === 'v1') return { serial: undefined, parts };
+  if (version !== 'v2') return null;
+  const serial = parseSerial(parts.shift() ?? '');
+  return serial === null ? null : { serial, parts };
+}
+
+/** Parse a metadata path (v1, or v2 with a serial); null unless every field is well formed. */
 export function parseMetaPath(pathname) {
-  if (!pathname.startsWith(META) || !pathname.endsWith('.json')) return null;
-  const parts = pathname.slice(META.length, -'.json'.length).split('/');
-  if (parts.length !== 6) return null;
-  const [idS, rarityS, statsS, lookS, zoneS, nameS] = parts;
+  const v = versioned(pathname, META, '.json');
+  if (!v || v.parts.length !== 6) return null;
+  const [idS, rarityS, statsS, lookS, zoneS, nameS] = v.parts;
   const stats = statsS.split('-');
   if (stats.length !== 4) return null;
   const fish = {
@@ -74,20 +93,25 @@ export function parseMetaPath(pathname) {
     zone: text(zoneS),
     name: text(nameS),
   };
-  return Object.values(fish).includes(null) ? null : fish;
+  if (Object.values(fish).includes(null)) return null;
+  return v.serial === undefined ? fish : { ...fish, serial: v.serial };
 }
 
-/** Parse an image path; null unless every field is well formed. */
+/** Parse an image path (v1, or v2 with a serial); null unless every field is well formed. */
 export function parseImagePath(pathname) {
-  if (!pathname.startsWith(IMG) || !pathname.endsWith('.png')) return null;
-  const parts = pathname.slice(IMG.length, -'.png'.length).split('/');
-  if (parts.length !== 4) return null;
+  const v = versioned(pathname, IMG, '.png');
+  if (!v || v.parts.length !== 4) return null;
+  const { parts } = v;
   const fish = { id: parseId(parts[0]), rarity: parseRarity(parts[1]), look: parseLook(parts[2]), species: text(parts[3]) };
-  return Object.values(fish).includes(null) ? null : fish;
+  if (Object.values(fish).includes(null)) return null;
+  return v.serial === undefined ? fish : { ...fish, serial: v.serial };
 }
+
+const versionOf = (fish) => (fish.serial === undefined ? 'v1/' : `v2/${fish.serial}/`);
 
 /** The image path for a parsed metadata path (game/src/nft-uri.ts fishImagePath builds the same). */
-export const imagePath = (fish) => `${IMG}${fish.id}/${fish.rarity}/${fish.lookPath}/${encodeURIComponent(speciesOf(fish.name))}.png`;
+export const imagePath = (fish) =>
+  `${IMG}${versionOf(fish)}${fish.id}/${fish.rarity}/${fish.lookPath}/${encodeURIComponent(speciesOf(fish.name))}.png`;
 
 /** The origin to put in the JSON's image URL. Never a loopback address unless the request was local. */
 export function originFor(req, configured = process.env.PUBLIC_ORIGIN) {
@@ -104,10 +128,11 @@ export function metadataJson(fish, origin) {
   const label = RARITIES[fish.rarity].label;
   const image = origin + imagePath(fish);
   const article = /^[aeiou]/i.test(label) ? 'An' : 'A';
+  const numbered = fish.serial !== undefined;
   return {
-    name: fish.name,
+    name: numbered ? `${fish.name} ${formatSerial(fish.serial)}` : fish.name,
     symbol: SYMBOL,
-    description: `${article} ${label.toLowerCase()} ${species} caught ${fish.depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${fish.id}.`,
+    description: `${article} ${label.toLowerCase()} ${species} caught ${fish.depthM} m down on a single held breath in Breathless.${numbered ? ` Fish ${formatSerial(fish.serial)}.` : ''} The art is a pure function of seed ${fish.id}.`,
     image,
     external_url: origin,
     attributes: [
@@ -119,6 +144,7 @@ export function metadataJson(fish, origin) {
       ['Weight (kg)', String(fish.weightKg)],
       ['Catch value', String(fish.value)],
       ['Seed', fish.id],
+      ...(numbered ? [['Number', formatSerial(fish.serial)]] : []),
     ].map(([trait_type, value]) => ({ trait_type, value })),
     properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },
   };
@@ -163,7 +189,7 @@ export function createNftHandler({ publicOrigin = process.env.PUBLIC_ORIGIN, log
       if (renders === RENDERS_PER_MINUTE + 1) log(`[nft] render limit reached (${RENDERS_PER_MINUTE}/min), answering 503 for new images`);
       return null;
     }
-    const out = renderFishPng({ rarity: fish.rarity, species: fish.species, seed: seedOf(fish.id), look: fish.look });
+    const out = renderFishPng({ rarity: fish.rarity, species: fish.species, seed: seedOf(fish.id), look: fish.look, serial: fish.serial });
     pngs.set(pathname, out);
     if (pngs.size > PNG_CACHE) pngs.delete(pngs.keys().next().value);
     return out;
