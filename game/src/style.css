@@ -3596,7 +3596,32 @@ button:disabled {
   color: var(--hold);
 }
 /* Ship mode (the boat): the intro is a paragraph, not a one-line effect. */
-#wb-inspect.ships #wb-inspect-effect {
+/* Dressing the diver figure: each piece of gear is a row to click (on / off). */
+#wb-inspect.diver #wb-inspect-levels li {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+#wb-inspect.diver #wb-inspect-levels li:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+#wb-inspect.diver #wb-inspect-levels li.on {
+  border-color: rgba(62, 240, 168, 0.55);
+  background: rgba(62, 240, 168, 0.1);
+}
+#wb-inspect.diver #wb-inspect-levels li.locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+#wb-inspect.diver #wb-inspect-levels li.locked::after {
+  content: '';
+}
+
+#wb-inspect.ships #wb-inspect-effect,
+#wb-inspect.diver #wb-inspect-effect {
   font-size: 14px;
   font-weight: 500;
   line-height: 1.5;

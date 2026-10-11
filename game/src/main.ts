@@ -107,6 +107,8 @@ const bowSeat = new THREE.Object3D();
 bowSeat.position.set(3.02, 0.66, 0);
 world.boat.add(bowSeat);
 diver.sit(bowSeat);
+// Not on the title or the menus: the workbench has its own diver figure. It shows from the jump in (startGame).
+diver.group.visible = false;
 const JUMP_OUT = 2.6; // where the jump lands: this far past the bow, and this deep
 const JUMP_DEPTH = 1.4;
 // Floating at the surface this close to the boat, F climbs aboard and goes back to the workbench.
@@ -1215,15 +1217,15 @@ canvas.addEventListener('click',e=>{
 },true);
 let resetDayClock = false;
 
+/**
+ * The tab was hidden mid-dive: rather than a pause menu, the same as Esc — up to
+ * the rope's fish and the workbench, the dive held where it was (Esc on the table
+ * carries it on from there; MAIN MENU ends the trip).
+ */
 function pause() {
   if (phase !== 'play' || paused) return;
-  paused = true;
-  keys.clear();
   loadoutWheel.closeWheel(false);
-  vault.toggle(false);
-  gear.toggle(false);
-  report.toggle(false);
-  pauseMenu.show();
+  climbAboard();
 }
 
 // ---- Back aboard ---------------------------------------------------------
@@ -1347,6 +1349,7 @@ function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   diver.sit(bowSeat);
+  diver.group.visible = false; // back on the title: no diver on the bow
   hud.setBoardPrompt(false);
   calmSea();
   net = [];
@@ -1438,9 +1441,12 @@ document.addEventListener('pointermove', (e) => {
 });
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => aquarium.show() },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.17, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => aquarium.show() },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.83, label: 'SETTINGS', onClick: openSettingsDesk },
+  // The field guide (B) and the tutorial hang on the rope too, instead of buttons in the corner.
+  { seed: 0x5eed04, rarity: 'legendary', species: 'Ember Triggerfish', hue: 14, sat: 0.8, light: 0.55, at: 0.5, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
+  { seed: 0x5eed05, rarity: 'uncommon', species: 'Ghost Angelfish', hue: 150, sat: 0.5, light: 0.6, at: 0.665, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTutorial() },
 ]);
 
 // Gear set in the workbench's READY tray for this dive. The selected slots are
@@ -1480,8 +1486,9 @@ const workbench = new Workbench({
   },
   preview: mapPreview,
   dive(id, gear) {
-    loadout = gear;
-    activeLoadout = [...gear];
+    // The net shaft isn't on the workbench: it always goes down with the diver, at the level owned.
+    loadout = gear.includes('rod') ? gear : [...gear, 'rod'];
+    activeLoadout = [...loadout];
     const firstPacked = QUICK_SLOTS.find((item) => gear.includes(item.slot));
     activeTool = firstPacked?.slot ?? 'net';
     loadoutWheel.setActive(activeTool);
@@ -1530,6 +1537,22 @@ const workbench = new Workbench({
     progress: () => mapProgress.bestValue,
     model: (i) => shipyard.modelAt(i),
     equip: (i) => shipyard.equip(i),
+  },
+  // The ready tray is saved per wallet whenever it changes, and comes back packed the same.
+  savedLoadout() {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(storageKey('loadout')) ?? 'null');
+      return Array.isArray(saved) ? saved.filter((id): id is UpgradeId => typeof id === 'string') : null;
+    } catch {
+      return null;
+    }
+  },
+  saveLoadout(gear) {
+    try {
+      localStorage.setItem(storageKey('loadout'), JSON.stringify(gear));
+    } catch {
+      // Private mode or full storage: it just isn't remembered.
+    }
   },
   sonarColor(color) {
     sonar.setColor(color);
