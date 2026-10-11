@@ -73,6 +73,39 @@ function lampMat(color = '#ffd58a') {
   return new THREE.MeshStandardMaterial({ color: '#5b4a33', emissive: color, emissiveIntensity: 0, flatShading: true });
 }
 
+/** 0 in clear air to 1 in steady rain: how far the mountains have flattened into silhouettes. */
+const rainMist = { value: 0 };
+
+function setRainMist(env?: SceneryEnv) {
+  rainMist.value = THREE.MathUtils.smoothstep(env?.weather?.rain ?? 0, 0.12, 0.6);
+}
+
+/**
+ * Vertex-coloured rock for peaks, pillars and sea stacks. In rain it loses its
+ * facets and snow and becomes one flat tone of the haze, darker the nearer the
+ * ridge stands: layered silhouettes instead of grey shapes dissolving in fog.
+ */
+function mountainMat() {
+  const mat = flatMat('#ffffff', { vertexColors: true });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uMist = rainMist;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform float uMist;
+      `)
+      .replace('#include <fog_fragment>', `
+        #ifdef USE_FOG
+          float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+          vec3 hazed = mix(gl_FragColor.rgb, fogColor, fogFactor);
+          vec3 silhouette = fogColor * mix(0.66, 0.9, smoothstep(70.0, 190.0, vFogDepth));
+          gl_FragColor.rgb = mix(hazed, silhouette, uMist);
+        #endif
+      `);
+  };
+  mat.customProgramCacheKey = () => 'scenery-mountain-mist-v1';
+  return mat;
+}
+
 /** Paint a whole piece one colour so it can join a vertex-coloured batch. */
 function solid(geo: THREE.BufferGeometry, color: THREE.ColorRepresentation) {
   const flat = geo.index ? geo.toNonIndexed() : geo;
@@ -374,7 +407,7 @@ interface PuffSource {
 class Puffs {
   readonly mesh: THREE.InstancedMesh | null = null;
   private items: { s: PuffSource; phase: number; a: number; b: number; bulk: number }[] = [];
-  /** Scales every puff; night smoke is thicker. */
+  /** Scales every puff. */
   swell = 1;
 
   constructor(group: THREE.Group, mat: THREE.Material, sources: PuffSource[], detail: SceneryDetail, rng: Rng) {
@@ -383,27 +416,34 @@ class Puffs {
       // Seeds are drawn for the high-detail count, so puff j looks the same at every level.
       for (let j = 0; j < s.counts[2]; j++) {
         const [a, b, c] = [rng.next(), rng.next(), rng.next()];
-        // Fewer puffs are drawn bigger, so a sparse plume still reads as one.
-        if (j < n) this.items.push({ s, phase: (j + a * 0.6) / n, a: b, b: c, bulk: Math.pow(s.counts[2] / n, 0.35) });
+        // Fewer puffs are drawn bigger, so a sparse plume still reads as one. They leave the
+        // chimney almost evenly spaced: a column, not a scatter of balls.
+        if (j < n) this.items.push({ s, phase: (j + a * 0.25) / n, a: b, b: c, bulk: Math.pow(s.counts[2] / n, 0.35) });
       }
     }
     if (!this.items.length) return;
     this.mesh = instanced(new THREE.IcosahedronGeometry(1, 0), mat, this.items.length);
-    this.items.forEach((it, i) => this.mesh!.setColorAt(i, _c.setScalar(0.86 + it.a * 0.14)));
+    this.items.forEach((it, i) => this.mesh!.setColorAt(i, _c.setScalar(0.93 + it.a * 0.07)));
     group.add(this.mesh);
   }
 
-  update(time: number) {
+  /** `wind` (0 calm to 1 storm) lays every plume over and keeps it lower. */
+  update(time: number, wind = 0) {
     if (!this.mesh) return;
+    const lean = 0.6 + 1.1 * wind;
+    const lift = 1 - 0.35 * wind;
     for (let i = 0; i < this.items.length; i++) {
       const { s, phase, a, b, bulk } = this.items[i];
       const age = fract(time / s.life + phase);
-      // Rises fast out of the chimney, then slows while the wind takes it.
-      const x = s.x + s.drift[0] * Math.pow(age, 1.4) + (a - 0.5) * s.spread + Math.sin(time * 0.8 + b * 6.3) * 0.4 * age;
-      const y = s.y + s.rise * (1 - Math.pow(1 - age, 1.7));
-      const z = s.z + s.drift[1] * age + (b - 0.5) * s.spread;
+      // Every puff of a source follows one path: fast out of the chimney, then slower while the
+      // wind takes it. The whole column sways as a wave travelling up it, so it never breaks apart.
+      const sway = Math.sin(time * 0.55 - age * 3.4 + s.x) * 0.38 * age;
+      const loose = s.spread * (0.4 + age);
+      const x = s.x + s.drift[0] * lean * Math.pow(age, 1.4) + (a - 0.5) * loose + sway;
+      const y = s.y + s.rise * lift * (1 - Math.pow(1 - age, 1.7));
+      const z = s.z + s.drift[1] * lean * age + (b - 0.5) * loose;
       const r = (s.size[0] + (s.size[1] - s.size[0]) * age) * Math.min(1, age * 8) * Math.min(1, (1 - age) * 3.5) * bulk * this.swell;
-      _q.setFromEuler(_e.set(a * 6, b * 6 + age * 1.5, 0, 'XYZ'));
+      _q.setFromEuler(_e.set(a * 6 + age * 0.6, b * 6 + age * 1.5, 0, 'XYZ'));
       this.mesh.setMatrixAt(i, _m.compose(_p.set(x, y, z), _q, _s.set(r, r * 0.8, r)));
     }
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -559,10 +599,13 @@ function smokeMaterial(day: string) {
     setNight(night: boolean) {
       if (night === was) return;
       was = night;
-      mat.color.set(night ? '#eef3f8' : day);
-      mat.emissive.set(night ? '#b4c2d6' : day);
-      mat.emissiveIntensity = night ? 0.5 : 0.45;
-      mat.opacity = night ? 0.8 : 0.55;
+      // By day the smoke is lit by the sun like everything else, with a little glow of its
+      // own so its shaded side is not black. At night it is a dim blue-grey in the moonlight,
+      // never brighter than the windows below it.
+      mat.color.set(night ? '#8794a8' : day);
+      mat.emissive.set(night ? '#3b475c' : day);
+      mat.emissiveIntensity = night ? 0.35 : 0.3;
+      mat.opacity = night ? 0.5 : 0.6;
     },
   };
 }
@@ -579,16 +622,25 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     batch.add(solid(geo, color), painted, x, y, z, o);
   const rock = shades(['#4d5d6b', '#3f4d59', '#5a6a77']);
   const snow = shades(['#f4fbff', '#dcecf5']);
-  const peak = (x: number, z: number, r: number, h: number) => {
+  const mountain = mountainMat();
+  // Each range keeps to its own slab of depth, and a peak is only `depth` times as
+  // deep as it is wide. Peaks of one range still merge into each other, but the
+  // two ranges never touch: a far snowfield cannot poke through a near rock face.
+  const peak = (x: number, z: number, r: number, h: number, depth: number) => {
     const snowline = rng.range(0.42, 0.58);
     const geo = jitter(new THREE.ConeGeometry(r, h, 7, 4), rng, r * 0.09);
     paintFaces(geo, (t) => (t > snowline + rng.range(-0.1, 0.1) ? rng.pick(snow) : rng.pick(rock)));
-    batch.add(geo, painted, x, h / 2 - 2, z, { ry: rng.range(0, 6) });
+    // Turn it first: the squash is along the line of sight, whichever way the cone faces.
+    geo.rotateY(rng.range(0, 6));
+    batch.add(geo, mountain, x, h / 2 - 2, z, { sz: depth });
   };
   // Far range, then a nearer range that leaves the middle open like a channel.
-  for (let x = -220; x <= 220; x += 55) peak(x + rng.range(-12, 12), rng.range(-130, -108), rng.range(30, 44), rng.range(48, 74));
-  for (const x of [-168, -112, -60, 60, 112, 168]) {
-    peak(x + rng.range(-8, 8), rng.range(-96, -82), rng.range(18, 28), rng.range(26, 42));
+  for (let x = -220; x <= 220; x += 55) {
+    peak(x + rng.range(-12, 12), -126 + (rng.range(-130, -108) + 119) * 0.27, rng.range(30, 44), rng.range(48, 74), 0.45);
+  }
+  // The right-hand range starts beyond the waterfall's bluff (x = 47), which stands clear of it.
+  for (const x of [-168, -112, -60, 96, 140, 184]) {
+    peak(x + rng.range(-8, 8), -82 + (rng.range(-96, -82) + 89) * 0.3, rng.range(18, 28), rng.range(26, 42), 0.4);
   }
 
   // Wooded shore at the foot of the near range.
@@ -613,10 +665,78 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   // Two fishing cabins and a pier on an islet off to the left.
   put(jitter(new THREE.IcosahedronGeometry(8, 0), rng, 1), '#4f5a60', -34, -0.4, -47, { sy: 0.2 });
   const [roof, trim, wood] = ['#2b3138', '#f1eee6', '#7a5a3c'];
+  const windows = lampMat();
+  // Where each cabin's window and chimney top ended up, for the night lights and the smoke.
+  const panes: [number, number, number][] = [];
+  const flues: [number, number, number][] = [];
+  const pools: number[] = [];
+  /** A fishing cabin with its gable to the camera: stone footing, plank walls with white corner boards, snow on the roof. */
   const cabin = (x: number, z: number, w: number, h: number, d: number, color: string) => {
-    put(new THREE.BoxGeometry(w, h, d), color, x, 1.2 + h / 2, z);
-    put(pyramid(w + 1, h * 0.7, d + 1), roof, x, 1.2 + h, z);
-    put(new THREE.BoxGeometry(0.9, 1.7, 0.1), trim, x - w * 0.25, 1.2 + 0.85, z + d / 2 + 0.05);
+    const floor = 1.5;
+    const front = z + d / 2;
+    const eaves = floor + h;
+    const rise = h * 0.62;
+    put(new THREE.BoxGeometry(w + 0.3, 0.45, d + 0.3), '#5d646a', x, floor - 0.2, z);
+    put(new THREE.BoxGeometry(w, h, d), color, x, floor + h / 2, z);
+    for (const side of [-1, 1]) put(new THREE.BoxGeometry(0.16, h, 0.16), trim, x + side * (w / 2), floor + h / 2, front);
+
+    // The roof: the gable faces the camera, eaves overhang, and snow lies on the upper part of each slope.
+    const hw = w / 2 + 0.45, hd = d / 2 + 0.5, drip = -0.12, line = 0.4;
+    const xs = hw * (1 - line), ys = drip + (rise - drip) * line;
+    // One slope from eave to snow line to ridge; `s` is +1 for the right-hand slope.
+    const slope = (s: number, x0: number, y0: number, x1: number, y1: number) => {
+      const q = [s * x0, y0, hd, s * x0, y0, -hd, s * x1, y1, -hd, s * x1, y1, hd];
+      const [a, b, c, e] = [q.slice(0, 3), q.slice(3, 6), q.slice(6, 9), q.slice(9, 12)];
+      return s > 0 ? [...a, ...b, ...c, ...a, ...c, ...e] : [...a, ...c, ...b, ...a, ...e, ...c];
+    };
+    // The wall under the roof, front and back.
+    const gable = (s: number) => {
+      const end = [-w / 2, 0, s * (d / 2), w / 2, 0, s * (d / 2), 0, rise - 0.04, s * (d / 2)];
+      return s > 0 ? end : [...end.slice(0, 3), ...end.slice(6, 9), ...end.slice(3, 6)];
+    };
+    // White barge boards along the front edge of the roof.
+    const board = (s: number) => {
+      const q = [s * hw, drip, hd, 0, rise, hd, 0, rise - 0.22, hd, s * hw, drip - 0.22, hd];
+      const [a, b, c, e] = [q.slice(0, 3), q.slice(3, 6), q.slice(6, 9), q.slice(9, 12)];
+      return s > 0 ? [...a, ...b, ...c, ...a, ...c, ...e] : [...a, ...c, ...b, ...a, ...e, ...c];
+    };
+    batch.add(
+      triangles([
+        [[...slope(1, hw, drip, xs, ys), ...slope(-1, hw, drip, xs, ys)], roof],
+        [slope(1, xs, ys, 0, rise), '#f4fbff'],
+        [slope(-1, xs, ys, 0, rise), '#dcecf5'],
+        [[...gable(1), ...gable(-1)], color],
+        [[...board(1), ...board(-1)], trim],
+      ]),
+      painted, x, eaves, z,
+    );
+
+    // Door with a frame and a stone step.
+    const dx = x - w * 0.25;
+    put(new THREE.BoxGeometry(1.1, 1.85, 0.08), trim, dx, floor + 0.92, front + 0.04);
+    put(new THREE.BoxGeometry(0.8, 1.62, 0.1), '#4a3626', dx, floor + 0.83, front + 0.07);
+    put(new THREE.BoxGeometry(1.3, 0.2, 0.55), '#5d646a', dx, floor - 0.1, front + 0.3);
+
+    // A framed window with a cross of glazing bars; the pane is the part that lights up.
+    const [wx, wy] = [x + w * 0.24, floor + h * 0.56];
+    put(new THREE.BoxGeometry(1.26, 1.16, 0.06), trim, wx, wy, front + 0.03);
+    batch.add(new THREE.BoxGeometry(1, 0.9, 0.1), windows, wx, wy, front + 0.05);
+    put(new THREE.BoxGeometry(0.07, 0.9, 0.06), trim, wx, wy, front + 0.11);
+    put(new THREE.BoxGeometry(1, 0.07, 0.06), trim, wx, wy, front + 0.11);
+    panes.push([wx, wy, front + 0.05]);
+    // Light from the window falls on the ground in front of it: a wedge, widest and faintest at its far edge.
+    const [near, far, reach] = [0.55, 1.5, 2.9];
+    pools.push(
+      wx - near, floor + 0.06, front + 0.12, wx + near, floor + 0.06, front + 0.12, wx + far, floor - 0.3, front + reach,
+      wx - near, floor + 0.06, front + 0.12, wx + far, floor - 0.3, front + reach, wx - far, floor - 0.3, front + reach,
+    );
+
+    // The chimney stands through the right-hand slope, toward the back.
+    const [cx, cz, cw] = [x + w * 0.2, z - d * 0.18, w * 0.14];
+    const top = eaves + rise + 0.75;
+    put(new THREE.BoxGeometry(cw, rise + 1.1, cw), '#6b625a', cx, top - (rise + 1.1) / 2, cz);
+    put(new THREE.BoxGeometry(cw + 0.2, 0.16, cw + 0.2), '#3f3a36', cx, top, cz);
+    flues.push([cx, top + 0.2, cz]);
   };
   cabin(-37, -46, 5, 3, 4, '#b5392f');
   cabin(-28.5, -49, 3.6, 2.4, 3, '#d9a441');
@@ -628,23 +748,6 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     const r = rng.range(1.6, 3.6);
     const x = (i % 2 ? 1 : -1) * rng.range(12, 90);
     batch.add(jitter(new THREE.IcosahedronGeometry(r, 0), rng, r * 0.18), ice, x, 0.1, rng.range(-55, -10), { sy: 0.12 });
-  }
-
-  const windows = lampMat();
-  const panes = [
-    [-35.8, 3.1, -43.95],
-    [-28, 2.7, -47.45],
-  ] as const;
-  for (const [x, y, z] of panes) batch.add(new THREE.BoxGeometry(1, 0.9, 0.1), windows, x, y, z);
-
-  // Chimneys on the front slope of each roof, where the camera can see them: [x, z, bottom, top, width].
-  const chimneys = [
-    [-35.6, -45.7, 4.6, 6.7, 0.7],
-    [-29.4, -48.8, 4.1, 5.75, 0.55],
-  ] as const;
-  for (const [x, z, y0, y1, w] of chimneys) {
-    put(new THREE.BoxGeometry(w, y1 - y0, w), '#6b625a', x, (y0 + y1) / 2, z);
-    put(new THREE.BoxGeometry(w + 0.2, 0.16, w + 0.2), '#3f3a36', x, y1, z);
   }
 
   // A rowboat tied up at the pier: half a cylinder, pinched into a bow and a stern.
@@ -669,7 +772,7 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   // A tapered six-sided butte, turned so one face looks at the camera; the water runs down that face.
   const bluff = jitter(new THREE.CylinderGeometry(5.5, 8, 22, 6, 3).rotateY(Math.PI / 6), fall, 0.5);
   paintFaces(bluff, (t) => (t > 0.88 ? snow[0] : fall.pick(rock)));
-  batch.add(bluff, painted, 47, 9, -79);
+  batch.add(bluff, mountain, 47, 9, -79);
   const sheet = new THREE.PlaneGeometry(1.7, 19.6, 1, 6);
   const sp = sheet.attributes.position;
   for (let i = 0; i < sp.count; i++) {
@@ -691,13 +794,25 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     [
       { color: '#ffd25a', glass: '#8a7a4a', period: 4, flash: 0.7, halo: 1.7 },
       { color: '#ffc46b', glass: '#6b5a3a', flicker: 0.15, halo: 1.3 },
-      { color: '#ffd58a', glass: '#000000', halo: 1.7 },
-      { color: '#ffd58a', glass: '#000000', halo: 1.4 },
+      // The windows' own glow stays close to the pane; the light they throw is the wedge on the ground.
+      { color: '#ffd58a', glass: '#000000', flicker: 0.06, halo: 1.05 },
+      { color: '#ffd58a', glass: '#000000', flicker: 0.06, phase: 2, halo: 0.9 },
     ],
     detail,
   );
   lights.placeAt(1, -27.2, 3.4, -42.6, 0.34, 0.42);
   panes.forEach(([x, y, z], i) => lights.placeAt(2 + i, x, y, z, 0));
+
+  // Window light on the ground, bright at the wall and fading out: flat wedges, drawn additively.
+  const poolGeo = new THREE.BufferGeometry();
+  poolGeo.setAttribute('position', new THREE.Float32BufferAttribute(pools, 3));
+  const poolShade = new Float32Array(pools.length);
+  for (let i = 0; i < pools.length / 3; i++) poolShade.fill([1, 1, 0.12, 1, 0.12, 0.12][i % 6], i * 3, i * 3 + 3);
+  poolGeo.setAttribute('color', new THREE.BufferAttribute(poolShade, 3));
+  const pool = new THREE.Mesh(poolGeo, additive());
+  (pool.material as THREE.MeshBasicMaterial).color.set('#ffb85c');
+  pool.visible = false;
+  group.add(pool);
 
   // One mooring buoy and a few small net floats; keep open water around the boat.
   const buoyGeo = compound([
@@ -735,8 +850,8 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     group,
     smokeLook.mat,
     [
-      { x: -35.6, y: 6.9, z: -45.7, counts: [6, 9, 16], life: 7, rise: 8.5, drift: [10, 1.5], size: [0.5, 1.8], spread: 0.2 },
-      { x: -29.4, y: 5.9, z: -48.8, counts: [0, 7, 12], life: 6.5, rise: 7, drift: [8.5, 1.2], size: [0.42, 1.5], spread: 0.2 },
+      { x: flues[0][0], y: flues[0][1], z: flues[0][2], counts: [6, 9, 16], life: 7, rise: 8.5, drift: [10, 1.5], size: [0.45, 1.7], spread: 0.2 },
+      { x: flues[1][0], y: flues[1][1], z: flues[1][2], counts: [0, 7, 12], life: 6.5, rise: 7, drift: [8.5, 1.2], size: [0.38, 1.4], spread: 0.2 },
       { x: 47, y: 0.8, z: -70.5, counts: [0, 0, 10], life: 4.5, rise: 5.5, drift: [3, 1.5], size: [0.5, 1.5], spread: 3.2 },
     ],
     detail,
@@ -775,13 +890,16 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     group,
     update(time, night, _dt, env) {
       const shine = night && (env?.lightingEffects ?? true);
+      setRainMist(env);
       windows.emissiveIntensity = shine ? 1.8 : 0;
+      pool.visible = shine;
+      // The fire inside wavers a little, and the light on the ground with it.
+      if (shine) (pool.material as THREE.MeshBasicMaterial).opacity = 0.5 + 0.06 * Math.sin(time * 5.3) * Math.sin(time * 2.1);
       buoys.update(time, env);
       floes?.update(time, env);
       lights.update(time, night, shine);
       smokeLook.setNight(night);
-      smoke.swell = night ? 1.2 : 1;
-      smoke.update(time);
+      smoke.update(time, env?.weather?.wind ?? 0);
       const auroraVisibility = shine ? 1 - (env?.weather?.cloud ?? 0) : 0;
       for (const r of ribbons) {
         r.mesh.visible = auroraVisibility > 0.01;
@@ -809,6 +927,7 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   const painted = flatMat('#ffffff', { vertexColors: true });
   const put = (geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x: number, y: number, z: number, o?: Placement) =>
     batch.add(solid(geo, color), painted, x, y, z, o);
+  const mountain = mountainMat();
   const stone = shades(['#8a8672', '#77735f', '#9a957f', '#6c6855']);
   const moss = shades(['#3f6b3a', '#2f5a35']);
   const bush = ['#3f6b3a', '#2f5a35'];
@@ -819,7 +938,7 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
     const bottom = top * rng.range(1.5, 1.9);
     const geo = jitter(new THREE.CylinderGeometry(top, bottom, h, 7, 5), rng, top * 0.22);
     paintFaces(geo, (t) => (t > 0.9 || (t > 0.3 && rng.next() < 0.07) ? rng.pick(moss) : rng.pick(stone)));
-    batch.add(geo, painted, x, h / 2 - 3, z, { ry: rng.range(0, 6) });
+    batch.add(geo, mountain, x, h / 2 - 3, z, { ry: rng.range(0, 6) });
     const crown = h - 3;
     put(jitter(new THREE.IcosahedronGeometry(top * 1.2, 0), rng, top * 0.2), rng.pick(bush), x, crown, z, { sy: 0.5 });
     for (let t = 0; t < rng.int(1, 3); t++) {
@@ -844,7 +963,7 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
     const h = rng.range(20, 30);
     const geo = jitter(new THREE.ConeGeometry(r, h, 6, 2), rng, r * 0.06);
     paintFaces(geo, (t) => (t > 0.72 && rng.next() < 0.6 ? frost : rng.pick(rim)));
-    batch.add(geo, painted, x + rng.range(-10, 10), h / 2 - 2, -140);
+    batch.add(geo, mountain, x + rng.range(-10, 10), h / 2 - 2, -140);
   }
 
   // A lakeside pavilion on a rock.
@@ -999,6 +1118,7 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
     group,
     update(time, night, dt, env) {
       const shine = night && (env?.lightingEffects ?? true);
+      setRainMist(env);
       lantern.emissiveIntensity = shine ? 2 : 0;
       mistMat.opacity = night ? 0.3 : 0.18;
       for (let i = 0; i < mist.length; i++) {
@@ -1019,7 +1139,8 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
       }
       lights.update(time, night, shine);
       smokeLook.setNight(night);
-      smoke.update(time);
+      // Incense in the pavilion's lee: the wind barely reaches it.
+      smoke.update(time, (env?.weather?.wind ?? 0) * 0.3);
       cranes.update(time, night);
     },
   };
@@ -1037,12 +1158,13 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     batch.add(solid(geo, color), painted, x, y, z, o);
 
   // The sky's clouds are shared by every map (see sky.ts); this map adds only sheet lightning.
+  const mountain = mountainMat();
   const stack = '#3f4a55';
   const stacks: [number, number, number][] = [];
   for (const [x, z] of [[-118, -92], [-64, -98], [38, -106], [128, -88]]) {
     const r = rng.range(4, 7);
     const h = rng.range(9, 20);
-    put(jitter(new THREE.ConeGeometry(r, h, 6, 3), rng, r * 0.2), stack, x, h / 2 - 2, z);
+    batch.add(solid(jitter(new THREE.ConeGeometry(r, h, 6, 3), rng, r * 0.2), stack), mountain, x, h / 2 - 2, z);
     stacks.push([x, z, r]);
   }
 
@@ -1214,6 +1336,7 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     update(time, night, dt, env) {
       const lightingEffects = env?.lightingEffects ?? true;
       const shine = night && lightingEffects;
+      setRainMist(env);
       // Sheet lightning: a rare deterministic strike that decays over a fraction of a second.
       const slot = Math.floor(time * 4);
       const roll = Math.abs(Math.sin(slot * 12.9898) * 43758.5453) % 1;
