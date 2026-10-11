@@ -168,7 +168,7 @@ function randomSeed(): number {
 
 function rollFor(depth: number): FishSpec {
   const a = rollFish(randomSeed(), depth);
-  if (!world.night) return a;
+  if (!world.night && !sharksOut()) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
   // With sharks out it is three: the price of swimming with them.
   const rarer = (x: FishSpec, y: FishSpec) => (RARITY_ORDER.indexOf(y.rarity) > RARITY_ORDER.indexOf(x.rarity) ? y : x);
@@ -366,7 +366,7 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On a map with sharks (the Open Ocean), at night, if the player said yes (shark.ts).
+// On the Open Ocean, if the player said yes: one by day, two at night.
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
@@ -377,7 +377,7 @@ const sharkAsk = document.getElementById('shark-ask')!;
 
 /** Do sharks hunt right now? */
 function sharksOut() {
-  return settings.sharks === 'on' && world.map.sharks && world.night && phase === 'play';
+  return settings.sharks === 'on' && world.map.sharks && phase === 'play';
 }
 
 /** Before a dive on shark waters, the player chooses once; Settings can change it later. */
@@ -395,7 +395,7 @@ function answerSharks(on: boolean) {
   paused = false;
   // The pause was not a breath taken underwater.
   breathSince = null;
-  hud.message(on ? 'Sharks come out after dark. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  hud.message(on ? 'One shark by day, two at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
 }
 document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
 document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
@@ -426,14 +426,14 @@ function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: 
   const bpm = pulse ?? pulseEstimate.tick(dt, diver.vel.length() / Math.max(1, currentStats().swimSpeed));
   const out = sharksOut();
   const intensity = out ? sharkIntensity(bpm, estimated ? SHARK.rest : restingPulse.bpm) : 0;
-  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents);
+  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents, world.night);
   for (const event of sharkEvents) {
     if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
     else if (event === 'bite') sharkBite(intensity);
   }
-  sharkFx.update(dt, sharkPack.sharks, intensity);
+  sharkFx.update(dt, sharkPack.sharks, intensity, world.dayCycle.state.nightMix, settings.lightingEffects);
   health.sharks = out;
-  hud.setSharks(out ? { count: sharkPack.sharks.length, bpm, estimated, intensity } : null);
+  hud.setSharks(out ? { count: sharkPack.sharks.filter(s => s.mode !== 'leave').length, bpm, estimated, intensity } : null);
 }
 
 function noSharks() {
