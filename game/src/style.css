@@ -1343,6 +1343,17 @@ button:disabled {
   color: var(--danger);
 }
 
+#collection-grid .explorer,
+#wallet .explorer {
+  font-size: 12px;
+  text-decoration: none;
+}
+
+#collection-grid .explorer:hover,
+#wallet .explorer:hover {
+  text-decoration: underline;
+}
+
 #market-bar {
   display: flex;
   align-items: center;

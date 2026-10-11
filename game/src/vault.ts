@@ -18,10 +18,19 @@ const FUND_SOL = 0.1;
 const $ = (id: string) => document.getElementById(id)!;
 
 const STEP_LABEL = {
-  'upload-image': 'Uploading art…',
-  'upload-metadata': 'Uploading metadata…',
   mint: 'Minting on Solana…',
 };
+
+/** Solana Explorer on devnet. Pure, so the panel needs no chain code to link an address. */
+const explorerAddress = (a: string) => `https://explorer.solana.com/address/${a}?cluster=devnet`;
+
+function explorerLink(address: string, label = 'View on Explorer ↗') {
+  const a = el('a', 'explorer', label);
+  a.href = explorerAddress(address);
+  a.target = '_blank';
+  a.rel = 'noopener';
+  return a;
+}
 
 const SELL_LABEL = {
   verify: 'Market verifying…',
@@ -80,7 +89,8 @@ export class Vault {
       this.walletEl.textContent = 'Connect Phantom to mint.';
       return;
     }
-    this.walletEl.textContent = 'Connecting to Solana devnet…';
+    const ownerLink = () => explorerLink(owner, 'View wallet on Explorer ↗');
+    this.walletEl.replaceChildren('Connecting to Solana devnet… ', ownerLink());
     try {
       const c = await this.queue.loadChain();
       let sol: number | null = null;
@@ -90,12 +100,13 @@ export class Vault {
       const bal = sol == null ? 'balance unavailable' : `${sol.toFixed(3)} SOL`;
       const link = (a: string) => `<a target="_blank" rel="noopener" href="${c.explorer('address', a)}">${short(a)}</a>`;
       const fund = sol != null && sol < FUND_BELOW_SOL ? ` <button id="fund" class="mini primary">Fund game wallet (${FUND_SOL} SOL)</button>` : '';
-      this.walletEl.innerHTML = `Phantom ${link(owner)} · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+      this.walletEl.innerHTML = `Phantom ${link(owner)} <span class="owner-explorer"></span> · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+      this.walletEl.querySelector('.owner-explorer')!.replaceWith(ownerLink());
       this.walletEl.querySelector('.note')!.textContent = note;
       $('airdrop').addEventListener('click', () => this.airdrop());
       if (fund) $('fund').addEventListener('click', () => this.fund());
     } catch (e) {
-      this.walletEl.textContent = `Solana unavailable: ${(e as Error).message}`;
+      this.walletEl.replaceChildren(`Solana unavailable: ${(e as Error).message} `, ownerLink());
     }
   }
 
@@ -206,6 +217,8 @@ export class Vault {
     const row = el('div', 'nft-row');
     row.append(this.nftBadge(f), this.sellControl(f));
     cap.replaceChildren(meta, row);
+    // The chain is the source of truth: a direct link works even when a wallet hides the NFT.
+    if (f.nft === 'minted' && f.assetId) cap.appendChild(explorerLink(f.assetId));
     const err = q.sellErrors.get(f) ?? (f.nft === 'failed' ? f.mintError : undefined);
     if (err) {
       const sale = q.sellErrors.has(f);

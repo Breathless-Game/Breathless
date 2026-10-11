@@ -10,6 +10,7 @@ import http from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMarket } from './market.mjs';
+import { createNftHandler } from './nft-meta.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
@@ -24,7 +25,11 @@ mkdirSync(DIR, { recursive: true, mode: 0o700 });
 
 const market = await createMarket({ rpc: RPC, dir: DIR });
 
+// The fish NFT metadata host too, so the Vite proxy serves /api/nft in dev as `npm start` does.
+const nft = createNftHandler();
+
 const server = http.createServer(async (req, res) => {
+  if (await nft(req, res)) return;
   if (await market.handle(req, res)) return;
   res.writeHead(404, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
