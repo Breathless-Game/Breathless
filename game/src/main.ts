@@ -1364,8 +1364,9 @@ const workbench = new Workbench({
   },
   preview: mapPreview,
   dive(id, gear) {
-    loadout = gear;
-    activeLoadout = [...gear];
+    // The net shaft isn't on the workbench: it always goes down with the diver, at the level owned.
+    loadout = gear.includes('rod') ? gear : [...gear, 'rod'];
+    activeLoadout = [...loadout];
     const firstPacked = QUICK_SLOTS.find((item) => gear.includes(item.slot));
     activeTool = firstPacked?.slot ?? 'net';
     loadoutWheel.setActive(activeTool);

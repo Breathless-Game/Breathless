@@ -60,11 +60,11 @@ export interface WorkbenchConditions {
   rain: string;
 }
 
-// The seven pieces of dive gear (the six loadout slots plus the deployable deep
-// sonar), and a model of the boat (for picking the ship; it never goes in the
-// ready tray). The rod carries the net and the reel changes its recovery; bait is
-// a boat upgrade and is not packed on this workbench.
-const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar', 'boat'];
+// The six pieces of dive gear you pack (five loadout slots plus the deployable
+// deep sonar), and a model of the boat (for picking the ship; it never goes in the
+// ready tray). The net shaft (rod) isn't on the table: it always goes down with
+// the net (main.ts adds it to the dive). Bait is a boat upgrade and is not packed here.
+const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'sonar', 'boat'];
 
 /**
  * Where each piece lies when it isn't packed, in table units (x right, z toward
@@ -78,8 +78,7 @@ const SPOTS: [number, number][] = [
   [-4.4, 0.35],
   [-3.3, 0.35],
   [-2.2, 0.35],
-  [-4.4, 1.65],
-  [-2.85, 1.65], // the boat
+  [-3.3, 1.65], // the boat
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
@@ -87,19 +86,18 @@ const TRAY = { x0: 2.2, x1: 4.9, z0: -2.5, z1: 2.5 };
 // One ring per piece of dive gear (GEAR's order), its silhouette cut into the felt
 // so you can see what goes where. The front strip is kept clear for the label.
 const SLOTS: [number, number][] = [
-  [2.85, -1.5], // fins
-  [2.85, -0.5], // tank
-  [2.85, 0.5], // lamp
-  [4.25, -0.5], // rod
-  [4.25, 0.5], // net
-  [4.25, 1.5], // reel
-  [2.85, 1.5], // sonar
+  [2.85, -0.6], // fins
+  [2.85, 0.45], // tank
+  [2.85, 1.5], // lamp
+  [4.25, -0.6], // net
+  [4.25, 0.45], // reel
+  [4.25, 1.5], // sonar
 ];
 // Packed until the player changes it (then whatever was in the tray last time):
 // the starting gear, every piece, so a first dive needs no packing.
-const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar'];
-// The diver figure stands in the tray's back corner, by the rings: it wears what's in them.
-const FIGURE_AT = new THREE.Vector3(4.25, 0.05, -1.55);
+const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'sonar'];
+// The diver figure stands at the back of the tray, between the two rows of rings: it wears what's in them.
+const FIGURE_AT = new THREE.Vector3(3.55, 0.05, -1.65);
 const FIGURE_H = 1.25; // standing height, table units: its head stays under the SETTINGS fish
 const MAP_AT = new THREE.Vector3(0.1, 0, 0.1);
 const MAP_W = 2.9;
@@ -595,7 +593,7 @@ export class Workbench {
     d.setTankLevel(level('tank'));
     d.setLampLevel(level('lamp'));
     d.setNetLevel(level('net'));
-    d.setRodLevel(level('rod'));
+    d.setRodLevel(Math.min(3, Math.max(1, this.hooks.owned('rod')))); // the shaft always comes with the net
     d.setWorn({ fins: packed.has('fins'), tank: packed.has('tank'), lamp: packed.has('lamp'), net: packed.has('net') });
   }
 
