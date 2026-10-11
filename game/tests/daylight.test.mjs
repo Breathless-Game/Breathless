@@ -29,7 +29,7 @@ test('lighting is periodic and continuous across midnight and every color key', 
   const midnight = sampleLighting(0);
   for (const hour of [-48, -24, 24, 48]) assert.deepEqual(sampleLighting(hour), midnight);
   assert.deepEqual(sampleLighting(-1), sampleLighting(23));
-  const boundaries = [0, 5, 6, 7, 9, 12, 15, 17, 18, 19, 20, 22];
+  const boundaries = [0, 4.6, 5.3, 5.9, 6.4, 7.2, 9, 12, 15, 16.6, 17.5, 18.1, 18.7, 19.4, 20.2, 22];
   for (const hour of boundaries) {
     const before = lightingNumbers(sampleLighting(hour - 1e-5));
     const after = lightingNumbers(sampleLighting(hour + 1e-5));
