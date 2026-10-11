@@ -638,7 +638,7 @@ export class Diver {
     }
   }
 
-  /** Preserve upstream seated/jump poses; use the custom suit when swimming. */
+  /** Replace the legacy suit while retaining gameplay gear and effects. */
   private useCustomSuit(active:boolean) {
     if(this.customSuitActive===active) return;
     this.customSuitActive=active;
