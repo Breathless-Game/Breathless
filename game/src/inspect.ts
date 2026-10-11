@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { buildUpgradeModel, type UpgradeDef, type UpgradeLevel } from './upgrades';
+import { buildUpgradeModel, upgradeEffect, type UpgradeDef, type UpgradeLevel } from './upgrades';
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { t, lang, onLangChange } from './i18n';
 
 // A closer look at one piece of gear from the workbench: it grows from where it
 // lies on the table to the middle of the screen over the blurred table, turning
@@ -112,7 +113,8 @@ export class GearInspector {
   private raf = 0;
   private last = 0;
   private buying = false;
-  private notice = '';
+  private notice: [string, string] | null = null;
+  private noticeText(): string { return this.notice ? t(this.notice[0], this.notice[1]) : ''; }
 
   constructor(private hooks: InspectHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
@@ -193,6 +195,7 @@ export class GearInspector {
     this.stage.addEventListener('pointerup', endSwipe);
     this.stage.addEventListener('pointercancel', endSwipe);
     window.addEventListener('resize', () => this.open && this.resize());
+    onLangChange(() => { if (this.open) this.renderInfo(); });
   }
 
   get open() {
@@ -231,7 +234,7 @@ export class GearInspector {
   }
 
   private open3d(from: { x: number; y: number }) {
-    this.notice = '';
+    this.notice = null;
     this.orbitYaw = 0;
     this.orbitTilt = 0;
     this.models.forEach((m) => this.turntable.remove(m));
@@ -349,14 +352,14 @@ export class GearInspector {
     const owned = this.hooks.owned(def);
     const lv = this.level;
     const unlocked = lv <= owned;
-    $('wb-inspect-name').textContent = def.name;
-    $('wb-inspect-zh').textContent = def.nameZh;
-    $('wb-inspect-up-kind').textContent = 'UPGRADE · 升级';
+    $('wb-inspect-name').textContent = lang() === 'zh' ? def.nameZh : def.name;
+    $('wb-inspect-zh').textContent = '';
+    $('wb-inspect-up-kind').textContent = t('UPGRADE', '升级');
     this.root.classList.remove('ships', 'diver');
-    $('wb-inspect-kind').textContent = def.group === 'dive' ? 'Dive gear · 潜水装备' : 'Boat gear · 船上装备';
-    $('wb-inspect-level').textContent = `Level ${lv} / 3${unlocked ? '' : ' · locked'}`;
+    $('wb-inspect-kind').textContent = def.group === 'dive' ? t('Dive gear', '潜水装备') : t('Boat gear', '船上装备');
+    $('wb-inspect-level').textContent = t(`Level ${lv} / 3${unlocked ? '' : ' · locked'}`, `${lv} / 3 级${unlocked ? '' : ' · 未解锁'}`);
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
-    $('wb-inspect-effect').textContent = def.effects[lv - 1];
+    $('wb-inspect-effect').textContent = upgradeEffect(def, lv);
     const sonarColor = $<HTMLLabelElement>('wb-inspect-sonar-color');
     const sonarInput = $<HTMLInputElement>('wb-inspect-sonar-input');
     const isSonar = def.id === 'sonar';
@@ -366,7 +369,7 @@ export class GearInspector {
     $('wb-inspect-levels').replaceChildren(
       ...LEVELS.map((l) => {
         const li = document.createElement('li');
-        li.textContent = `Lv ${l} · ${def.effects[l - 1]}`;
+        li.textContent = `Lv ${l} · ${upgradeEffect(def, l)}`;
         li.classList.toggle('on', l === lv);
         li.classList.toggle('locked', l > owned);
         return li;
@@ -374,7 +377,7 @@ export class GearInspector {
     );
     const ready = this.hooks.isReady(def);
     const readyBtn = $<HTMLButtonElement>('wb-inspect-ready');
-    readyBtn.textContent = ready ? 'Put it back · 放回桌上' : 'Get it ready · 放入准备区';
+    readyBtn.textContent = ready ? t('Put it back', '放回桌上') : t('Get it ready', '放入准备区');
     readyBtn.classList.toggle('primary', !ready);
     readyBtn.classList.toggle('hidden', def.group !== 'dive'); // the boat isn't packed for a dive
 
@@ -384,15 +387,15 @@ export class GearInspector {
     const price = def.prices[nextLv - 1];
     const pearls = this.hooks.pearls();
     const short = !maxed && pearls < price;
-    $('wb-inspect-up-title').textContent = maxed ? 'Fully upgraded · 已满级' : `Upgrade to level ${nextLv} · 升级`;
-    $('wb-inspect-up-effect').textContent = maxed ? def.effects[2] : def.effects[nextLv - 1];
-    $('wb-inspect-up-price').textContent = maxed ? '' : `${price} Pearls`;
+    $('wb-inspect-up-title').textContent = maxed ? t('Fully upgraded', '已满级') : t(`Upgrade to level ${nextLv}`, `升级到 ${nextLv} 级`);
+    $('wb-inspect-up-effect').textContent = maxed ? upgradeEffect(def, 3) : upgradeEffect(def, nextLv);
+    $('wb-inspect-up-price').textContent = maxed ? '' : t(`${price} Pearls`, `${price} 珍珠`);
     const buy = $<HTMLButtonElement>('wb-inspect-buy');
     buy.disabled = maxed || short || this.buying;
     buy.classList.toggle('primary', !buy.disabled);
-    buy.textContent = this.buying ? 'Upgrading… · 升级中' : short ? `Need ${price - pearls} more · 珍珠不足` : `Upgrade · 升级 (${price})`;
+    buy.textContent = this.buying ? t('Upgrading…', '升级中…') : short ? t(`Need ${price - pearls} more`, `还差 ${price - pearls} 珍珠`) : t(`Upgrade (${price})`, `升级 (${price})`);
     buy.classList.toggle('hidden', maxed);
-    $('wb-inspect-pearls').textContent = this.notice || `You have ${Math.floor(pearls)} Pearls · 珍珠`;
+    $('wb-inspect-pearls').textContent = this.noticeText() || t(`You have ${Math.floor(pearls)} Pearls`, `你有 ${Math.floor(pearls)} 珍珠`);
     this.renderPaths(def, owned);
 
     $('wb-inspect-dots').replaceChildren(
@@ -406,7 +409,7 @@ export class GearInspector {
     $<HTMLButtonElement>('wb-inspect-prev').disabled = lv === 1;
     $<HTMLButtonElement>('wb-inspect-next').disabled = lv === 3;
     this.stage.classList.toggle('locked', !unlocked);
-    $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${def.prices[lv - 1]} Pearls`;
+    $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${def.prices[lv - 1]} ${t('Pearls', '珍珠')}`;
   }
 
   /** Ship mode: the ship being looked at, its bonuses, and whether it can be sailed. */
@@ -418,21 +421,21 @@ export class GearInspector {
     const current = ships.current();
     const progress = ships.progress();
     const unlocked = progress >= ship.threshold;
-    $('wb-inspect-kind').textContent = 'Ship · 船只';
-    $('wb-inspect-up-kind').textContent = 'SHIP · 船只';
+    $('wb-inspect-kind').textContent = t('Ship', '船只');
+    $('wb-inspect-up-kind').textContent = t('SHIP', '船只');
     this.root.classList.add('ships');
     this.root.classList.remove('diver');
     $('wb-inspect-sonar-color').classList.add('hidden');
-    $('wb-inspect-name').textContent = ship.name;
-    $('wb-inspect-zh').textContent = ship.nameZh;
-    $('wb-inspect-level').textContent = `Level ${String(i).padStart(2, '0')} · ${i === current ? 'sailing · 当前使用' : unlocked ? 'unlocked · 已解锁' : 'locked · 未解锁'}`;
+    $('wb-inspect-name').textContent = lang() === 'zh' ? ship.nameZh : ship.name;
+    $('wb-inspect-zh').textContent = '';
+    $('wb-inspect-level').textContent = `${t('Level', '等级')} ${String(i).padStart(2, '0')} · ${i === current ? t('sailing', '当前使用') : unlocked ? t('unlocked', '已解锁') : t('locked', '未解锁')}`;
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
-    $('wb-inspect-effect').textContent = `${ship.introZh} ${ship.intro}`;
+    $('wb-inspect-effect').textContent = lang() === 'zh' ? ship.introZh : ship.intro;
     // Every ship's bonuses, so they can be compared; the one shown is marked.
     $('wb-inspect-levels').replaceChildren(
       ...list.map((s, j) => {
         const li = document.createElement('li');
-        li.textContent = `${String(j).padStart(2, '0')} ${s.name} · ${s.bonuses.join(' · ') || 'no bonus'}`;
+        li.textContent = `${String(j).padStart(2, '0')} ${lang() === 'zh' ? s.nameZh : s.name} · ${s.bonuses.join(' · ') || t('no bonus', '无加成')}`;
         li.classList.toggle('on', j === i);
         li.classList.toggle('locked', progress < s.threshold);
         return li;
@@ -442,15 +445,15 @@ export class GearInspector {
     $('wb-inspect-paths').classList.add('hidden');
 
     // The right panel: its bonuses, how far the banked value has come, and Equip.
-    $('wb-inspect-up-title').textContent = i === current ? 'Sailing · 当前船只' : unlocked ? 'Equip this ship · 装备船只' : 'Locked · 未解锁';
-    $('wb-inspect-up-effect').textContent = ship.bonuses.join(' · ') || 'The starter boat: no bonus';
-    $('wb-inspect-up-price').textContent = ship.threshold ? `Unlocks at ${ship.threshold} banked value` : 'Starter ship';
+    $('wb-inspect-up-title').textContent = i === current ? t('Sailing', '当前船只') : unlocked ? t('Equip this ship', '装备船只') : t('Locked', '未解锁');
+    $('wb-inspect-up-effect').textContent = ship.bonuses.join(' · ') || t('The starter boat: no bonus', '初始小船：没有加成');
+    $('wb-inspect-up-price').textContent = ship.threshold ? t(`Unlocks at ${ship.threshold} banked value`, `累计入库价值达到 ${ship.threshold} 解锁`) : t('Starter ship', '初始船只');
     const buy = $<HTMLButtonElement>('wb-inspect-buy');
     buy.classList.remove('hidden');
     buy.disabled = i === current || !unlocked;
     buy.classList.toggle('primary', !buy.disabled);
-    buy.textContent = i === current ? 'Equipped · 已装备' : unlocked ? 'Equip · 装备' : `Bank ${Math.ceil(ship.threshold - progress)} more · 未解锁`;
-    $('wb-inspect-pearls').textContent = this.notice || `Total banked value ${Math.floor(progress)} · 累计入库价值 (no fish are spent)`;
+    buy.textContent = i === current ? t('Equipped', '已装备') : unlocked ? t('Equip', '装备') : t(`Bank ${Math.ceil(ship.threshold - progress)} more`, `还差 ${Math.ceil(ship.threshold - progress)} 入库价值`);
+    $('wb-inspect-pearls').textContent = this.noticeText() || t(`Total banked value ${Math.floor(progress)} (no fish are spent)`, `累计入库价值 ${Math.floor(progress)}（不会消耗鱼）`);
 
     $('wb-inspect-dots').replaceChildren(
       ...list.map((s, j) => {
@@ -463,7 +466,7 @@ export class GearInspector {
     $<HTMLButtonElement>('wb-inspect-prev').disabled = i === 0;
     $<HTMLButtonElement>('wb-inspect-next').disabled = i === list.length - 1;
     this.stage.classList.toggle('locked', !unlocked);
-    $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${ship.threshold} banked value`;
+    $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${ship.threshold} ${t('banked value', '入库价值')}`;
   }
 
   /**
@@ -476,33 +479,33 @@ export class GearInspector {
     const gear = d.gear();
     const worn = gear.filter((g) => this.hooks.isReady(g));
     const full = worn.length >= d.slots;
-    $('wb-inspect-kind').textContent = 'Diver · 潜水员';
-    $('wb-inspect-up-kind').textContent = 'LOADOUT · 配装';
+    $('wb-inspect-kind').textContent = t('Diver', '潜水员');
+    $('wb-inspect-up-kind').textContent = t('LOADOUT', '配装');
     this.root.classList.remove('ships');
     this.root.classList.add('diver');
     $('wb-inspect-sonar-color').classList.add('hidden');
     $('wb-inspect-paths').classList.add('hidden');
-    $('wb-inspect-name').textContent = 'Your diver';
-    $('wb-inspect-zh').textContent = '潜水员';
-    $('wb-inspect-level').textContent = `Wearing ${worn.length} / ${d.slots} · 已穿戴`;
+    $('wb-inspect-name').textContent = t('Your diver', '你的潜水员');
+    $('wb-inspect-zh').textContent = '';
+    $('wb-inspect-level').textContent = t(`Wearing ${worn.length} / ${d.slots}`, `已穿戴 ${worn.length} / ${d.slots}`);
     $('wb-inspect-level').classList.remove('locked');
     $('wb-inspect-effect').textContent =
-      'Click a piece to put it on or take it off. What the diver wears goes down with you, at the level you own. 点击装备穿上或卸下，穿着的装备会带下水。';
+      t('Click a piece to put it on or take it off. What the diver wears goes down with you, at the level you own.', '点击装备穿上或卸下，穿着的装备会带下水，等级与你拥有的一致。');
     $('wb-inspect-levels').replaceChildren(
       ...gear.map((g) => {
         const on = this.hooks.isReady(g);
         const lv = Math.min(3, Math.max(1, this.hooks.owned(g)));
         const li = document.createElement('li');
-        li.textContent = `${on ? '✓' : '+'} ${g.name} · ${g.nameZh} · Lv ${lv}`;
+        li.textContent = `${on ? '✓' : '+'} ${lang() === 'zh' ? g.nameZh : g.name} · Lv ${lv}`;
         li.classList.toggle('on', on);
         li.classList.toggle('locked', !on && full); // no room for it
-        li.title = on ? 'Take it off · 卸下' : full ? 'Every slot is taken: take something off first' : 'Put it on · 穿上';
+        li.title = on ? t('Take it off', '卸下') : full ? t('Every slot is taken: take something off first', '位置已满：先卸下一件') : t('Put it on', '穿上');
         li.addEventListener('click', () => {
           if (!on && full) {
-            this.notice = 'Every slot is taken: take something off first. 位置已满';
+            this.notice = ['Every slot is taken: take something off first.', '位置已满：先卸下一件。'];
             return this.renderInfo();
           }
-          this.notice = '';
+          this.notice = null;
           this.hooks.setReady(g, !on);
           this.redress();
         });
@@ -511,18 +514,18 @@ export class GearInspector {
     );
     const off = $<HTMLButtonElement>('wb-inspect-ready');
     off.classList.remove('hidden', 'primary');
-    off.textContent = 'Take all off · 全部卸下';
+    off.textContent = t('Take all off', '全部卸下');
     off.disabled = worn.length === 0;
 
-    $('wb-inspect-up-title').textContent = 'Packed for the dive · 本次携带';
-    $('wb-inspect-up-effect').textContent = worn.length ? worn.map((g) => g.name).join(' · ') : 'Nothing: you dive with the basics';
-    $('wb-inspect-up-price').textContent = 'Saved automatically: it is packed the same next time · 自动保存';
+    $('wb-inspect-up-title').textContent = t('Packed for the dive', '本次携带');
+    $('wb-inspect-up-effect').textContent = worn.length ? worn.map((g) => (lang() === 'zh' ? g.nameZh : g.name)).join(' · ') : t('Nothing: you dive with the basics', '什么都没带：只带基础装备下水');
+    $('wb-inspect-up-price').textContent = t('Saved automatically: it is packed the same next time', '自动保存：下次下水携带相同');
     const all = $<HTMLButtonElement>('wb-inspect-buy');
     all.classList.remove('hidden');
     all.disabled = full || worn.length === gear.length;
     all.classList.toggle('primary', !all.disabled);
-    all.textContent = 'Wear all · 全部穿上';
-    $('wb-inspect-pearls').textContent = this.notice || `${d.slots - worn.length} slot${d.slots - worn.length === 1 ? '' : 's'} free · 空位`;
+    all.textContent = t('Wear all', '全部穿上');
+    $('wb-inspect-pearls').textContent = this.noticeText() || t(`${d.slots - worn.length} slot${d.slots - worn.length === 1 ? '' : 's'} free`, `空位 ${d.slots - worn.length}`);
 
     $('wb-inspect-dots').replaceChildren();
     $<HTMLButtonElement>('wb-inspect-prev').disabled = true;
@@ -541,7 +544,7 @@ export class GearInspector {
   }
 
   private equipShip() {
-    this.notice = this.hooks.ships.equip(this.level - 1) ? '' : 'Still locked: bank more fish first.';
+    this.notice = this.hooks.ships.equip(this.level - 1) ? null : ['Still locked: bank more fish first.', '尚未解锁：先多入库一些鱼。'];
     this.renderInfo();
   }
 
@@ -555,12 +558,12 @@ export class GearInspector {
     const def = this.def;
     if (!def || this.buying) return;
     this.buying = true;
-    this.notice = '';
+    this.notice = null;
     this.renderInfo();
     const failed = await this.hooks.buy(def);
     this.buying = false;
     if (this.def !== def) return;
-    this.notice = failed ?? '';
+    this.notice = failed ? [failed, failed] : null;
     // Show the level just bought: its model slides in.
     const owned = this.hooks.owned(def);
     if (!failed && owned > this.level) this.step(owned - this.level);
@@ -581,9 +584,9 @@ export class GearInspector {
         b.className = `wb-path${p.id === active && owned >= 2 ? ' on' : ''}`;
         b.disabled = owned < 2;
         const name = document.createElement('b');
-        name.textContent = `${p.name} · ${p.nameZh}`;
+        name.textContent = lang() === 'zh' ? p.nameZh : p.name;
         const effect = document.createElement('small');
-        effect.textContent = owned < 2 ? `Unlocks at Lv2 · ${p.summary}` : p.effects[this.level - 1] ?? p.summary;
+        effect.textContent = owned < 2 ? `${t('Unlocks at Lv2', '2 级解锁')} · ${p.summary}` : p.effects[this.level - 1] ?? p.summary;
         b.append(name, effect);
         b.addEventListener('click', () => {
           this.hooks.selectPath(def, p.id);
