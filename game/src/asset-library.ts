@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import fishingNetGlbUrl from '../../assets/gear/fishing-net-faceted.glb?url';
 import fishingNetPreviewUrl from '../../assets/gear/fishing-net-faceted-preview.png?url';
-import { RARITY, RARITY_ORDER, ZONES, rollFish, speciesProfile, type FishSpec, type SpeciesProfile } from './fish';
+import { RARITY_BY_DEPTH } from './depth-odds';
+import { RARITY, RARITY_ORDER, rollFish, speciesProfile, type FishSpec, type SpeciesProfile } from './fish';
 import { buildFishingNetMesh } from './gear';
 import { fishCard, fishSprite } from './portrait';
 
@@ -17,29 +18,29 @@ const SPRITE_PX = 512;
 const FRAME = 0.68;
 // The species whose NFT card is kept in assets/cards as the example.
 const CARD_EXAMPLE = 'moonfin-leviathan';
+// Rarity depends only on depth. Past the deepest anchor in depth-odds.ts (350 m)
+// the odds stop changing and every rarity can roll, mythic included.
+const SAMPLE_DEPTH = RARITY_BY_DEPTH[RARITY_BY_DEPTH.length - 1][0];
 
 interface Specimen {
   slug: string;
   spec: FishSpec;
   profile: SpeciesProfile;
-  zone: string;
 }
 
 function slugOf(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
-/** The lowest seed that rolls each species. Striped species wait for a roll that has stripes. */
+/** The lowest seed that rolls each species at SAMPLE_DEPTH. Striped species wait for a roll that has stripes. */
 function findSpecimens(): Specimen[] {
   const found = new Map<string, Specimen>();
   for (let seed = 1; seed <= 4000; seed++) {
-    for (const zone of ZONES) {
-      const spec = rollFish(seed, zone, (zone.top + zone.bottom) / 2);
-      if (found.has(spec.species)) continue;
-      const profile = speciesProfile(spec);
-      if (profile.pattern === 'stripes' && spec.stripes === 0) continue;
-      found.set(spec.species, { slug: slugOf(spec.species), spec, profile, zone: zone.name });
-    }
+    const spec = rollFish(seed, SAMPLE_DEPTH);
+    if (found.has(spec.species)) continue;
+    const profile = speciesProfile(spec);
+    if (profile.pattern === 'stripes' && spec.stripes === 0) continue;
+    found.set(spec.species, { slug: slugOf(spec.species), spec, profile });
   }
   return [...found.values()].sort(
     (a, b) =>
@@ -149,7 +150,7 @@ async function main() {
     const r = RARITY[s.spec.rarity];
     const el = tile(
       s.spec.species,
-      [`${r.label} · ${s.profile.archetype} · ${s.profile.pattern}`, `seed ${s.spec.seed} · ${s.zone}`],
+      [`${r.label} · ${s.profile.archetype} · ${s.profile.pattern}`, `seed ${s.spec.seed} · ${s.spec.depthM} m`],
       await sprite(s.spec),
       `${s.slug}.png`,
     );
@@ -175,7 +176,7 @@ async function main() {
   const example = specimens.find((s) => s.slug === CARD_EXAMPLE);
   if (example) {
     document.getElementById('cards')!.append(
-      tile(example.spec.name, ['fishCard(spec)', `seed ${example.spec.seed} · ${example.zone}`], fishCard(example.spec), `${example.slug}.png`),
+      tile(example.spec.name, ['fishCard(spec)', `seed ${example.spec.seed} · ${example.spec.depthM} m`], fishCard(example.spec), `${example.slug}.png`),
     );
   }
 }

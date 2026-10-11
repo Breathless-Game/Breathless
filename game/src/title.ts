@@ -4,7 +4,11 @@
 // level on two lines (head and tail) so the name reads straight.
 // Plain 2D Verlet physics on a canvas overlay; the 3D sea keeps rendering behind.
 
-import { RARITY, rollFish, ZONES, type Archetype, type Rarity } from './fish';
+import { RARITY, rollFish, type Archetype, type Rarity } from './fish';
+
+// The title fish were picked by look under the old Abyss drop table. Keep rolling
+// them with it so retuning the in-game odds (depth-odds.ts) doesn't reshape them.
+export const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
 import { fishSprite } from './portrait';
 
 export interface TitleFish {
@@ -83,7 +87,15 @@ const LINE_SEGS = 5;
 const SWING_S = 1.15;
 const FIRST_DROP_S = 1.35;
 const DROP_GAP_S = 0.28;
-const PAN_FRAC = 0.09; // how far the rope rides up when the camera pans down to the workbench
+const PAN_FRAC = 0.03; // how far the rope rides up when the camera pans down to the workbench
+// Over the workbench the rope is pulled taut, its ends lowered to this height (fraction of the screen).
+// Shortening the links alone can't do it: the fish stretch a long rope into a deep sag. So each rope
+// particle is also pulled toward a nearly straight line (a shallow BENCH_SAG in the middle).
+const BENCH_ROPE_Y = 0.19; // high enough that the fish hang clear of the table's back edge
+const BENCH_SAG = 0.025;
+const BENCH_TAUT = 0.972; // rope length factor: ROPE_SLACK × this ≈ the span
+const BENCH_PULL = 0.35; // per step, how far a rope particle moves toward the taut line
+const BENCH_LINES = 0.4; // fishing line length over the workbench, as a fraction of the title's
 const CLICK_MOVE_PX = 8;
 const CLICK_MS = 450;
 
@@ -162,6 +174,7 @@ export class TitleScreen {
   private raf = 0;
   private running = false;
   private panU = 0;
+  private tableY: number | null = null; // screen y where the fish's shadows fall on the workbench table
   private name: HTMLElement;
 
   private pointer = { x: -1e4, y: -1e4, vx: 0, vy: 0, t: 0 };
@@ -176,7 +189,7 @@ export class TitleScreen {
     this.name = canvas.parentElement!.querySelector('#title-name')!;
     this.fish = defs.map((def, i) => {
       const img = new Image();
-      const base = rollFish(def.seed, ZONES[2], 40);
+      const base = rollFish(def.seed, 40, TITLE_ODDS);
       const f: Hanging = {
         def,
         img,
@@ -210,14 +223,21 @@ export class TitleScreen {
    * The camera pans down to the workbench: 0 = the title, 1 = the rope and its
    * fish ride up to the top of the screen and the name scrolls away.
    */
-  setPan(u: number) {
+  setPan(u: number, tableY: number | null = null) {
     this.panU = u;
+    this.tableY = tableY;
+    this.canvas.parentElement!.style.setProperty('--pan', String(u));
     this.name.style.transform = u ? `translateY(${-u * 40}vh)` : '';
     this.name.style.opacity = u ? String(Math.max(0, 1 - u * 2.2)) : '';
   }
 
   private get pan() {
     return this.panU * this.h * PAN_FRAC;
+  }
+
+  /** Over the workbench the fishing lines are reeled in, so the fish hang clear of the table's gear and tray. */
+  private get lineScale() {
+    return 1 + (BENCH_LINES - 1) * this.panU;
   }
 
   /** Pointer position in rope space (the drawing is shifted up by the pan). */
@@ -366,6 +386,25 @@ export class TitleScreen {
     for (const l of tailLine.links) l.len += d;
   }
 
+  /**
+   * Follows the workbench pan: the anchors come down to BENCH_ROPE_Y on screen
+   * and the rope shortens until it runs nearly straight across. At pan 0 this is
+   * exactly the title's own slack rope.
+   */
+  private tighten() {
+    const u = this.panU;
+    const y = this.ay + (this.h * BENCH_ROPE_Y + this.pan - this.ay) * u;
+    this.ps[0].y = y;
+    // The free end is still being swung in during the intro; leave it to the swing.
+    if (!this.swinging) {
+      const end = this.ps[ROPE_SEGS];
+      end.x = this.bx;
+      end.y = y;
+    }
+    const len = this.seg * (1 + (BENCH_TAUT - 1) * u);
+    for (const l of this.ropeLinks) l.len = len;
+  }
+
   // ---- Physics ----------------------------------------------------------
 
   private frame(dt: number) {
@@ -391,6 +430,7 @@ export class TitleScreen {
       if (u >= 1) this.swinging = false;
     }
     for (const f of this.fish) if (!f.dropped && this.t >= f.dropAt) this.drop(f, false);
+    this.tighten();
 
     if (this.held) {
       const p = this.ps[this.held.i];
@@ -416,6 +456,22 @@ export class TitleScreen {
       for (const l of this.ropeLinks) this.solve(l);
       for (const f of this.fish) for (const l of f.links) this.solve(l);
     }
+    this.pullTaut();
+  }
+
+  /** Over the workbench: draws the rope toward a nearly straight line between its anchors. */
+  private pullTaut() {
+    const k = BENCH_PULL * this.panU;
+    if (!k || this.swinging) return;
+    const a = this.ps[0];
+    const b = this.ps[ROPE_SEGS];
+    for (let i = 1; i < ROPE_SEGS; i++) {
+      const p = this.ps[i];
+      if (!p.inv) continue; // held by the pointer
+      const s = i / ROPE_SEGS;
+      const y = a.y + (b.y - a.y) * s + Math.sin(s * Math.PI) * this.h * BENCH_SAG;
+      p.y += (y - p.y) * k;
+    }
   }
 
   private solve(l: Link) {
@@ -426,8 +482,10 @@ export class TitleScreen {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const d = Math.hypot(dx, dy) || 1e-6;
-    if (l.slack && d <= l.len) return;
-    const k = (d - l.len) / d;
+    // Fishing lines are reeled in over the workbench (see lineScale).
+    const len = l.slack ? l.len * this.lineScale : l.len;
+    if (l.slack && d <= len) return;
+    const k = (d - len) / d;
     a.x += dx * k * (a.inv / w);
     a.y += dy * k * (a.inv / w);
     b.x -= dx * k * (b.inv / w);
@@ -475,7 +533,10 @@ export class TitleScreen {
     const hit = this.fishAt(x, y);
     const i = hit ? (hit.u < 0.5 ? hit.f.head : hit.f.tail) : this.ropeAt(x, y);
     this.press = { fish: hit?.f ?? null, x, y, t: performance.now() };
-    if (i == null || this.swinging) return;
+    if (i == null) return;
+    // The fish and rope hang in front of the workbench table: claim the press so the table ignores it.
+    e.preventDefault();
+    if (this.swinging) return;
     this.held = { i, inv: this.ps[i].inv };
     this.ps[i].inv = 0;
     this.canvas.setPointerCapture(e.pointerId);
@@ -485,7 +546,10 @@ export class TitleScreen {
   private onMove(e: PointerEvent) {
     if (!this.running) return;
     this.trackPointer(e);
-    if (this.held) return;
+    if (this.held) {
+      e.preventDefault(); // carrying a fish: no table tips underneath
+      return;
+    }
     // A passing cursor shoves whatever it brushes past.
     const { x, y, vx, vy } = this.pointer;
     const push = (p: P) => {
@@ -499,7 +563,10 @@ export class TitleScreen {
     for (const f of this.fish) if (f.dropped) [f.head, f.tail].forEach((i) => push(this.ps[i]));
     for (let i = 1; i < ROPE_SEGS; i++) push(this.ps[i]);
     const hit = this.fishAt(x, y);
-    this.canvas.style.cursor = hit?.f.def.onClick ? 'pointer' : hit || this.ropeAt(x, y) != null ? 'grab' : '';
+    const rope = !hit && this.ropeAt(x, y) != null;
+    this.canvas.style.cursor = hit?.f.def.onClick ? 'pointer' : hit || rope ? 'grab' : '';
+    // Hovering a fish or the rope: the workbench table behind shouldn't show its tip too.
+    if (hit || rope) e.preventDefault();
   }
 
   private onUp(e: PointerEvent) {
@@ -545,6 +612,7 @@ export class TitleScreen {
   private draw() {
     const c = this.ctx;
     c.clearRect(0, 0, this.w, this.h);
+    this.drawShadows();
     c.save();
     c.translate(0, -this.pan);
 
@@ -563,6 +631,38 @@ export class TitleScreen {
     this.drawRope();
     for (const f of this.fish) if (f.dropped) this.drawFish(f);
     c.restore();
+  }
+
+  /**
+   * Over the workbench, each fish casts a soft shadow onto the table below it
+   * (screen space), so it reads as hanging above the table, not just in front.
+   */
+  private drawShadows() {
+    if (this.tableY == null || !this.panU) return;
+    const c = this.ctx;
+    for (const f of this.fish) {
+      if (!f.dropped) continue;
+      const h = this.ps[f.head];
+      const t = this.ps[f.tail];
+      // Just under the fish where it hangs over the table, else on the table's back.
+      const bottom = Math.max(h.y, t.y) - this.pan;
+      const y = Math.max(this.tableY, bottom + 18);
+      // Lower fish hang nearer the table: darker, tighter shadows.
+      const lift = Math.max(0, this.tableY - bottom);
+      const near = Math.max(0.25, 1 - lift / (this.h * 0.4));
+      const r = Math.max(Math.abs(h.x - t.x), f.len * 0.35) * (0.45 + 0.25 / near);
+      const g = c.createRadialGradient(0, 0, 0, 0, 0, r);
+      g.addColorStop(0, `rgba(20, 10, 2, ${0.55 * near * this.panU})`);
+      g.addColorStop(1, 'rgba(20, 10, 2, 0)');
+      c.save();
+      c.translate((h.x + t.x) / 2, y);
+      c.scale(1, 0.22); // flattened onto the tabletop
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(0, 0, r, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
   }
 
   private drawRope() {

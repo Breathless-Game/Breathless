@@ -39,6 +39,8 @@ assets/
 | 鱼的模型 | `buildFishMesh(spec)` | [`game/src/fish.ts`](../game/src/fish.ts) |
 | 鱼的图片、图标和 NFT 卡牌 | `fishSprite` / `fishIcon` / `fishCard` | [`game/src/portrait.ts`](../game/src/portrait.ts) |
 | 鱼竿 | `buildFishingNetMesh()` | [`game/src/gear.ts`](../game/src/gear.ts) |
+| 13 款水下装备与配件 | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts)、[`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
+| 配件 3D 工坊预览与导出 | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html)、[`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | 预览页 | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html)、[`game/src/asset-library.ts`](../game/src/asset-library.ts) |
 | 鱼竿检查与导出 | `gear-preview.html` | [`game/gear-preview.html`](../game/gear-preview.html)、[`game/src/gear-preview.ts`](../game/src/gear-preview.ts) |
 
@@ -52,13 +54,15 @@ assets/
 - **稀有度**决定颜色范围、发光强度、基础速度和价值。
 - **seed** 决定具体的颜色、大小和名字，所以同一个鱼种的两条鱼不会完全一样。
 
-下面每张图是该鱼种的一条鱼，生成它们用的 seed 列在[第 5 节](#5-重新渲染图片)。
+下面每张图是该鱼种的一条鱼。预览页用的 seed 列在[第 5 节](#5-重新渲染图片)；保存的图大多是用更早的 seed 渲染的，见那里的说明。
+
+稀有度只看抓到鱼时的深度，和地图、区域名都无关：[`game/src/depth-odds.ts`](../game/src/depth-odds.ts) 里的 `RARITY_BY_DEPTH` 给出若干锚点深度的百分比权重，锚点之间线性插值，350 m 以下保持不变。完整的表见[主 README](../README.zh-CN.md#7-游戏设计参数) 第 7 节。下面每档稀有度列出表里的几个点。
 
 ### 图鉴
 
 #### Common（普通）
 
-颜色 `#b8c4cc` · value 1 · 基础速度 2.2 · 基础逃跑半径 3 · 出现在 Shallows 浅水区（70%）、Coral Reef 珊瑚礁（20%）
+颜色 `#b8c4cc` · value 1 · 基础速度 2.2 · 基础逃跑半径 3 · 水面 90%，50 m 处 58%，350 m 以下 22%
 
 | Sand Minnow | Grey Perch | Mud Goby |
 | :---: | :---: | :---: |
@@ -67,7 +71,7 @@ assets/
 
 #### Uncommon（少见）
 
-颜色 `#5fd38d` · value 3 · 基础速度 2.8 · 基础逃跑半径 3.6 · 出现在 Shallows 浅水区（25%）、Coral Reef 珊瑚礁（35%）、The Abyss 深渊（10%）
+颜色 `#5fd38d` · value 3 · 基础速度 2.8 · 基础逃跑半径 3.6 · 水面 9.5%，50 m 处 28%，350 m 以下 26%
 
 | Striped Wrasse | Coral Chromis | Silver Snapper |
 | :---: | :---: | :---: |
@@ -76,7 +80,7 @@ assets/
 
 #### Rare（稀有）
 
-颜色 `#4aa8ff` · value 10 · 基础速度 3.4 · 基础逃跑半径 4.4 · 出现在 Shallows 浅水区（5%）、Coral Reef 珊瑚礁（30%）、The Abyss 深渊（30%）
+颜色 `#4aa8ff` · value 10 · 基础速度 3.4 · 基础逃跑半径 4.4 · 水面 0.5%，50 m 处 10.5%，350 m 以下 25%
 
 | Azure Tang | Neon Cardinal | Spotted Grouper |
 | :---: | :---: | :---: |
@@ -85,7 +89,7 @@ assets/
 
 #### Epic（史诗）
 
-颜色 `#b46cff` · value 35 · 基础速度 4.2 · 基础逃跑半径 5.2 · 出现在 Coral Reef 珊瑚礁（13%）、The Abyss 深渊（35%）
+颜色 `#b46cff` · value 35 · 基础速度 4.2 · 基础逃跑半径 5.2 · 只在 15 m 以下出现：50 m 处 3%，350 m 以下 16.5%
 
 | Violet Lionfish | Ember Triggerfish | Ghost Angelfish |
 | :---: | :---: | :---: |
@@ -94,7 +98,7 @@ assets/
 
 #### Legendary（传说）
 
-颜色 `#ffb340` · value 150 · 基础速度 5 · 基础逃跑半径 6 · 出现在 Coral Reef 珊瑚礁（2%）、The Abyss 深渊（19%）
+颜色 `#ffb340` · value 150 · 基础速度 5 · 基础逃跑半径 6 · 只在 30 m 以下出现：50 m 处 0.5%，350 m 以下 7.5%
 
 | Golden Koi Dragon | Abyssal Sunfish | Crowned Sailfish |
 | :---: | :---: | :---: |
@@ -103,7 +107,7 @@ assets/
 
 #### Mythic（神话）
 
-颜色 `#ff5fd2` · value 800 · 基础速度 5.8 · 基础逃跑半径 7 · 出现在 The Abyss 深渊（6%）
+颜色 `#ff5fd2` · value 800 · 基础速度 5.8 · 基础逃跑半径 7 · 只在 50 m 以下出现：80 m 处 0.2%，350 m 以下 3%
 
 | Moonfin Leviathan | Prism Coelacanth |
 | :---: | :---: |
@@ -224,9 +228,9 @@ assets/
 
 ### 从 seed 到 NFT 卡牌
 
-`rollFish(seed, zone, depth)` → `FishSpec` → `buildFishMesh(spec)` → `fishCard(spec)`
+`rollFish(seed, depth, odds?)` → `FishSpec` → `buildFishMesh(spec)` → `fishCard(spec)`
 
-同一个 seed 在同一个区域永远生成同一条鱼，所以任何人都能重新渲染卡牌来核对。`fishCard` 画出用于铸造的 512 × 512 图片：稀有度颜色做背景，上面是鱼，以及它的名字、大小、深度和编号。
+同一个 seed 在同一个深度永远生成同一条鱼，所以任何人都能重新渲染卡牌来核对。深度决定稀有度的掉率，也会和捕获价值一起存在鱼身上；第三个参数 `odds` 可以覆盖掉率（标题页用到了它）。`fishCard` 画出用于铸造的 512 × 512 图片：稀有度颜色做背景，上面是鱼，以及它的名字、大小、深度和编号。
 
 <img src="cards/moonfin-leviathan.png" width="320" alt="NFT 卡牌示例：Starborn Moonfin Leviathan">
 
@@ -257,9 +261,10 @@ assets/
 | `tip` / `Catch_Centre` | 空的标记点 | – | – | 2.7，网圈正中 |
 
 - **轴心**：模型的原点是潜水员的肩膀，鱼竿指向 +x。`diver.ts` 把它挂在身体的 `(0.6, 0, 0.3)` 处，挥动时整个 group 一起转。
-- **抓鱼点**：按 `Space` 挥竿，抓鱼距离从 `tip` 计算；容量与范围由 [`equipment.ts`](../game/src/equipment.ts) 定义。
+- **抓鱼点**：按 `Space` 挥竿。离 `tip` 最近、并且在当前渔网等级的收网范围以内的那条鱼被抓住，网里最多装这一等级的容量那么多条鱼。等级定义在 [`game/src/equipment.ts`](../game/src/equipment.ts) 的 `ROD_TIERS`：Lv1 是 2.4 m、6 条，Lv2 是 2.8 m、8 条，Lv3 是 3.2 m、10 条。
 - **网兜**：224 条线段，一次绘制调用。7 圈、每圈 16 个点交替错开半个网格，成对的斜线形成菱形，仅收口和边缘保留环形缝线。
-- **升级**：已实现三档。升级只缩放 `mouth`（网圈、护框、网兜和支撑）；握把、线轮、杆身与抓鱼中心位置保持不变。
+- **还没做的**：[策划案](../design/game-design-document.md#7-经济与升级)第 7.1 节里鱼竿、鱼饵、船的升级目前只有设计。渔网等级是游戏里唯一的升级。
+- **升级**：已实现三档。`Diver.setNetLevel()` 只缩放 `mouth`（网圈、护框、网兜和支撑），在 Lv1 之上每升一级放大 15%；握把、线轮、杆身与抓鱼中心位置保持不变。
 
 | 等级 | 网容量 | 抓鱼半径 | 网口缩放 |
 | --- | --- | --- | --- |
@@ -278,11 +283,11 @@ assets/
 **在代码里用**。可以直接生成模型，也可以要任意尺寸的图片：
 
 ```ts
-import { ZONES, rollFish, buildFishMesh } from './fish';
+import { rollFish, buildFishMesh } from './fish';
 import { fishCard, fishSprite } from './portrait';
 import { buildFishingNetMesh } from './gear';
 
-const spec = rollFish(43, ZONES[2], 48);    // Starborn Moonfin Leviathan
+const spec = rollFish(43, 350);             // Starborn Moonfin Leviathan，在 350 m 抓到
 scene.add(buildFishMesh(spec).group);       // 3D 模型
 img.src = fishSprite(spec, 256);            // 透明背景 PNG 的 data URL，尺寸任意
 img.src = fishCard(spec);                   // 512 × 512 的 NFT 卡牌
@@ -303,27 +308,29 @@ scene.add(rod.group);                       // rod.tip 是网圈正中的标记�
 
 要别的尺寸，在这个页面的控制台里执行：`await assetLibrary.sprite('azure-tang', 1024)`，返回一个 data URL。
 
-页面给每个鱼种用的是能生成它的最小 seed。带条纹的鱼种会等到一次有条纹的生成。图里的鱼是这些：
+页面把每个 seed 都放在 350 m 抽。这是 `RARITY_BY_DEPTH` 最深的锚点，每档稀有度（包括神话）都能抽到。页面给每个鱼种用的是在这个深度能生成它的最小 seed。带条纹的鱼种会等到一次有条纹的生成。页面画的鱼是这些：
 
-| 鱼种 | seed | 区域 | 深度 | 调用 |
-| --- | --- | --- | --- | --- |
-| Sand Minnow | 1 | Shallows 浅水区 | 9 m | `rollFish(1, ZONES[0], 9)` |
-| Grey Perch | 8 | Shallows 浅水区 | 9 m | `rollFish(8, ZONES[0], 9)` |
-| Mud Goby | 5 | Shallows 浅水区 | 9 m | `rollFish(5, ZONES[0], 9)` |
-| Striped Wrasse | 2 | Shallows 浅水区 | 9 m | `rollFish(2, ZONES[0], 9)` |
-| Coral Chromis | 11 | Coral Reef 珊瑚礁 | 28 m | `rollFish(11, ZONES[1], 28)` |
-| Silver Snapper | 10 | Coral Reef 珊瑚礁 | 28 m | `rollFish(10, ZONES[1], 28)` |
-| Azure Tang | 1 | Coral Reef 珊瑚礁 | 28 m | `rollFish(1, ZONES[1], 28)` |
-| Neon Cardinal | 8 | The Abyss 深渊 | 48 m | `rollFish(8, ZONES[2], 48)` |
-| Spotted Grouper | 5 | Coral Reef 珊瑚礁 | 28 m | `rollFish(5, ZONES[1], 28)` |
-| Violet Lionfish | 2 | The Abyss 深渊 | 48 m | `rollFish(2, ZONES[2], 48)` |
-| Ember Triggerfish | 11 | The Abyss 深渊 | 48 m | `rollFish(11, ZONES[2], 48)` |
-| Ghost Angelfish | 5 | The Abyss 深渊 | 48 m | `rollFish(5, ZONES[2], 48)` |
-| Golden Koi Dragon | 43 | Coral Reef 珊瑚礁 | 28 m | `rollFish(43, ZONES[1], 28)` |
-| Abyssal Sunfish | 20 | The Abyss 深渊 | 48 m | `rollFish(20, ZONES[2], 48)` |
-| Crowned Sailfish | 30 | The Abyss 深渊 | 48 m | `rollFish(30, ZONES[2], 48)` |
-| Moonfin Leviathan | 43 | The Abyss 深渊 | 48 m | `rollFish(43, ZONES[2], 48)` |
-| Prism Coelacanth | 36 | The Abyss 深渊 | 48 m | `rollFish(36, ZONES[2], 48)` |
+| 稀有度 | 鱼种 | seed | 调用 |
+| --- | --- | --- | --- |
+| common | Grey Perch | 8 | `rollFish(8, 350)` |
+| common | Mud Goby | 9 | `rollFish(9, 350)` |
+| common | Sand Minnow | 7 | `rollFish(7, 350)` |
+| uncommon | Coral Chromis | 14 | `rollFish(14, 350)` |
+| uncommon | Silver Snapper | 24 | `rollFish(24, 350)` |
+| uncommon | Striped Wrasse | 27 | `rollFish(27, 350)` |
+| rare | Azure Tang | 1 | `rollFish(1, 350)` |
+| rare | Neon Cardinal | 11 | `rollFish(11, 350)` |
+| rare | Spotted Grouper | 5 | `rollFish(5, 350)` |
+| epic | Ember Triggerfish | 20 | `rollFish(20, 350)` |
+| epic | Ghost Angelfish | 30 | `rollFish(30, 350)` |
+| epic | Violet Lionfish | 2 | `rollFish(2, 350)` |
+| legendary | Abyssal Sunfish | 107 | `rollFish(107, 350)` |
+| legendary | Crowned Sailfish | 36 | `rollFish(36, 350)` |
+| legendary | Golden Koi Dragon | 89 | `rollFish(89, 350)` |
+| mythic | Moonfin Leviathan | 43 | `rollFish(43, 350)` |
+| mythic | Prism Coelacanth | 104 | `rollFish(104, 350)` |
+
+> **这个目录里的 PNG 比这张表旧。** 它们是稀有度还按区域决定的时候渲染的，用的 seed 不一样。有 5 个 seed 没变（Grey Perch 8、Azure Tang 1、Spotted Grouper 5、Violet Lionfish 2、Moonfin Leviathan 43），这几张图仍然对得上。另外 12 张图画的是同一鱼种的另一条鱼：体型和花纹一样，具体颜色和大小不同。示例卡牌还是同一条 Starborn Moonfin Leviathan（90 cm、7.83 kg、#0000002b），但保存的 PNG 上写的是 "caught at 48 m"，页面现在渲染出来是 "caught at 350 m"。按上面的步骤重新渲染一遍，图就和表一致了。
 
 ---
 

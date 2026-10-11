@@ -1,0 +1,16 @@
+.anchor
+.DS_Store
+# build output; the IDL and TS types are copied out by hand (see README)
+target/*
+!target/idl/
+!target/types/
+**/*.rs.bk
+node_modules
+test-ledger
+.yarn
+# secret keys: never commit
+.keys/
+target/deploy/
+*-keypair.json
+# programs dumped from devnet for the local validator (npm run fixtures)
+tests/fixtures/*.so
