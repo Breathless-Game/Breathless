@@ -11,10 +11,11 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createGenericFile, generateSigner, percentAmount, publicKey, sol, transactionBuilder } from '@metaplex-foundation/umi';
 import { burn, fetchAsset, fetchCollection } from '@metaplex-foundation/mpl-core';
-import { createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
+import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, SoldLedger, appraise, checkTransferTx, parseQuoteBody, parseSellBody, singleFlight } from './market-rules.mjs';
+import { HttpError, SoldLedger, appraise, parseQuoteBatchBody, parseQuoteBody } from './market-rules.mjs';
+import { createSaleDesk, quoteMany } from './market-sale.mjs';
 import { renderPearlPng } from './pearl-png.mjs';
 
 const SYMBOL = 'PEARL';
@@ -165,13 +166,23 @@ export function createServerMode({ u, rpc, dir, log }) {
     return { pearls: a.pearls };
   }
 
-  /** Mint `pearls` to the seller's ATA (created if missing, market pays). The signature is persisted before sending. */
+  /** POST /quote-batch: the same check for several fish at once. */
+  function quoteBatch(body) {
+    return quoteMany(parseQuoteBatchBody(body), quote);
+  }
+
+  /**
+   * Mint `pearls` to the seller's ATA (created if missing, market pays). The signature is persisted before sending.
+   * The memo names the fish: it makes every pay transaction unique, so two fish of the same value sold to the
+   * same seller in the same blockhash window can never produce one identical transaction (one signature, one payment).
+   */
   async function pay(assetId, mint, seller, pearls) {
     const ata = findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(seller) });
     const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
     const builder = transactionBuilder()
       .add(createIdempotentAssociatedToken(u, { ata, mint: publicKey(mint), owner: publicKey(seller) }))
       .add(mintTokensTo(u, { mint: publicKey(mint), token: ata, amount: BigInt(pearls) }))
+      .add(addMemo(u, { memo: `PEARL for fish ${assetId}` }))
       .setBlockhash(blockhash);
     const tx = await builder.buildAndSign(u);
     ledger.payPending(assetId, sigStr(tx.signatures[0]), blockhash.lastValidBlockHeight);
@@ -225,47 +236,26 @@ export function createServerMode({ u, rpc, dir, log }) {
     }
   }
 
-  const inflight = new Map();
-  async function sell(body) {
-    const { assetId, seller, transferTx } = parseSellBody(body);
-    return singleFlight(inflight, assetId, async () => {
-      let plan = ledger.plan(assetId, seller);
-      if (plan === 'conflict') throw new HttpError(409, 'This fish was already sold by another wallet');
-      if (plan === 'done') return ledger.result(assetId);
-      const mint = await ensureMint();
-
-      if (plan === 'new') {
-        const tx = await poll(
-          () => u.rpc.getTransaction(base58.serialize(transferTx), { commitment: 'confirmed' }),
-          (t) => t !== null,
-        );
-        const bad = checkTransferTx(tx, { assetId, seller, market: marketKey });
-        if (bad) throw new HttpError(400, bad);
-        const asset = await poll(
-          () => loadAsset(assetId),
-          (a) => a?.owner?.toString() === marketKey,
-        );
-        if (asset?.owner?.toString() !== marketKey) throw new HttpError(400, 'The market does not own this fish yet');
-        const a = appraise(asset.attributes?.attributeList);
-        if (!a.ok) throw new HttpError(422, a.reason);
-        ledger.begin(assetId, { seller, transferTx, pearls: a.pearls });
-        plan = 'resume';
-      }
-
-      if (plan === 'resume') {
-        const pending = await resolvePending(assetId);
-        if (pending === 'in-flight') throw new HttpError(409, 'Payment is still confirming, retry in a few seconds');
-        if (pending === 'unpaid') {
-          const r = ledger.get(assetId);
-          await pay(assetId, mint, seller, r.pearls);
-          log(`[market] paid ${r.pearls} PEARL to ${seller} for ${assetId}`);
-        }
-      }
-
-      await burnSold(assetId);
-      return ledger.result(assetId);
-    });
-  }
+  // Every fish is verified, paid and burned on its own, under a lock on its id (market-sale.mjs).
+  const desk = createSaleDesk({
+    ledger,
+    market: marketKey,
+    ensureMint,
+    fetchTransfer: (sig) =>
+      poll(
+        () => u.rpc.getTransaction(base58.serialize(sig), { commitment: 'confirmed' }),
+        (t) => t !== null,
+      ),
+    loadMarketAsset: (assetId) =>
+      poll(
+        () => loadAsset(assetId),
+        (a) => a?.owner?.toString() === marketKey,
+      ),
+    resolvePending,
+    pay,
+    burnSold,
+    log,
+  });
 
   async function info() {
     let funded = false;
@@ -282,6 +272,8 @@ export function createServerMode({ u, rpc, dir, log }) {
       programId: null,
       oracle: null,
       funded,
+      // POST /quote-batch and /sell-batch exist: a client sells many fish with one transfer and two requests.
+      batch: true,
     };
   }
 
@@ -297,5 +289,5 @@ export function createServerMode({ u, rpc, dir, log }) {
     for (const [id, r] of Object.entries(ledger.records)) if (r.status === 'paid') await burnSold(id);
   })();
 
-  return { info, quote, sell, ready };
+  return { info, quote, quoteBatch, sell: desk.sell, sellBatch: desk.sellBatch, ready };
 }
