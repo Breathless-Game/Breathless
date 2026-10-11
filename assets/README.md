@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Every fish and the fishing rod in 屏息 Breathless is a low-poly model built in code. The game ships no model files and no textures. This folder is the catalog of those assets: a picture of each one, the numbers that shape it, and how to render it again or add a new one.
+Every fish and the fishing rod in 屏息 Breathless is built in code. The rod uses more detailed hardware and PBR materials while retaining faceted shading. This folder catalogs the assets with renders, model parameters and a reusable Lv1 fishing-net GLB. The game builds the models live; the exported files are available for reuse.
 
 ---
 
@@ -24,7 +24,11 @@ assets/
 ├── README.md            this page
 ├── README.zh-CN.md      this page in Chinese
 ├── fish/                17 sprites, one per species: 512 × 512 PNG, transparent
-├── gear/                the fishing rod: 1024 × 512 PNG, transparent and on dark water
+├── gear/                fishing-net renders and the reusable Lv1 GLB
+│   ├── fishing-net.png                  1024 × 512 PNG, transparent
+│   ├── fishing-net-dark.png             1024 × 512 PNG, on dark water
+│   ├── fishing-net-faceted-preview.png  inspection preview
+│   └── fishing-net-faceted.glb          base Lv1 model with per-face normals
 └── cards/               one example NFT card: 512 × 512 PNG
 ```
 
@@ -38,6 +42,7 @@ The pictures are renders. The game does not load them: it draws every fish and t
 | 13 Diving Accessories | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts), [`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
 | Accessory 3D Studio | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html), [`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | Preview page | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html), [`game/src/asset-library.ts`](../game/src/asset-library.ts) |
+| Rod inspection and export | `gear-preview.html` | [`game/gear-preview.html`](../game/gear-preview.html), [`game/src/gear-preview.ts`](../game/src/gear-preview.ts) |
 
 ---
 
@@ -233,26 +238,41 @@ The same seed at the same depth always gives the same fish, so anyone can render
 
 ## 3. Fishing rod
 
-<img src="gear/fishing-net-dark.png" width="720" alt="The fishing rod, used underwater as a landing net">
+<img src="gear/fishing-net-dark.png" width="720" alt="The faceted fishing rod, used underwater as a landing net">
 
-The design doc calls this item a fishing rod. Underwater, the game uses it as a landing net: it keeps the rod hardware (grip, reel, shaft, ferrule) and carries a hoop and a web at the far end. `buildFishingNetMesh()` returns the model as `group`, and a marker called `tip`.
+[Inspection preview](gear/fishing-net-faceted-preview.png) · [Download Lv1 GLB](gear/fishing-net-faceted.glb)
+
+The design doc calls this item a fishing rod. Underwater, the game uses it as a landing net: a carbon blank, EVA-style grip, spinning reel and guide rings lead to an elliptical hoop and a fine nylon web. `buildFishingNetMesh()` returns the complete `group`, the upgrade pivot `mouth`, and a catch marker called `tip`. Mesh materials use `flatShading: true`; their metalness, roughness and clearcoat describe the hardware without texture files. The GLB is the base Lv1 asset, with per-face normals baked in to preserve the facets in other viewers.
 
 | Part | Geometry | Size (model units) | Color | Position along the rod (x) |
 | --- | --- | --- | --- | --- |
 | Arm | Box | 0.7 × 0.14 × 0.14 | `#1d2b3a`, the wetsuit color | 0–0.7 |
-| Grip | 6-sided cylinder | radius 0.09–0.12, length 0.38 | `#7e4c32` | 0.59–0.97 |
-| Reel | 8-sided cylinder | radius 0.14, thickness 0.1 | `#344956`, metallic | 0.98, below the shaft |
-| Reel handle | Box | 0.22 × 0.035 × 0.035 | `#344956`, metallic | 1.1 |
-| Shaft | 6-sided cylinder, tapered | radius 0.035–0.06, length 1.35 | `#c9d2d7`, metallic | 0.585–1.935 |
-| Ferrule | Torus | radius 0.07, tube 0.018 | `#ffd166` | 1.55 |
-| Hoop | 12-sided torus | radius 0.42, tube 0.04 | `#ffd166` | 2.0 |
-| Web | Line segments | a cone from radius 0.1 to radius 0.42 | `#dffaf7` at 58% opacity | 1.45–2.0 |
-| `tip` | Empty marker | – | – | 2.0, the middle of the hoop |
+| Butt cap | 12-sided cylinder | radius 0.105–0.12, length 0.1 | `#142027` | 0.61–0.71 |
+| Grip and bands | 12-sided tapered cylinder, torus bands | grip radius 0.105–0.135, length 0.46; band radius 0.12 | `#9b5d3c`, bands `#142027` | grip 0.68–1.14; bands 0.72 and 1.1 |
+| Reel seat and collar | 12-sided tapered cylinder, torus | radius 0.073–0.082, length 0.28; collar radius 0.084 | `#46616a`, collar `#9eafb2` | seat 1.12–1.4; collar 1.4 |
+| Reel body | Sphere, 16 × 10 segments | radius 0.17, scaled (0.82, 1.18, 0.78) | `#263b46` | 1.25, below the shaft |
+| Reel plate, spool and bail | 16-sided cylinders and torus rings | plate radius 0.185, thickness 0.035; spool radius 0.135, length 0.13; bail radius 0.19 | `#9eafb2`, spool `#a9b6b8` | 1.25–1.3 |
+| Reel handle and knob | 8-sided cylinder, sphere | handle radius 0.014; knob radius 0.045 | `#9eafb2`, knob `#263b46` | handle 1.34–1.53; knob 1.55 |
+| Carbon blank and accent | 12-sided tapered cylinder, 8-sided accent | blank radius 0.022–0.068, length 1.34; accent radius 0.008–0.011, length 1.15 | `#17242d`, accent `#46616a` | blank 1.31–2.65; accent 1.505–2.655 |
+| Guide rings | 12-sided torus | radii 0.065, 0.052, 0.042, 0.033; tube 0.009 | `#9eafb2` | 1.67, 1.93, 2.18, 2.4 |
+| Hoop and inner guard | Elliptical tube, 32 path × 8 radial segments | hoop radii y/z 0.52/0.47; guard 0.47/0.42; tube 0.038 | `#6f9698`, guard `#46616a` | 2.7 |
+| Web | Diamond-weave line segments | depth 0.78; gathered radius 0.075 to hoop radii 0.52/0.47 | `#b9d6d7` at 38% opacity | 1.92–2.7 |
+| Mouth braces | 8-sided cylinders | radius 0.014, from the shaft to y ±0.52 | `#6f9698` | 2.5–2.7 |
+| `tip` / `Catch_Centre` | Empty marker | – | – | 2.7, the middle of the hoop |
 
 - **Pivot**: the origin of the model is the diver's shoulder, and the rod points along +x. `diver.ts` attaches it to the body at `(0.6, 0, 0.3)` and turns the whole group for the swing.
-- **Catch point**: `Space` swings the rod. The nearest fish within the net tier's catch radius of `tip` is caught, and the net holds as many fish as the tier's capacity. The tiers are `ROD_TIERS` in [`game/src/equipment.ts`](../game/src/equipment.ts): Lv1 2.4 m and 6 fish, Lv2 2.8 m and 8, Lv3 3.2 m and 10. `Diver.setNetLevel()` scales the whole model up by 12% per tier above Lv1.
-- **Web**: 108 line segments in one draw call (5 rings of 12 points, and 12 lines along the cone). It is drawn as lines, not as a solid cone, so that it looks like netting from every angle.
-- **Not built yet**: the rod, bait and boat upgrades in section 7.1 of the [design doc](../design/game-design-document.md#7-经济与升级) (in Chinese) are design only. The net tiers above are the only upgrade in the game, and they reuse this one model at a larger scale.
+- **Catch point**: `Space` swings the rod. The nearest fish within the net tier's catch radius of `tip` is caught, and the net holds as many fish as the tier's capacity. The tiers are `ROD_TIERS` in [`game/src/equipment.ts`](../game/src/equipment.ts): Lv1 2.4 m and 6 fish, Lv2 2.8 m and 8, Lv3 3.2 m and 10.
+- **Web**: 224 line segments in one draw call. Seven rows of 16 points have alternating half-cell offsets; paired diagonals form diamonds, with seams only at the gathered end and rim.
+- **Not built yet**: the rod, bait and boat upgrades in section 7.1 of the [design doc](../design/game-design-document.md#7-经济与升级) (in Chinese) are design only. The net tiers are the only upgrade in the game.
+- **Upgrades**: three tiers are implemented. `Diver.setNetLevel()` scales only `mouth` (hoop, guard, web and braces), by 15% per tier above Lv1; the grip, reel, shaft and catch centre keep their positions.
+
+| Tier | Net capacity | Catch radius | Mouth scale |
+| --- | --- | --- | --- |
+| Lv1 · Basic Net | 6 fish | 2.4 | 1.00 |
+| Lv2 · Reinforced Net | 8 fish | 2.8 | 1.15 |
+| Lv3 · Abyssal Net | 10 fish | 3.2 | 1.30 |
+
+Start `npm run game` and open <http://localhost:5173/gear-preview.html> to rotate and zoom the actual game model, inspect all three levels, and export PNG or GLB. PNG captures the current view and tier; GLB always exports the base Lv1 model without the preview floor, lights or camera.
 
 ---
 
