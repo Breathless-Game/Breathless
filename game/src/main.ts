@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Shipyard, SHIPS } from './ships';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
@@ -24,6 +25,8 @@ import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type Ban
 import { NftQueue } from './nft-queue';
 import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
+import { WorldEvents, type EventContext } from './events';
+import { disposeTree } from './lowpoly';
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
@@ -69,6 +72,41 @@ resize();
 const diver = new Diver(scene);
 world.colorGrade.apply(diver.group);
 const hud = new Hud();
+
+// Random world events (avalanches, whales, a leviathan...). They play only during a
+// dive (see update()); menus show none and cost nothing.
+const events = new WorldEvents(scene, world.map, renderQuality.settings.detail);
+world.colorGrade.apply(scene);
+const eventCtx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
+let eventsLive = false;
+const shakeOffset = new THREE.Vector3();
+// Fish near the diver bolt for a moment when the ground shakes or something huge passes.
+const SCATTER: Record<string, number> = { avalanche: 5, rockfall: 1.5, leviathan: 2 }; // seconds until it hits
+const scatterAt = new THREE.Vector3();
+const scatterThreat = new THREE.Vector3();
+let scatterFrom = Infinity;
+let scatterUntil = -Infinity;
+let scatterFresh = false;
+events.onEvent = (e) => {
+  hud.message(e.label, 2600);
+  const delay = SCATTER[e.id];
+  if (delay !== undefined) {
+    scatterFrom = time + delay;
+    scatterUntil = scatterFrom + 2.5;
+    scatterFresh = true;
+  }
+};
+
+let eventDetail = renderQuality.settings.detail;
+/** Keep the events' detail level in step with the render quality. */
+function syncEventDetail() {
+  const detail = renderQuality.settings.detail;
+  if (detail === eventDetail) return;
+  eventDetail = detail;
+  events.setDetail(detail);
+  // The rebuild made new materials: give them the scene's colour grade too.
+  world.colorGrade.apply(scene);
+}
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
@@ -97,6 +135,8 @@ function removeFish(fish: Fish) {
   fishes.splice(fishes.indexOf(fish), 1);
   scene.remove(fish.mesh.group);
   trenchFish.delete(fish);
+  // Each fish owns its geometry and materials: free them with the mesh.
+  disposeTree(fish.mesh.group);
 }
 
 function spawnFish(band: Band) {
@@ -185,8 +225,7 @@ function tendTrench(diverDepth: number) {
  * trench, where that school covers them.
  */
 function populate() {
-  for (const f of [...trenchFish]) removeFish(f);
-  for (const f of fishes) scene.remove(f.mesh.group);
+  for (const f of [...fishes]) removeFish(f);
   fishes.length = 0;
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
@@ -207,7 +246,17 @@ const equipment: EquipmentState = loadEquipment();
 // loadout means the debug/title state where all owned upgrades are available.
 let activeLoadout: readonly UpgradeId[] | null = null;
 let activeTool: EquipmentSlot = 'net';
-const currentStats = () => deriveStats(equipment, activeLoadout ?? undefined);
+let shipBonus: (typeof SHIPS)[number] = SHIPS[0];
+// The ship's bonus goes on top of the packed gear: extra net slots, a wider catch, a faster swim.
+const currentStats = () => {
+  const stats = deriveStats(equipment, activeLoadout ?? undefined);
+  return {
+    ...stats,
+    netCapacity: stats.netCapacity + shipBonus.capacity,
+    catchRadius: stats.catchRadius * (1 + shipBonus.range),
+    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed),
+  };
+};
 const activeLevel = (slot: EquipmentSlot): number => {
   const packed = activeLoadout;
   if (packed && !packed.includes(slot)) return 1;
@@ -255,7 +304,7 @@ function saveBank() {
   } catch {}
 }
 
-const currentTier = () => rodTier(equipment);
+const currentTier = () => { const tier = rodTier(equipment); return { ...tier, capacity: tier.capacity + shipBonus.capacity, catchRadius: tier.catchRadius * (1 + shipBonus.range) }; };
 hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
@@ -528,6 +577,9 @@ function showMapOnHud() {
 function applyMap(id: MapId) {
   if (id === world.map.id) return;
   world.setMap(MAPS[id]);
+  // The event pool follows the map, whether the picker or a restored wallet chose it.
+  events.setMap(world.map);
+  world.colorGrade.apply(scene);
   populate(); // also swaps the old trench school for one under the new shelf
   showMapOnHud();
 }
@@ -585,6 +637,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   phase = 'play';
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
@@ -682,7 +735,8 @@ function pause() {
 }
 
 function onEscape() {
-  if (pauseMenu.open) pauseMenu.back();
+  if (shipyard.open) shipyard.close();
+  else if (pauseMenu.open) pauseMenu.back();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
@@ -733,6 +787,7 @@ function applySettings(s: Settings) {
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
+  syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
   document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
@@ -757,6 +812,27 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
+const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) => {
+  paused = open;
+  keys.clear();
+  if (!open) breathSince = null;
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); }, scene, root => world.colorGrade.apply(root));
+const boatRay = new THREE.Raycaster();
+document.addEventListener('click', (e) => {
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat, true).length) { e.preventDefault(); e.stopPropagation(); shipyard.show(); }
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const target = e.target as HTMLCanvasElement;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open) { target.style.cursor = ''; return; }
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
+});
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
@@ -837,6 +913,7 @@ function loadWalletProgress() {
   refreshEquipment();
   mapPicker.render();
   noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
+  shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
 }
@@ -943,7 +1020,7 @@ function update(dt: number, time: number) {
 
   // Water drag, speed cap, and gentle buoyancy at the surface.
   diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  // Fins improve ordinary swimming only. Emergency ascent keeps its own cap.
+  // Fins (and the ship's bonus) improve ordinary swimming only. Emergency ascent keeps its own cap.
   const cap = outOfAir ? 10 : currentStats().swimSpeed;
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
@@ -972,13 +1049,54 @@ function update(dt: number, time: number) {
 
   diver.update(dt, time, -diver.pos.y);
   tendTrench(-diver.pos.y);
-  for (const f of fishes) f.update(dt, time, diver.pos);
+  const scattering = time >= scatterFrom && time < scatterUntil;
+  if (scattering && scatterFresh) {
+    scatterAt.copy(diver.pos);
+    scatterFresh = false;
+  }
+  for (const f of fishes) {
+    const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
+    // A threat just behind each nearby fish, on the diver's side: it darts away.
+    f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
+  }
   world.update(time, camera.position.y, camera.position.x);
 
   // On the menu the camera sinks a little as the workbench pans in.
   cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
+  camera.position.sub(shakeOffset);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+
+  // World events, after World.update (the lightning flash tints what it wrote).
+  // Only during a dive: leaving or starting one clears them and restarts the clock.
+  const diving = phase === 'play' || phase === 'blackout';
+  if (diving !== eventsLive) {
+    eventsLive = diving;
+    events.stop();
+    scatterFrom = Infinity;
+    scatterUntil = -Infinity;
+  }
+  if (diving) {
+    const weather = world.weather.state;
+    eventCtx.cameraY = camera.position.y;
+    eventCtx.cameraX = camera.position.x;
+    eventCtx.aspect = camera.aspect;
+    eventCtx.depth = -diver.pos.y;
+    eventCtx.night = world.night;
+    eventCtx.shelfDepth = mapDepth(world.map); // below it is the trench
+    const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY; // as in cameraTarget()
+    eventCtx.floorY = inTrench ? -Infinity : world.seabedY; // the trench has no floor
+    eventCtx.lightingEffects = world.lightingEffectsEnabled;
+    eventCtx.storm = weather.storm;
+    eventCtx.cloud = weather.cloud;
+    events.update(time, dt, eventCtx);
+  }
+  // The storm's own sheet lightning holds off while an event bolt strikes.
+  world.quietWeatherLightning = events.activeId === 'lightning';
+  // A subtle shake (a few cm) on top of the follow, taken off again next frame.
+  const shake = events.shake;
+  shakeOffset.set(shake * Math.sin(time * 47.3) * Math.cos(time * 13.1), shake * Math.sin(time * 53.7 + 1.3) * Math.cos(time * 9.7), 0);
+  camera.position.add(shakeOffset);
 
   hud.setBreath(s, outOfAir);
   hud.setDepth(-diver.pos.y);
@@ -1041,11 +1159,12 @@ function frame() {
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
     world.setQuality(renderQuality.settings);
+    syncEventDetail();
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
   // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
-  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, (!paused || shipyard.open) && !document.hidden);
   resetDayClock = false;
   if (!paused) {
     time += dt;
@@ -1070,6 +1189,10 @@ Object.assign(window, {
   breathTest,
   titleScreen,
   world,
+  events,
+  renderer,
+  /** Fire a world event now, e.g. trigger('whale'). Only during a dive, like the schedule. */
+  trigger: (id: string) => eventsLive && events.trigger(id),
   selectMap,
   diver,
   fishes,

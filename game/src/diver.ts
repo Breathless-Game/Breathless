@@ -18,6 +18,7 @@ export class Diver {
   private finL!: THREE.Mesh;
   private finR!: THREE.Mesh;
   private netArm: THREE.Group;
+  private netMouth: THREE.Group;
   private netTip: THREE.Object3D;
   /** Visible emergency-tank model; level one deliberately has no cylinder. */
   private tankGroup = new THREE.Group();
@@ -94,6 +95,7 @@ export class Diver {
     // the shoulder so the whole tool follows the swing animation.
     const net = buildFishingNetMesh();
     this.netArm = net.group;
+    this.netMouth = net.mouth;
     this.netArm.position.set(0.6, 0, 0.3);
     this.netTip = net.tip;
     this.body.add(this.netArm);
@@ -130,7 +132,7 @@ export class Diver {
 
   /** Make the visible hoop grow with the equipped net tier. */
   setNetLevel(level: number) {
-    this.netScale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.12;
+    this.netScale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.15;
     this.updateNetScale();
   }
 
@@ -146,8 +148,11 @@ export class Diver {
     this.updateNetScale();
   }
 
+  // The shaft slot stretches the whole tool along its length; the net tier
+  // grows only the hoop, kept round by undoing the shaft's stretch on it.
   private updateNetScale() {
-    this.netArm.scale.set(this.netScale * this.rodReachScale, this.netScale, this.netScale);
+    this.netArm.scale.set(this.rodReachScale, 1, 1);
+    this.netMouth.scale.set(this.netScale / this.rodReachScale, this.netScale, this.netScale);
   }
 
   /** Update the visible fin size for the selected diver upgrade tier. */
