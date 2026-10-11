@@ -18,6 +18,7 @@ import { createServer, STATUS_CODES } from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { sweepDead, watchAlive } from './heartbeat.mjs';
 import {
   SmartSpectraSDK,
   FrameTransform,
@@ -479,6 +480,7 @@ function envInt(name, fallback) {
 
 function onConnection(ws) {
   log('game connected');
+  watchAlive(ws);
   const session = new Session(ws);
   ws.on('message', (data, isBinary) => {
     if (isBinary) session.onFrame(data);
@@ -626,6 +628,8 @@ if (!API_KEY) log('PRESAGE_API_KEY missing in .env: running simulator only');
 if (jpegError) log(`JPEG frames off, raw only (run npm --prefix sensor install): ${jpegError}`);
 if (MAX_LIVE > 1) log(`warning: MAX_LIVE_SESSIONS=${MAX_LIVE}, but the Presage SDK can't run two sessions in one process`);
 
+// Also drops half-open sockets (heartbeat.mjs), so a player's reconnect gets their old Presage slot back.
 setInterval(() => {
-  for (const ws of wss.clients) ws.ping();
+  const dropped = sweepDead(wss.clients);
+  if (dropped) log(`dropped ${dropped} unresponsive connection(s)`);
 }, 10_000);
