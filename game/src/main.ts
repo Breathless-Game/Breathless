@@ -676,7 +676,7 @@ function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
 }
 
 function nextSlotLabel(slot: UpgradeSlot) {
-  return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp', sonar: 'Deep sonar' } as const)[slot];
+  return ({ net: 'Net', rod: 'Net shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp', sonar: 'Deep sonar' } as const)[slot];
 }
 
 // ---- Input --------------------------------------------------------------

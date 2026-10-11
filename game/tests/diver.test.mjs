@@ -18,7 +18,9 @@ async function moduleUrl(file, dependencies = {}) {
   return `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`;
 }
 
-const gearUrl = await moduleUrl('gear');
+const commonUrl = await moduleUrl('upgrade-models/common');
+const fishingNetUrl = await moduleUrl('fishing-net', { './upgrade-models/common': commonUrl });
+const gearUrl = await moduleUrl('gear', { './fishing-net': fishingNetUrl });
 const fxUrl = await moduleUrl('fx');
 const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));

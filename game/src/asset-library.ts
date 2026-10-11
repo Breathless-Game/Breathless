@@ -8,7 +8,7 @@ import { buildFishingNetMesh } from './gear';
 import { fishCard, fishSprite } from './portrait';
 
 // Dev-only page (http://localhost:5173/asset-library.html). It draws every fish
-// species and the fishing rod with the same builders the game uses, so the
+// species and the fishing net with the same builders the game uses, so the
 // previews in /assets can be regenerated after a model change. See
 // assets/README.md.
 
@@ -159,8 +159,8 @@ async function main() {
   }
 
   document.getElementById('gear')!.append(
-    tile('Fishing rod', ['buildFishingNetMesh()', 'transparent'], netSprite(1024, 512, false), 'fishing-net.png'),
-    tile('Fishing rod', ['buildFishingNetMesh()', 'on dark water'], netSprite(1024, 512, true), 'fishing-net-dark.png'),
+    tile('Fishing net', ['buildFishingNetMesh()', 'transparent'], netSprite(1024, 512, false), 'fishing-net.png'),
+    tile('Fishing net', ['buildFishingNetMesh()', 'on dark water'], netSprite(1024, 512, true), 'fishing-net-dark.png'),
   );
   const faceted = tile('Faceted 3D fishing net', ['Lv1 · PBR · per-face normals', 'Reusable GLB model and rendered review'], fishingNetPreviewUrl, 'fishing-net-faceted-preview.png');
   const glbLink = document.createElement('a');

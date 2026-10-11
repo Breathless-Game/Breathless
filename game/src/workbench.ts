@@ -14,7 +14,7 @@ import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
 import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
 import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
-import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { UPGRADES, WORKBENCH_GEAR_SIZE, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -68,8 +68,8 @@ const SPOTS: [number, number][] = [
   [-3.9, -0.85],
   [-3.9, 0.45],
   [-3.6, 1.8],
-  [1.5, -0.65],
-  [1.55, 0.8],
+  [0.8, -0.78],
+  [1.55, 0.92],
   [-0.9, 1.95],
   [1.05, 1.95],
   [-0.6, -1.75], // the boat, behind the chart
@@ -92,9 +92,9 @@ const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
-const GEAR_SIZE = 1.05; // longest side of a piece, table units
 const BOAT_SIZE = 1.5; // the model boat, bow to stern
 const TRAY_SCALE = 0.8;
+const TRAY_FOOTPRINT = 0.88; // leave a visible gap between the 1.1-unit tray slots
 const GRAVITY = 26;
 const RESTITUTION = 0.32;
 const BOUNCE_MIN = 2.2; // slower than this and it just settles
@@ -145,11 +145,14 @@ const CLICK_MS = 400;
 
 type Mode = 'wait' | 'free' | 'held' | 'moving' | 'ready';
 type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect';
+type ModelKey = number | string;
 
 interface Piece {
   id: UpgradeId;
   /** What its model shows: the level owned, or for the boat which ship (-1: the stand-in). */
-  key: number;
+  /** Includes the net's attached lamp/reel state, so that a display is rebuilt only when needed. */
+  key: ModelKey;
+  level: number;
   def: UpgradeDef;
   obj: THREE.Group;
   hit: THREE.Mesh;
@@ -179,6 +182,7 @@ interface Piece {
   slot: number;
   hover: number;
   tray: number; // display scale, shrinks in the tray
+  trayScale: number;
 }
 
 interface Tween {
@@ -485,19 +489,49 @@ export class Workbench {
     this.mapTex.needsUpdate = true;
   }
 
+  private ownedLevel(id: UpgradeId): number {
+    return Math.min(3, Math.max(1, this.hooks.owned(id)));
+  }
+
+  /** The two optional modules only appear on the net when they are packed for the dive. */
+  private netAssemblyLevels() {
+    const isPacked = (id: UpgradeId) => this.pieces.some((piece) => piece.id === id && piece.slot >= 0);
+    return {
+      netLevel: this.ownedLevel('net'),
+      shaftLevel: this.ownedLevel('rod'),
+      reelLevel: isPacked('reel') ? this.ownedLevel('reel') : 0,
+      lampLevel: isPacked('lamp') ? this.ownedLevel('lamp') : 0,
+    };
+  }
+
+  private modelKey(id: UpgradeId): ModelKey {
+    if (id === 'boat') {
+      const ship = this.hooks.ship();
+      return `boat:${ship.model ? ship.key : -1}`;
+    }
+    if (id === 'net') {
+      const a = this.netAssemblyLevels();
+      return `net:${a.netLevel}:shaft:${a.shaftLevel}:reel:${a.reelLevel}:lamp:${a.lampLevel}`;
+    }
+    return `${id}:${this.ownedLevel(id)}`;
+  }
+
   /** The model for a piece as owned now: its bought level, or for the boat the ship you sail. */
-  private pieceModel(id: UpgradeId): { model: THREE.Object3D; key: number } {
+  private pieceModel(id: UpgradeId): { model: THREE.Object3D; key: ModelKey; level: number } {
     if (id === 'boat') {
       const ship = this.hooks.ship();
       // Until the ship models load, the boat from the map stands in.
-      return ship.model ? { model: ship.model, key: ship.key } : { model: buildUpgradeModel('boat', 1), key: -1 };
+      return ship.model
+        ? { model: ship.model, key: `boat:${ship.key}`, level: 1 }
+        : { model: buildUpgradeModel('boat', 1), key: 'boat:-1', level: 1 };
     }
-    const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
-    return { model: buildUpgradeModel(id, level), key: level };
+    const level = this.ownedLevel(id) as 1 | 2 | 3;
+    const options = id === 'net' ? this.netAssemblyLevels() : undefined;
+    return { model: buildUpgradeModel(id, level, options), key: this.modelKey(id), level };
   }
 
   private buildPiece(id: UpgradeId, i: number): Piece {
-    const { model, key } = this.pieceModel(id);
+    const { model, key, level } = this.pieceModel(id);
     model.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true;
     });
@@ -508,7 +542,8 @@ export class Workbench {
     const size = box.getSize(new THREE.Vector3());
     // The model boat stands on its keel, a little bigger than the gear; everything else lies flat.
     const upright = id === 'boat';
-    model.scale.multiplyScalar(((upright ? BOAT_SIZE : GEAR_SIZE) / Math.max(size.x, size.y, size.z)));
+    const displaySize = upright ? BOAT_SIZE : WORKBENCH_GEAR_SIZE[id];
+    model.scale.multiplyScalar(displaySize / Math.max(size.x, size.y, size.z));
     box = new THREE.Box3().setFromObject(holder);
     model.position.sub(box.getCenter(new THREE.Vector3()));
     size.copy(box.getSize(new THREE.Vector3()));
@@ -518,7 +553,6 @@ export class Workbench {
       else if (size.z <= size.y && size.z <= size.x) flat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
     }
     const thin = upright ? size.y : Math.min(size.x, size.y, size.z);
-    const wide = upright ? [size.x, size.z] : [size.x, size.y, size.z].sort((a, b) => b - a);
 
     // A sample of the model's vertices, so it can rest on the table at any angle.
     const hull: THREE.Vector3[] = [];
@@ -541,13 +575,25 @@ export class Workbench {
     obj.add(hit);
     obj.visible = false;
     this.scene.add(obj);
+    // Measure the actual footprint after the resting rotation. Fins and other
+    // flat pieces swap their thin axis when they lie on the table.
+    const flatBox = new THREE.Box3();
+    for (const point of hull) flatBox.expandByPoint(point.clone().applyQuaternion(flat));
+    const flatSize = flatBox.getSize(new THREE.Vector3());
+    // A full-size piece is useful on the table; in the tray it must fit its own
+    // 1.1-unit slot instead of inheriting the old universal 0.8 scale.
+    const trayScale = Math.min(TRAY_SCALE, TRAY_FOOTPRINT / Math.max(flatSize.x, flatSize.z, 0.01));
+    const collisionRadius = Math.max(0.18, Math.hypot(flatSize.x, flatSize.z) * 0.5);
     return {
       id,
       key,
+      level,
       def: UPGRADES.find((u) => u.id === id)!,
       obj,
       hit,
-      r: (wide[0] + wide[1]) * 0.24,
+      // Circle broad phase: use the actual resting footprint instead of the
+      // former 0.24 heuristic, which let long shafts pass through neighbours.
+      r: collisionRadius,
       restY: thin / 2,
       flat,
       hull,
@@ -568,6 +614,7 @@ export class Workbench {
       slot: -1,
       hover: 0,
       tray: 1,
+      trayScale,
     };
   }
 
@@ -579,8 +626,7 @@ export class Workbench {
   refreshGear() {
     this.pieces.forEach((old, i) => {
       if (old.mode === 'held' || old.mode === 'moving') return;
-      const want = old.id === 'boat' ? this.hooks.ship() : null;
-      const key = want ? (want.model ? want.key : -1) : Math.min(3, Math.max(1, this.hooks.owned(old.id)));
+      const key = this.modelKey(old.id);
       if (key === old.key) return;
       const p = this.buildPiece(old.id, GEAR.indexOf(old.id));
       p.obj.visible = old.obj.visible;
@@ -591,6 +637,7 @@ export class Workbench {
       p.q.copy(old.q);
       p.pos.copy(old.pos);
       p.tray = old.tray;
+      p.trayScale = Math.min(old.trayScale, p.trayScale);
       p.pos.y = Math.max(p.pos.y, this.standY(p));
       if (p.mode === 'free') {
         p.vel.set(0, 3, 0);
@@ -599,7 +646,9 @@ export class Workbench {
       if (old.obj.visible) this.puff(p.pos.x, p.pos.z, p.r * 1.4);
       this.scene.remove(old.obj);
       old.obj.traverse((o) => {
-        if (o instanceof THREE.Mesh) o.geometry.dispose();
+        if (!(o instanceof THREE.Mesh)) return;
+        o.geometry.dispose();
+        for (const surface of Array.isArray(o.material) ? o.material : [o.material]) surface.dispose();
       });
       if (this.hovered === old) this.hovered = null;
       this.pieces[i] = p;
@@ -803,7 +852,7 @@ export class Workbench {
       p.obj.position.y += p.hover * 0.12;
       p.obj.quaternion.copy(p.q);
       // Set down a little smaller in the tray, so neighbours don't overlap.
-      p.tray = lerp(p.tray, p.slot >= 0 ? TRAY_SCALE : 1, 1 - Math.exp(-dt * 8));
+      p.tray = lerp(p.tray, p.slot >= 0 ? p.trayScale : 1, 1 - Math.exp(-dt * 8));
       p.obj.scale.setScalar(p.tray * (1 + p.hover * 0.08));
     }
     this.mapHover = lerp(this.mapHover, this.hovered === 'map' ? 1 : 0, 1 - Math.exp(-dt * 12));
@@ -1040,7 +1089,7 @@ export class Workbench {
     p.mode = 'moving';
     const [x, z] = SLOTS[slot];
     const from = p.pos.clone();
-    const to = new THREE.Vector3(x, p.restY * TRAY_SCALE + 0.05, z);
+    const to = new THREE.Vector3(x, p.restY * p.trayScale + 0.05, z);
     const q0 = p.q.clone();
     const q1 = this.restQ(p, 0);
     this.tween(
@@ -1056,6 +1105,8 @@ export class Workbench {
         p.yaw = 0;
         this.puff(x, z, 0.5);
         this.lightSlot(this.slotRings[slot], true);
+        // A packed lamp/reel is mounted on the net display automatically.
+        this.refreshGear();
       },
     );
   }
@@ -1072,6 +1123,7 @@ export class Workbench {
     p.vel.set((tx - p.pos.x) / t, 0.5 * GRAVITY * t, (tz - p.pos.z) / t);
     p.spin.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 8);
     p.yaw = (Math.random() - 0.5) * 1.6;
+    this.refreshGear();
   }
 
   private lightSlot(ring: THREE.Mesh, on: boolean) {
@@ -1135,6 +1187,9 @@ export class Workbench {
       if (p.slot >= 0) this.lightSlot(this.slotRings[p.slot], false);
       p.slot = -1;
       p.mode = 'held';
+      // Removing a packed lamp or reel immediately removes it from the net's
+      // displayed assembly, while leaving the held piece untouched.
+      if (p.id === 'lamp' || p.id === 'reel') this.refreshGear();
       this.held = p;
       this.press = null;
       this.hovered = null;
@@ -1231,7 +1286,7 @@ export class Workbench {
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
         : [
             `${hit.def.name} · ${hit.def.nameZh}`,
-            hit.id === 'boat' ? 'Your ship · 当前船只 — click for the shipyard' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
+            hit.id === 'boat' ? 'Your ship · 当前船只 — click for the shipyard' : `Lv ${hit.level} · ${hit.def.effects[hit.level - 1]}`,
             hit.mode === 'ready' ? 'Ready · click for a closer look' : hit.def.group === 'dive' ? 'Click for a closer look · drag to the tray' : 'Click to upgrade the boat',
           ];
     this.tip.replaceChildren(

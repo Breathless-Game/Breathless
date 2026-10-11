@@ -51,6 +51,9 @@ export class Diver {
   private netArm: THREE.Group;
   private netMouth: THREE.Group;
   private netTip: THREE.Object3D;
+  /** Loadout equipment clipped to the fishing net, kept separate from the headlamp light. */
+  private netLamp: THREE.Group;
+  private netReel: THREE.Group;
   /** Visible emergency-tank model; level one deliberately has no cylinder. */
   private tankGroup = new THREE.Group();
   private tankBody: THREE.Mesh | null = null;
@@ -176,6 +179,8 @@ export class Diver {
     this.netMouth = net.mouth;
     this.netArm.position.set(0.6, 0, 0.3);
     this.netTip = net.tip;
+    this.netLamp = net.lamp;
+    this.netReel = net.reel;
     this.body.add(this.netArm);
 
     this.group.add(this.body);
@@ -457,6 +462,10 @@ export class Diver {
     this.headlamp.angle = [0.65, 0.85, 1.05][this.lampLevel - 1];
     this.lampMaxIntensity = [48, 64, 82][this.lampLevel - 1];
     this.lampGroup.scale.setScalar(this.lampLevel === 3 ? 1.18 : this.lampLevel === 2 ? 1.08 : 1);
+    // The selected torch is carried on the net's clamp as well as driving the
+    // diver's beam. This keeps the visible tool and the active loadout aligned.
+    this.netLamp.visible = true;
+    this.netLamp.scale.setScalar(this.lampLevel === 3 ? 1.16 : this.lampLevel === 2 ? 1.08 : 1);
   }
 
   /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
@@ -470,6 +479,8 @@ export class Diver {
   setReelLevel(level: number) {
     const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
     this.setReelRecovery(1 + (tier - 1) * 0.2);
+    this.netReel.visible = true;
+    this.netReel.scale.setScalar(tier === 3 ? 1.12 : tier === 2 ? 1.06 : 1);
   }
 
   /** Apply branch-adjusted recovery to the visible swing animation. */
