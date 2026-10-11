@@ -39,7 +39,7 @@ export interface MapDef {
    * only bring wind and rain). Above 0, rogue waves can capsize the boat (see storm.ts).
    */
   stormSwell: number;
-  /** Sharks hunt here at night, if the player has opted in (see shark.ts). */
+  /** One shark hunts here by day, two at night, if the player has opted in (see shark.ts). */
   sharks: boolean;
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];

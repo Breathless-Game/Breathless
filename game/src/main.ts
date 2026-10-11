@@ -29,8 +29,8 @@ import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
+import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
@@ -168,7 +168,7 @@ function randomSeed(): number {
 
 function rollFor(depth: number): FishSpec {
   const a = rollFish(randomSeed(), depth);
-  if (!world.night) return a;
+  if (!world.night && !sharksOut()) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
   // With sharks out it is three: the price of swimming with them.
   const rarer = (x: FishSpec, y: FishSpec) => (RARITY_ORDER.indexOf(y.rarity) > RARITY_ORDER.indexOf(x.rarity) ? y : x);
@@ -366,7 +366,7 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On a map with sharks (the Open Ocean), at night, if the player said yes (shark.ts).
+// On the Open Ocean, if the player said yes: one by day, two at night.
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
@@ -377,7 +377,7 @@ const sharkAsk = document.getElementById('shark-ask')!;
 
 /** Do sharks hunt right now? */
 function sharksOut() {
-  return settings.sharks === 'on' && world.map.sharks && world.night && phase === 'play';
+  return settings.sharks === 'on' && world.map.sharks && phase === 'play';
 }
 
 /** Before a dive on shark waters, the player chooses once; Settings can change it later. */
@@ -395,7 +395,7 @@ function answerSharks(on: boolean) {
   paused = false;
   // The pause was not a breath taken underwater.
   breathSince = null;
-  hud.message(on ? 'Sharks come out after dark. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  hud.message(on ? 'One shark by day, two at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
 }
 document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
 document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
@@ -426,14 +426,14 @@ function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: 
   const bpm = pulse ?? pulseEstimate.tick(dt, diver.vel.length() / Math.max(1, currentStats().swimSpeed));
   const out = sharksOut();
   const intensity = out ? sharkIntensity(bpm, estimated ? SHARK.rest : restingPulse.bpm) : 0;
-  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents);
+  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents, world.night);
   for (const event of sharkEvents) {
     if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
     else if (event === 'bite') sharkBite(intensity);
   }
-  sharkFx.update(dt, sharkPack.sharks, intensity);
+  sharkFx.update(dt, sharkPack.sharks, intensity, world.dayCycle.state.nightMix, settings.lightingEffects);
   health.sharks = out;
-  hud.setSharks(out ? { count: sharkPack.sharks.length, bpm, estimated, intensity } : null);
+  hud.setSharks(out ? { count: sharkPack.sharks.filter(s => s.mode !== 'leave').length, bpm, estimated, intensity } : null);
 }
 
 function noSharks() {
@@ -550,7 +550,7 @@ const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
   sold(fish, result) {
     hud.setBank(bank);
-    hud.toast(fish, `SOLD · +${result.pearls} PEARLS`);
+    hud.toast(fish, `SOLD · +${pearls(result.pearls).toUpperCase()}`);
     void syncPearls(result.pearls);
   },
 });
@@ -585,7 +585,11 @@ const loadoutWheel = new LoadoutWheel({
 hud.setActiveGear(activeTool, true);
 let nowMs = 0;
 
+/** Set once the workbench exists: its pieces follow levels bought and ships picked. */
+let onGearChange = () => {};
+
 function refreshEquipment() {
+  onGearChange();
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
@@ -613,39 +617,44 @@ async function syncPearls(earned = 0) {
 }
 
 let buying = false;
-async function buyNextUpgrade(slot: UpgradeSlot = 'net') {
-  if (buying) return;
+/** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
+async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
+  if (buying) return 'Already upgrading…';
   if (phase === 'play') {
     gear.showNotice('Return to the workbench before upgrading gear.');
-    return;
+    return 'Return to the workbench before upgrading gear.';
   }
   const next = nextSlotTier(equipment, slot);
   if (!next) {
     gear.showNotice(`${nextSlotLabel(slot)} is already at maximum level.`);
-    return;
+    return 'Already at the top level.';
   }
   const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
-    gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
-    hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
-    return;
+    const need = `Need ${pearls(next.cost - totalPearls(equipment))} more`;
+    gear.showNotice(`${need}.`);
+    hud.message(need, 1500);
+    return need;
   }
   // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
   buying = true;
   gear.setBusy(true);
+  let failed: string | null = null;
   try {
     if (plan.fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
     Object.assign(equipment, applySlotUpgrade(equipment, plan));
     hud.message(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, 1800);
   } catch (e) {
     console.error('upgrade failed', e);
-    gear.showNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
+    failed = `Upgrade failed: ${(e as Error).message ?? e}`;
+    gear.showNotice(failed);
   } finally {
     buying = false;
     gear.setBusy(false);
     refreshEquipment();
     if (plan.fromChain > 0) void syncPearls();
   }
+  return failed;
 }
 
 function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
@@ -1171,8 +1180,10 @@ function startFish() {
   if (aboard) aboardToTitle();
   else if (workbench.visible) {
     if (workbench.atRest) workbench.escape(); // pans back up to the title
-  } else if (settingsDesk.visible) settingsDesk.escape();
-  else openWorkbench();
+  } else if (settingsDesk.visible) {
+    deskFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
+    settingsDesk.escape();
+  } else openWorkbench();
 }
 
 /**
@@ -1279,10 +1290,10 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
   paused = open;
   keys.clear();
   if (!open) breathSince = null;
-}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); }, scene, root => world.colorGrade.apply(root));
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
 const boatRay = new THREE.Raycaster();
 document.addEventListener('click', (e) => {
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible) return;
   if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
   const rect = canvas.getBoundingClientRect();
   boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
@@ -1291,7 +1302,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('pointermove', (e) => {
   if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
   const target = e.target as HTMLCanvasElement;
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open) { target.style.cursor = ''; return; }
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || aquarium.open) { target.style.cursor = ''; return; }
   const rect = canvas.getBoundingClientRect();
   boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
   if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
@@ -1312,12 +1323,29 @@ const BENCH_CAMERA_DROP = 1.4;
 let benchPan = 0;
 let aquariumPan = 0; // the aquarium pans the same way
 
+// The workbench and the settings desk each report their own pan. Switching from
+// one to the other, one sinks while the other rises: the camera, the title's rope
+// and the START fish follow whichever is further in.
+const tablePan = { bench: 0, desk: 0 };
+const tableY = { bench: 0, desk: 0 };
+let deskFromBench = false; // the settings desk was opened from the workbench, and goes back to it
+
+function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
+  tablePan[which] = u;
+  tableY[which] = y;
+  const bench = workbench.visible ? tablePan.bench : 0;
+  const desk = settingsDesk.visible ? tablePan.desk : 0;
+  const top = bench >= desk ? 'bench' : 'desk';
+  // Mid-swap (both tables up) the rope and the sea stay where they are: only the tables move.
+  benchPan = workbench.visible && settingsDesk.visible ? 1 : Math.max(bench, desk);
+  titleScreen.setPan(benchPan, tableY[top]);
+  labelStartFish(benchPan);
+}
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
-    benchPan = u;
-    titleScreen.setPan(u, tableY);
-    labelStartFish(u);
+    setTablePan('bench', u, tableY);
     // Leaving the boat, the fish rise away off the top while the table sinks.
     if (leavingBoat) titleScreen.setLift(1 - u);
   },
@@ -1342,19 +1370,40 @@ const workbench = new Workbench({
       startGame();
     } else openStartCard();
   },
-  // Only the net (equipment.ts's rod tiers) can be upgraded so far; the rest is starting gear.
-  owned: (id) => (id === 'net' ? equipment.rodLevel : 1),
   conditions: workbenchConditions,
+  // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
+  owned: (id) => (isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1),
+  buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve('Not upgradable here')),
+  pearls: () => totalPearls(equipment),
+  paths: (id) =>
+    isEquipmentSlot(id)
+      ? EQUIPMENT_PATHS[id].map((p) => ({ id: p.id, name: p.name, nameZh: p.nameZh, summary: p.summary, effects: p.tiers.map((t) => t.effect) }))
+      : null,
+  activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
+  selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),
+  ship: () => ({ key: shipyard.shipIndex, model: shipyard.shipModel() }),
+  openShipyard: () => shipyard.show(),
   sonarColor(color) {
     sonar.setColor(color);
   },
 });
+// The gear panel (G) buys too: whatever buys or picks a ship, the pieces on the table follow.
+onGearChange = () => workbench.visible && workbench.refreshGear();
+
+function isUpgradeSlot(id: UpgradeId): id is UpgradeSlot {
+  return id in EQUIPMENT_TIERS;
+}
+
+function isEquipmentSlot(id: UpgradeId): id is EquipmentSlot {
+  return id in EQUIPMENT_PATHS;
+}
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
   loginGate.hide();
   workbench.hide();
   settingsDesk.hide();
+  deskFromBench = false;
   benchPan = 0;
   titleScreen.setPan(0);
   labelStartFish(0);
@@ -1368,7 +1417,9 @@ const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
 mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, 'Not connected');
-for (const id of ['pause-wallet', 'collection-wallet', 'wallet-chip']) mountWalletRow(document.getElementById(id)!, logoutHooks);
+mountWalletRow(document.getElementById('pause-wallet')!, logoutHooks);
+mountWalletRow(document.getElementById('collection-wallet')!, logoutHooks, { empty: 'Not connected', explorer: true });
+mountWalletRow(document.getElementById('wallet-chip')!, logoutHooks, { menu: true });
 
 // SETTINGS pans down to a table like START's, with the settings as plaques on it (settings-desk.ts).
 const settingsDesk = new SettingsDesk({
@@ -1379,14 +1430,32 @@ const settingsDesk = new SettingsDesk({
   connectWallet: () => loginGate.show(),
   logOut: () => void logOut(),
   pan(u, tableY) {
-    benchPan = u;
-    titleScreen.setPan(u, tableY);
-    labelStartFish(u);
+    setTablePan('desk', u, tableY);
+  },
+  view(move, yaw, pitch) {
+    deskView.move.copy(move);
+    deskView.yaw = yaw;
+    deskView.pitch = pitch;
+  },
+  leaving() {
+    // Opened from the workbench: that table comes back up as this one sinks.
+    if (!deskFromBench) return;
+    deskFromBench = false;
+    workbench.show(false, true);
   },
 });
+// The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
+titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
+/** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
-  if (!workbench.visible && !settingsDesk.visible && !loginGate.visible) settingsDesk.show();
+  if (settingsDesk.visible || loginGate.visible) return;
+  if (workbench.visible) {
+    if (!workbench.atRest) return;
+    deskFromBench = true;
+    workbench.leave(); // the workbench sinks while the settings desk rises
+  }
+  settingsDesk.show();
 }
 
 function openWorkbench() {
@@ -1497,6 +1566,11 @@ document.addEventListener('visibilitychange', () => {
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
+const camLook = new THREE.Vector3();
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+// How far the settings desk's camera has moved and turned to lean in over a plaque (settings-desk.ts).
+const deskView = { move: new THREE.Vector3(), yaw: 0, pitch: 0 };
 const timeLabel = document.getElementById('time-of-day')!;
 let displayedMinute = -1;
 let displayedWeather = '';
@@ -1608,8 +1682,15 @@ function update(dt: number, time: number) {
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
   cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
   camera.position.sub(shakeOffset);
+  // The settings desk's camera leans in over a plaque: the sea camera moves and turns
+  // with it, so it reads as the camera moving rather than the table sliding over a
+  // still view. (The sea is in metres, the desk in table units: near enough the same.)
+  const leaning = settingsDesk.visible;
+  if (leaning) camTarget.add(deskView.move);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
-  camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+  const look = camLook.set(0, -1.6, -camera.position.z);
+  if (leaning) look.applyAxisAngle(AXIS_X, deskView.pitch).applyAxisAngle(AXIS_Y, -deskView.yaw);
+  camera.lookAt(look.add(camera.position));
 
   // World events, after World.update (the lightning flash tints what it wrote).
   // Only during a dive: leaving or starting one clears them and restarts the clock.
@@ -1774,6 +1855,8 @@ frame();
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
   workbench,
+  equipment,
+  shipyard,
   settingsDesk,
   loadout: () => loadout,
   /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
