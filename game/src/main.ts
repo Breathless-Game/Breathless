@@ -1754,6 +1754,19 @@ function update(dt: number, time: number) {
   }
   world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
+  // Read the post-swell hull pose so the wake follows the same crest that is
+  // visible in this frame, including the rogue-wave pitch and roll.
+  if (phase === 'play') {
+    stormFx.boatWake(
+      dt,
+      time,
+      world.boat.position.x,
+      world.boat.position.y,
+      world.boat.rotation.x,
+      world.boat.rotation.z,
+      seaSurface,
+    );
+  }
 
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
   cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
