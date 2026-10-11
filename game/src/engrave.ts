@@ -170,6 +170,8 @@ export function engraveName(fish: FishMesh, label: string, tone: THREE.Color, me
       bumpMap,
       bumpScale: 3,
       transparent: true,
+      // Fins and neighbouring tails sit in front of the flank; the label must stay readable.
+      depthTest: false,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -4,
@@ -177,6 +179,7 @@ export function engraveName(fish: FishMesh, label: string, tone: THREE.Color, me
       metalness,
     }),
   );
+  carvingMesh.renderOrder = 10;
   fish.group.add(carvingMesh);
   fish.group.scale.setScalar(scale);
   return carvingMesh;
