@@ -336,6 +336,76 @@ body {
   background: rgba(255, 255, 255, 0.16);
 }
 
+/* Sharks in the water: the pulse they hunt by and how worked up they are. */
+#shark {
+  position: absolute;
+  top: 118px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(6, 16, 28, 0.7);
+  border: 1px solid var(--line);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+#shark .bar {
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+#shark-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #5fd38d, #ffb340 55%, var(--danger));
+}
+
+#shark-ask {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 18, 0.72);
+  padding: 16px;
+}
+
+#shark-ask .card {
+  max-width: 520px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 30px 32px;
+  backdrop-filter: blur(10px);
+}
+
+#shark-ask h2 {
+  margin: 0 0 12px;
+  font-size: 26px;
+  font-weight: 900;
+}
+
+#shark-ask ul {
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+#shark-ask li {
+  margin: 8px 0;
+}
+
 #center-msg {
   position: absolute;
   top: 38%;
