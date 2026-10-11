@@ -64,10 +64,41 @@ Config (version 1) holds the game's price table, `GAME_PRICE_TABLE` in
 Secret keys (git-ignored, never commit): `contracts/.keys/player_state-program.json`,
 `contracts/.keys/player_state-deployer.json`.
 
-Deployed binary: `target/deploy/player_state.so`, 381848 bytes, sha256
+v1 binary (2026-10-11, `main` 28689d8): 381848 bytes, sha256
 `e518da31c305ce237df2bce34b10da52725923a67de7244ce9481b895559829e`.
 
 ## Transactions
 
 - Deploy: [`s2tWGwYA…bHN`](https://explorer.solana.com/tx/s2tWGwYAVrggMgPkbmeXkJnVCC1MSwkQ2TozEVf2Eq3fShrxZQ7YTcaF8ZvDLXuZnoderR9qyuPQPdCNH748bHN?cluster=devnet)
 - `initialize_config` (scripts/init-player-state.ts): [`5k4zWmB9…yM9M`](https://explorer.solana.com/tx/5k4zWmB9WRBswmkKUicjM7NmVWWvDk6wMbZGyafgcBiZ4ReKvTMzQu6BeWyKJwwhUnDvPQwJYCc5r2xu2KdryM9M?cluster=devnet)
+
+## v2 upgrade (2026-10-11, branch `feat/player-state-v2`)
+
+Additive: Progress (boats, ship, lifetime banked value, catch log) and ProgressConfig
+(boat prices, ship / map thresholds); `buy_boat`, `set_ship`, `record_catch`,
+`init_progress_config`, `set_progress_config`. v1 accounts and instructions unchanged
+(see README.md). Before the upgrade the program owned one account (Config); no
+PlayerState or Aquarium existed on devnet.
+
+| what | address |
+| --- | --- |
+| `progress_config` PDA (`["progress_config"]`, 266 bytes, bump 254) | [`3NueXxn6WNCJaA3dUNKznvskWqgFZENHuxzo5CPMiKx3`](https://explorer.solana.com/address/3NueXxn6WNCJaA3dUNKznvskWqgFZENHuxzo5CPMiKx3?cluster=devnet) |
+| `progress` PDA per wallet | `["progress", owner]`, created by `buy_boat` / `record_catch` |
+
+ProgressConfig rules (`GAME_PROGRESS_RULES` in game/src/player-state.ts): boat prices
+bait / boat / boatSpeed / boatHull / boatDeck = [0,40,300] / [0,120,700] / [0,80,500] x3;
+ship thresholds [0,50,150,500,1200,2500]; map thresholds fjord 0, tianchi 150, ocean 1000.
+
+Binary: 455216 bytes, sha256
+`c1a920aaa5522d650f601a3b7ee2dab5db2ff7b58e4720777ec7b53da9566660` (the dumped
+on-chain program matches). ProgramData extended by 73368 bytes (381848 -> 455216).
+
+- SOL for the upgrade: 2.2 SOL from the market wallet 12b3… to EA77…: [`AQUBM1eh…uTi`](https://explorer.solana.com/tx/AQUBM1ehogJJTXYYtY1Kf9gny85oygnYv3GUwXDk6C8MUWSXkeMv7HUJ8LvJQwbKh4jx4yqhWxtMtEfQnH17uTi?cluster=devnet)
+  (EA77 0.5527 -> 2.7527; the 2.3133 SOL buffer was refunded after the upgrade, the
+  extend kept 0.3727; EA77 holds 2.3757 SOL afterwards)
+- `solana program extend … 73368`: [`g3icdG1y…qFx`](https://explorer.solana.com/tx/g3icdG1yy7aSTgfAaH8ULcgTRqEwi9JURpq6nT9gLztTjoCehXVnH8B5oJ1h5RXbdRybRnk2Brq3hh4cxtMHqFx?cluster=devnet)
+- Upgrade from buffer `HNUfL8xQ7kRqrybC8ErX7Xn7M1xfRErDPihRPfHdBvpV` (closed), slot 509901184: [`L4z6QbHE…eSZ`](https://explorer.solana.com/tx/L4z6QbHE3WwxuhCA8gz7r6D7GyzPUvqvb8esbJXygTS9Q4QrpyifyJ6nsP583kHC49zhTiL1q5xyFxkFXHJceSZ?cluster=devnet)
+- `init_progress_config` (scripts/init-progress-config.ts): [`3X5Zp87R…A4a`](https://explorer.solana.com/tx/3X5Zp87RkdTpbShmmt9HYNw8eMJwSuypqkzc2taVGBcWtVcW4jqerDCQK7Vuzx6EFNhHeuS3unPXpB24fact5A4a?cluster=devnet)
+- Read-only devnet simulations (scripts/measure-record-catch.ts, nothing sent): Core
+  fish mint + `record_catch` for a new owner, 1066 bytes, 34.7k-39.2k CU, success;
+  `buy_boat` bait Lv2, 411 bytes, 14.8k CU, success.
