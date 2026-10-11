@@ -285,3 +285,20 @@ test('deep sonar cable tiers are bought through the same slot plan', () => {
   assert.equal(equipment.nextSlotTier({ ...after, sonarLevel: 3 }, 'sonar'), null, 'maxed out');
   assert.equal(equipment.deriveStats(after).netCapacity, equipment.deriveStats({ ...after, sonarLevel: 1 }).netCapacity, 'sonar leaves the other stats alone');
 });
+
+test('migrateBank keeps a valid fish number and drops a broken one', () => {
+  const base = { id: 'a1', name: 'Grey Perch', rarity: 'common', depthM: 3, nft: 'minted', assetId: 'Asset1111111111111111111111111111111111111' };
+  const { bank, changed } = migrateBank([
+    { ...base, serial: 42 },
+    { ...base, serial: 1234567 },
+    { ...base, serial: '42' },
+    { ...base, serial: 0 },
+    { ...base, serial: 4.2 },
+  ]);
+  assert.deepEqual(
+    bank.map((f) => f.serial),
+    [42, 1234567, undefined, undefined, undefined],
+  );
+  assert.equal(changed, true);
+  assert.equal(migrateBank([{ ...base, serial: 42 }]).changed, false);
+});

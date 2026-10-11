@@ -5,7 +5,7 @@
 import type { BreathMode } from './breath';
 import type { TimeOfDay } from './daylight';
 import type { WeatherMode } from './weather';
-import { type Quality, type Settings, saveSettings } from './settings';
+import { type Quality, type Settings, type SharkChoice, saveSettings } from './settings';
 import { closeDropdown, enhanceSelect } from './dropdown';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -55,13 +55,14 @@ export class PauseMenu {
   private quality = $<HTMLSelectElement>('set-quality');
   private camera = $<HTMLInputElement>('set-camera');
   private help = $<HTMLInputElement>('set-help');
+  private sharks = $<HTMLSelectElement>('set-sharks');
 
   constructor(
     private settings: Settings,
     private hooks: PauseHooks,
   ) {
     // Themed dropdowns in place of the native popups; the selects below keep working as before.
-    for (const select of [this.input, this.timeOfDay, this.weather, this.quality]) enhanceSelect(select);
+    for (const select of [this.input, this.timeOfDay, this.weather, this.quality, this.sharks]) enhanceSelect(select);
     $('pause-resume').addEventListener('click', () => this.requestResume());
     $('pause-settings').addEventListener('click', () => this.showSettings());
     $('pause-menu').addEventListener('click', () => this.requestQuit());
@@ -76,6 +77,7 @@ export class PauseMenu {
     this.quality.addEventListener('change', () => this.update({ quality: this.quality.value as Quality }));
     this.camera.addEventListener('change', () => this.update({ showCamera: this.camera.checked }));
     this.help.addEventListener('change', () => this.update({ showHelp: this.help.checked }));
+    this.sharks.addEventListener('change', () => this.update({ sharks: this.sharks.value as SharkChoice }));
     hooks.applySettings(settings);
   }
 
@@ -152,6 +154,7 @@ export class PauseMenu {
     this.quality.value = this.settings.quality;
     this.camera.checked = this.settings.showCamera;
     this.help.checked = this.settings.showHelp;
+    this.sharks.value = this.settings.sharks;
     $('set-input-row').classList.remove('hidden');
     this.show('settings');
   }

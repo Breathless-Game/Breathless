@@ -6,7 +6,7 @@ import { base58 } from '@metaplex-foundation/umi/serializers';
 import { zoneName } from './depth-odds';
 import { ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
-import { fishImagePath, fishMetaPath, isHostedMetaUri, nftOrigin } from './nft-uri';
+import { fishImagePath, fishMetaPath, nftName, nftOrigin } from './nft-uri';
 import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
 
 // Everything here runs in the browser against Solana devnet. The identity is
@@ -92,7 +92,8 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
     payer: session,
     authority: session,
     updateAuthority: session.publicKey,
-    name: spec.name,
+    // "Lively Striped Wrasse #0042": the queue gets the fish its number (spec.serial) first.
+    name: nftName(spec),
     uri,
     plugins: [
       {
@@ -117,18 +118,21 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 export type RepairResult = 'updated' | 'ok' | 'not-ours';
 
 /**
- * Point an already-minted fish at our metadata host. Fish minted before it pointed at Irys
- * devnet URIs that no longer resolve, so wallets showed nothing. Only touches assets whose
- * update authority is this session key; costs one session-paid transaction per fish.
+ * Bring an already-minted fish's on-chain name and URI up to date in one transaction: its number
+ * ("… #0042", spec.serial) and our metadata host (fish minted before it pointed at Irys devnet URIs
+ * that no longer resolve). Only touches assets whose update authority is this session key; costs
+ * one session-paid transaction per fish.
  */
-export async function repairFishUri(spec: FishSpec & { assetId: string }): Promise<RepairResult> {
+export async function repairFishUri(spec: FishSpec & { assetId: string; serial?: number }): Promise<RepairResult> {
   const u = getUmi();
   const asset = await fetchAsset(u, publicKey(spec.assetId));
-  if (isHostedMetaUri(asset.uri)) return 'ok';
+  const name = nftName(spec);
+  const uri = fishMetaUri(spec);
+  if (asset.name === name && asset.uri === uri) return 'ok';
   const session = sessionSigner(u);
   const ua = asset.updateAuthority;
   if (ua.type !== 'Address' || ua.address?.toString() !== session.publicKey.toString()) return 'not-ours';
-  await update(u, { asset, uri: fishMetaUri(spec), authority: session, payer: session })
+  await update(u, { asset, name, uri, authority: session, payer: session })
     .setFeePayer(session)
     .sendAndConfirm(u);
   return 'updated';
