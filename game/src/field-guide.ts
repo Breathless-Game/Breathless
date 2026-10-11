@@ -108,6 +108,16 @@ export class FieldGuide {
     if (this.previousFocus?.isConnected && !this.previousFocus.closest('.hidden')) this.previousFocus.focus();
     else this.launcher.querySelector<HTMLButtonElement>('#guide-open')!.focus();
   }
+  /** The tutorial on or off (the 新手引导 button, or the title's TUTORIAL fish). */
+  toggleTour() {
+    this.setEnabled(!this.state.enabled);
+  }
+
+  /** The corner buttons (手册 · 新手引导): hidden while the title's GUIDE and TUTORIAL fish hang there instead. */
+  showLauncher(show: boolean) {
+    this.launcher.classList.toggle('hidden', !show);
+  }
+
   private setEnabled(enabled: boolean) {
     this.state = { ...this.state, enabled, chosen: true };
     this.collapsed = false;

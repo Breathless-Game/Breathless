@@ -1461,10 +1461,13 @@ document.addEventListener('pointermove', (e) => {
 });
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.25, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.42, label: 'AQUARIUM', onClick: openAquarium },
-  { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.59, label: 'HEALTH', onClick: openHealthDesk },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.76, label: 'SETTINGS', onClick: openSettingsDesk },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.12, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.27, label: 'AQUARIUM', onClick: openAquarium },
+  { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.42, label: 'HEALTH', onClick: openHealthDesk },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.57, label: 'SETTINGS', onClick: openSettingsDesk },
+  // The field guide and the tutorial hang here too (instead of the corner buttons, while the rope is up).
+  { seed: 0x5eed05, rarity: 'uncommon', species: 'Silver Snapper', hue: 150, sat: 0.55, light: 0.55, at: 0.72, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
+  { seed: 0x5eed06, rarity: 'rare', species: 'Ghost Angelfish', hue: 42, sat: 0.35, light: 0.7, at: 0.87, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTour() },
 ]);
 // The trip report, put away, flies into the HEALTH fish (that's where the reports are kept).
 const HEALTH_FISH = 2;
@@ -1959,6 +1962,8 @@ function update(dt: number, time: number) {
 
   hud.setBreath(s, outOfAir);
   hud.placeBreath(overDiversHead());
+  // While the rope hangs on screen, its GUIDE and TUTORIAL fish replace the corner buttons.
+  fieldGuide?.showLauncher(!titleScreen.visible);
   hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
