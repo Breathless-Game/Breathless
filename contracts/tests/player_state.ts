@@ -543,4 +543,414 @@ describe("player_state", () => {
       expect(lamports0 - info.lamports).to.equal(2 * 16 * 6960);
     });
   });
+
+  // ------------------------------------------------------------------ v2
+
+  describe("v2: progress (boats, ships, lifetime banked value)", () => {
+    // BOAT_IDS (game/src/gear-nft.ts) and their prices (upgrades.ts); SHIPS thresholds (ships.ts);
+    // map unlocks fjord / tianchi / ocean (maps.ts, before "Open every map from the start").
+    const BOAT_SLOT = { bait: 0, boat: 1, boatSpeed: 2, boatHull: 3, boatDeck: 4 };
+    const RULES = {
+      boatPrices: [[0, 40, 300], [0, 120, 700], [0, 80, 500], [0, 80, 500], [0, 80, 500]],
+      shipThresholds: [0, 50, 150, 500, 1200, 2500],
+      mapThresholds: [0, 150, 1000],
+    };
+    type Rules = typeof RULES;
+    const rulesArg = (r: Rules) => ({
+      boatPrices: r.boatPrices.map((row) => row.map(bn)),
+      shipThresholds: r.shipThresholds.map(bn),
+      mapThresholds: r.mapThresholds.map(bn),
+    });
+    const cloneRules = (r: Rules): Rules => JSON.parse(JSON.stringify(r));
+    const HEADER = 100;
+
+    const [progressConfig] = PublicKey.findProgramAddressSync([Buffer.from("progress_config")], pid);
+    const progressPda = (o: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from("progress"), o.toBuffer()], pid)[0];
+    const progress = (who: Keypair | PublicKey) =>
+      program.account.progress.fetch(progressPda(who instanceof Keypair ? who.publicKey : who));
+    const catchLog = async (who: PublicKey) => {
+      const data = (await connection.getAccountInfo(progressPda(who)))!.data;
+      const out: bigint[] = [];
+      for (let o = HEADER; o < data.length; o += 8) out.push(data.readBigUInt64LE(o));
+      return out;
+    };
+
+    const testOracle = Keypair.generate(); // stands in for the market wallet
+    const dave = Keypair.generate(); // mints fish before ever creating a PlayerState
+    const daveSession = Keypair.generate(); // the game's session key: fee payer of the mint tx
+    const erin = Keypair.generate(); // someone pre-funds her Progress address
+
+    const initRules = (r: Rules, signer: Keypair = admin) =>
+      program.methods
+        .initProgressConfig(rulesArg(r))
+        .accountsStrict({ admin: signer.publicKey, config, progressConfig, systemProgram: SystemProgram.programId })
+        .signers([signer])
+        .rpc();
+    const setRules = (r: Rules, signer: Keypair = admin) =>
+      program.methods.setProgressConfig(rulesArg(r)).accountsStrict({ admin: signer.publicKey, config, progressConfig }).signers([signer]).rpc();
+    const recordIx = (owner: PublicKey, fish: bigint | number, value: number, o: { oracle?: Keypair; payer?: Keypair; progress?: PublicKey } = {}) =>
+      program.methods
+        .recordCatch(new BN(fish.toString()), bn(value))
+        .accountsStrict({
+          oracle: (o.oracle ?? testOracle).publicKey,
+          payer: (o.payer ?? daveSession).publicKey,
+          config,
+          owner,
+          progress: o.progress ?? progressPda(owner),
+          systemProgram: SystemProgram.programId,
+        });
+    const record = (owner: PublicKey, fish: bigint | number, value: number, o: { oracle?: Keypair; payer?: Keypair; progress?: PublicKey } = {}) => {
+      const signers = [o.oracle ?? testOracle, o.payer ?? daveSession];
+      return recordIx(owner, fish, value, o).signers(signers).rpc();
+    };
+    const boatAccounts = (who: Keypair, over: Partial<Record<string, PublicKey>> = {}) => ({
+      owner: who.publicKey,
+      config,
+      progressConfig,
+      progress: progressPda(who.publicKey),
+      pearlMint: pearl,
+      ownerPearl: ata[who.publicKey.toBase58()],
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      ...over,
+    });
+    const buyBoat = (who: Keypair, slot: number, level: number, over: Partial<Record<string, PublicKey>> = {}, signer: Keypair = who) =>
+      program.methods.buyBoat(slot, level).accountsStrict(boatAccounts(who, over)).signers([signer]).rpc();
+    const setShip = (who: Keypair, ship: number, signer: Keypair = who, owner: PublicKey = who.publicKey) =>
+      program.methods.setShip(ship).accountsStrict({ owner, progressConfig, progress: progressPda(who.publicKey) }).signers([signer]).rpc();
+
+    // Raw v1 accounts before any v2 instruction runs: v2 must never touch them.
+    let v1Before: Record<string, string> = {};
+    const v1Accounts = () => ({ config, alicePlayer: playerPda(alice.publicKey), aliceAquarium: aquariumPda(alice.publicKey), carolAquarium: aquariumPda(carol.publicKey) });
+    const rawAll = async () => {
+      const out: Record<string, string> = {};
+      for (const [k, a] of Object.entries(v1Accounts())) out[k] = (await connection.getAccountInfo(a))!.data.toString("hex");
+      return out;
+    };
+
+    before(async () => {
+      const fund = new Transaction();
+      for (const kp of [testOracle, dave, daveSession, erin]) {
+        fund.add(SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: kp.publicKey, lamports: 2 * LAMPORTS_PER_SOL }));
+      }
+      await sendAndConfirmTransaction(connection, fund, [admin]);
+      for (const [kp, amount] of [[dave, 5_000], [erin, 1_000]] as const) {
+        const acc = await getOrCreateAssociatedTokenAccount(connection, admin, pearl, kp.publicKey);
+        ata[kp.publicKey.toBase58()] = acc.address;
+        await mintTo(connection, admin, pearl, acc.address, admin, amount);
+      }
+      v1Before = await rawAll();
+      await program.methods.setOracle(testOracle.publicKey).accountsStrict({ admin: admin.publicKey, config }).rpc();
+    });
+
+    after(async () => {
+      await program.methods.setOracle(oracle).accountsStrict({ admin: admin.publicKey, config }).rpc();
+    });
+
+    describe("progress_config", () => {
+      it("init is Config-admin only and validates the rules", async () => {
+        await expectFail(() => initRules(RULES, stranger), "Unauthorized");
+        const freeLv2 = cloneRules(RULES);
+        freeLv2.boatPrices[BOAT_SLOT.boat][1] = 0;
+        await expectFail(() => initRules(freeLv2), "InvalidProgressRules");
+        const paidLv1 = cloneRules(RULES);
+        paidLv1.boatPrices[BOAT_SLOT.bait][0] = 1;
+        await expectFail(() => initRules(paidLv1), "InvalidProgressRules");
+        const lockedStarter = cloneRules(RULES);
+        lockedStarter.shipThresholds[0] = 10;
+        await expectFail(() => initRules(lockedStarter), "InvalidProgressRules");
+        const decreasing = cloneRules(RULES);
+        decreasing.mapThresholds = [0, 1000, 150];
+        await expectFail(() => initRules(decreasing), "InvalidProgressRules");
+      });
+
+      it("the admin creates it with the game's boat prices and unlock thresholds", async () => {
+        await initRules(RULES);
+        const pc = await program.account.progressConfig.fetch(progressConfig);
+        expect(pc.version).to.equal(1);
+        expect(pc.rules.boatPrices.map((r: BN[]) => r.map(Number))).to.deep.equal(RULES.boatPrices);
+        expect(pc.rules.shipThresholds.map(Number)).to.deep.equal(RULES.shipThresholds);
+        expect(pc.rules.mapThresholds.map(Number)).to.deep.equal(RULES.mapThresholds);
+        expect((await connection.getAccountInfo(progressConfig))!.data.length).to.equal(8 + 2 + 15 * 8 + 6 * 8 + 3 * 8 + 64);
+        await expectFail(() => initRules(RULES), "already in use");
+      });
+
+      it("set_progress_config is admin only and validates", async () => {
+        await expectFail(() => setRules(RULES, stranger), "Unauthorized");
+        const bad = cloneRules(RULES);
+        bad.boatPrices[BOAT_SLOT.boatDeck][2] = 0;
+        await expectFail(() => setRules(bad), "InvalidProgressRules");
+        const other = cloneRules(RULES);
+        other.mapThresholds = [0, 10, 20];
+        await setRules(other);
+        expect((await program.account.progressConfig.fetch(progressConfig)).rules.mapThresholds.map(Number)).to.deep.equal([0, 10, 20]);
+        await setRules(RULES);
+      });
+    });
+
+    describe("record_catch", () => {
+      it("rejects any signer but Config.oracle", async () => {
+        await expectFail(() => record(dave.publicKey, 1, 10, { oracle: stranger }), "Unauthorized");
+        await expectFail(() => record(dave.publicKey, 1, 10, { oracle: dave, payer: dave }), "Unauthorized");
+        expect(await connection.getAccountInfo(progressPda(dave.publicKey))).to.equal(null);
+      });
+
+      it("works before the owner has a PlayerState: creates Progress, the payer funds the rent", async () => {
+        expect(await connection.getAccountInfo(playerPda(dave.publicKey))).to.equal(null);
+        const payer0 = await connection.getBalance(daveSession.publicKey);
+        const sig = await record(dave.publicKey, 0x0badf00d, 60);
+        const p = await progress(dave);
+        expect(p.owner.toBase58()).to.equal(dave.publicKey.toBase58());
+        expect(p.version).to.equal(1);
+        expect(Number(p.lifetimeValue)).to.equal(60);
+        expect(Number(p.bestValue)).to.equal(60);
+        expect(p.catches).to.equal(1);
+        expect(p.boatLevels).to.deep.equal([1, 1, 1, 1, 1]);
+        expect(p.ship).to.equal(0);
+        const info = (await connection.getAccountInfo(progressPda(dave.publicKey)))!;
+        expect(info.data.length).to.equal(HEADER + 8);
+        expect(info.lamports).to.equal(await connection.getMinimumBalanceForRentExemption(HEADER + 8));
+        // The provider wallet paid the fee here; daveSession paid exactly the rent.
+        expect(payer0 - (await connection.getBalance(daveSession.publicKey))).to.equal(info.lamports);
+        expect(await catchLog(dave.publicKey)).to.deep.equal([0x0badf00dn]);
+        expect(await connection.getAccountInfo(playerPda(dave.publicKey))).to.equal(null);
+        const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+        console.log(`      record_catch creating Progress: ${tx!.meta!.computeUnitsConsumed} CU`);
+      });
+
+      it("a duplicate fish is a successful no-op: nothing double-counts, no rent is taken", async () => {
+        const before = (await connection.getAccountInfo(progressPda(dave.publicKey)))!;
+        const payer0 = await connection.getBalance(daveSession.publicKey);
+        await record(dave.publicKey, 0x0badf00d, 60);
+        await record(dave.publicKey, 0x0badf00d, 9_999); // a forged retry with another value changes nothing either
+        const after = (await connection.getAccountInfo(progressPda(dave.publicKey)))!;
+        expect(after.data.toString("hex")).to.equal(before.data.toString("hex"));
+        expect(after.lamports).to.equal(before.lamports);
+        expect(await connection.getBalance(daveSession.publicKey)).to.equal(payer0);
+        // The same fish twice in one transaction counts once too.
+        const tx = new Transaction()
+          .add(await recordIx(dave.publicKey, 7, 5).instruction())
+          .add(await recordIx(dave.publicKey, 7, 5).instruction());
+        await sendAndConfirmTransaction(connection, tx, [admin, testOracle, daveSession]);
+        const p = await progress(dave);
+        expect(Number(p.lifetimeValue)).to.equal(65);
+        expect(p.catches).to.equal(2);
+      });
+
+      it("adds every new fish, keeps the best and a sorted log; lifetime value only grows", async () => {
+        const keys = [0xffffffffn, 0n, 0x12345678n, 3n, 0xdeadbeefn, (1n << 64n) - 1n, 0x0a11ce00n];
+        const values = [10, 0, 250, 1, 40, 3, 7];
+        let lifetime = 65;
+        for (let i = 0; i < keys.length; i++) {
+          await record(dave.publicKey, keys[i], values[i]);
+          lifetime += values[i];
+          const p = await progress(dave);
+          expect(Number(p.lifetimeValue)).to.equal(lifetime);
+        }
+        const p = await progress(dave);
+        expect(Number(p.bestValue)).to.equal(250);
+        expect(p.catches).to.equal(9);
+        const log = await catchLog(dave.publicKey);
+        expect(log.length).to.equal(9);
+        expect(log).to.deep.equal([...log].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+        expect(log).to.include.members([7n, 0x0badf00dn, ...keys]);
+      });
+
+      it("the oracle may pay for itself (a standalone backfill), and a pre-funded address still works", async () => {
+        const pda = progressPda(erin.publicKey);
+        // A system account must be rent exempt, so the smallest griefing deposit is the 0-byte minimum.
+        const lamports = await connection.getMinimumBalanceForRentExemption(0);
+        await sendAndConfirmTransaction(
+          connection,
+          new Transaction().add(SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: pda, lamports })),
+          [admin]
+        );
+        await record(erin.publicKey, 42, 30, { payer: testOracle });
+        const info = (await connection.getAccountInfo(pda))!;
+        expect(info.owner.toBase58()).to.equal(pid.toBase58());
+        expect(info.lamports).to.equal(await connection.getMinimumBalanceForRentExemption(HEADER + 8));
+        expect(Number((await progress(erin)).lifetimeValue)).to.equal(30);
+      });
+
+      it("rejects another owner's Progress account", async () => {
+        await expectFail(() => record(dave.publicKey, 99, 1, { progress: progressPda(erin.publicKey) }), "ConstraintSeeds");
+      });
+
+      it("stays cheap as the log grows (10 catches per transaction)", async () => {
+        let last = 0;
+        for (let t = 0; t < 5; t++) {
+          const tx = new Transaction();
+          for (let i = 0; i < 10; i++) tx.add(await recordIx(dave.publicKey, BigInt("0x" + randomBytes(4).toString("hex")) + 0x1_0000_0000n, 1).instruction());
+          const sig = await sendAndConfirmTransaction(connection, tx, [admin, testOracle, daveSession], { commitment: "confirmed" });
+          last = (await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }))!.meta!.computeUnitsConsumed!;
+        }
+        const p = await progress(dave);
+        console.log(`      10 x record_catch into a ${p.catches - 10}-fish log: ${last} CU (${Math.round(last / 10)} per catch)`);
+        expect(last / 10).to.be.below(20_000);
+        expect((await connection.getAccountInfo(progressPda(dave.publicKey)))!.data.length).to.equal(HEADER + 8 * p.catches);
+      });
+    });
+
+    describe("buy_boat", () => {
+      it("burns the ProgressConfig price for exactly the next level, creating Progress on first use", async () => {
+        expect(await connection.getAccountInfo(progressPda(alice.publicKey))).to.equal(null);
+        let pearls = await balance(alice);
+        for (const [name, slot] of Object.entries(BOAT_SLOT)) {
+          for (const level of [2, 3]) {
+            await buyBoat(alice, slot, level);
+            pearls -= RULES.boatPrices[slot][level - 1];
+            expect(await balance(alice), `${name} Lv${level}`).to.equal(pearls);
+            expect((await progress(alice)).boatLevels[slot]).to.equal(level);
+          }
+        }
+        const p = await progress(alice);
+        expect(p.boatLevels).to.deep.equal([3, 3, 3, 3, 3]);
+        expect(Number(p.lifetimeValue)).to.equal(0);
+        expect((await connection.getAccountInfo(progressPda(alice.publicKey)))!.data.length).to.equal(HEADER);
+      });
+
+      it("rejects going above the max", async () => {
+        await expectFail(() => buyBoat(alice, BOAT_SLOT.bait, 4), "MaxLevel");
+        await expectFail(() => buyBoat(alice, BOAT_SLOT.bait, 3), "MaxLevel");
+      });
+
+      it("rejects skipping a level or re-buying the current one", async () => {
+        const before = await balance(dave);
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boat, 3), "NotNextLevel");
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boat, 1), "NotNextLevel");
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boat, 0), "NotNextLevel");
+        await buyBoat(dave, BOAT_SLOT.boat, 2);
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boat, 2), "NotNextLevel");
+        expect(await balance(dave)).to.equal(before - 120);
+      });
+
+      it("keeps the catch log and lifetime value intact", async () => {
+        const p0 = await progress(dave);
+        const log0 = await catchLog(dave.publicKey);
+        await buyBoat(dave, BOAT_SLOT.bait, 2);
+        const p = await progress(dave);
+        expect(Number(p.lifetimeValue)).to.equal(Number(p0.lifetimeValue));
+        expect(p.catches).to.equal(p0.catches);
+        expect(await catchLog(dave.publicKey)).to.deep.equal(log0);
+        expect(p.boatLevels).to.deep.equal([2, 2, 1, 1, 1]);
+      });
+
+      it("rejects an unknown boat piece", async () => {
+        await expectFail(() => buyBoat(dave, 5, 2), "InvalidBoatSlot");
+      });
+
+      it("rejects the wrong mint, someone else's token account and the wrong token program", async () => {
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boatHull, 2, { pearlMint: fakeMint }), "WrongMint");
+        await expectFail(() => buyBoat(alice, BOAT_SLOT.boatHull, 2, { ownerPearl: fakeAta }), "WrongMint");
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boatHull, 2, { ownerPearl: ata[carol.publicKey.toBase58()] }), "WrongTokenOwner");
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boatHull, 2, { tokenProgram: TOKEN_2022_PROGRAM_ID }), "WrongTokenProgram");
+      });
+
+      it("rejects the wrong signer", async () => {
+        // A stranger signing for dave's Progress: the seeds bind it to the signer.
+        await expectFail(() => buyBoat(stranger, BOAT_SLOT.boatHull, 2, { progress: progressPda(dave.publicKey) }), "ConstraintSeeds");
+        // dave's accounts without dave's signature.
+        await expectFail(() => buyBoat(dave, BOAT_SLOT.boatHull, 2, {}, stranger), "unknown signer");
+        expect((await progress(dave)).boatLevels[BOAT_SLOT.boatHull]).to.equal(1);
+      });
+
+      it("without enough PEARL fails and creates nothing", async () => {
+        await expectFail(() => buyBoat(bob, BOAT_SLOT.boat, 2), "InsufficientPearl");
+        expect(await connection.getAccountInfo(progressPda(bob.publicKey))).to.equal(null);
+        expect(await balance(bob)).to.be.at.most(50);
+      });
+
+      it("burns the new price after set_progress_config", async () => {
+        const r = cloneRules(RULES);
+        r.boatPrices[BOAT_SLOT.boatDeck][1] = 7;
+        await setRules(r);
+        const before = await balance(dave);
+        await buyBoat(dave, BOAT_SLOT.boatDeck, 2);
+        expect(await balance(dave)).to.equal(before - 7);
+        await setRules(RULES);
+      });
+
+      it("a shark bite never lowers a boat level", async () => {
+        const p0 = await progress(alice);
+        await sharkBite(alice, session);
+        expect((await progress(alice)).boatLevels).to.deep.equal(p0.boatLevels);
+      });
+    });
+
+    describe("set_ship", () => {
+      it("sails any ship the lifetime banked value has unlocked; owner only", async () => {
+        await record(erin.publicKey, 43, 30); // erin: lifetime 60
+        await setShip(erin, 1);
+        expect((await progress(erin)).ship).to.equal(1);
+        await expectFail(() => setShip(erin, 2), "ShipLocked");
+        await expectFail(() => setShip(erin, 6), "InvalidShip");
+        await expectFail(() => setShip(erin, 1, stranger, stranger.publicKey), "ConstraintSeeds");
+        await record(erin.publicKey, 44, 90); // lifetime 150
+        await setShip(erin, 2);
+        await setShip(erin, 0);
+        expect((await progress(erin)).ship).to.equal(0);
+      });
+
+      it("needs a Progress account", async () => {
+        await expectFail(() => setShip(bob, 0), "AccountNotInitialized");
+      });
+    });
+
+    describe("v1 compatibility", () => {
+      const v1Idl = require("./idl/player_state.v1.json");
+      const byName = (xs: any[]) => Object.fromEntries(xs.map((x) => [x.name, x]));
+
+      it("every v1 instruction, account, type and error code is unchanged in the IDL", () => {
+        const now = idl as any;
+        const ixNow = byName(now.instructions);
+        for (const ix of v1Idl.instructions) expect(ixNow[ix.name], ix.name).to.deep.equal(ix);
+        const accNow = byName(now.accounts);
+        for (const a of v1Idl.accounts) expect(accNow[a.name], a.name).to.deep.equal(a);
+        const typeNow = byName(now.types);
+        for (const t of v1Idl.types) expect(typeNow[t.name], t.name).to.deep.equal(t);
+        const errNow = byName(now.errors);
+        for (const e of v1Idl.errors) expect(errNow[e.name], e.name).to.deep.equal(e);
+        expect(now.address).to.equal(v1Idl.address);
+      });
+
+      it("v2 instructions never touched the v1 accounts, and their sizes are the deployed ones", async () => {
+        const now = await rawAll();
+        // Config differs only while the test oracle is set; compare with it swapped back.
+        await program.methods.setOracle(oracle).accountsStrict({ admin: admin.publicKey, config }).rpc();
+        const nowRestored = await rawAll();
+        await program.methods.setOracle(testOracle.publicKey).accountsStrict({ admin: admin.publicKey, config }).rpc();
+        expect(nowRestored.config).to.equal(v1Before.config);
+        expect(now.aliceAquarium).to.equal(v1Before.aliceAquarium);
+        expect(now.carolAquarium).to.equal(v1Before.carolAquarium);
+        expect((await connection.getAccountInfo(config))!.data.length).to.equal(612);
+        // alice's PlayerState only changed through the v1 shark_bite above.
+        expect((await connection.getAccountInfo(playerPda(alice.publicKey)))!.data.length).to.equal(249);
+      });
+
+      it("a fresh v1 player still works end to end on the v2 binary", async () => {
+        const fay = Keypair.generate();
+        await sendAndConfirmTransaction(
+          connection,
+          new Transaction().add(SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: fay.publicKey, lamports: LAMPORTS_PER_SOL })),
+          [admin]
+        );
+        const acc = await getOrCreateAssociatedTokenAccount(connection, admin, pearl, fay.publicKey);
+        ata[fay.publicKey.toBase58()] = acc.address;
+        await mintTo(connection, admin, pearl, acc.address, admin, 1_000);
+        await initPlayer(fay, PublicKey.default);
+        await buy(fay, ROD);
+        await setPath(fay, fay, ROD, 1);
+        await craft(fay, BAIT);
+        const p = await player(fay);
+        expect(p.levels[ROD]).to.equal(2);
+        expect(p.paths[ROD]).to.equal(1);
+        expect(p.crafted[BAIT]).to.equal(1);
+        expect(await balance(fay)).to.equal(1_000 - GAME.upgrade[ROD][1] - GAME.recipeCost[BAIT]);
+        expect((await connection.getAccountInfo(playerPda(fay.publicKey)))!.data.length).to.equal(249);
+        expect((await connection.getAccountInfo(aquariumPda(fay.publicKey)))!.data.length).to.equal(62);
+        // A v1 player has no Progress until a v2 instruction makes one.
+        expect(await connection.getAccountInfo(progressPda(fay.publicKey))).to.equal(null);
+      });
+    });
+  });
 });

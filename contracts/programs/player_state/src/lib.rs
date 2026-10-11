@@ -13,6 +13,16 @@
 //!
 //! The rules mirror the game (game/src/equipment.ts, synthesis.ts, main.ts,
 //! aquarium-state.ts, fish-food.ts). Health and breath data never come here.
+//!
+//! v2 (additive: the v1 accounts, instructions and error codes are unchanged)
+//! adds one `Progress` PDA per wallet (`["progress", owner]`) with the boat
+//! levels (upgrades.ts group 'boat'), the shipyard ship sailed, the lifetime
+//! banked value that unlocks ships and maps, the best single catch, and a
+//! sorted log of every recorded fish key so `record_catch` is idempotent.
+//! Boat prices and the ship / map thresholds live in a separate admin-set
+//! `ProgressConfig` PDA (`["progress_config"]`), so the Config layout is
+//! untouched. `record_catch` is signed by `Config.oracle` (the market wallet)
+//! and needs no PlayerState: new players mint fish before they buy anything.
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
@@ -47,6 +57,28 @@ pub const MILLI: u64 = 1000;
 pub const PLAYER_VERSION: u8 = 1;
 pub const CONFIG_VERSION: u8 = 1;
 pub const AQUARIUM_VERSION: u8 = 1;
+
+// ---- v2
+pub const PROGRESS_SEED: &[u8] = b"progress";
+pub const PROGRESS_CONFIG_SEED: &[u8] = b"progress_config";
+pub const PROGRESS_VERSION: u8 = 1;
+pub const PROGRESS_CONFIG_VERSION: u8 = 1;
+/// Boat pieces, in the order of BOAT_IDS (game/src/gear-nft.ts): bait, boat,
+/// boatSpeed, boatHull, boatDeck. Levels 1..=MAX_LEVEL like the dive gear.
+pub const BOAT_SLOT_COUNT: usize = 5;
+/// Shipyard ships, in the order of SHIPS (game/src/ships.ts).
+pub const SHIP_COUNT: usize = 6;
+/// Maps, in the order of MAPS (game/src/maps.ts): fjord, tianchi (Heaven Lake), ocean.
+pub const MAP_COUNT: usize = 3;
+/// Bytes per fish key in the Progress catch log.
+pub const CATCH_KEY_SIZE: usize = 8;
+
+// The v1 layouts that the deployed program writes and v1 clients decode. v2
+// must never change them (game/src/player-state.ts CONFIG_SIZE etc.).
+const _: () = assert!(8 + Config::INIT_SPACE == 612);
+const _: () = assert!(8 + PlayerState::INIT_SPACE == 249);
+const _: () = assert!(Aquarium::BASE == 62);
+const _: () = assert!(Progress::SIZE == 100);
 
 /// Every price and rule number the program reads. Amounts are PEARL base units
 /// (the mint has 0 decimals, so 1 unit = 1 PEARL).
@@ -94,6 +126,33 @@ impl PriceTable {
         require!(self.max_growth_milli > 0, PlayerStateError::InvalidPriceTable);
         Ok(())
     }
+}
+
+/// v2 rules, admin-set in `ProgressConfig`. Amounts are PEARL / banked value units.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+pub struct ProgressRules {
+    /// `[boat slot][level - 1]`: PEARL to buy that level (upgrades.ts prices). Level 1 must be 0.
+    pub boat_prices: [[u64; 3]; BOAT_SLOT_COUNT],
+    /// Lifetime banked value that unlocks each ship (ships.ts SHIPS[].threshold). Ship 0 must be 0.
+    pub ship_thresholds: [u64; SHIP_COUNT],
+    /// Lifetime banked value that unlocks each map (maps.ts unlockValue). Map 0 must be 0.
+    pub map_thresholds: [u64; MAP_COUNT],
+}
+
+impl ProgressRules {
+    pub fn validate(&self) -> Result<()> {
+        for slot in self.boat_prices.iter() {
+            require!(slot[0] == 0, PlayerStateError::InvalidProgressRules);
+            require!(slot[1] > 0 && slot[2] > 0, PlayerStateError::InvalidProgressRules);
+        }
+        require!(non_decreasing_from_zero(&self.ship_thresholds), PlayerStateError::InvalidProgressRules);
+        require!(non_decreasing_from_zero(&self.map_thresholds), PlayerStateError::InvalidProgressRules);
+        Ok(())
+    }
+}
+
+fn non_decreasing_from_zero(v: &[u64]) -> bool {
+    v.first() == Some(&0) && v.windows(2).all(|w| w[0] <= w[1])
 }
 
 #[program]
@@ -344,6 +403,221 @@ pub mod player_state {
         });
         Ok(())
     }
+
+    // ---------------------------------------------------------- v2: progress
+
+    /// Creates the `ProgressConfig` (boat prices, ship and map thresholds). Config admin only.
+    pub fn init_progress_config(ctx: Context<InitProgressConfig>, rules: ProgressRules) -> Result<()> {
+        rules.validate()?;
+        let pc = &mut ctx.accounts.progress_config;
+        pc.version = PROGRESS_CONFIG_VERSION;
+        pc.bump = ctx.bumps.progress_config;
+        pc.rules = rules;
+        pc.reserved = [0; 64];
+        emit!(ProgressRulesSet { admin: ctx.accounts.admin.key() });
+        Ok(())
+    }
+
+    /// Replaces the boat prices and the ship / map thresholds. Config admin only.
+    pub fn set_progress_config(ctx: Context<AdminProgressConfig>, rules: ProgressRules) -> Result<()> {
+        rules.validate()?;
+        ctx.accounts.progress_config.rules = rules;
+        emit!(ProgressRulesSet { admin: ctx.accounts.admin.key() });
+        Ok(())
+    }
+
+    /// Buys `level` of a boat piece at the ProgressConfig price, burning the
+    /// PEARL in the same instruction (the boat twin of `buy_upgrade`). `level`
+    /// must be exactly the next one, so a resent or doubled transaction can
+    /// never buy two levels. Creates the owner's Progress on first use (the
+    /// owner pays its rent). Nothing ever lowers a boat level: a shark bite
+    /// only resets the dive gear (equipment.ts DIVE_GEAR_SLOTS).
+    pub fn buy_boat(ctx: Context<BuyBoat>, slot: u8, level: u8) -> Result<()> {
+        let s = slot as usize;
+        require!(s < BOAT_SLOT_COUNT, PlayerStateError::InvalidBoatSlot);
+        let a = &ctx.accounts;
+        let owner = a.owner.key();
+        let info = a.progress.to_account_info();
+        let mut progress =
+            load_or_create_progress(&info, &owner, &a.owner.to_account_info(), &a.system_program, ctx.bumps.progress)?;
+        let current = progress.boat_levels[s];
+        require!(current < MAX_LEVEL && level <= MAX_LEVEL, PlayerStateError::MaxLevel);
+        require!(level == current + 1, PlayerStateError::NotNextLevel);
+        let price = a.progress_config.rules.boat_prices[s][(level - 1) as usize];
+        burn_pearl(&a.owner, &a.pearl_mint, &a.owner_pearl, &a.token_program, price)?;
+        progress.boat_levels[s] = level;
+        store_progress(&info, &progress)?;
+        emit!(BoatBought { owner, slot, level, price });
+        Ok(())
+    }
+
+    /// Sails a shipyard ship (ships.ts equip): free, any ship whose threshold
+    /// the lifetime banked value has reached. Owner only. Ship 0 needs no call.
+    pub fn set_ship(ctx: Context<SetShip>, ship: u8) -> Result<()> {
+        let s = ship as usize;
+        require!(s < SHIP_COUNT, PlayerStateError::InvalidShip);
+        let need = ctx.accounts.progress_config.rules.ship_thresholds[s];
+        let progress = &mut ctx.accounts.progress;
+        require!(progress.lifetime_value >= need, PlayerStateError::ShipLocked);
+        progress.ship = ship;
+        emit!(ShipSet { owner: progress.owner, ship });
+        Ok(())
+    }
+
+    /// The oracle (Config.oracle, the market wallet) records one banked fish:
+    /// its value is added to the owner's lifetime banked value (which unlocks
+    /// ships and maps and never goes down) and the best single catch is kept.
+    ///
+    /// Idempotent per fish: `fish` (the fish's seed, the u32 of its 8-hex id,
+    /// zero-extended) goes into the sorted catch log at the end of the
+    /// Progress account. A fish already in the log is a no-op that succeeds,
+    /// so a retried mint never double-counts and never fails the mint it rides
+    /// with. Creates the Progress on first use; `payer` funds its rent and the
+    /// 8 bytes of rent each new fish adds (in the cosigned mint tx that is the
+    /// game's session key, the fee payer, so no extra signature is needed).
+    pub fn record_catch(ctx: Context<RecordCatch>, fish: u64, value: u64) -> Result<()> {
+        let a = &ctx.accounts;
+        let owner = a.owner.key();
+        let payer = a.payer.to_account_info();
+        let info = a.progress.to_account_info();
+        let mut progress = load_or_create_progress(&info, &owner, &payer, &a.system_program, ctx.bumps.progress)?;
+        let n = progress.catches as usize;
+        let log_end = Progress::SIZE + n * CATCH_KEY_SIZE;
+        let at = {
+            let data = info.try_borrow_data()?;
+            require!(data.len() == log_end, PlayerStateError::BadCatchLog);
+            match find_catch(&data[Progress::SIZE..log_end], fish) {
+                Ok(_) => {
+                    emit!(CatchAlreadyRecorded { owner, fish });
+                    return Ok(());
+                }
+                Err(i) => i,
+            }
+        };
+        let lifetime_value = progress.lifetime_value.checked_add(value).ok_or(PlayerStateError::Overflow)?;
+        let catches = progress.catches.checked_add(1).ok_or(PlayerStateError::Overflow)?;
+        grow_account(&info, &payer, &a.system_program, log_end + CATCH_KEY_SIZE)?;
+        {
+            let mut data = info.try_borrow_mut_data()?;
+            let slot = Progress::SIZE + at * CATCH_KEY_SIZE;
+            data.copy_within(slot..log_end, slot + CATCH_KEY_SIZE);
+            data[slot..slot + CATCH_KEY_SIZE].copy_from_slice(&fish.to_le_bytes());
+        }
+        progress.lifetime_value = lifetime_value;
+        progress.best_value = progress.best_value.max(value);
+        progress.catches = catches;
+        store_progress(&info, &progress)?;
+        emit!(CatchRecorded { owner, fish, value, lifetime_value, best_value: progress.best_value, catches });
+        Ok(())
+    }
+}
+
+/// Binary search of a sorted log of little-endian u64 fish keys:
+/// Ok(index) if present, Err(insertion index) if not.
+fn find_catch(log: &[u8], fish: u64) -> std::result::Result<usize, usize> {
+    let key_at = |i: usize| {
+        let mut b = [0u8; CATCH_KEY_SIZE];
+        b.copy_from_slice(&log[i * CATCH_KEY_SIZE..(i + 1) * CATCH_KEY_SIZE]);
+        u64::from_le_bytes(b)
+    };
+    let (mut lo, mut hi) = (0usize, log.len() / CATCH_KEY_SIZE);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        match key_at(mid).cmp(&fish) {
+            std::cmp::Ordering::Equal => return Ok(mid),
+            std::cmp::Ordering::Less => lo = mid + 1,
+            std::cmp::Ordering::Greater => hi = mid,
+        }
+    }
+    Err(lo)
+}
+
+/// Loads the owner's Progress header, or creates the account (header only, no
+/// catches yet) with `payer` funding the rent. Done by hand rather than with
+/// Anchor's `init_if_needed` because the account grows with its catch log and
+/// `init_if_needed` rejects an existing account whose size differs from
+/// `space`. Like Anchor's `init`, it copes with an address someone pre-funded.
+fn load_or_create_progress<'info>(
+    info: &AccountInfo<'info>,
+    owner: &Pubkey,
+    payer: &AccountInfo<'info>,
+    system: &Program<'info, System>,
+    bump: u8,
+) -> Result<Progress> {
+    if info.owner == &crate::ID {
+        let data = info.try_borrow_data()?;
+        require!(data.len() >= Progress::SIZE, PlayerStateError::BadCatchLog);
+        let progress = Progress::try_deserialize(&mut &data[..])?;
+        require_keys_eq!(progress.owner, *owner, PlayerStateError::Unauthorized);
+        return Ok(progress);
+    }
+    require_keys_eq!(*info.owner, system_program::ID, PlayerStateError::Unauthorized);
+    let bump_seed = [bump];
+    let seeds: &[&[u8]] = &[PROGRESS_SEED, owner.as_ref(), &bump_seed];
+    let signer = &[seeds];
+    let space = Progress::SIZE;
+    let rent = Rent::get()?.minimum_balance(space);
+    let held = info.lamports();
+    let sys = system.to_account_info();
+    if held == 0 {
+        system_program::create_account(
+            CpiContext::new_with_signer(sys, system_program::CreateAccount { from: payer.clone(), to: info.clone() }, signer),
+            rent,
+            space as u64,
+            &crate::ID,
+        )?;
+    } else {
+        if rent > held {
+            system_program::transfer(
+                CpiContext::new(sys.clone(), system_program::Transfer { from: payer.clone(), to: info.clone() }),
+                rent - held,
+            )?;
+        }
+        system_program::allocate(
+            CpiContext::new_with_signer(sys.clone(), system_program::Allocate { account_to_allocate: info.clone() }, signer),
+            space as u64,
+        )?;
+        system_program::assign(
+            CpiContext::new_with_signer(sys, system_program::Assign { account_to_assign: info.clone() }, signer),
+            &crate::ID,
+        )?;
+    }
+    Ok(Progress {
+        version: PROGRESS_VERSION,
+        bump,
+        owner: *owner,
+        lifetime_value: 0,
+        best_value: 0,
+        catches: 0,
+        boat_levels: [1; BOAT_SLOT_COUNT],
+        ship: 0,
+        reserved: [0; 32],
+    })
+}
+
+/// Writes the Progress header (discriminator + fields); the catch log after it is untouched.
+fn store_progress(info: &AccountInfo, progress: &Progress) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    let mut header: &mut [u8] = &mut data[..Progress::SIZE];
+    progress.try_serialize(&mut header)
+}
+
+/// Grows a program account to `new_size`, `payer` topping up the rent.
+fn grow_account<'info>(
+    info: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system: &Program<'info, System>,
+    new_size: usize,
+) -> Result<()> {
+    let need = Rent::get()?.minimum_balance(new_size).saturating_sub(info.lamports());
+    if need > 0 {
+        system_program::transfer(
+            CpiContext::new(system.to_account_info(), system_program::Transfer { from: payer.clone(), to: info.clone() }),
+            need,
+        )?;
+    }
+    info.resize(new_size)?;
+    Ok(())
 }
 
 /// aquarium-state.ts feedFish: fully grown first, then the cooldown of the
@@ -629,6 +903,133 @@ pub struct ForgetFish<'info> {
     pub aquarium: Account<'info, Aquarium>,
 }
 
+// ------------------------------------------------------------- v2 accounts
+
+/// Admin-set v2 rules. Separate from Config so the v1 Config layout never changes.
+#[account]
+#[derive(InitSpace)]
+pub struct ProgressConfig {
+    pub version: u8,
+    pub bump: u8,
+    pub rules: ProgressRules,
+    pub reserved: [u8; 64],
+}
+
+/// One per wallet (`["progress", owner]`), created by `buy_boat` or `record_catch`.
+/// The fixed header below is followed by `catches` little-endian u64 fish
+/// keys, sorted ascending (the catch log), so the account is
+/// `Progress::SIZE + 8 * catches` bytes.
+#[account]
+#[derive(InitSpace)]
+pub struct Progress {
+    pub version: u8,
+    pub bump: u8,
+    pub owner: Pubkey,
+    /// Value of every fish ever banked (oracle-recorded). Never decreases.
+    pub lifetime_value: u64,
+    /// The most valuable single fish recorded.
+    pub best_value: u64,
+    /// Fish keys in the catch log.
+    pub catches: u32,
+    /// Level per boat piece (bait, boat, boatSpeed, boatHull, boatDeck), 1..=3.
+    pub boat_levels: [u8; BOAT_SLOT_COUNT],
+    /// The shipyard ship sailed (SHIPS index); 0 = the starter.
+    pub ship: u8,
+    pub reserved: [u8; 32],
+}
+
+impl Progress {
+    /// Header size, discriminator included; the catch log starts here.
+    pub const SIZE: usize = 8 + Progress::INIT_SPACE;
+}
+
+// ---------------------------------------------------------- v2 instructions
+
+#[derive(Accounts)]
+pub struct InitProgressConfig<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin @ PlayerStateError::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + ProgressConfig::INIT_SPACE,
+        seeds = [PROGRESS_CONFIG_SEED],
+        bump
+    )]
+    pub progress_config: Account<'info, ProgressConfig>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AdminProgressConfig<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin @ PlayerStateError::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [PROGRESS_CONFIG_SEED], bump = progress_config.bump)]
+    pub progress_config: Account<'info, ProgressConfig>,
+}
+
+#[derive(Accounts)]
+pub struct BuyBoat<'info> {
+    /// Signs, pays the burn and (on first use) the Progress rent.
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(seeds = [PROGRESS_CONFIG_SEED], bump = progress_config.bump)]
+    pub progress_config: Account<'info, ProgressConfig>,
+    /// CHECK: the owner's Progress PDA (address checked by the seeds); loaded,
+    /// created and written by hand in load_or_create_progress / store_progress.
+    #[account(mut, seeds = [PROGRESS_SEED, owner.key().as_ref()], bump)]
+    pub progress: UncheckedAccount<'info>,
+    #[account(mut, address = config.pearl_mint @ PlayerStateError::WrongMint)]
+    pub pearl_mint: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        constraint = owner_pearl.mint == pearl_mint.key() @ PlayerStateError::WrongMint,
+        constraint = owner_pearl.owner == owner.key() @ PlayerStateError::WrongTokenOwner,
+        constraint = *owner_pearl.to_account_info().owner == token_program.key() @ PlayerStateError::WrongTokenProgram
+    )]
+    pub owner_pearl: InterfaceAccount<'info, TokenAccount>,
+    #[account(address = config.token_program @ PlayerStateError::WrongTokenProgram)]
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetShip<'info> {
+    pub owner: Signer<'info>,
+    #[account(seeds = [PROGRESS_CONFIG_SEED], bump = progress_config.bump)]
+    pub progress_config: Account<'info, ProgressConfig>,
+    #[account(
+        mut,
+        seeds = [PROGRESS_SEED, owner.key().as_ref()],
+        bump = progress.bump,
+        has_one = owner @ PlayerStateError::Unauthorized
+    )]
+    pub progress: Account<'info, Progress>,
+}
+
+#[derive(Accounts)]
+pub struct RecordCatch<'info> {
+    /// Must be Config.oracle (the market wallet). Signs, pays nothing.
+    pub oracle: Signer<'info>,
+    /// Funds the Progress rent and its growth; any signer (the mint tx's fee payer).
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = oracle @ PlayerStateError::Unauthorized)]
+    pub config: Account<'info, Config>,
+    /// CHECK: the fish's owner wallet; only used as the Progress seed.
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: the owner's Progress PDA (address checked by the seeds); loaded,
+    /// created, grown and written by hand.
+    #[account(mut, seeds = [PROGRESS_SEED, owner.key().as_ref()], bump)]
+    pub progress: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 /// Burns `amount` PEARL from the owner's token account; the owner signs. The
 /// balance is checked first so a short wallet fails with a clear error.
 fn burn_pearl<'info>(
@@ -745,6 +1146,41 @@ pub struct FishForgotten {
     pub entries: u32,
 }
 
+#[event]
+pub struct ProgressRulesSet {
+    pub admin: Pubkey,
+}
+
+#[event]
+pub struct BoatBought {
+    pub owner: Pubkey,
+    pub slot: u8,
+    pub level: u8,
+    pub price: u64,
+}
+
+#[event]
+pub struct ShipSet {
+    pub owner: Pubkey,
+    pub ship: u8,
+}
+
+#[event]
+pub struct CatchRecorded {
+    pub owner: Pubkey,
+    pub fish: u64,
+    pub value: u64,
+    pub lifetime_value: u64,
+    pub best_value: u64,
+    pub catches: u32,
+}
+
+#[event]
+pub struct CatchAlreadyRecorded {
+    pub owner: Pubkey,
+    pub fish: u64,
+}
+
 // ------------------------------------------------------------------ errors
 
 #[error_code]
@@ -789,4 +1225,17 @@ pub enum PlayerStateError {
     FeedCooldown,
     #[msg("Clock out of range")]
     BadClock,
+    // v2: appended so every v1 error code keeps its number.
+    #[msg("Unknown boat piece")]
+    InvalidBoatSlot,
+    #[msg("Only the next level can be bought")]
+    NotNextLevel,
+    #[msg("Unknown ship")]
+    InvalidShip,
+    #[msg("This ship needs more lifetime banked value")]
+    ShipLocked,
+    #[msg("Invalid boat prices or unlock thresholds")]
+    InvalidProgressRules,
+    #[msg("Progress account size does not match its catch log")]
+    BadCatchLog,
 }
