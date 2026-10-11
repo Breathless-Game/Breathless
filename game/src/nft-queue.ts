@@ -11,19 +11,22 @@ import {
 } from './market';
 import type { MintStep } from './chain';
 import type { SellResult, SellStep } from './pearl';
+import { walletState } from './wallet';
 
 // Background chain work for the bank, one job at a time per lane: mint queued fish, then sell the
 // ones the player asked to sell. The rules live in market.ts; this class only runs them. Solana code
 // is imported lazily on the first job, so it never delays or breaks a dive.
+// Mints are paid by the game (session) wallet, so only they wait for its SOL. Sales are signed and
+// paid by the owner's Phantom wallet, which says so itself if it is short.
+// Nothing runs before Phantom connects; main.ts reloads the page when the wallet changes.
 
 type Chain = typeof import('./chain');
 type Pearl = typeof import('./pearl');
 
-/** 'needs-sol': paused until the burner wallet has devnet SOL. 'offline': the RPC did not answer. */
+/** 'needs-sol': mints paused until the game (session) wallet has devnet SOL. 'offline': the RPC did not answer. */
 export type Funds = 'unknown' | 'ok' | 'needs-sol' | 'offline';
 
 const MIN_MINT_SOL = 0.02; // Irys upload of the card and metadata plus the Core asset rent, with headroom
-const MIN_TX_SOL = 0.001; // a sale only signs one transaction
 const POLL_MS = 60_000;
 const START_DELAY_MS = 4000;
 
@@ -69,6 +72,7 @@ export class NftQueue {
   }
 
   kick() {
+    if (!walletState().connected) return;
     void this.runMints();
     void this.runSells();
   }
@@ -119,7 +123,7 @@ export class NftQueue {
     this.hooks.changed();
   }
 
-  /** Is there enough SOL for the next job? Tries one airdrop per shortfall, then pauses and polls. */
+  /** Does the game wallet have enough SOL for the next mint? Tries one airdrop per shortfall, then pauses and polls. */
   private async ensureFunds(min: number): Promise<boolean> {
     try {
       const c = await this.loadChain();
@@ -167,7 +171,7 @@ export class NftQueue {
   private scheduleWake() {
     window.clearTimeout(this.wakeTimer);
     const at = nextRetryAt(this.bank);
-    if (at !== null) this.wakeTimer = window.setTimeout(() => void this.runMints(), Math.max(1000, at - Date.now()));
+    if (at !== null) this.wakeTimer = window.setTimeout(() => this.kick(), Math.max(1000, at - Date.now()));
   }
 
   private async runMints() {
@@ -211,12 +215,8 @@ export class NftQueue {
     if (this.sellBusy) return;
     this.sellBusy = true;
     try {
-      while (nextToSell(this.bank)) {
-        if (!(await this.ensureFunds(MIN_TX_SOL))) return;
-        const f = nextToSell(this.bank);
-        if (!f) break;
-        await this.sellOne(f);
-      }
+      // One at a time: each sale is its own Phantom approval.
+      for (let f = nextToSell(this.bank); f; f = nextToSell(this.bank)) await this.sellOne(f);
     } finally {
       this.sellBusy = false;
     }

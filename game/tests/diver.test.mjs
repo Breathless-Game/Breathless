@@ -22,7 +22,8 @@ const gearUrl = await moduleUrl('gear');
 const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
-const { Fish, ZONES, rollFish } = await import(await moduleUrl('fish', { './rng': rngUrl }));
+const depthOddsUrl = await moduleUrl('depth-odds');
+const { Fish, ZONES, rollFish } = await import(await moduleUrl('fish', { './rng': rngUrl, './depth-odds': depthOddsUrl }));
 
 function createDiver(quality = RENDER_QUALITY.high, y = -20) {
   const scene = new THREE.Scene();
@@ -257,7 +258,7 @@ test('the headlamp remains attached to the rotating head in deep water', () => {
 
 function createFish(seed = 42, zone = ZONES[1]) {
   const y = -(zone.top + zone.bottom) / 2;
-  const fish = new Fish(rollFish(seed, zone, -y), zone, 0, y, 140);
+  const fish = new Fish(rollFish(seed, -y), zone, 0, y, 140);
   fish.pos.z = 0;
   return fish;
 }

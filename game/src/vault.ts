@@ -3,10 +3,17 @@ import { MAPS, type MapId } from './maps';
 import { bulkSellable, isFundsError, needsConfirm, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
 import { fishCard } from './portrait';
+import { sessionBalance, topUpSession, walletState } from './wallet';
+import { isUserRejection } from './wallet-storage';
 
-// The collection panel: banked fish as NFT cards, the devnet wallet, and selling.
-// Chain code is loaded lazily (through the queue), so a Solana hiccup can never
-// break the dive itself.
+// The collection panel: banked fish as NFT cards, the devnet wallets, and selling.
+// Phantom owns the fish and signs sales; the game wallet pays mint fees without
+// prompts. Chain code is loaded lazily (through the queue), so a Solana hiccup
+// can never break the dive itself.
+
+/** Below this the game wallet can't cover a mint (the queue's MIN_MINT_SOL): offer a Phantom top-up. */
+const FUND_BELOW_SOL = 0.02;
+const FUND_SOL = 0.1;
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -22,7 +29,7 @@ const SELL_LABEL = {
   confirm: 'Confirming…',
 };
 
-const FAUCET_HINT = 'Faucet is rate limited. Use faucet.solana.com with the address above.';
+const FAUCET_HINT = 'Faucet is rate limited. Use Fund game wallet, or faucet.solana.com with the game wallet address above.';
 const CONFIRM_MS = 5000;
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
@@ -68,21 +75,49 @@ export class Vault {
   }
 
   private async refreshWallet(note = '') {
+    const { owner, session } = walletState();
+    if (!owner || !session) {
+      this.walletEl.textContent = 'Connect Phantom to mint.';
+      return;
+    }
     this.walletEl.textContent = 'Connecting to Solana devnet…';
     try {
       const c = await this.queue.loadChain();
-      const addr = c.walletAddress();
-      let bal = '…';
+      let sol: number | null = null;
       try {
-        bal = `${(await c.balanceSol()).toFixed(3)} SOL`;
-      } catch {
-        bal = 'balance unavailable';
-      }
-      this.walletEl.innerHTML = `Devnet wallet <a target="_blank" rel="noopener" href="${c.explorer('address', addr)}">${short(addr)}</a> · <b>${bal}</b> <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+        sol = await sessionBalance();
+      } catch {}
+      const bal = sol == null ? 'balance unavailable' : `${sol.toFixed(3)} SOL`;
+      const link = (a: string) => `<a target="_blank" rel="noopener" href="${c.explorer('address', a)}">${short(a)}</a>`;
+      const fund = sol != null && sol < FUND_BELOW_SOL ? ` <button id="fund" class="mini primary">Fund game wallet (${FUND_SOL} SOL)</button>` : '';
+      this.walletEl.innerHTML = `Phantom ${link(owner)} · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
       this.walletEl.querySelector('.note')!.textContent = note;
       $('airdrop').addEventListener('click', () => this.airdrop());
+      if (fund) $('fund').addEventListener('click', () => this.fund());
     } catch (e) {
       this.walletEl.textContent = `Solana unavailable: ${(e as Error).message}`;
+    }
+  }
+
+  /** Phantom sends devnet SOL to the game wallet (one prompt). */
+  private async fund() {
+    const btn = $('fund') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Approve in Phantom…';
+    try {
+      await topUpSession(FUND_SOL);
+      await this.refreshWallet('Game wallet funded.');
+      this.queue.recheck();
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      console.error('top-up failed', e);
+      await this.refreshWallet(
+        isUserRejection(e)
+          ? 'Top-up cancelled.'
+          : /insufficient|debit an account|0x1\b/i.test(msg)
+            ? 'Your Phantom wallet needs devnet SOL (faucet.solana.com), and Phantom must be on Devnet.'
+            : `Top-up failed: ${msg.slice(0, 100)}`,
+      );
     }
   }
 
@@ -117,7 +152,7 @@ export class Vault {
     const queued = this.bank.filter((f) => f.nft === 'pending' || f.nft === 'failed').length;
     const waiting = queued || this.bank.some((f) => f.sellQueued);
     if (q.funds === 'needs-sol' && waiting) {
-      parts.push(el('span', 'paused', `⏸ NFT queue paused: the wallet needs devnet SOL. ${FAUCET_HINT} Checking again every minute.`));
+      parts.push(el('span', 'paused', '⏸ Minting paused: the game wallet needs devnet SOL. Use Fund game wallet above. Checking again every minute.'));
     } else if (q.funds === 'offline' && waiting) {
       parts.push(el('span', 'paused', '⏸ Solana devnet is not answering. Retrying every minute.'));
     } else if (q.minting) {
@@ -173,8 +208,15 @@ export class Vault {
     cap.replaceChildren(meta, row);
     const err = q.sellErrors.get(f) ?? (f.nft === 'failed' ? f.mintError : undefined);
     if (err) {
-      const line = el('div', 'err', q.sellErrors.has(f) ? `Sale failed: ${err}` : `Mint failed: ${err}`);
-      if (isFundsError(err)) line.textContent = 'Not enough devnet SOL. Airdrop first.';
+      const sale = q.sellErrors.has(f);
+      const line = el('div', 'err', sale ? `Sale failed: ${err}` : `Mint failed: ${err}`);
+      // Mints are paid by the game wallet, sales by the player's Phantom wallet.
+      if (sale && isUserRejection({ message: err })) line.textContent = 'Sale cancelled in Phantom.';
+      else if (isFundsError(err)) {
+        line.textContent = sale
+          ? 'Your Phantom wallet needs devnet SOL for the sale fee (faucet.solana.com), and Phantom must be on Devnet.'
+          : 'The game wallet is out of devnet SOL. Fund it above.';
+      }
       cap.appendChild(line);
     }
   }
@@ -249,7 +291,7 @@ export class Vault {
       return wrap;
     }
     const btn = el('button', 'mini sell', `${verb} · ${quote.pearls} Pearls`);
-    btn.title = quote.mintFirst ? 'Mints the NFT first: the market only buys NFTs' : 'One transaction burns the NFT and pays you PEARL';
+    btn.title = quote.mintFirst ? 'Mints the NFT first: the market only buys NFTs' : 'The market burns the NFT and pays you its value in PEARL';
     btn.addEventListener('click', () => {
       if (needsConfirm(f.rarity)) this.setConfirming(f);
       else this.queue.sell(f);
