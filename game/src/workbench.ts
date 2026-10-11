@@ -59,6 +59,9 @@ export interface WorkbenchHooks {
   /** The gear in the ready tray last time (null: never packed), and saving it whenever the tray changes. */
   savedLoadout(): UpgradeId[] | null;
   saveLoadout(gear: UpgradeId[]): void;
+  /** Open the physical field guide after its pickup animation. */
+  /** Open the field-guide modal; return false if it declined to open so the book goes back. */
+  guide?(): boolean | void;
 }
 
 export interface WorkbenchConditions {
@@ -111,6 +114,8 @@ const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'so
 const FIGURE_AT = new THREE.Vector3(3.55, 0.05, -1.65);
 const FIGURE_H = 1.25; // standing height, table units: its head stays under the SETTINGS fish
 const MAP_AT = new THREE.Vector3(0.4, 0, 0.1);
+// The guide lives on the clear right side of the bench, beside the chart.
+const GUIDE_AT = new THREE.Vector3(1.15, 0.08, 1.75);
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
@@ -166,7 +171,7 @@ const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
 
 type Mode = 'wait' | 'free' | 'held' | 'moving' | 'ready';
-type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect' | 'synth';
+type State = 'closed' | 'idle' | 'opening' | 'guide' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect' | 'synth';
 
 interface Piece {
   id: UpgradeId;
@@ -264,16 +269,23 @@ export class Workbench {
   private last = 0;
   private raf = 0;
   private tweens: Tween[] = [];
-  private press: { piece: Piece | null; map: boolean; figure: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
+  private press: { piece: Piece | null; map: boolean; figure: boolean; guide: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
   private held: Piece | null = null;
   private holdTarget = new THREE.Vector3();
-  private hovered: Piece | 'map' | 'figure' | 'synth' | null = null;
+  private hovered: Piece | 'map' | 'figure' | 'guide' | 'synth' | null = null;
   private picked: MapId | null = null;
   private inspector: GearInspector;
   // The diver figure on its stand (not a piece: it never moves). It wears what's in the tray.
   private figure = new THREE.Group();
   private figureDiver!: Diver;
   private figureHit!: THREE.Mesh;
+  private guideReturning = false;
+  private guide = new THREE.Group();
+  private guideCover = new THREE.Group();
+  private guideHit!: THREE.Mesh;
+  private guideOpen = 0;
+  private guideLift = 0;
+  private guideHover = 0;
   private figureHover = 0;
 
   constructor(private hooks: WorkbenchHooks) {
@@ -287,6 +299,8 @@ export class Workbench {
     });
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x000000, 0);
@@ -302,6 +316,8 @@ export class Workbench {
 
     this.chartRenderer = new THREE.WebGLRenderer({ canvas: $<HTMLCanvasElement>('wb-chart-gl'), antialias: true, alpha: true });
     this.chartRenderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.chartRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.chartRenderer.toneMappingExposure = 1.0;
     this.chartRenderer.setClearColor(0x000000, 0);
     this.chartScene.add(new THREE.HemisphereLight('#e6f6ff', '#4a3420', 1.25));
     const key = new THREE.DirectionalLight('#fff1dc', 2.4);
@@ -409,6 +425,12 @@ export class Workbench {
     this.sheet.fold = 1;
     this.sheet.curl = 0; // lying on the table, its edges rest on the tabletop
     this.sheet.reset();
+    this.guideOpen = 0;
+    this.guideReturning = false;
+    this.guideLift = 0;
+    this.guide.position.copy(GUIDE_AT);
+    this.guide.rotation.set(-0.04, -0.12, 0);
+    this.guide.scale.setScalar(1);
     this.tweens = [];
     this.synthesisLift = -0.65;
     this.synthesisRig.position.y = this.synthesisLift;
@@ -457,12 +479,19 @@ export class Workbench {
     this.ui.classList.add('hidden');
     this.chartEl.classList.add('hidden');
     this.tip.classList.add('hidden');
+    this.guideOpen = 0;
+    this.guideReturning = false;
+    this.guideLift = 0;
+    this.guide.position.copy(GUIDE_AT);
+    this.guide.rotation.set(-0.04, -0.12, 0);
+    this.guide.scale.setScalar(1);
     document.body.style.cursor = '';
   }
 
   /** Esc: put down the gear being looked at, fold the chart; from the bare table, pan back up to the title. */
   escape() {
     if (this.state === 'inspect') this.inspector.close();
+    else if (this.state === 'guide') return; // the modal owns Esc; never re-open it from here
     else if (this.state === 'chart') this.closeChart();
     else if (this.state === 'synth') this.closeSynthesis();
     else if (this.state === 'idle') this.leave();
@@ -537,6 +566,35 @@ export class Workbench {
       s.add(ring);
       this.slotRings.push(ring);
     }
+
+    // A small, bound field guide on the clear side of the table. It is a real
+    // 3D object so the player can pick it up instead of reaching for the old
+    // title rope fish. The page hinge is animated when it is clicked.
+    const cover = new THREE.MeshStandardMaterial({ color: '#496650', roughness: 0.78 });
+    const paper = new THREE.MeshStandardMaterial({ color: '#e8d8ad', roughness: 0.95 });
+    const guideBack = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.09, 0.92), cover);
+    guideBack.position.y = 0.06;
+    const pages = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.075, 0.82), paper);
+    pages.position.set(0.07, 0.115, 0);
+    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.96), cover);
+    spine.position.set(-0.58, 0.12, 0);
+    // The front cover is hinged at the spine and opens during pickup, so the
+    // physical prop visibly changes from a closed book to an open manual.
+    const frontCover = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.075, 0.82), cover);
+    frontCover.position.set(0.58, 0.04, 0);
+    const title = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.008, 0.28), new THREE.MeshStandardMaterial({ color: '#d8be79', roughness: 0.8 }));
+    title.position.set(0.58, 0.085, 0);
+    this.guideCover.position.set(-0.58, 0.12, 0);
+    this.guideCover.add(frontCover, title);
+    this.guide.add(guideBack, pages, spine, this.guideCover);
+    this.guide.position.copy(GUIDE_AT);
+    this.guide.rotation.x = -0.04;
+    this.guide.rotation.y = -0.12;
+    this.guideHit = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.2, 1.02), new THREE.MeshBasicMaterial({ visible: false }));
+    this.guideHit.position.y = 0.1;
+    this.guide.add(this.guideHit);
+    this.guide.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
+    s.add(this.guide);
 
     // A half-hidden military-green metal station rises from behind the desk.
     // Flat faces and chunky hardware keep it in the same low-poly language.
@@ -704,7 +762,10 @@ export class Workbench {
       return ship.model ? { model: ship.model, key: ship.key } : { model: buildUpgradeModel('boat', 1), key: -1 };
     }
     const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
-    return { model: buildUpgradeModel(id, level), key: level };
+    // Keep the tier's physical growth visible after the workbench applies its
+    // family-level tray size. buildUpgradeModel stores the relative scale in
+    // userData so a long Lv3 rod is not shrunk back to the Lv1 silhouette.
+    return { model: buildUpgradeModel(id, level, { preserveTierScale: true }), key: level };
   }
 
   /** Apply the persisted beacon accent to the table piece and open inspector. */
@@ -725,7 +786,8 @@ export class Workbench {
     const size = box.getSize(new THREE.Vector3());
     // The model boat stands on its keel, a little bigger than the gear; everything else lies flat.
     const upright = id === 'boat';
-    model.scale.multiplyScalar(((upright ? BOAT_SIZE : GEAR_SIZE) / Math.max(size.x, size.y, size.z)));
+    const tierScale = typeof model.userData.tierScale === 'number' ? model.userData.tierScale : 1;
+    model.scale.multiplyScalar(((upright ? BOAT_SIZE : GEAR_SIZE) * tierScale / Math.max(size.x, size.y, size.z)));
     box = new THREE.Box3().setFromObject(holder);
     model.position.sub(box.getCenter(new THREE.Vector3()));
     size.copy(box.getSize(new THREE.Vector3()));
@@ -1070,6 +1132,11 @@ export class Workbench {
     });
     this.figureHover = lerp(this.figureHover, this.hovered === 'figure' ? 1 : 0, 1 - Math.exp(-dt * 14));
     this.figure.scale.setScalar(1 + this.figureHover * 0.06);
+    this.guideHover = lerp(this.guideHover, this.hovered === 'guide' ? 1 : 0, 1 - Math.exp(-dt * 14));
+    this.guide.position.y = GUIDE_AT.y + this.guideLift + this.guideHover * 0.04;
+    this.guide.rotation.z = -this.guideOpen * 0.04;
+    this.guideCover.rotation.z = this.guideOpen * 1.72;
+    this.guide.scale.setScalar(1 + this.guideHover * 0.045);
     this.mapMat.emissiveIntensity = this.mapHover * (0.12 + 0.06 * Math.sin(this.time * 6));
     for (const d of [...this.dust]) {
       d.t += dt;
@@ -1392,15 +1459,17 @@ export class Workbench {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1), this.camera);
   }
 
-  private pick(e: PointerEvent): Piece | 'map' | 'figure' | 'synth' | null {
+  private pick(e: PointerEvent): Piece | 'map' | 'figure' | 'guide' | 'synth' | null {
     this.setRay(e);
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
     if (this.map.visible) targets.push(this.mapMesh);
     targets.push(this.figureHit);
+    targets.push(this.guideHit);
     if (this.synthesisRig.visible) targets.push(this.synthesisHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
     if (hit.object === this.figureHit) return 'figure';
+    if (hit.object === this.guideHit) return 'guide';
     if (hit.object === this.synthesisHit) return 'synth';
     return hit.object === this.mapMesh ? 'map' : (this.pieces.find((p) => p.hit === hit.object) ?? null);
   }
@@ -1417,8 +1486,8 @@ export class Workbench {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
     if (this.blocked() || this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
-    const piece = hit && hit !== 'map' && hit !== 'figure' && hit !== 'synth' ? hit : null;
-    this.press = { piece, map: hit === 'map', figure: hit === 'figure', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
+    const piece = hit && !['map', 'figure', 'guide', 'synth'].includes(hit as string) ? hit as Piece : null;
+    this.press = { piece, map: hit === 'map', guide: hit === 'guide', figure: hit === 'figure', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
@@ -1511,7 +1580,8 @@ export class Workbench {
     if (!press || this.state !== 'idle') return;
     const click = Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS;
     if (!click) return;
-    if (press.map) this.openChart();
+    if (press.guide) this.pickUpGuide();
+    else if (press.map) this.openChart();
     else if (press.synth) this.openSynthesis();
     else if (press.figure) {
       this.setHover(null, e);
@@ -1543,7 +1613,7 @@ export class Workbench {
     this.inspector.showDiver({ x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
   }
 
-  private setHover(hit: Piece | 'map' | 'figure' | 'synth' | null, e: PointerEvent) {
+  private setHover(hit: Piece | 'map' | 'figure' | 'guide' | 'synth' | null, e: PointerEvent) {
     this.hovered = hit;
     document.body.style.cursor = hit ? 'pointer' : '';
     if (!hit) {
@@ -1551,7 +1621,9 @@ export class Workbench {
       return;
     }
     const lines =
-      hit === 'map'
+      hit === 'guide'
+        ? [t('Field guide', '潜水手册'), t('A 3D book on the workbench', '工作台上的 3D 手册'), t('Click to pick up and open', '点击拿起并打开')]
+        : hit === 'map'
         ? [t('Sea chart', '海图'), t('Three places, one per chapter', '三处海域，每章一处'), t('Click to open', '点击打开')]
         : hit === 'figure'
         ? [
@@ -1584,6 +1656,46 @@ export class Workbench {
 
 
   // ---- Chart ------------------------------------------------------------
+
+  /** Lift the book, open its cover, then hand control to the field-guide modal. */
+  private pickUpGuide() {
+    if (this.state !== 'idle') return;
+    this.state = 'opening';
+    this.hovered = null;
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const r0 = this.guide.rotation.x;
+    this.tween(0.55, (u) => {
+      const e = easeOut(u);
+      this.guideLift = easeOut(u) * 0.72;
+      this.guide.rotation.x = r0 - e * 0.34;
+      this.guideOpen = e;
+    }, () => {
+      this.state = 'guide';
+      if (this.hooks.guide?.() === false) this.guideClosed(); // modal refused to open: put the book back
+    });
+  }
+
+  /** Called by the host when the modal closes, returning the book to the bench. */
+  guideClosed() {
+    if (!this.visible || this.guideOpen <= 0 || this.guideReturning) return;
+    this.guideReturning = true;
+    this.hovered = null;
+    document.body.style.cursor = '';
+    const lift0 = this.guideLift;
+    const r0 = this.guide.rotation.x;
+    this.tween(0.45, (u) => {
+      const e = easeInOut(u);
+      this.guideLift = lerp(lift0, 0, e);
+      this.guide.rotation.x = lerp(r0, -0.04, e);
+      this.guideOpen = 1 - e;
+    }, () => {
+      this.guideLift = 0;
+      this.guideOpen = 0;
+      this.guideReturning = false;
+      this.state = 'idle';
+    });
+  }
 
   /**
    * Gear lying on the chart hops off first; then the chart is picked up, flattened

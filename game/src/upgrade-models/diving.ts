@@ -119,28 +119,50 @@ export function buildFins(level: UpgradeLevel) {
   const flexible = material('#333734', { metalness: 0, roughness: 0.97 });
   const carbon = material('#303638', { metalness: 0.07, roughness: 0.9 });
   const composite = material('#59605b', { metalness: 0, roughness: 0.93 });
-  const length = [1.03, 1.4, 1.92][level - 1];
-  const widths = level === 1 ? [0.16, 0.22, 0.29, 0.32, 0.3] : level === 2 ? [0.16, 0.24, 0.31, 0.34, 0.32] : [0.16, 0.24, 0.29, 0.31, 0.31, 0.29];
+  const length = [1.03, 1.44, 2.12][level - 1];
+  // The middle grade is a broad channel fin; the final grade uses a visibly
+  // longer, straighter composite plate rather than another wide rubber blade.
+  const widths = level === 1 ? [0.16, 0.22, 0.29, 0.32, 0.3]
+    : level === 2 ? [0.16, 0.28, 0.39, 0.42, 0.39]
+    : [0.16, 0.25, 0.30, 0.31, 0.31, 0.30];
   const blade = level === 1 ? flexible : level === 2 ? composite : carbon;
   for (const side of [-1, 1]) {
     const fin = new THREE.Group();
     fin.name = side < 0 ? 'left-fin' : 'right-fin';
-    fin.position.x = side * 0.405;
+    fin.position.x = side * (level === 2 ? 0.49 : 0.405);
     fin.rotation.z = side * 0.075;
     group.add(fin);
     footPocket(fin, flexible, colors.rubber);
-    mesh(fin, bladeGeometry(length, widths, level === 2 ? 0.025 : 0, level === 1), blade, [0, 0, 0], 'thin-flexible-blade');
+    mesh(fin, bladeGeometry(length, widths, level === 2 ? 0.065 : 0, level === 1), blade, [0, 0, 0], 'thin-flexible-blade');
     for (const edge of [-1, 1]) {
-      tube(fin, widths.map((width, row): Point => [edge * width, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? 0.085 : 0), -0.008 - row / (widths.length - 1) * 0.12]), level === 3 ? 0.014 : 0.021, colors.rubber, 4);
-      tube(fin, [[edge * 0.18, 0.25, 0.09], [edge * 0.18, -0.1, 0.08], [edge * 0.14, -0.34, -0.003]], 0.02, colors.rubber, 4);
+      const rail = tube(fin, widths.map((width, row): Point => [edge * width, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? 0.085 : 0), -0.008 - row / (widths.length - 1) * 0.12]), level === 3 ? 0.012 : level === 2 ? 0.038 : 0.021, colors.rubber, 4);
+      rail.name = level === 2 ? 'raised-channel-side-rail' : level === 3 ? 'composite-plate-edge' : 'rubber-blade-edge';
+      tube(fin, [[edge * 0.18, 0.25, 0.09], [edge * 0.18, -0.1, 0.08], [edge * 0.14, -0.34, -0.003]], level === 2 ? 0.029 : 0.02, colors.rubber, 4).name = 'foot-pocket-to-blade-tendon';
     }
-    const ribs = level === 1 ? [-0.35, 0.35] : [-0.38, 0.38];
-    for (const fraction of ribs) tube(fin, widths.map((width, row): Point => [width * fraction, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? Math.abs(fraction) * 0.085 : 0), 0.004 - row / (widths.length - 1) * 0.12]), level === 3 ? 0.008 : 0.016, colors.rubber, 4);
-    // Functional blade fastenings, without decorative colored strips.
-    for (const x of [-0.13, 0.13]) {
-      mesh(fin, new THREE.BoxGeometry(0.05, 0.12, 0.022), colors.rubber, [x, -0.23, 0.015]);
+    const ribs = level === 1 ? [-0.35, 0.35] : level === 2 ? [-0.48, 0, 0.48] : [-0.38, 0.38];
+    for (const fraction of ribs) {
+      tube(fin, widths.map((width, row): Point => [width * fraction, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? Math.abs(fraction) * 0.085 : 0), (level === 2 ? 0.016 : 0.004) - row / (widths.length - 1) * 0.12]), level === 3 ? 0.007 : level === 2 ? 0.028 : 0.016, colors.rubber, 4).name = level === 2 ? 'moulded-water-channel-rib' : 'longitudinal-blade-rib';
+    }
+    if (level === 2) {
+      // A moulded root bridge supports the broad blade before its channels
+      // flex. The stepped rails and deep channels remain visible in profile.
+      mesh(fin, new THREE.BoxGeometry(0.49, 0.095, 0.065), flexible, [0, -0.31, 0.006], 'broad-channel-root-bridge');
+      for (const edge of [-1, 1]) {
+        beam(fin, [edge * 0.20, -0.30, 0.026], [edge * 0.34, -0.68, -0.011], 0.029, flexible, 4).name = 'channel-fin-root-brace';
+      }
+    } else if (level === 3) {
+      // The replaceable long plate is clamped into the foot pocket. Four
+      // exposed fasteners distinguish this construction from moulded fins.
+      mesh(fin, new THREE.BoxGeometry(0.40, 0.20, 0.045), composite, [0, -0.25, 0.011], 'replaceable-composite-blade-carrier');
+      for (const x of [-0.14, 0.14]) {
+        mesh(fin, new THREE.BoxGeometry(0.065, 0.25, 0.055), colors.rubber, [x, -0.25, 0.025], 'composite-blade-clamp');
+        for (const y of [-0.18, -0.32]) cylinderZ(fin, 0.020, 0.016, colors.metal, [x, y, 0.059], 6).name = 'exposed-blade-clamp-bolt';
+      }
+    } else {
+      for (const x of [-0.13, 0.13]) mesh(fin, new THREE.BoxGeometry(0.05, 0.12, 0.022), colors.rubber, [x, -0.23, 0.015], 'moulded-rubber-blade-root');
     }
   }
+  group.userData.structure = ['short-vented-rubber-blade', 'wide-deep-channel-blade', 'long-replaceable-composite-plate'][level - 1];
   return group;
 }
 
@@ -258,7 +280,7 @@ function topHeadband(group: THREE.Group, surface: THREE.Material) {
   }
 }
 
-function lampHead(group: THREE.Group, x: number, radius: number, depth: number, colors: ReturnType<typeof palette>, guard: boolean) {
+function lampHead(group: THREE.Group, x: number, radius: number, depth: number, colors: ReturnType<typeof palette>, guard: boolean, coolingRibs = false) {
   const z = 0.47;
   const front = z + depth;
   const housing = new THREE.Shape();
@@ -293,6 +315,15 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
   if (guard) {
     ring(group, radius + 0.008, 0.014, colors.rubber, [x, 0.015, front + 0.004], 'z', 8).name = 'integrated-impact-guard';
   }
+  if (coolingRibs) {
+    // Lv2's deeper barrel has real stepped heat-sink collars around its body.
+    // They are deliberately matte metal so the lamp remains unlit in the studio.
+    const collar = material('#646e70', { metalness: 0.52, roughness: 0.62 });
+    for (const offset of [0.035, 0.11, 0.185]) {
+      ring(group, radius * 1.27, 0.017, collar, [x, 0.015, z + offset], 'z', 8).name = 'barrel-heat-sink-collar';
+    }
+    mesh(group, new THREE.BoxGeometry(radius * 2.72, radius * 0.31, 0.06), collar, [x, 0.015, z - 0.025], 'deep-barrel-rear-collar');
+  }
 }
 
 export function buildLamp(level: UpgradeLevel) {
@@ -303,9 +334,16 @@ export function buildLamp(level: UpgradeLevel) {
   topHeadband(group, colors.rubber);
   mesh(group, new THREE.BoxGeometry(level === 3 ? 0.55 : 0.32, 0.135, 0.065), colors.rubber, [0, 0.015, 0.442], 'front-mount');
   if (level === 3) {
-    lampHead(group, -0.138, 0.105, 0.16, colors, true);
-    lampHead(group, 0.138, 0.1, 0.19, colors, true);
-  } else lampHead(group, 0, level === 1 ? 0.115 : 0.14, level === 1 ? 0.14 : 0.17, colors, level === 2);
+    // Twin reinforced optics sit on a wider bridge; their deeper barrels and
+    // separate guards read as a real dual-head assembly at catalogue scale.
+    lampHead(group, -0.138, 0.112, 0.23, colors, true);
+    lampHead(group, 0.138, 0.108, 0.28, colors, true);
+  } else if (level === 2) {
+    // A single, visibly deep barrel with an impact ring and heat-sink collars.
+    lampHead(group, 0, 0.16, 0.265, colors, true, true);
+  } else {
+    lampHead(group, 0, 0.115, 0.14, colors, false);
+  }
   mesh(group, new THREE.BoxGeometry(0.07, 0.024, 0.055), colors.rubber, [level === 3 ? -0.138 : 0, level === 3 ? 0.144 : level === 2 ? 0.184 : 0.155, 0.51], 'recessed-power-switch');
   const batteryWidth = [0.24, 0.28, 0.33][level - 1];
   const batteryDepth = [0.09, 0.11, 0.13][level - 1];

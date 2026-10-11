@@ -33,7 +33,14 @@ const select = document.querySelector<HTMLSelectElement>('#equipment')!;
 UPGRADES.forEach((definition) => select.add(new Option(definition.nameZh, definition.id)));
 
 function resetView() {
-  const bounds = new THREE.Box3().setFromObject(current);
+  // Fit all levels together so switching to a longer tier never crops it or
+  // silently zooms it back down to the starter's apparent size.
+  const bounds = new THREE.Box3();
+  for (const level of [1, 2, 3] as UpgradeLevel[]) {
+    const reference = buildUpgradeModel(currentId, level, { preserveTierScale: true });
+    bounds.union(new THREE.Box3().setFromObject(reference));
+    disposeModel(reference);
+  }
   const centre = bounds.getCenter(new THREE.Vector3());
   const direction = new THREE.Vector3(3, 2.4, 5).normalize();
   camera.position.copy(centre).addScaledVector(direction, 8);
@@ -58,7 +65,7 @@ function show(id: UpgradeId, level: UpgradeLevel) {
   if (current) { scene.remove(current); disposeModel(current); }
   currentId = id;
   currentLevel = level;
-  current = buildUpgradeModel(id, level);
+  current = buildUpgradeModel(id, level, { preserveTierScale: true });
   scene.add(current);
   select.value = id;
   document.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.level) === level)));
