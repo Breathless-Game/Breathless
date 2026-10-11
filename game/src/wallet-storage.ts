@@ -155,6 +155,8 @@ export const shortAddress = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
 
 /** An address on Solana Explorer (devnet). Pure, so UI can link an address without chain code. */
 export const explorerAddress = (a: string) => `https://explorer.solana.com/address/${encodeURIComponent(a)}?cluster=devnet`;
+/** A transaction on Solana Explorer (devnet). */
+export const explorerTx = (sig: string) => `https://explorer.solana.com/tx/${encodeURIComponent(sig)}?cluster=devnet`;
 
 // ---- Wallet picker ----------------------------------------------------------
 

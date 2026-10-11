@@ -120,10 +120,20 @@
           </label>
           <button id="aq-close" class="mini" title="Back to the title (Esc)" data-zh-title="返回标题 (Esc)">×</button>
         </div>
-        <div class="aq-tank">
-          <canvas id="aq-canvas"></canvas>
-          <div id="aq-empty" class="hidden"></div>
-          <div id="aq-card" class="hidden"></div>
+        <div class="aq-layout">
+          <div class="aq-tank">
+            <canvas id="aq-canvas"></canvas>
+            <div id="aq-empty" class="hidden"></div>
+            <div id="aq-card" class="hidden"></div>
+          </div>
+          <aside id="aq-feeder" aria-label="Aquarium food feeder" data-zh-aria-label="鱼缸喂食器">
+            <div class="aq-feeder-title" data-zh="鱼食">Fish food</div>
+            <div id="aq-feeder-model" class="aq-feeder-model"></div>
+            <select id="aq-food-select" aria-label="Choose fish food" data-zh-aria-label="选择鱼食"></select>
+            <div id="aq-feed-status" class="aq-feed-status"></div>
+            <button id="aq-feed-all" class="mini primary" type="button">Pour into tank</button>
+            <div class="aq-feeder-hint" data-zh="点击鱼食或按钮，所有鱼会来抢">Click the model or button; the whole school will rush in</div>
+          </aside>
         </div>
       </div>
     </div>
@@ -148,6 +158,7 @@
         <div id="wb-paper"></div>
         <div id="wb-pins" class="wb-ctl"></div>
         <aside id="wb-place" class="wb-ctl">
+          <div id="wb-place-scroll">
           <!-- One frame of the place itself, from where the dive starts; diving grows it to the full screen. -->
           <div id="wb-place-preview"></div>
           <div id="wb-place-title"></div>
@@ -170,7 +181,10 @@
             <div class="wb-weather-note" data-zh="在声纳装备上设置信标">Configure beacon on Sonar</div>
           </section>
           <div id="wb-place-gear" class="small muted"></div>
-          <button id="wb-dive" class="primary" data-zh="下潜">Dive</button>
+          </div>
+          <footer id="wb-place-foot">
+            <button id="wb-dive" class="primary" data-zh="下潜">Dive</button>
+          </footer>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl" data-zh="点击海图外或按 Esc 收起">Click outside the chart or press Esc to fold it</div>
       </div>

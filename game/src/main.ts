@@ -39,7 +39,7 @@ import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
 import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
 import { NftQueue } from './nft-queue';
-import { nudgePearlBalance, pearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
+import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
@@ -759,14 +759,24 @@ function refreshEquipment() {
   applyEquipmentVisuals();
 }
 
+const PEARL_READ_TIMEOUT_MS = 20_000;
 /** Re-read the on-chain PEARL balance into the cache. `earned` shows a sale's Pearls before the read lands. */
 async function syncPearls(earned = 0) {
   if (earned) {
+    bumpPearlEpoch();
     equipment.pearls += earned;
     refreshEquipment();
   }
+  const current = readGuard(); // a spend or sale while this read is out makes its answer old
   try {
-    equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    // A read that never settles must not leave the badge on "…" forever (a known balance stays shown).
+    const read = (await nftQueue.loadPearl()).pearlBalance();
+    const value = await Promise.race([
+      read,
+      new Promise<never>((_, fail) => setTimeout(() => fail(new Error('PEARL balance read timed out')), PEARL_READ_TIMEOUT_MS)),
+    ]);
+    if (!current()) return; // the newer read that change started will land instead
+    equipment.pearls = value;
     setPearlBalance(equipment.pearls);
     refreshEquipment();
   } catch (e) {
