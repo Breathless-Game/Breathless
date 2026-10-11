@@ -12,6 +12,19 @@ import { HttpError, MAX_BATCH, appraise, checkTransferTx, mapLimit, parseSellBat
 /** Fish of one batch worked on at once: bounded so the RPC isn't flooded. */
 export const BATCH_CONCURRENCY = 4;
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Call `fn` until `ok(result)`, at most `tries` times `gapMs` apart; returns the last result. */
+export async function poll(fn, ok, tries = 6, gapMs = 1000) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    last = await fn();
+    if (ok(last)) return last;
+    if (i < tries - 1) await sleep(gapMs);
+  }
+  return last;
+}
+
 const errorOf = (assetId, e) => ({
   assetId,
   status: e instanceof HttpError ? e.status : 500,
@@ -78,6 +91,10 @@ export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, load
    * POST /sell-batch: { seller, sales: [{ assetId, transferTx }] } -> { results: [...] }, one per
    * sale in order: { assetId, pearls, tx, extra } when sold, { assetId, status, error } when not.
    * A fish that fails never stops the others.
+   *
+   * RPC cost: parseSellBatchBody allows at most MAX_BATCH_TXS distinct transfers, and each one is
+   * fetched (polled) once, the first time a fish needs it, its result shared by all of its fish.
+   * So a batch of made-up signatures costs at most MAX_BATCH_TXS polls, however many fish it names.
    */
   async function sellBatch(body) {
     const { seller, sales } = parseSellBatchBody(body);
