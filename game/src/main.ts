@@ -759,6 +759,7 @@ function refreshEquipment() {
   applyEquipmentVisuals();
 }
 
+const PEARL_READ_TIMEOUT_MS = 20_000;
 /** Re-read the on-chain PEARL balance into the cache. `earned` shows a sale's Pearls before the read lands. */
 async function syncPearls(earned = 0) {
   if (earned) {
@@ -766,7 +767,12 @@ async function syncPearls(earned = 0) {
     refreshEquipment();
   }
   try {
-    equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    // A read that never settles must not leave the badge on "…" forever (a known balance stays shown).
+    const read = (await nftQueue.loadPearl()).pearlBalance();
+    equipment.pearls = await Promise.race([
+      read,
+      new Promise<never>((_, fail) => setTimeout(() => fail(new Error('PEARL balance read timed out')), PEARL_READ_TIMEOUT_MS)),
+    ]);
     setPearlBalance(equipment.pearls);
     refreshEquipment();
   } catch (e) {
