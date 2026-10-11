@@ -172,6 +172,16 @@ export class HealthDesk extends TableScene {
     return super.atRest && this.paperState === 'table';
   }
 
+  /** The saved trips were deleted: if the desk is up, the old report and the jar's scrolls go too. */
+  forget() {
+    if (!this.visible) return; // onShow() reads the trips afresh
+    if (this.paperState === 'held') this.putDown();
+    this.hovered = null;
+    this.tip.classList.add('hidden');
+    this.layOut(null);
+    this.fillJar([]);
+  }
+
   protected onShow() {
     const trips = loadTrips();
     this.layOut(trips[0] ?? null);

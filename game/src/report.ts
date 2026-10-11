@@ -248,7 +248,8 @@ function drawPulse(el: HTMLCanvasElement, d: DiveRecord) {
 export class Report {
   private panel = $('report');
 
-  constructor(private log: HealthLog) {
+  /** `deleted`: after the player deleted their health data here (the trips go with it). */
+  constructor(private log: HealthLog, private deleted: () => void = () => {}) {
     onLangChange(() => {
       if (this.open) this.render();
     });
@@ -328,6 +329,7 @@ export class Report {
     document.getElementById('report-delete')?.addEventListener('click', () => {
       if (!confirm(t('Delete all recorded dives and vitals from this device?', '删除本设备上所有已记录的下潜和体征数据？'))) return;
       this.log.clear();
+      this.deleted();
       this.render();
     });
   }

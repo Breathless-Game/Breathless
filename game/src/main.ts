@@ -55,7 +55,7 @@ import { SynthesisPanel } from './synthesis-panel';
 import { canCraft, loadSynthesis, saveSynthesis, setSynthesisCosts, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
 import { isAction, keysFor, openControls } from './controls';
-import { Trip, TripReport } from './trip';
+import { clearTrips, Trip, TripReport } from './trip';
 import { TankTable } from './aquarium-tank';
 import { HealthDesk } from './health-desk';
 import type { LessonId } from './tutorial';
@@ -781,7 +781,13 @@ const health = new HealthLog();
 // One trip: the first dive off the title to the main menu again (trip.ts); its report at the end.
 const trip = new Trip();
 const tripReport = new TripReport();
-const report = new Report(health);
+// Deleting health data takes the trip reports too (their pulse and breathing traces), stored and in progress.
+const report = new Report(health, () => {
+  clearTrips();
+  trip.reset();
+  if (tripReport.open) tripReport.close();
+  healthDesk.forget();
+});
 const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => void selectEquipmentPath(slot, path));
 gear.setLock(() => chainBlocked());
 gear.render(equipment);

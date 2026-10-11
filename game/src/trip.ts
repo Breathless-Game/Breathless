@@ -72,6 +72,18 @@ export class Trip {
   private lastSample = 0;
   active = false;
 
+  /** Drop the trip under way, samples and all (the player deleted their health data). */
+  reset() {
+    this.active = false;
+    this.startAt = 0;
+    this.maps = [];
+    this.caught = [];
+    this.banked = 0;
+    this.pulse = [];
+    this.breath = [];
+    this.lastSample = 0;
+  }
+
   /** The first dive of a trip (later dives in the same trip just carry on). */
   start(map: MapId) {
     if (this.active) return this.visit(map);
@@ -164,6 +176,19 @@ export function loadTrips(): TripRecord[] {
     return Array.isArray(xs) ? xs : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Delete every saved trip (they hold heart and breathing traces): this wallet's, and the
+ * unscoped fallback written while no wallet was connected.
+ */
+export function clearTrips() {
+  const keys = new Set([`deepbreath.${STORE}`, key()]);
+  for (const k of keys) {
+    try {
+      localStorage.removeItem(k);
+    } catch {}
   }
 }
 
