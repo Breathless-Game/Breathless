@@ -263,6 +263,7 @@ check "says ROLLED BACK" has_text "$OUT" 'ROLLED BACK to previous release sha-1'
 check "release 1 is live again (node_modules too)" is_release r1
 check "RELEASE is sha-1" release_is sha-1
 check "restarted twice" test "$(restarts)" -eq 2
+check "exactly one backup dir left" test "$(find "$DEPLOY_DIR" -maxdepth 1 -name '.rollback*' | wc -l | tr -d ' ')" -eq 1
 check "diagnostics logged with allowed commands" has_text "$FAKE_LOG/sudo.log" 'journalctl -u breathless -n 50 --no-pager'
 check ".env and .market-* untouched" state_intact
 
@@ -329,6 +330,18 @@ ARGS=--rollback deploy r2 manual
 check "exit 0" test "$rc" -eq 0
 check "release 1 is live" is_release r1
 check "RELEASE is sha-1" release_is sha-1
+check ".env and .market-* untouched" state_intact
+
+scenario "no live release but a backup (half-failed rollback): backup kept"
+fresh
+deploy r1 sha-1
+deploy r2 sha-2
+rm -rf "$DEPLOY_DIR/game/dist" "$DEPLOY_DIR/sensor/node_modules" "$DEPLOY_DIR/sensor/index.mjs"
+deploy broken sha-3
+check "exit non-zero" test "$rc" -ne 0
+check "kept the backup" has_text "$OUT" 'keeping'
+check "says ROLLED BACK to release 1" has_text "$OUT" 'ROLLED BACK to previous release sha-1'
+check "release 1 is live" is_release r1
 check ".env and .market-* untouched" state_intact
 
 scenario "only sudo commands from sudoers-breathless were used"

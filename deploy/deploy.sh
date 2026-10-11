@@ -145,7 +145,7 @@ restore() {
     rmdir "$empty" &&
     rsync -a --link-dest="$BACKUP/sensor" "${KEEP[@]}" "$BACKUP/sensor/" "$DEPLOY_DIR/sensor/" &&
     rsync -a --link-dest="$BACKUP/game/dist" "$BACKUP/game/dist/" "$DEPLOY_DIR/game/dist/" &&
-    { [[ ! -f "$BACKUP/package.json" ]] || rsync -a "$BACKUP/package.json" "$DEPLOY_DIR/package.json"; } &&
+    { [[ ! -f "$BACKUP/package.json" ]] || rsync -a -I "$BACKUP/package.json" "$DEPLOY_DIR/package.json"; } &&
     write_file "$DEPLOY_DIR/RELEASE" "$(head -n 1 "$BACKUP/RELEASE")"
 }
 
@@ -204,9 +204,12 @@ if [[ -f "$DEPLOY_DIR/game/dist/index.html" ]]; then
   if [[ -d "$BACKUP" ]]; then mv "$BACKUP" "$BACKUP.old"; fi
   mv "$BACKUP.new" "$BACKUP"
   rm -rf "$BACKUP.old"
+elif have_backup; then
+  # No live release but a backup, e.g. after a rollback that failed half-way:
+  # keep it, it is still the last release known to have worked.
+  log "no live release in $DEPLOY_DIR: keeping $BACKUP ($(head -n 1 "$BACKUP/RELEASE")) to roll back to"
 else
   log "no release in $DEPLOY_DIR yet: first deploy, nothing to back up"
-  rm -rf "$BACKUP"
 fi
 
 ARMED=1
