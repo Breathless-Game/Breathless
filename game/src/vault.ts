@@ -1,7 +1,7 @@
 import { fishValue, zoneForDepth } from './fish';
 import { onLangChange, pickName, t } from './i18n';
 import { MAPS, type MapId } from './maps';
-import { bulkSellable, bulkSellableBelowEpic, isFundsError, needsConfirm, pearls, sellQuote, type BankedFish } from './market';
+import { bulkSelectable, bulkSelectBlock, bulkSellable, bulkSellableBelowEpic, isFundsError, needsConfirm, pearls, pruneSelection, selectionRange, selectionSummary, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
 import { formatSerial, nftName } from './nft-uri';
 import { fishCard } from './portrait';
@@ -88,6 +88,14 @@ export class Vault {
   /** "Sell all" is asking once more (it never takes epic or rarer fish, but it is still many fish). */
   private confirmingAll = false;
   private confirmTimer = 0;
+  /** Fish ticked for a bulk sale. Survives re-renders; pruned to fish still in the bank and sellable. */
+  private selected = new Set<BankedFish>();
+  /** The last fish ticked: the anchor for shift-click range select. */
+  private anchor: BankedFish | null = null;
+  /** The selection toolbar is asking once more (it holds epic or rarer fish). */
+  private confirmingSelected = false;
+  /** Cards in display order, for range select. */
+  private order: BankedFish[] = [];
   private funding = false;
 
   constructor(
@@ -209,8 +217,14 @@ export class Vault {
   }
 
   private render() {
+    this.selected = pruneSelection(this.selected, this.bank, this.queue.selling);
+    if (!this.selected.size) {
+      this.confirmingSelected = false;
+      this.anchor = null;
+    }
     this.renderMarket();
     const sorted = [...this.bank].sort((a, b) => fishValue(b) - fishValue(a));
+    this.order = sorted;
     const worth = this.bank.filter((f) => !f.legacy).reduce((s, f) => s + fishValue(f), 0);
     this.countEl.textContent = sorted.length ? t(`${sorted.length} fish · worth ${pearls(worth)}`, `${sorted.length} 条鱼 · 价值 ${pearls(worth)}`) : '';
     if (!sorted.length) {
@@ -266,9 +280,11 @@ export class Vault {
     if (below.length > commons.length) {
       if (this.confirmingAll) {
         const wrap = el('span', 'sell-confirm', '');
-        const yes = el('button', 'mini primary', t(`Sell ${below.length} fish · ${pearls(worth(below))}`, `出售 ${below.length} 条鱼 · ${pearls(worth(below))}`));
+        const yes = el('button', 'mini primary', t(`Confirm ${below.length} · ${pearls(worth(below))}`, `确认 ${below.length} 条 · ${pearls(worth(below))}`));
         yes.title = t('Epic, legendary and mythic fish are kept', '史诗、传说和神话级的鱼会保留');
-        const no = el('button', 'mini', t('Cancel', '取消'));
+        const no = el('button', 'mini cancel-x', '✕');
+        no.title = t('Cancel', '取消');
+        no.setAttribute('aria-label', t('Cancel', '取消'));
         yes.addEventListener('click', () => {
           this.setConfirmingAll(false);
           this.queue.sellMany(bulkSellableBelowEpic(this.bank));
@@ -283,6 +299,8 @@ export class Vault {
         parts.push(btn);
       }
     }
+    // Always present (disabled when nothing is ticked) so the toolbar never changes size.
+    parts.push(this.selectionBar());
     if (q.lastSale) {
       const { name, result, count, total, failed } = q.lastSale;
       const what = count > 1 ? t(`Sold ${count} fish · +${pearls(total)}`, `已售出 ${count} 条鱼 · +${pearls(total)}`) : t(`Sold ${name} · +${pearls(result.pearls)}`, `已售出 ${name} · +${pearls(result.pearls)}`);
@@ -317,7 +335,103 @@ export class Vault {
       card.img.src = fishCard(f);
     }
     this.caption(f, card.cap);
+    card.fig.classList.toggle('selected', this.selected.has(f));
+    card.fig.querySelector('.card-select')?.remove();
+    card.fig.prepend(this.checkbox(f));
     return card.fig;
+  }
+
+  /** The bulk-sell tick on a card. Disabled, with the reason, when the fish cannot be sold. */
+  private checkbox(f: BankedFish) {
+    const block = bulkSelectBlock(f, this.queue.selling);
+    const label = el('label', 'card-select');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = this.selected.has(f);
+    box.setAttribute('aria-label', t(`Select ${f.name} to sell`, `选择 ${f.name} 出售`));
+    if (block) {
+      box.disabled = true;
+      label.title =
+        block === 'queued' ? t('Already being sold', '正在出售')
+        : block === 'minting' ? t('Wait for the NFT to mint first', '请等待 NFT 铸造完成')
+        : block === 'paid-out' ? t('Already paid out', '已结算')
+        : (f.sellBlock ?? t('Not sellable', '无法出售'));
+    }
+    // Never let the tick reach the card.
+    label.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (block) return;
+      const on = box.checked;
+      if (e.shiftKey && this.anchor && this.anchor !== f) {
+        const range = selectionRange(this.order, this.anchor, f, (x) => bulkSelectable(x, this.queue.selling));
+        for (const x of range) on ? this.selected.add(x) : this.selected.delete(x);
+      } else if (on) this.selected.add(f);
+      else this.selected.delete(f);
+      this.anchor = f;
+      this.confirmingSelected = false;
+      this.render();
+    });
+    label.append(box);
+    return label;
+  }
+
+  /** Shown while something is ticked: sell them together, select every sellable fish, or clear. */
+  private selectionBar() {
+    const chosen = [...this.selected];
+    const sum = selectionSummary(chosen, fishValue);
+    const bar = el('span', 'select-bar');
+    const go = () => {
+      const list = [...this.selected];
+      this.selected = new Set();
+      this.anchor = null;
+      this.setConfirmingSelected(false);
+      this.queue.sellMany(list);
+    };
+    if (this.confirmingSelected && sum.needsConfirm) {
+      const yes = el('button', 'mini primary', t(`Confirm ${sum.count} · ${pearls(sum.total)}`, `确认 ${sum.count} 条 · ${pearls(sum.total)}`));
+      yes.title = t('Includes epic, legendary or mythic fish', '包含史诗、传说或神话级的鱼');
+      const no = el('button', 'mini cancel-x', '✕');
+      no.title = t('Cancel', '取消');
+      no.setAttribute('aria-label', t('Cancel', '取消'));
+      yes.addEventListener('click', go);
+      no.addEventListener('click', () => this.setConfirmingSelected(false));
+      const wrap = el('span', 'sell-confirm', '');
+      wrap.append(yes, no);
+      bar.append(wrap);
+    } else if (!sum.count) {
+      const sell = el('button', 'mini primary', t('Select fish to sell', '勾选要出售的鱼'));
+      sell.disabled = true;
+      bar.append(sell);
+    } else {
+      const sell = el('button', 'mini primary', t(`Sell selected (${sum.count}) · ${pearls(sum.total)}`, `出售所选 (${sum.count}) · ${pearls(sum.total)}`));
+      sell.title = t(`One approval in ${walletName()} for all of them`, `在 ${walletName()} 中一次确认全部`);
+      sell.addEventListener('click', () => (sum.needsConfirm ? this.setConfirmingSelected(true) : go()));
+      bar.append(sell);
+    }
+    const all = el('button', 'mini', t('Select all sellable', '全选可出售'));
+    all.addEventListener('click', () => {
+      this.selected = new Set(this.bank.filter((x) => bulkSelectable(x, this.queue.selling)));
+      this.confirmingSelected = false;
+      this.render();
+    });
+    const clear = el('button', 'mini', t('Clear', '清除'));
+    clear.disabled = !sum.count;
+    clear.addEventListener('click', () => {
+      this.selected = new Set();
+      this.anchor = null;
+      this.setConfirmingSelected(false);
+      this.render();
+    });
+    bar.append(all, clear);
+    return bar;
+  }
+
+  private setConfirmingSelected(on: boolean) {
+    this.confirmingSelected = on;
+    window.clearTimeout(this.confirmTimer);
+    if (on) this.confirmTimer = window.setTimeout(() => this.setConfirmingSelected(false), CONFIRM_MS);
+    this.refresh();
   }
 
   /**
@@ -333,16 +447,17 @@ export class Vault {
     status.append(this.nftBadge(f));
     // The chain is the source of truth: a direct link works even when a wallet hides the NFT.
     if (f.nft === 'minted' && f.assetId) status.appendChild(explorerLink(f.assetId));
+    // One reserved line, always present: errors never add a row (clamped; the full text is in the title).
     const parts: HTMLElement[] = [meta, status];
     const err = q.sellErrors.get(f) ?? (f.nft === 'failed' ? f.mintError : undefined);
+    const line = el('div', 'card-note', '');
     if (f.sellBlock && !q.sellErrors.has(f)) {
-      const line = el('div', 'err', `Not sellable: ${f.sellBlock}`);
-      line.title = line.textContent ?? '';
-      parts.push(line);
+      line.className = 'card-note err';
+      line.textContent = `Not sellable: ${f.sellBlock}`;
     } else if (err) {
       const sale = q.sellErrors.has(f);
-      const line = el('div', 'err', sale ? t(`Sale failed: ${err}`, `出售失败：${err}`) : t(`Mint failed: ${err}`, `铸造失败：${err}`));
-      line.title = line.textContent ?? '';
+      line.className = 'card-note err';
+      line.textContent = sale ? t(`Sale failed: ${err}`, `出售失败：${err}`) : t(`Mint failed: ${err}`, `铸造失败：${err}`);
       // Mints are paid by the game wallet, sales by the player's own wallet.
       if (sale && isUserRejection({ message: err })) line.textContent = t(`Sale cancelled in ${walletName()}.`, `已在 ${walletName()} 中取消出售。`);
       else if (isFundsError(err)) {
@@ -350,8 +465,12 @@ export class Vault {
           ? t(`${walletName()} needs devnet SOL for the sale fee (faucet.solana.com) and must be on Devnet.`, `${walletName()} 需要 devnet SOL 支付出售手续费（faucet.solana.com），且须切换到 Devnet。`)
           : t('The game wallet is out of devnet SOL. Fund it above.', '游戏钱包的 devnet SOL 用完了，请在上方充值。');
       }
-      parts.push(line);
     }
+    if (line.textContent) {
+      line.title = line.textContent;
+      line.tabIndex = 0;
+    }
+    parts.push(line);
     const actions = el('div', 'card-actions');
     const fix = this.nftAction(f);
     if (fix) actions.append(fix);
@@ -442,8 +561,12 @@ export class Vault {
     const verb = quote.mintFirst ? t('Mint & sell', '铸造并出售') : t('Sell', '出售');
     if (this.confirming === f) {
       const wrap = el('span', 'sell-confirm', '');
-      const yes = el('button', 'mini primary', `${t('Confirm', '确认')}${f.serial ? ` ${formatSerial(f.serial)}` : ''} · ${pearls(quote.pearls)}`);
-      const no = el('button', 'mini', t('Cancel', '取消'));
+      // Same footprint as the Sell button: "Confirm · N" plus a small cancel, no extra row.
+      const yes = el('button', 'mini primary', `${t('Confirm', '确认')} · ${pearls(quote.pearls)}`);
+      yes.title = `${t('Confirm', '确认')}${f.serial ? ` ${formatSerial(f.serial)}` : ''} · ${pearls(quote.pearls)}`;
+      const no = el('button', 'mini cancel-x', '✕');
+      no.title = t('Cancel', '取消');
+      no.setAttribute('aria-label', t('Cancel', '取消'));
       yes.addEventListener('click', () => {
         this.setConfirming(null);
         this.queue.sell(f);
