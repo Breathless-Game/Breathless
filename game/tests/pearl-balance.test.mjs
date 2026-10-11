@@ -43,6 +43,16 @@ test('store: loading until a read lands, nudges only after, failures keep a know
   assert.equal(n, after, 'unsubscribed listeners hear nothing more');
 });
 
+test('store: a spend shows the post-burn balance, and a failed sync after it never regresses to loading', () => {
+  m.setPearlBalance(100);
+  m.nudgePearlBalance(95); // applyPearlSpend + refreshEquipment right after the burn
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
+  m.setPearlsUnavailable(new Error('429 Too Many Requests')); // the sync after the burn is rate limited
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
+  m.setPearlsUnavailable(new Error('PEARL balance read timed out')); // or never settles
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
+});
+
 test('explainPearlError names the cause', () => {
   assert.match(m.explainPearlError(new Error('HTTP 429')), /rate limiting/);
   assert.match(m.explainPearlError(new Error('Failed to fetch')), /market is offline/);

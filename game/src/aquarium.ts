@@ -741,6 +741,8 @@ export class Aquarium {
         });
       }
       if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) {
+        // Clear the lock first: pick() renders Feed disabled while `feeding` is set, and nothing re-renders it after.
+        this.feeding = false;
         this.pick(swimmer);
         rerendered = true;
       }
