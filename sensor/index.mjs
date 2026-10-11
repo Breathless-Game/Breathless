@@ -161,6 +161,10 @@ class Session {
     });
     sdk.on('metrics', (buf) => this.#onMetrics(buf));
     sdk.useCustomInput(FrameTransform.kNone);
+    // A new Presage pipeline (first frame, camera restart, stall or error) starts with its
+    // own start-up swings and trace scale, so the frozen baseline is learned again.
+    // The old SDK is fully torn down by now (teardowns === 0), so nothing stale reaches it.
+    this.detector = new BreathDetector();
     sdk.start();
     this.sdk = sdk;
     this.sdkStartedAt = performance.now();
