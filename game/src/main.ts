@@ -37,7 +37,6 @@ import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migr
 import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
 import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
-import { renderGearChain } from './gear-chain-ui';
 import { NftQueue } from './nft-queue';
 import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -1897,7 +1896,6 @@ function gearSnapshot(): GearLevels | null {
   };
 }
 
-const gearChainCard = document.getElementById('wb-chain')!;
 const gearSync = new GearSync({
   key: () => (walletState().owner ? storageKey('gear-nft') : null),
   store: localStorage,
@@ -1906,7 +1904,7 @@ const gearSync = new GearSync({
   loadChain: () => import('./chain'),
   isFundsError,
   timers: { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id) },
-  changed: () => renderGearChain(gearChainCard, GEAR_NFT_ON ? [gearSync.status('boat'), gearSync.status('kit')] : []),
+  changed: () => {}, // status is no longer shown anywhere; the sync runs in the background
   hidden: () => document.hidden,
 });
 // Every level change (bought, branch switched, ship equipped, a penalty's reset) reaches the sync.
