@@ -101,3 +101,38 @@ test('answers every /api/nft path itself, and nothing else', async () => {
     assert.equal((await fetch(base + '/api/market/info')).status, 418);
   });
 });
+
+const META2 = '/api/nft/meta/v2/42/c61cd89c/uncommon/8-3-38-0.52/slim-130-45-50-310-3/Coral%20Reef/Lively%20Striped%20Wrasse.json';
+const IMG2 = '/api/nft/img/v2/42/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png';
+
+test('v2 paths carry the fish number; v1 still parses without one', () => {
+  assert.equal(parseMetaPath(META2).serial, 42);
+  assert.equal(parseMetaPath(META).serial, undefined);
+  assert.equal(parseImagePath(IMG2).serial, 42);
+  assert.equal(parseMetaPath(META2.replace('/v2/42/', '/v2/10000/')).serial, 10000);
+  assert.equal(parseMetaPath(META2.replace('/v2/42/', '/v2/1234567/')).serial, 1234567);
+  assert.equal(parseMetaPath(META2.replace('/v2/42/', '/v2/999999999/')).serial, 999999999);
+  for (const bad of ['/v2/0/', '/v2/0042/', '/v2/-1/', '/v2/1e3/', '/v2/1000000000/', '/v2/', '/v3/42/', '/v2/abc/']) {
+    assert.equal(parseMetaPath(META2.replace('/v2/42/', bad)), null, bad);
+    assert.equal(parseImagePath(IMG2.replace('/v2/42/', bad)), null, bad);
+  }
+  // The serial segment is required in v2 and not allowed in v1.
+  assert.equal(parseMetaPath(META.replace('/v1/', '/v1/42/')), null);
+});
+
+test('v2 JSON is named "<name> #0042" and its image draws the number', async () => {
+  await withServer({ publicOrigin: '' }, async (base) => {
+    const meta = await (await fetch(base + META2)).json();
+    assert.equal(meta.name, 'Lively Striped Wrasse #0042');
+    assert.equal(meta.image, base + IMG2);
+    const attrs = Object.fromEntries(meta.attributes.map((a) => [a.trait_type, a.value]));
+    assert.equal(attrs.Number, '#0042');
+    const big = await (await fetch(base + META2.replace('/v2/42/', '/v2/1234567/'))).json();
+    assert.equal(big.name, 'Lively Striped Wrasse #1234567');
+
+    const numbered = Buffer.from(await (await fetch(meta.image)).arrayBuffer());
+    const plain = Buffer.from(await (await fetch(base + IMG)).arrayBuffer());
+    assert.equal(numbered.toString('ascii', 12, 16), 'IHDR');
+    assert.ok(!numbered.equals(plain), 'the number is on the card');
+  });
+});

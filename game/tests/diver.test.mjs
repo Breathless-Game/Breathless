@@ -19,7 +19,8 @@ async function moduleUrl(file, dependencies = {}) {
 }
 
 const gearUrl = await moduleUrl('gear');
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl }));
+const fxUrl = await moduleUrl('fx');
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
@@ -34,8 +35,39 @@ function createDiver(quality = RENDER_QUALITY.high, y = -20) {
 }
 
 function bubbles(scene) {
-  // Bubbles are world-space particles; the entire diver model is in its group.
-  return scene.children.filter(child => child.isMesh);
+  // Bubbles are world-space particles; the entire diver model is in its group,
+  // and the white water it throws is one instanced mesh.
+  return scene.children.filter(child => child.isMesh && !child.isInstancedMesh);
+}
+
+/** Where every live piece of white water (droplet or foam chip) is right now. */
+function whiteWater(scene) {
+  const mesh = scene.getObjectByName('diver-water-splash');
+  const matrix = new THREE.Matrix4();
+  const live = [];
+  for (let i = 0; i < mesh.count; i++) {
+    mesh.getMatrixAt(i, matrix);
+    if (matrix.elements[0] !== 0 || matrix.elements[1] !== 0 || matrix.elements[2] !== 0) {
+      live.push(new THREE.Vector3().setFromMatrixPosition(matrix));
+    }
+  }
+  return live;
+}
+
+/** Swim straight up or down at `speed` m/s (negative dives), as the game loop would move the diver. */
+function swim(diver, speed, seconds, fps = 60) {
+  diver.vel.set(0, speed, 0);
+  for (let frame = 0; frame < Math.round(seconds * fps); frame++) {
+    diver.pos.y = Math.min(-0.05, diver.pos.y + speed / fps);
+    diver.update(1 / fps, frame / fps, -diver.pos.y);
+  }
+}
+
+/** A diver that has floated at the surface long enough to settle. */
+function createFloatingDiver(quality = RENDER_QUALITY.high) {
+  const created = createDiver(quality, -0.05);
+  simulate(created.diver, 1);
+  return created;
 }
 
 function withFixedRandom(run) {
@@ -81,25 +113,128 @@ test('late-created bubbles pass through the scene material binder', () => {
   assert.equal(bound, 3);
 });
 
-test('the diver creates a subtle waterline ripple and a crossing pulse', () => {
-  const { diver } = createDiver(RENDER_QUALITY.high, -4);
-  const ring = diver.group.getObjectByName('diver-water-contact-ripple');
-  assert.ok(ring);
-  diver.update(1 / 60, 0, 4);
-  assert.equal(ring.visible, false, 'deep swimming does not leave a surface ripple');
+test('floating at the surface and swimming deep show no white water, and no ring', () => {
+  for (const y of [-0.05, -4]) {
+    const { scene, diver } = createDiver(RENDER_QUALITY.high, y);
+    simulate(diver, 2);
+    const splash = scene.getObjectByName('diver-water-splash');
+    assert.equal(splash.visible, false);
+    assert.equal(whiteWater(scene).length, 0);
+    assert.equal(diver.group.getObjectByName('diver-water-contact-ripple'), undefined);
+  }
+});
 
-  diver.pos.y = -0.2;
-  diver.update(1 / 60, 1, 0.2);
-  assert.equal(ring.visible, true);
-  diver.group.updateMatrixWorld(true);
-  assert.ok(Math.abs(ring.getWorldPosition(new THREE.Vector3()).y - 0.03) < 1e-6);
-  const nearOpacity = ring.material.opacity;
-  assert.ok(nearOpacity > 0 && nearOpacity < 0.56);
+test('diving in throws a crown above the water, drags air under, and both clear', () => {
+  const { scene, diver } = createFloatingDiver();
+  const splash = scene.getObjectByName('diver-water-splash');
+  swim(diver, -4.5, 0.2);
+  assert.equal(splash.visible, true);
+  const crown = whiteWater(scene);
+  assert.ok(crown.length >= 12, `a visible burst, got ${crown.length}`);
+  assert.ok(crown.every(position => position.y > 0 && Math.abs(position.x - diver.pos.x) < 3));
+  assert.ok(crown.some(position => position.y > 0.3), 'droplets rise off the surface');
+  const trail = bubbles(scene);
+  assert.ok(trail.length > 0, 'the plunge drags air under');
+  assert.ok(trail.every(bubble => bubble.position.y < 0));
 
-  diver.pos.y = -1;
-  diver.update(1 / 60, 2, 1);
-  assert.equal(ring.visible, true, 'the entry/exit pulse survives just below the surface');
-  assert.ok(ring.material.opacity > 0.3 && ring.material.opacity < 0.56, 'crossing adds a visible pulse');
+  swim(diver, -4.5, 3);
+  assert.equal(whiteWater(scene).length, 0);
+  assert.equal(splash.visible, false, 'the pool hides once every droplet has fallen back');
+  assert.equal(bubbles(scene).length, 0);
+});
+
+test('surfacing fast punches white water up at the head; drifting up does not', () => {
+  for (const [speed, splashes] of [[7, true], [1, false]]) {
+    const { scene, diver } = createDiver(RENDER_QUALITY.high, -4);
+    diver.vel.set(1, speed, 0);
+    simulate(diver, 0.5); // settle facing +x, pitched to the climb
+    swim(diver, speed, 4.2 / speed);
+    const burst = whiteWater(scene);
+    assert.equal(burst.length > 0, splashes, `climbing at ${speed} m/s`);
+    if (!splashes) continue;
+    const middle = burst.reduce((sum, position) => sum + position.x, 0) / burst.length;
+    assert.ok(middle > diver.pos.x + 0.2, 'the burst is at the head, not the fins');
+    assert.ok(burst.some(position => position.y > 0.3));
+  }
+});
+
+test('a faster crossing throws more, and lower quality throws less', () => {
+  const thrown = (quality, speed) => withFixedRandom(() => {
+    const { scene, diver } = createFloatingDiver(quality);
+    swim(diver, -speed, 0.5 / speed);
+    return whiteWater(scene).length + bubbles(scene).length;
+  });
+  assert.ok(thrown(RENDER_QUALITY.high, 1.6) < thrown(RENDER_QUALITY.high, 5));
+  assert.ok(thrown(RENDER_QUALITY.low, 5) < thrown(RENDER_QUALITY.high, 5));
+});
+
+test('white water follows the waves: a swell is not a dive, and a dive splashes at its height', () => {
+  const { scene, diver } = createFloatingDiver();
+  let level = 0;
+  diver.setWaterSurface(() => level);
+  // A crest rolls over the floating diver and away again.
+  for (let frame = 0; frame < 240; frame++) {
+    level = 0.6 * Math.sin((frame / 240) * Math.PI);
+    diver.update(1 / 60, frame / 60, -diver.pos.y);
+  }
+  assert.equal(whiteWater(scene).length, 0);
+
+  level = 0.5;
+  swim(diver, -4.5, 0.1);
+  const crown = whiteWater(scene);
+  assert.ok(crown.length > 0, 'the plunge still splashes after the swell');
+  assert.ok(crown.every(position => position.y > 0.5), 'on the raised water, not at y = 0');
+});
+
+test('a swimmer heaved by heavy seas splashes where the picture is, not where the physics is', () => {
+  const { scene, diver } = createFloatingDiver();
+  let level = 0;
+  diver.setWaterSurface(() => level);
+  // The swell lifts the water and the drawn diver together by more than a head's depth.
+  for (let frame = 0; frame < 240; frame++) {
+    level = 1.5 * Math.sin((frame / 240) * Math.PI * 0.5);
+    diver.update(1 / 60, frame / 60, -diver.pos.y, level);
+  }
+  assert.equal(whiteWater(scene).length, 0);
+  assert.ok(level > 1.4 && Math.abs(diver.group.position.y - (diver.pos.y + level)) < 1e-9, 'the picture rides the crest');
+
+  diver.vel.set(0, -4.5, 0);
+  for (let frame = 0; frame < 6; frame++) {
+    diver.pos.y -= 4.5 / 60;
+    diver.update(1 / 60, 4 + frame / 60, -diver.pos.y, level);
+  }
+  const crown = whiteWater(scene);
+  assert.ok(crown.length > 0, 'diving off the crest splashes at once');
+  assert.ok(crown.every(position => position.y > level));
+});
+
+test('a respawn just under the surface floats up without a splash', () => {
+  for (const level of [-0.25, 0, 0.25]) {
+    const { scene, diver } = createFloatingDiver();
+    diver.setWaterSurface(() => level);
+    diver.pos.set(0, -0.4, 0);
+    diver.vel.set(0, 0, 0);
+    // The game loop's buoyancy and drag near the surface (see update() in main.ts).
+    for (let frame = 0; frame < 120; frame++) {
+      diver.vel.y = (diver.vel.y + 6 / 60) * Math.exp(-2.4 / 60);
+      diver.pos.y = Math.min(-0.05, diver.pos.y + diver.vel.y / 60);
+      diver.update(1 / 60, frame / 60, -diver.pos.y);
+      assert.equal(whiteWater(scene).length, 0, `water at ${level}`);
+    }
+    assert.equal(bubbles(scene).length, 0);
+  }
+});
+
+test('bubbles pop at the waves, not at y = 0', () => {
+  withFixedRandom(() => {
+    const { scene, diver } = createDiver(RENDER_QUALITY.high, -1);
+    diver.setWaterSurface(() => -0.6);
+    diver.exhale(1);
+    const [particle] = bubbles(scene);
+    simulate(diver, 0.5);
+    assert.equal(particle.parent, null, 'a trough ends the bubble early');
+    assert.ok(particle.position.y < 0);
+  });
 });
 
 test('changing quality rebinds live meshes before disposing shared geometry and trims old particles', () => {
