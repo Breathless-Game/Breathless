@@ -170,6 +170,27 @@ test('biteForfeit with nothing banked this dive takes nothing', () => {
   assert.deepEqual(biteForfeit(bank, new Set()), []);
 });
 
+test('settings saved with the old sharks choice still load, without the field', async () => {
+  const { loadSettings, saveSettings } = await load('../src/settings.ts');
+  const store = new Map();
+  const saved = globalThis.localStorage;
+  globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) };
+  try {
+    for (const sharks of ['ask', 'on', 'off', 42]) {
+      store.set('deepbreath.settings', JSON.stringify({ quality: 'low', weather: 'storm', sharks }));
+      const s = loadSettings();
+      assert.equal(s.quality, 'low');
+      assert.equal(s.weather, 'storm');
+      assert.ok(!('sharks' in s), `sharks: ${sharks} is dropped`);
+      saveSettings(s);
+      assert.ok(!('sharks' in JSON.parse(store.get('deepbreath.settings'))));
+    }
+  } finally {
+    if (saved === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = saved;
+  }
+});
+
 test('biteForfeit never mutates the bank (the NFT queue removes what it returns)', () => {
   const a = fish('a');
   const bank = [a];
