@@ -56,7 +56,6 @@
       </div>
 
       <div id="center-msg"></div>
-      <div id="board-prompt" class="hidden"><b>F</b> Climb aboard · 上船</div>
 
       <section id="net" class="panel">
         <div class="small muted">NET</div>
@@ -90,8 +89,6 @@
 
     <div id="title-screen" class="hidden">
       <canvas id="title-canvas"></canvas>
-      <!-- The hanging fish as 3D models, over the rope; clicks go through to the canvas below. -->
-      <canvas id="title-fish3d"></canvas>
       <div id="title-name">
         <div class="zh">屏息</div>
         <div class="en">BREATHLESS</div>
@@ -102,27 +99,9 @@
       <div id="wallet-chip" class="wallet-row wallet-chip hidden"></div>
     </div>
 
-    <!-- The aquarium (图鉴): banked fish in a glass tank; it rises from below as the title's fish ride up out of sight. -->
-    <div id="aquarium" class="hidden">
-      <div class="aq-stage">
-        <div class="aq-bar">
-          <div class="aq-title">Aquarium · 图鉴 <span id="aq-label" class="small muted"></span></div>
-          <button id="aq-prev" class="mini" title="Previous tank (←)">‹</button>
-          <div id="aq-tabs"></div>
-          <button id="aq-next" class="mini" title="Next tank (→)">›</button>
-          <button id="aq-close" class="mini" title="Back to the title (Esc)">×</button>
-        </div>
-        <div class="aq-tank">
-          <canvas id="aq-canvas"></canvas>
-          <div id="aq-empty" class="hidden"></div>
-          <div id="aq-card" class="hidden"></div>
-        </div>
-      </div>
-    </div>
-
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Click gear for a closer look · drag it to the tray to get it ready · click the map to choose where to dive · Esc back</div>
+      <div id="wb-hint" class="small">Click gear to get it ready · drag to throw · click the map to choose where to dive · Esc back</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
@@ -155,37 +134,6 @@
           <button id="wb-dive" class="primary">Dive · 下潜</button>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl">Click outside the chart or press Esc to fold it</div>
-      </div>
-      <!-- A closer look at one piece of gear: info left, the model in the middle, the upgrade right. -->
-      <div id="wb-inspect" class="hidden">
-        <div id="wb-inspect-bg"></div>
-        <aside id="wb-inspect-info" class="card">
-          <div id="wb-inspect-kind" class="small muted"></div>
-          <h2 id="wb-inspect-name"></h2>
-          <div id="wb-inspect-zh" class="muted"></div>
-          <div id="wb-inspect-level" class="small"></div>
-          <p id="wb-inspect-effect"></p>
-          <ul id="wb-inspect-levels" class="small"></ul>
-          <button id="wb-inspect-ready"></button>
-        </aside>
-        <div id="wb-inspect-stage">
-          <canvas id="wb-inspect-gl"></canvas>
-          <div id="wb-inspect-lock"></div>
-          <div id="wb-inspect-nav">
-            <button id="wb-inspect-prev" class="mini" title="Previous level (←)">‹</button>
-            <div id="wb-inspect-dots"></div>
-            <button id="wb-inspect-next" class="mini" title="Next level (→)">›</button>
-          </div>
-        </div>
-        <aside id="wb-inspect-up" class="card">
-          <div class="small muted">UPGRADE · 升级</div>
-          <h3 id="wb-inspect-up-title"></h3>
-          <p id="wb-inspect-up-effect"></p>
-          <div id="wb-inspect-up-price"></div>
-          <button id="wb-inspect-buy" disabled></button>
-        </aside>
-        <div id="wb-inspect-hint" class="small">← → or swipe to switch levels · Esc or click outside to put it down</div>
-        <button id="wb-inspect-close" class="mini" title="Put it down (Esc)">×</button>
       </div>
     </div>
 

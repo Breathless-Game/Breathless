@@ -40,8 +40,8 @@ function count(model, name) {
   return found;
 }
 
-test('all 36 display models are centred, finite, and fit the two-unit workbench API', () => {
-  assert.equal(UPGRADES.length, 12); // 11 gear pieces and the whole boat (workbench.ts)
+test('all 33 display models are centred, finite, and fit the two-unit workbench API', () => {
+  assert.equal(UPGRADES.length, 11);
   for (const definition of UPGRADES) {
     for (const level of [1, 2, 3]) {
       const model = buildUpgradeModel(definition.id, level);

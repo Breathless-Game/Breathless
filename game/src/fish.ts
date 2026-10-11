@@ -262,20 +262,9 @@ export interface FishMesh {
   group: THREE.Group;
   tail: THREE.Object3D;
   material: THREE.MeshStandardMaterial;
-  /** The body alone (no fins, tail or eyes), e.g. to carve into; and its unscaled proportions. */
-  body: THREE.Mesh;
-  size: { len: number; height: number; width: number };
 }
 
-/** How finely the body is built. The game's fish are hexagonal, 6 rings long; more gives a smoother flank (e.g. to carve a name into). */
-export interface FishDetail {
-  rings: number;
-  sides: number;
-}
-
-export const LOW_POLY: FishDetail = { rings: 6, sides: 6 };
-
-export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): FishMesh {
+export function buildFishMesh(spec: FishSpec): FishMesh {
   const shape = SHAPES[spec.archetype];
   const profile = speciesProfile(spec);
   const L = shape.len;
@@ -285,9 +274,9 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
   const accent = hsl(spec.accentHue, Math.min(1, spec.sat + 0.2), 0.55);
   const fin = hsl(spec.hue + 15, spec.sat, spec.light * 0.85);
 
-  // Body: rings (hexagonal at the default detail) from tail root (t=0) to nose (t=1).
-  const RINGS = detail.rings;
-  const SIDES = detail.sides;
+  // Body: hexagonal rings from tail root (t=0) to nose (t=1).
+  const RINGS = 6;
+  const SIDES = 6;
   const rings: THREE.Vector3[][] = [];
   for (let i = 0; i <= RINGS; i++) {
     const t = i / RINGS;
@@ -317,19 +306,16 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
       let color = midY > shape.height * 0.12 ? back : midY < -shape.height * 0.12 ? belly : body;
       const t = (i + 0.5) / RINGS;
       const upperBody = midY > -shape.height * 0.2;
-      // Patterns are laid out on the 6 × 6 grid, so a finer body keeps the same markings.
-      const pi = Math.floor((i * LOW_POLY.rings) / RINGS);
-      const pj = Math.floor((j * LOW_POLY.sides) / SIDES);
       const patterned = (() => {
         switch (profile.pattern) {
           case 'stripes':
-            return spec.stripes > 0 && pi > 0 && pi < LOW_POLY.rings - 1 && pi % 2 === (spec.stripes % 2);
+            return spec.stripes > 0 && i > 0 && i < RINGS - 1 && i % 2 === (spec.stripes % 2);
           case 'spots':
-            return upperBody && ((pi * 7 + pj * 3 + Math.floor(spec.hue)) % 11 < 3);
+            return upperBody && ((i * 7 + j * 3 + Math.floor(spec.hue)) % 11 < 3);
           case 'mask':
             return upperBody && t > 0.64;
           case 'glow':
-            return upperBody && (pi + pj) % 3 === 0;
+            return upperBody && (i + j) % 3 === 0;
           default:
             return false;
         }
@@ -346,22 +332,20 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
     fb.tri(rings[RINGS][j], rings[RINGS][(j + 1) % SIDES], nose, body);
     fb.tri(rings[0][(j + 1) % SIDES], rings[0][j], root, back);
   }
-  // Fins on their own mesh, so the body is just the body (e.g. to carve a name into).
-  const finFaces = new FaceBuilder();
   // Dorsal fin.
-  const dorsalBase = rings[Math.round(RINGS / 2)][0].y;
+  const dorsalBase = rings[3][0].y;
   const d1 = new THREE.Vector3(-L * 0.15, dorsalBase - 0.02, 0);
   const d2 = new THREE.Vector3(L * 0.2, dorsalBase - 0.02, 0);
   const d3 = new THREE.Vector3(-L * 0.12, dorsalBase + shape.dorsal * profile.dorsal, 0);
-  finFaces.tri(d1, d2, d3, profile.pattern === 'stripes' ? accent : fin);
-  finFaces.tri(d2, d1, d3, profile.pattern === 'stripes' ? accent : fin);
+  fb.tri(d1, d2, d3, profile.pattern === 'stripes' ? accent : fin);
+  fb.tri(d2, d1, d3, profile.pattern === 'stripes' ? accent : fin);
   // Pectoral fins.
   for (const side of [1, -1]) {
     const p1 = new THREE.Vector3(L * 0.15, -shape.height * 0.1, side * shape.width * 0.45);
     const p2 = new THREE.Vector3(L * 0.0, -shape.height * 0.25, side * (shape.width * 0.45 + 0.22 * profile.pectoral));
     const p3 = new THREE.Vector3(-L * 0.05, -shape.height * 0.05, side * shape.width * 0.45);
-    finFaces.tri(p1, p2, p3, fin);
-    finFaces.tri(p2, p1, p3, fin);
+    fb.tri(p1, p2, p3, fin);
+    fb.tri(p2, p1, p3, fin);
   }
 
   const emissive = RARITY[spec.rarity].emissive;
@@ -375,7 +359,6 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
     side: THREE.DoubleSide,
   });
   const bodyMesh = new THREE.Mesh(fb.build(), material);
-  const fins = new THREE.Mesh(finFaces.build(), material);
 
   // Tail on its own pivot so it can wag.
   const tb = new FaceBuilder();
@@ -401,9 +384,9 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
     eye.position.set(L * 0.33, shape.height * 0.1, side * shape.width * 0.33);
     group.add(eye);
   }
-  group.add(bodyMesh, fins, tail);
+  group.add(bodyMesh, tail);
   group.scale.setScalar(spec.scale);
-  return { group, tail, material, body: bodyMesh, size: { len: L, height: shape.height, width: shape.width * profile.bodyWidth } };
+  return { group, tail, material };
 }
 
 // ---- Behaviour ----------------------------------------------------------

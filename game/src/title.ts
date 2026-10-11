@@ -1,17 +1,15 @@
 // Title screen: a rope (anchored off-screen) swings in from the left and catches
 // on the right, then fish drop onto it on fishing lines. The labeled fish are the
-// menu buttons, with their name carved into the body; a long name hangs its fish
+// menu buttons, with their name printed on the body; a long name hangs its fish
 // level on two lines (head and tail) so the name reads straight.
-// Plain 2D Verlet physics on a canvas overlay (rope, lines, glow); the fish
-// themselves are real 3D models on a layer above it (title3d.ts), placed from
-// the physics every frame. The 3D sea keeps rendering behind.
+// Plain 2D Verlet physics on a canvas overlay; the 3D sea keeps rendering behind.
 
-import { RARITY, rollFish, speciesProfile, type Archetype, type Rarity } from './fish';
-import { FishStage, type FishPose } from './title3d';
+import { RARITY, rollFish, type Archetype, type Rarity } from './fish';
 
 // The title fish were picked by look under the old Abyss drop table. Keep rolling
 // them with it so retuning the in-game odds (depth-odds.ts) doesn't reshape them.
 export const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
+import { fishSprite } from './portrait';
 
 export interface TitleFish {
   seed: number;
@@ -19,12 +17,7 @@ export interface TitleFish {
   hue: number;
   sat: number;
   light: number;
-  /**
-   * One of the game's species (fish.ts): its own body, fins and pattern. Pick a
-   * deep-bodied one for a labelled fish, to leave room for the carved name.
-   */
-  species?: string;
-  /** Body shape override, for a fish without a species. */
+  /** Body shape override; a deep body leaves room for a printed name. */
   archetype?: Archetype;
   /** Where it hangs along the rope, 0..1. */
   at: number;
@@ -48,6 +41,16 @@ interface Link {
   slack: boolean;
 }
 
+// Nose and tail ends of the body axis in sprite pixels, so the drawn fish lines
+// up with its particles; `c` is where the body's centre of mass sits along it (0..1).
+interface SpriteFit {
+  nx: number;
+  ny: number;
+  tx: number;
+  ty: number;
+  c: number;
+}
+
 interface Line {
   attach: number; // rope particle
   pts: number[];
@@ -57,6 +60,8 @@ interface Line {
 
 interface Hanging {
   def: TitleFish;
+  img: HTMLImageElement;
+  fit: SpriteFit | null;
   sideways: boolean;
   lines: Line[];
   head: number;
@@ -72,32 +77,78 @@ const GRAVITY = 2200; // px/s²
 const STEP = 1 / 120;
 const ITERATIONS = 14;
 const DAMPING = 0.995;
-// While a menu fish is picked (hovered or held), everything swings much less: the
-// bounce dies away about three times as fast. CALM_RATE: how quickly it eases in and out.
-const CALM_DAMPING = 0.985;
-const CALM_RATE = 8;
 const ROPE_SEGS = 36;
 const SIDEWAYS_CHARS = 4; // names this long hang their fish level, on two lines
+const BODY_CENTRE = 0.56; // along tail->nose, where the printed name goes (until the sprite is measured)
 const LEVEL_RATE = 0.006; // how fast a sideways fish's lines even out its tilt
 const MIN_LINE_SEG = 2;
-const ROPE_SLACK = 1.015; // rope length over its span: a shallow, fairly taut sag
-const ROPE_Y = 0.07; // anchor height, fraction of the screen
+const ROPE_SLACK = 1.035;
 const LINE_SEGS = 5;
 const SWING_S = 1.15;
 const FIRST_DROP_S = 1.35;
 const DROP_GAP_S = 0.28;
 const PAN_FRAC = 0.03; // how far the rope rides up when the camera pans down to the workbench
-const LIFT_FRAC = 0.75; // how far it rides up for the aquarium: the lowest fish clears the top of the screen
 // Over the workbench the rope is pulled taut, its ends lowered to this height (fraction of the screen).
 // Shortening the links alone can't do it: the fish stretch a long rope into a deep sag. So each rope
 // particle is also pulled toward a nearly straight line (a shallow BENCH_SAG in the middle).
 const BENCH_ROPE_Y = 0.19; // high enough that the fish hang clear of the table's back edge
 const BENCH_SAG = 0.025;
-const BENCH_TAUT = 0.991; // rope length factor: ROPE_SLACK × this ≈ the span
+const BENCH_TAUT = 0.972; // rope length factor: ROPE_SLACK × this ≈ the span
 const BENCH_PULL = 0.35; // per step, how far a rope particle moves toward the taut line
 const BENCH_LINES = 0.4; // fishing line length over the workbench, as a fraction of the title's
 const CLICK_MOVE_PX = 8;
 const CLICK_MS = 450;
+
+const SPRITE_PX = 256;
+
+/**
+ * The render is a tilted 3/4 view with padding. Take the body axis as the principal
+ * axis of the opaque pixels (tip-to-tip would follow the tail fin and tilt the fish),
+ * nose toward +x, and its ends at the extreme projections.
+ */
+function fitSprite(img: HTMLImageElement): SpriteFit {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = SPRITE_PX;
+  const cx = cv.getContext('2d', { willReadFrequently: true })!;
+  cx.drawImage(img, 0, 0, SPRITE_PX, SPRITE_PX);
+  const a = cx.getImageData(0, 0, SPRITE_PX, SPRITE_PX).data;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let y = 0; y < SPRITE_PX; y += 2)
+    for (let x = 0; x < SPRITE_PX; x += 2)
+      if (a[(y * SPRITE_PX + x) * 4 + 3] > 60) {
+        xs.push(x);
+        ys.push(y);
+      }
+  const n = xs.length || 1;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  let dx = Math.cos(th);
+  let dy = Math.sin(th);
+  if (dx < 0) {
+    dx = -dx;
+    dy = -dy;
+  }
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const p = (xs[i] - mx) * dx + (ys[i] - my) * dy;
+    lo = Math.min(lo, p);
+    hi = Math.max(hi, p);
+  }
+  return { nx: mx + dx * hi, ny: my + dy * hi, tx: mx + dx * lo, ty: my + dy * lo, c: -lo / (hi - lo || 1) };
+}
 
 const easeOutBack = (u: number) => {
   const c1 = 1.4;
@@ -123,13 +174,8 @@ export class TitleScreen {
   private raf = 0;
   private running = false;
   private panU = 0;
-  private liftU = 0;
-  private hovered: Hanging | null = null; // the menu fish under the pointer
-  private calm = 0; // 0..1, eases toward 1 while a menu fish is picked
   private tableY: number | null = null; // screen y where the fish's shadows fall on the workbench table
   private name: HTMLElement;
-  private stage: FishStage; // the fish as 3D models, over the rope canvas
-  private hover: number[] = []; // per fish, 0..1: eased toward 1 under the pointer
 
   private pointer = { x: -1e4, y: -1e4, vx: 0, vy: 0, t: 0 };
   private held: { i: number; inv: number } | null = null;
@@ -141,15 +187,13 @@ export class TitleScreen {
   ) {
     this.ctx = canvas.getContext('2d')!;
     this.name = canvas.parentElement!.querySelector('#title-name')!;
-    this.stage = new FishStage(canvas.parentElement!.querySelector('#title-fish3d')!);
     this.fish = defs.map((def, i) => {
+      const img = new Image();
       const base = rollFish(def.seed, 40, TITLE_ODDS);
-      const species = def.species ?? base.species;
-      // A species brings its own body; without one, an archetype override still applies.
-      const archetype = def.species ? speciesProfile({ species, archetype: base.archetype }).archetype : (def.archetype ?? base.archetype);
-      this.stage.add({ ...base, species, archetype, rarity: def.rarity, hue: def.hue, sat: def.sat, light: def.light }, def.label);
       const f: Hanging = {
         def,
+        img,
+        fit: null,
         sideways: (def.label?.length ?? 0) >= SIDEWAYS_CHARS,
         lines: [],
         head: 0,
@@ -160,6 +204,9 @@ export class TitleScreen {
         links: [],
         dropped: false,
       };
+      img.onload = () => (f.fit = fitSprite(img));
+      const archetype = def.archetype ?? base.archetype;
+      img.src = fishSprite({ ...base, archetype, rarity: def.rarity, hue: def.hue, sat: def.sat, light: def.light }, SPRITE_PX);
       return f;
     });
     canvas.addEventListener('pointerdown', (e) => this.onDown(e));
@@ -180,24 +227,12 @@ export class TitleScreen {
     this.panU = u;
     this.tableY = tableY;
     this.canvas.parentElement!.style.setProperty('--pan', String(u));
-    this.scrollName();
-  }
-
-  /** The aquarium rises: 0 = the title, 1 = the rope and its fish lifted straight up off the screen. */
-  setLift(u: number) {
-    this.liftU = u;
-    this.scrollName();
-  }
-
-  private scrollName() {
-    const u = Math.max(this.panU, this.liftU);
     this.name.style.transform = u ? `translateY(${-u * 40}vh)` : '';
     this.name.style.opacity = u ? String(Math.max(0, 1 - u * 2.2)) : '';
   }
 
-  /** How far the drawing is shifted up: a little for the workbench, off the screen for the aquarium. */
   private get pan() {
-    return this.panU * this.h * PAN_FRAC + this.liftU * this.h * LIFT_FRAC;
+    return this.panU * this.h * PAN_FRAC;
   }
 
   /** Over the workbench the fishing lines are reeled in, so the fish hang clear of the table's gear and tray. */
@@ -210,22 +245,11 @@ export class TitleScreen {
     return { x: e.clientX, y: e.clientY + this.pan };
   }
 
-  /** Renames a menu fish (index as given to the constructor): its carved name changes in place. */
-  setLabel(i: number, label: string) {
-    const f = this.fish[i];
-    if (f.def.label === label) return;
-    f.def.label = label;
-    this.stage.setLabel(i, label);
-  }
-
-  /**
-   * intro: replay the rope swing and the fish drop; 'drop': the rope is already up
-   * and only the fish fall onto it, straight away; otherwise start settled.
-   */
-  show(intro: boolean | 'drop') {
+  /** intro: replay the rope swing and the fish drop; otherwise start settled. */
+  show(intro: boolean) {
     this.canvas.parentElement!.classList.remove('hidden');
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    this.build(reduced ? false : intro);
+    this.build(intro && !reduced);
     if (this.running) return;
     this.running = true;
     this.last = performance.now();
@@ -243,29 +267,23 @@ export class TitleScreen {
     cancelAnimationFrame(this.raf);
     this.held = null;
     this.press = null;
-    this.hovered = null;
-    this.calm = 0;
-    this.stage.clear();
     this.canvas.parentElement!.classList.add('hidden');
   }
 
   // ---- Setup ------------------------------------------------------------
 
-  private build(mode: boolean | 'drop') {
-    const intro = mode === true; // the rope swings in
-    const drop = mode !== false; // the fish fall onto it
+  private build(intro: boolean) {
     const dpr = Math.min(window.devicePixelRatio, 2);
     this.w = window.innerWidth;
     this.h = window.innerHeight;
     this.canvas.width = Math.round(this.w * dpr);
     this.canvas.height = Math.round(this.h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.stage.resize(this.w, this.h);
 
     // Both anchors sit off-screen: the rope just runs in from one edge and out the other.
     this.ax = -this.w * 0.08;
     this.bx = this.w * 1.08;
-    this.ay = this.by = Math.max(40, this.h * ROPE_Y);
+    this.ay = this.by = Math.max(50, this.h * 0.1);
     const span = this.bx - this.ax;
     const seg = (span * ROPE_SLACK) / ROPE_SEGS;
     this.seg = seg;
@@ -279,13 +297,12 @@ export class TitleScreen {
     for (let i = 0; i <= ROPE_SEGS; i++) {
       const u = i / ROPE_SEGS;
       const x = this.ax + (endX - this.ax) * u;
-      const y = this.ay + (endY - this.ay) * u + (intro ? 0 : Math.sin(u * Math.PI) * span * 0.07);
+      const y = this.ay + (endY - this.ay) * u + (intro ? 0 : Math.sin(u * Math.PI) * span * 0.12);
       this.ps.push({ x, y, px: x, py: y, inv: i === 0 || i === ROPE_SEGS ? 0 : 1 });
       if (i) this.ropeLinks.push({ a: i - 1, b: i, len: seg, slack: false });
     }
     this.swinging = intro;
-    // No swing to wait for: start the clock just before the first fish falls.
-    this.t = intro ? 0 : FIRST_DROP_S - 0.05;
+    this.t = 0;
     this.acc = 0;
 
     const unit = Math.min(this.w, this.h);
@@ -296,7 +313,7 @@ export class TitleScreen {
       f.dropped = false;
       f.links = [];
       f.lines = [];
-      if (!drop) this.drop(f, true);
+      if (!intro) this.drop(f, true);
     });
   }
 
@@ -397,29 +414,6 @@ export class TitleScreen {
       this.step();
     }
     this.draw();
-    this.drawFish3d(dt);
-  }
-
-  /** The fish themselves: 3D models placed from their tail and head particles (title3d.ts). */
-  private drawFish3d(dt: number) {
-    const poses: (FishPose | null)[] = this.fish.map((f, i) => {
-      const under = f.def.onClick && (this.hovered === f || this.held != null && this.press?.fish === f) ? 1 : 0;
-      this.hover[i] = (this.hover[i] ?? 0) + (under - (this.hover[i] ?? 0)) * Math.min(1, dt * 6);
-      if (!f.dropped) return null;
-      const h = this.ps[f.head];
-      const t = this.ps[f.tail];
-      // Verlet keeps last step's position: their difference is the velocity.
-      return {
-        tx: t.x,
-        ty: t.y - this.pan,
-        hx: h.x,
-        hy: h.y - this.pan,
-        vx: ((h.x - h.px + t.x - t.px) / 2) / STEP,
-        vy: ((h.y - h.py + t.y - t.py) / 2) / STEP,
-        hover: this.hover[i],
-      };
-    });
-    this.stage.render(poses, dt, performance.now() / 1000);
   }
 
   private step() {
@@ -446,15 +440,11 @@ export class TitleScreen {
       p.y = this.pointer.y;
     }
 
-    const picked = this.hovered || (this.held && this.press?.fish?.def.onClick);
-    this.calm += ((picked ? 1 : 0) - this.calm) * Math.min(1, CALM_RATE * STEP);
-    const damping = DAMPING + (CALM_DAMPING - DAMPING) * this.calm;
-
     const g = GRAVITY * STEP * STEP;
     for (const p of this.ps) {
       if (!p.inv) continue;
-      const vx = (p.x - p.px) * damping;
-      const vy = (p.y - p.py) * damping;
+      const vx = (p.x - p.px) * DAMPING;
+      const vy = (p.y - p.py) * DAMPING;
       p.px = p.x;
       p.py = p.y;
       p.x += vx;
@@ -573,7 +563,6 @@ export class TitleScreen {
     for (const f of this.fish) if (f.dropped) [f.head, f.tail].forEach((i) => push(this.ps[i]));
     for (let i = 1; i < ROPE_SEGS; i++) push(this.ps[i]);
     const hit = this.fishAt(x, y);
-    this.hovered = hit?.f.def.onClick ? hit.f : null;
     const rope = !hit && this.ropeAt(x, y) != null;
     this.canvas.style.cursor = hit?.f.def.onClick ? 'pointer' : hit || rope ? 'grab' : '';
     // Hovering a fish or the rope: the workbench table behind shouldn't show its tip too.
@@ -704,32 +693,31 @@ export class TitleScreen {
     c.setLineDash([]);
   }
 
-  /**
-   * On the rope canvas, under the 3D fish: a menu fish's glow in its rarity's
-   * colour, and a hook wherever a line meets a fish (mouth, and tail on sideways fish).
-   */
   private drawFish(f: Hanging) {
     const c = this.ctx;
     const h = this.ps[f.head];
     const t = this.ps[f.tail];
-    if (f.def.label) {
-      const i = this.fish.indexOf(f);
-      const r = f.len * 0.55;
-      const g = c.createRadialGradient(0, 0, 0, 0, 0, r);
-      const glow = RARITY[f.def.rarity].color;
-      g.addColorStop(0, glow);
-      g.addColorStop(1, 'transparent');
+    const angle = Math.atan2(h.y - t.y, h.x - t.x);
+    const color = RARITY[f.def.rarity].color;
+
+    const fit = f.fit;
+    if (fit) {
+      // Map the sprite's tail->nose vector onto the tail->head particles.
+      const sv = Math.atan2(fit.ny - fit.ty, fit.nx - fit.tx);
+      const scale = f.len / Math.hypot(fit.nx - fit.tx, fit.ny - fit.ty);
       c.save();
-      c.translate((h.x + t.x) / 2, (h.y + t.y) / 2);
-      c.rotate(Math.atan2(h.y - t.y, h.x - t.x));
-      c.scale(1, 0.55);
-      c.globalAlpha = 0.32 + 0.25 * (this.hover[i] ?? 0);
-      c.fillStyle = g;
-      c.beginPath();
-      c.arc(0, 0, r, 0, Math.PI * 2);
-      c.fill();
+      c.translate(t.x, t.y);
+      c.rotate(angle - sv);
+      c.scale(scale, scale);
+      if (f.def.label) {
+        c.shadowColor = color;
+        c.shadowBlur = 26 / scale;
+      }
+      c.drawImage(f.img, -fit.tx, -fit.ty);
       c.restore();
     }
+
+    // A hook wherever a line meets the fish (mouth, and tail on sideways fish).
     c.strokeStyle = '#cfd8dc';
     c.lineWidth = 1.6;
     for (const line of f.lines) {
@@ -738,5 +726,39 @@ export class TitleScreen {
       c.arc(p.x, p.y + 3, 3.5, Math.PI * 1.1, Math.PI * 0.1, true);
       c.stroke();
     }
+
+    if (f.def.label) this.drawName(f, h, t, angle);
+  }
+
+  /** The name printed on the body, kept upright whichever way the fish swings. */
+  private drawName(f: Hanging, h: P, t: P, angle: number) {
+    const c = this.ctx;
+    const label = f.def.label!;
+    // At the body's centre of mass: a little toward the nose, since the tail fin is thin.
+    const u = f.fit?.c ?? BODY_CENTRE;
+    const x = t.x + (h.x - t.x) * u;
+    const y = t.y + (h.y - t.y) * u;
+    const upright = Math.cos(angle) < 0 ? angle + Math.PI : angle;
+    c.save();
+    c.translate(x, y);
+    c.rotate(upright);
+    let size = Math.min(30, f.len * 0.13);
+    const font = () => `900 ${size.toFixed(1)}px Inter, system-ui, sans-serif`;
+    c.font = font();
+    c.letterSpacing = '0.08em';
+    const fit = (f.len * 0.5) / c.measureText(label).width;
+    if (fit < 1) {
+      size *= fit;
+      c.font = font();
+    }
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.lineJoin = 'round';
+    c.lineWidth = Math.max(2, size * 0.2);
+    c.strokeStyle = 'rgba(8, 14, 30, 0.8)';
+    c.strokeText(label, 0, 1);
+    c.fillStyle = '#ffffff';
+    c.fillText(label, 0, 1);
+    c.restore();
   }
 }

@@ -52,7 +52,6 @@ export class Hud {
   private sharkFill = $('shark-fill');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
-  private boardPrompt = $('board-prompt');
   private netSlots = $('net-slots');
   private bankCount = $('bank-count');
   private bankValue = $('bank-value');
@@ -189,11 +188,6 @@ export class Hud {
   setEmergency(fraction: number | null) {
     this.emergency.classList.toggle('hidden', fraction == null);
     if (fraction != null) this.emergencyFill.style.width = `${Math.max(0, fraction) * 100}%`;
-  }
-
-  /** The "F: climb aboard" prompt, shown while floating beside the boat. */
-  setBoardPrompt(show: boolean) {
-    this.boardPrompt.classList.toggle('hidden', !show);
   }
 
   /** The key to mash, in the middle of the screen, with a ring `progress` (0..1) full. Null hides it. */

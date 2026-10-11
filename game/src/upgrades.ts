@@ -4,10 +4,8 @@ import { buildDeepSonar } from './deep-sonar';
 import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
-import { beam, material, mesh } from './upgrade-models/common';
-import { buildFishingBoat } from './boat';
 
-export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boat' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp' | 'sonar';
+export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp' | 'sonar';
 export type UpgradeLevel = 1 | 2 | 3;
 export {
   ACCESSORIES,
@@ -33,8 +31,6 @@ export const UPGRADES: UpgradeDef[] = [
   { id: 'rod', group: 'dive', name: 'Net shaft', nameZh: '鱼竿杆身', effects: ['Tool reach 1.2 m', 'Tool reach 1.55 m', 'Tool reach 1.9 m'], prices: [0, 100, 500] },
   { id: 'reel', group: 'dive', name: 'Recovery reel', nameZh: '高速回收线轮', effects: ['Base swing recovery', '20% faster recovery', '40% faster recovery'], prices: [0, 120, 600] },
   { id: 'bait', group: 'boat', name: 'Bait', nameZh: '鱼饵', effects: ['Bite wait ×1.0', 'Bite wait ×0.8', 'Bite wait ×0.6'], prices: [0, 40, 300] },
-  // The whole boat as one piece on the workbench: its engine and hull upgrade together.
-  { id: 'boat', group: 'boat', name: 'Boat', nameZh: '船', effects: ['Trip 2 h · hull 3', 'Trip 1 h · hull 5', 'Trip 30 min · hull 8'], prices: [0, 120, 700] },
   { id: 'boatSpeed', group: 'boat', name: 'Boat engine', nameZh: '船 · 速度', effects: ['Trip takes 2 h', 'Trip takes 1 h', 'Trip takes 30 min'], prices: [0, 80, 500] },
   { id: 'boatHull', group: 'boat', name: 'Boat hull', nameZh: '船 · 耐久', effects: ['Durability 3', 'Durability 5', 'Durability 8'], prices: [0, 80, 500] },
   { id: 'boatDeck', group: 'boat', name: 'Fishing deck', nameZh: '船 · 鱼台', effects: ['1 rod', '2 rods', '3 rods'], prices: [0, 80, 500] },
@@ -66,7 +62,6 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   rod: buildRod,
   reel: buildReel,
   bait: buildBait,
-  boat: buildBoat,
   boatSpeed: buildBoatSpeed,
   boatHull: buildBoatHull,
   boatDeck: buildBoatDeck,
@@ -76,31 +71,6 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   lamp: buildLamp,
   sonar: buildSonarDisplay,
 };
-
-/**
- * The boat on the workbench is the boat from the map (boat.ts), as it is. Each
- * level adds a little on top: a radar on the wheelhouse roof, then spotlights
- * and gold trim along the gunwales.
- */
-function buildBoat(level: UpgradeLevel): THREE.Group {
-  const group = buildFishingBoat();
-  const steel = material('#9aaeb5', { metalness: 0.8, roughness: 0.3 });
-  if (level >= 2) {
-    beam(group, [-1.6, 2.16, 0], [-1.6, 2.5, 0], 0.04, steel, 6);
-    mesh(group, new THREE.BoxGeometry(0.9, 0.07, 0.14), steel, [-1.6, 2.55, 0]).rotation.y = 0.5;
-  }
-  if (level === 3) {
-    const dark = material('#102027', { metalness: 0.4, roughness: 0.4 });
-    const lens = material('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 2.4, metalness: 0.1, roughness: 0.25 });
-    const gold = material('#e5b642', { metalness: 0.8, roughness: 0.24 });
-    for (const z of [-0.55, 0.55]) {
-      mesh(group, new THREE.CylinderGeometry(0.1, 0.13, 0.18, 8), dark, [0.2, 2.25, z]).rotation.z = Math.PI / 2;
-      mesh(group, new THREE.SphereGeometry(0.09, 6, 4), lens, [0.31, 2.25, z]);
-    }
-    for (const z of [-0.84, 0.84]) mesh(group, new THREE.BoxGeometry(5.3, 0.06, 0.04), gold, [-0.5, 0.56, z]);
-  }
-  return group;
-}
 
 /** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
 function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
