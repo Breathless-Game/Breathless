@@ -1353,6 +1353,12 @@ button.link {
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
+  /* Never taller than the room the chart leaves (16px above, 56px below for the
+     hint): a long card scrolls inside itself and Dive stays pinned at its foot. */
+  max-height: calc(100vh - 80px);
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 #wb-chart.ready #wb-place {
@@ -1465,6 +1471,9 @@ button.link {
 
 #wb-dive {
   width: 100%;
+  position: sticky;
+  bottom: -20px;
+  box-shadow: 0 -10px 12px -2px var(--panel), 0 20px 0 0 var(--panel);
 }
 
 #wb-place.empty #wb-place-text {
@@ -1478,10 +1487,14 @@ button.link {
   }
 }
 
+/* Centered in the 56px strip under the chart that #wb-chart's padding keeps free,
+   so it can never land on the place card. */
 #wb-chart-hint {
   position: absolute;
+  left: 16px;
   right: 16px;
   bottom: 18px;
+  text-align: center;
   color: var(--muted);
 }
 
@@ -1495,6 +1508,17 @@ button.link {
 
   #wb-paper {
     width: 100%;
+  }
+
+  /* The overlay scrolls here, so the card does not: Dive sticks to the screen's foot. */
+  #wb-place {
+    max-height: none;
+    overflow: visible;
+  }
+
+  #wb-dive {
+    bottom: 0;
+    box-shadow: none;
   }
 
   .wb-pin-label {
