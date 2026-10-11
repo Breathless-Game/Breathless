@@ -69,7 +69,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
 - **Saved progress**: the selected map, the lifetime banked value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
 - **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), map-specific daylight hours (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
-- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying them with Pearl is not wired up. The one upgrade that is playable is the rod / net tier (`G`, section 7), which uses its own net model.
+- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, reel, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. The workbench uses these display models, and 27 of the 30 variants (everything except the reel, which is generated live) are archived as PNG/GLB in [the equipment asset library](assets/README.md#7-equipment-upgrade-models). Purchase and diving effects for the other equipment remain separate gameplay work.
 
 ### Hackathon positioning
 
@@ -411,7 +411,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
         ├── equipment.ts    rod level, Pearl balance, saved state and the upgrade rule
         ├── gear-panel.ts   the rod / net upgrade panel
-        ├── upgrades.ts     the upgrade table and low-poly models for each upgrade level (not shown in the game yet)
+        ├── upgrades.ts     upgrade definitions and the centred workbench model API
         ├── fish.ts         rarity table, zone names, species names, rollFish(seed, depth), catch value by depth, fish meshes, swim and flee AI
         ├── depth-odds.ts   drop rates by depth (RARITY_BY_DEPTH), zoneName(depth); no imports, tested in tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 seeded random numbers
@@ -706,7 +706,7 @@ Pause and background states freeze automatic weather and rain animation; manual 
 - Natural day / night cycle, water reflections and a saved lighting-effects switch
 - Natural weather plus clear / cloudy / rain / storm presets, with quality-scaled clouds and rain
 - Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, a seabed shelf of a different depth on each map with a bottomless trench under the boat, map picker on the start card, unlock by total banked fish value
-- Low-poly models for the upgrade parts (code only, not in the game yet)
+- Faceted PBR models for all nine equipment categories at three levels, used by the workbench, with PNG/GLB assets and an interactive equipment catalog
 - Rod / net upgrade MVP: three tiers of capacity and catch radius, a visibly bigger hoop, saved locally
 - Fish economy: every banked fish auto-minted as an NFT, selling burns it for Pearls, map progress counts lifetime value
 
