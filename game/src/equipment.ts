@@ -246,6 +246,22 @@ const SLOT_LEVELS: Record<UpgradeSlot, readonly SlotTier[]> = {
 
 /** Tier metadata for the multi-slot workshop UI. */
 export const EQUIPMENT_TIERS: Readonly<Record<UpgradeSlot, readonly SlotTier[]>> = SLOT_LEVELS;
+
+/**
+ * Replace the PEARL price of Lv2 and Lv3 per slot with the on-chain Config's (player-chain.ts),
+ * so the gear panel, the workbench and every affordability check show what buy_upgrade burns.
+ * `costs[slot]` is [Lv1, Lv2, Lv3]; Lv1 stays 0.
+ */
+export function setUpgradeCosts(costs: Partial<Record<UpgradeSlot, readonly number[]>>): void {
+  for (const [slot, list] of Object.entries(costs) as [UpgradeSlot, readonly number[]][]) {
+    const tiers = SLOT_LEVELS[slot] as SlotTier[] | undefined;
+    if (!tiers) continue;
+    for (let i = 1; i < tiers.length; i++) {
+      const cost = list[i];
+      if (Number.isSafeInteger(cost) && cost > 0) tiers[i] = { ...tiers[i], cost };
+    }
+  }
+}
 function pathDef(
   slot: EquipmentSlot,
   id: EquipmentPathId,

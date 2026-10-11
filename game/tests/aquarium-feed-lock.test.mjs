@@ -22,7 +22,7 @@ test('aquarium: school feeding pays once via buyFood and never leaves the Pour b
   const body = method('async feedSchool');
   const lock = body.indexOf('this.feeding = true');
   const guard = body.indexOf('if (this.feeding) return');
-  const pay = body.indexOf('await this.hooks.buyFood(food)');
+  const pay = body.indexOf('await this.hooks.buyFood(food');
   assert.ok(guard >= 0 && guard < lock, 'a second click while paying is ignored');
   assert.ok(lock > 0 && pay > lock, 'locked before paying');
   assert.match(body.slice(pay), /if \(!paid\) return;/, 'a null payment applies nothing');
