@@ -15,7 +15,8 @@ import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintT
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { HttpError, SoldLedger, appraise, parseQuoteBatchBody, parseQuoteBody } from './market-rules.mjs';
-import { createSaleDesk, quoteMany } from './market-sale.mjs';
+import { createPayout } from './market-payout.mjs';
+import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 import { renderPearlPng } from './pearl-png.mjs';
 
 const SYMBOL = 'PEARL';
@@ -25,19 +26,8 @@ const FUNDED_SOL = 0.02; // enough for a handful of sales (ATA rent ~0.002 + fee
 const MINT_NEEDS_SOL = 0.02; // mint + metadata accounts + Irys upload
 const FAUCET = 'https://faucet.solana.com';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sigStr = (bytes) => base58.deserialize(bytes)[0];
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
-
-async function poll(fn, ok, tries = 6, gapMs = 1000) {
-  let last;
-  for (let i = 0; i < tries; i++) {
-    last = await fn();
-    if (ok(last)) return last;
-    if (i < tries - 1) await sleep(gapMs);
-  }
-  return last;
-}
 
 /** `u` is a umi whose identity is the market keypair, with mplCore, mplToolbox and mplTokenMetadata installed. */
 export function createServerMode({ u, rpc, dir, log }) {
@@ -172,54 +162,31 @@ export function createServerMode({ u, rpc, dir, log }) {
   }
 
   /**
-   * Mint `pearls` to the seller's ATA (created if missing, market pays). The signature is persisted before sending.
+   * The PEARL payout for one fish: mint `pearls` to the seller's ATA (created if missing, market pays).
    * The memo names the fish: it makes every pay transaction unique, so two fish of the same value sold to the
    * same seller in the same blockhash window can never produce one identical transaction (one signature, one payment).
+   * The signature and expiry are persisted before sending; an uncertain send is settled by resolvePending
+   * (market-payout.mjs), so a timeout never leads to a second payment.
    */
-  async function pay(assetId, mint, seller, pearls) {
-    const ata = findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(seller) });
-    const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
-    const builder = transactionBuilder()
-      .add(createIdempotentAssociatedToken(u, { ata, mint: publicKey(mint), owner: publicKey(seller) }))
-      .add(mintTokensTo(u, { mint: publicKey(mint), token: ata, amount: BigInt(pearls) }))
-      .add(addMemo(u, { memo: `PEARL for fish ${assetId}` }))
-      .setBlockhash(blockhash);
-    const tx = await builder.buildAndSign(u);
-    ledger.payPending(assetId, sigStr(tx.signatures[0]), blockhash.lastValidBlockHeight);
-    try {
-      await u.rpc.sendTransaction(tx, { preflightCommitment: 'confirmed' });
-    } catch (e) {
-      ledger.payDropped(assetId); // rejected in preflight: never submitted
-      throw e;
-    }
-    const res = await builder.confirm(u, tx.signatures[0], { commitment: 'confirmed' });
-    if (res.value.err) {
-      ledger.payDropped(assetId);
-      throw new Error('PEARL mint transaction failed');
-    }
-    ledger.paid(assetId);
-  }
-
-  /** A record stuck in `paying` (crash or timeout): find out whether its pay tx landed. */
-  async function resolvePending(assetId) {
-    const r = ledger.get(assetId);
-    if (!r.payTx) return 'unpaid';
-    const [status] = await u.rpc.getSignatureStatuses([base58.serialize(r.payTx)], { searchTransactionHistory: true });
-    if (status && !status.error) {
-      ledger.paid(assetId);
-      return 'paid';
-    }
-    if (status?.error) {
-      ledger.payDropped(assetId);
-      return 'unpaid';
-    }
-    const height = await u.rpc.call('getBlockHeight', [{ commitment: 'confirmed' }]);
-    if (height > r.payLastValid) {
-      ledger.payDropped(assetId); // expired: it can never land now
-      return 'unpaid';
-    }
-    return 'in-flight';
-  }
+  const payout = createPayout({
+    ledger,
+    async build(assetId, mint, seller, pearls) {
+      const ata = findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(seller) });
+      const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
+      const tx = await transactionBuilder()
+        .add(createIdempotentAssociatedToken(u, { ata, mint: publicKey(mint), owner: publicKey(seller) }))
+        .add(mintTokensTo(u, { mint: publicKey(mint), token: ata, amount: BigInt(pearls) }))
+        .add(addMemo(u, { memo: `PEARL for fish ${assetId}` }))
+        .setBlockhash(blockhash)
+        .buildAndSign(u);
+      return { tx, blockhash, sig: sigStr(tx.signatures[0]), lastValid: blockhash.lastValidBlockHeight };
+    },
+    send: ({ tx }) => u.rpc.sendTransaction(tx, { preflightCommitment: 'confirmed' }),
+    confirm: async ({ tx, blockhash }) =>
+      (await u.rpc.confirmTransaction(tx.signatures[0], { strategy: { type: 'blockhash', ...blockhash }, commitment: 'confirmed' })).value.err,
+    getSignatureStatus: async (sig) => (await u.rpc.getSignatureStatuses([base58.serialize(sig)], { searchTransactionHistory: true }))[0],
+    getBlockHeight: () => u.rpc.call('getBlockHeight', [{ commitment: 'finalized' }]),
+  });
 
   async function burnSold(assetId) {
     try {
@@ -251,8 +218,8 @@ export function createServerMode({ u, rpc, dir, log }) {
         () => loadAsset(assetId),
         (a) => a?.owner?.toString() === marketKey,
       ),
-    resolvePending,
-    pay,
+    resolvePending: payout.resolvePending,
+    pay: payout.pay,
     burnSold,
     log,
   });

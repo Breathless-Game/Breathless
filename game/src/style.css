@@ -3201,6 +3201,59 @@ button:disabled {
   backdrop-filter: blur(10px);
 }
 
+/* PEARL balance: a pill in the chip's style, to the chip's left. "…" while reading, "—" when unavailable. */
+.wallet-chip .pearl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  cursor: default;
+}
+
+.pearl-badge .pearl-glyph {
+  color: var(--breathe);
+}
+
+.pearl-badge .pearl-amount {
+  min-width: 1ch;
+  text-align: right;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.pearl-badge .pearl-unit {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.pearl-badge[data-state='loading'] .pearl-amount,
+.pearl-badge[data-state='unavailable'] .pearl-amount {
+  color: var(--muted);
+}
+
+@media (max-width: 400px) {
+  .wallet-chip {
+    gap: 6px;
+  }
+  .wallet-chip .pearl-badge {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+  .pearl-badge .pearl-unit {
+    font-size: 10px;
+  }
+}
+
 .wallet-trigger {
   display: inline-flex;
   align-items: center;
@@ -3533,4 +3586,11 @@ button:disabled {
 
 .wb-path.on small {
   color: var(--hold);
+}
+/* Ship mode (the boat): the intro is a paragraph, not a one-line effect. */
+#wb-inspect.ships #wb-inspect-effect {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--muted);
 }

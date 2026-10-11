@@ -1,0 +1,89 @@
+/* A worn field notebook: ink diagrams, linen covers, paper and colored index tabs. */
+.guide-launcher { position: fixed; right: 22px; bottom: 22px; z-index: 80; display: flex; gap: 7px; }
+.guide-launcher button { background: #eee1bf; color: #3d493e; border: 1px solid #baae90; border-radius: 4px; box-shadow: 0 3px 12px #0005; font-size: 12px; font-weight: 700; padding: 10px 13px; }
+.guide-launcher button[aria-pressed='true'] { background: #a6bdaa; }
+.guide-launcher kbd, .field-guide kbd, .dive-tutorial kbd { display: inline-block; border: 1px solid currentColor; border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; font: inherit; font-size: 11px; margin-left: 5px; }
+.field-guide { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 36px 68px; background: #0b171dcc; backdrop-filter: blur(7px); color: #3a433b; }
+.guide-book { position: relative; width: min(100%, 960px); max-height: 90dvh; display: flex; flex-direction: column; background: #d8c8a5; border: 7px solid #536b5b; border-left-width: 22px; border-radius: 7px 17px 17px 6px; box-shadow: 0 20px 80px #0008, 4px 5px 0 #a09279, 8px 9px 0 #526352; transform: rotate(-.7deg); animation: guide-open .22s ease-out; }
+.guide-cover { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 24px; color: #f0e4c7; background: #546555; border-bottom: 2px solid #34463c; letter-spacing: 1px; font-size: 12px; font-weight: 700; }
+.field-guide button { color: inherit; border: 1px solid #8f9778; background: #e9dcba; border-radius: 3px; font: inherit; font-size: 12px; padding: 8px 12px; box-shadow: none; }
+.field-guide button:hover { background: #d8c897; }
+.field-guide button:disabled { opacity: .35; cursor: default; }
+.field-guide button:focus-visible, .guide-launcher button:focus-visible, .dive-tutorial button:focus-visible { outline: 3px solid #d99940; outline-offset: 3px; }
+.guide-cover button { background: transparent; color: #f0e4c7; border-color: #bdc0a0; white-space: nowrap; }
+.guide-cover button:hover { background: #64745f; }
+.guide-binding { position: absolute; top: 76px; bottom: 60px; left: -34px; display: flex; flex-direction: column; justify-content: space-around; width: 42px; z-index: 2; pointer-events: none; }
+.guide-binding i { display: block; height: 12px; width: 39px; border: 4px solid #252e29; border-right-color: #849084; border-radius: 50%; box-shadow: 0 2px 1px #fff6, 0 3px 2px #0007; }
+.guide-tabs { position: absolute; right: -46px; top: 66px; display: flex; flex-direction: column; gap: 7px; }
+.guide-tabs button { background: #a0b09a; border: 2px solid #455847; border-left: 0; border-radius: 0 4px 4px 0; width: 46px; height: 59px; padding: 5px 6px; font-weight: 700; font-size: 12px; box-shadow: 2px 3px 1px #0003; }
+.guide-tabs button:nth-child(2n) { background: #d4b77f; }
+.guide-tabs button:nth-child(3n) { background: #a1bac0; }
+.guide-tabs button span { display: block; font-size: 10px; opacity: .65; margin-bottom: 4px; }
+.guide-tabs button.selected { width: 54px; background: #f5eacb; box-shadow: 2px 3px 1px #0003, inset 0 -4px #798f6e; }
+.guide-pages { display: grid; grid-template-columns: 1fr 1fr; overflow-y: auto; min-height: 0; background: #ede3c7; background-image: repeating-linear-gradient(0deg, #72562a04 0 1px, transparent 1px 4px); }
+.guide-page { padding: 26px 30px 24px; }
+.guide-picture { border-right: 1px solid #cbbd97; box-shadow: inset -12px 0 18px -16px #372e24aa; }
+.guide-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 1.4px; margin: 0 0 15px; color: #6c7967; }
+.guide-page h1 { font-size: clamp(19px, 2.2vw, 27px); line-height: 1.4; font-weight: 800; margin: 0; }
+.guide-illustration { margin: 22px -8px 4px; border: 1px solid #9d96734d; border-radius: 42% 4% 37% 7% / 3% 41% 5% 26%; background: #dbdac333; padding: 7px; }
+.guide-sketch { width: 100%; display: block; color: #475345; }
+.guide-sketch text { font: 11px system-ui, sans-serif; stroke: none; fill: currentColor; }
+.guide-dash { stroke-dasharray: 4 6; }
+.guide-caption { font-size: 12px; text-align: center; letter-spacing: .5px; margin: 8px 0 25px; }
+.guide-pencil-note { border-left: 3px solid #b69b5e; padding: 2px 0 2px 13px; }
+.guide-pencil-note span { font-size: 9px; letter-spacing: 1px; font-weight: 800; color: #857d5c; }
+.guide-pencil-note p { font-size: 12px; line-height: 1.9; margin: 5px 0 0; }
+.guide-instructions ol { list-style: none; padding: 0; margin: 0; }
+.guide-instructions li { display: flex; gap: 13px; padding: 15px 0; border-bottom: 1px dashed #a5a17d; }
+.guide-step-number { border: 2px solid #66765a; border-radius: 45% 52% 40% 50%; width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center; font-size: 13px; transform: rotate(-7deg); }
+.guide-instructions h2 { font-size: 15px; margin: 1px 0 6px; }
+.guide-instructions li p { font-size: 12px; line-height: 1.9; margin: 0; }
+.guide-pack-list { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.guide-pack-list span { font-size: 11px; border: 1px solid #b5ac8e; padding: 6px 8px; }
+.guide-pack-list small { display: block; margin: 3px 0 0 13px; opacity: .7; }
+.guide-pack-list .packed { background: #a7b89955; color: #3c603e; }
+.guide-tour-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 20px; }
+.guide-tour-control strong { font-size: 12px; }
+.guide-tour-control small { display: block; margin-top: 4px; font-size: 10px; opacity: .75; }
+.guide-tour-control button { padding: 7px 10px; }
+.guide-tour-control button[aria-checked='true'] { background: #9fb693; }
+#guide-tour-restart { border: 0; background: transparent; padding-left: 0; font-size: 11px; }
+.guide-footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #c6b38b; padding: 12px 22px; font-size: 11px; letter-spacing: 1px; background: #e2d4b0; }
+.dive-tutorial { position: fixed; bottom: 82px; left: 22px; width: min(350px, calc(100vw - 44px)); z-index: 79; background: #eee3c9; color: #394b40; padding: 18px; border: 1px solid #b5b797; border-left: 4px solid #7e9872; border-radius: 3px 8px 8px 3px; box-shadow: 0 7px 24px #0004; }
+.dive-tutorial h2 { font-size: 16px; line-height: 1.45; margin: 9px 0 7px; }
+.dive-tutorial p:not(.guide-eyebrow) { font-size: 12px; line-height: 1.8; margin: 7px 0 12px; }
+.dive-tutorial strong { display: block; font-size: 12px; font-weight: 700; margin-top: 10px; }
+.dive-tutorial button { background: #5b755f; color: #fff6e1; border: 1px solid #5b755f; border-radius: 3px; padding: 8px 11px; font-size: 11px; }
+.dive-tutorial button:hover { background: #48674d; }
+.tour-heading { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+.tour-heading span { flex: 1; }
+.tour-heading button { color: #4b604f; background: transparent; border: 0; padding: 2px 7px; font-size: 17px; }
+.tour-heading button:hover { background: #d1d5b5; }
+.tour-progress { height: 3px; background: #cfcbae; margin: 13px 0; }
+.tour-progress i { display: block; height: 100%; background: #69875e; }
+#tour-read { margin-top: 14px; background: transparent; color: #4b604f; border-color: #aaa989; }
+.tour-actions { display: flex; gap: 8px; }
+#tour-dismiss { color: #4b604f; background: transparent; border-color: #aaa989; }
+@keyframes guide-open { from { opacity: 0; transform: translateY(20px) rotate(-2deg); } }
+@media (max-width: 720px) {
+  .field-guide { padding: 16px 50px 16px 22px; }
+  .guide-book { border-width: 5px; border-left-width: 13px; max-height: 94dvh; transform: none; }
+  .guide-cover { padding: 12px 13px; letter-spacing: .4px; font-size: 10px; }
+  .guide-cover button { padding: 6px 8px; font-size: 10px; }
+  .guide-pages { grid-template-columns: 1fr; }
+  .guide-page { padding: 20px 20px; }
+  .guide-picture { border-right: 0; border-bottom: 1px solid #bfb18e; box-shadow: none; }
+  .guide-illustration { max-width: 340px; margin: 15px auto 0; }
+  .guide-binding { left: -27px; width: 30px; }
+  .guide-binding i { width: 27px; height: 10px; border-width: 3px; }
+  .guide-tabs { right: -37px; top: 60px; gap: 5px; }
+  .guide-tabs button { width: 37px; height: 48px; padding: 3px; font-size: 11px; }
+  .guide-tabs button.selected { width: 40px; }
+  .guide-tabs button span { font-size: 9px; }
+  .guide-footer { padding: 10px; }
+  .guide-footer button { font-size: 10px; padding: 6px; }
+  .guide-launcher { right: 12px; bottom: 12px; }
+  .guide-launcher button { padding: 8px 10px; }
+  .dive-tutorial { left: 12px; bottom: 65px; padding: 13px; width: min(310px, calc(100vw - 24px)); }
+}
+@media (prefers-reduced-motion: reduce) { .guide-book { animation: none; transform: none; } }

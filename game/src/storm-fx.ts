@@ -59,6 +59,13 @@ export class StormFx {
   private floaters: Floater[] = [];
   private cargo: THREE.Object3D[] = [];
   private emit = 0;
+  // The boat's ordinary wake is deliberately a small, throttled effect. The
+  // wave crest has its own spray path below; keeping this state separate lets
+  // a calm sea leave just a few soft chips while a steep swell hits the hull
+  // with a short burst.
+  private wakeCooldown = 0;
+  private lastBoatX = Number.NaN;
+  private lastBoatY = Number.NaN;
   // Each clump of foam keeps its own place along the crest, size and tumble.
   private clump = new Float32Array(FOAM * 4);
 
@@ -161,6 +168,63 @@ export class StormFx {
         mesh: group, vx: dir * (1.5 + Math.random() * 4), vy: 4 + Math.random() * 3.5, vz: (Math.random() - 0.5) * 2,
         spin: new THREE.Vector3(0, 0, (Math.random() - 0.5) * 12), afloat: false, ride: 0, flat: new THREE.Euler(), age: 0, life: 3.2, phase: Math.random() * 6, fish: true,
       });
+    }
+  }
+
+  /**
+   * Add the small white-water interaction at the hull. `surface` is the same
+   * function used by the boat and the rogue wave, so the wake follows the
+   * actual crest instead of a fixed waterline. A steep local slope, a fast
+   * vertical heave, and a boat that is rolling all make the bow slap harder.
+   * A capsizing hull is left to `capsize`, which already produces the large
+   * throw of spray and floating debris.
+   */
+  boatWake(dt: number, _time: number, x: number, y: number, roll: number, pitch: number, surface: Surface) {
+    if (!Number.isFinite(dt) || dt <= 0 || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    const previousX = this.lastBoatX;
+    const previousY = this.lastBoatY;
+    this.lastBoatX = x;
+    this.lastBoatY = y;
+    // During a capsize the dedicated event effect is more legible than a
+    // continuous wake fighting the deck cargo and righting spray.
+    if (Math.abs(roll) > 0.55) {
+      this.wakeCooldown = Math.max(this.wakeCooldown, 0.18);
+      return;
+    }
+
+    const water = surface(x, 0);
+    const slope = (surface(x + 2, 0) - surface(x - 2, 0)) * 0.25;
+    const verticalSpeed = Number.isFinite(previousY) ? (y - previousY) / dt : 0;
+    const horizontalSpeed = Number.isFinite(previousX) ? (x - previousX) / dt : 0;
+    // All terms are metres or radians scaled to a comparable 0..1 visual
+    // intensity. The small floor keeps even calm fjord water alive.
+    const intensity = THREE.MathUtils.clamp(
+      0.1 + Math.abs(slope) * 1.7 + Math.abs(verticalSpeed) * 0.18
+        + Math.abs(y - water) * 0.28 + Math.abs(roll) * 0.16 + Math.abs(pitch) * 0.2
+        + Math.min(1, Math.abs(horizontalSpeed) * 0.025) * 0.12,
+      0,
+      1,
+    );
+    this.wakeCooldown -= dt;
+    if (this.wakeCooldown > 0) return;
+    // Higher, faster waves strike more often. Keeping a minimum interval
+    // prevents particle churn when the render loop is running quickly.
+    this.wakeCooldown = THREE.MathUtils.lerp(0.48, 0.14, intensity);
+    const size = THREE.MathUtils.lerp(0.22, 0.72, intensity);
+    const power = THREE.MathUtils.lerp(1.4, 4.8, intensity);
+    const count = Math.round(2 + intensity * 10);
+    const waveSide = slope >= 0 ? 1 : -1;
+    const bowX = x + 2.85;
+    const bowZ = waveSide * THREE.MathUtils.lerp(0.58, 0.82, intensity);
+    const bowY = surface(bowX, bowZ) + 0.04;
+    this.burst(bowX, bowY, bowZ, count, horizontalSpeed * 0.25 + waveSide * power * 0.15, power);
+    // The stern leaves a flatter, longer chip instead of a second wall of
+    // spray. This remains visible as the hull rises off a passing trough.
+    const trailX = x - 2.3;
+    const trailZ = -waveSide * 0.62;
+    this.leaveFoam(trailX, trailZ, size, THREE.MathUtils.lerp(1.5, 3.6, intensity));
+    if (intensity > 0.42) {
+      this.leaveFoam(x - 0.7, waveSide * 0.9, size * 0.72, 1.5 + intensity * 1.8);
     }
   }
 
@@ -309,6 +373,9 @@ export class StormFx {
     this.drop.fill(0);
     this.patch.fill(0);
     this.liveDrops = 0;
+    this.wakeCooldown = 0;
+    this.lastBoatX = Number.NaN;
+    this.lastBoatY = Number.NaN;
     for (const mesh of [this.foam, this.drops, this.patches]) {
       for (let i = 0; i < mesh.count; i++) mesh.setMatrixAt(i, HIDDEN);
       mesh.instanceMatrix.needsUpdate = true;
