@@ -1,4 +1,5 @@
 import * as T from 'three';
+import { gearLevelsChanged } from './gear-levels';
 import { storageKey } from './wallet';
 import './ships.css';
 const SHIP_INTROS_EN = [
@@ -46,7 +47,7 @@ export class Shipyard {
       if (button.dataset.close !== undefined) this.close();
       if (button.dataset.ship !== undefined) { this.selected = Number(button.dataset.ship); this.draw(); this.root.querySelector<HTMLButtonElement>(`[data-ship="${this.selected}"]`)?.focus(); }
       if (button.dataset.equip !== undefined && this.progress() >= SHIPS[this.selected].threshold) {
-        this.index = this.selected; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {}
+        this.index = this.selected; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {} gearLevelsChanged();
         this.apply(); this.onEquip(); this.draw();
       }
     });
