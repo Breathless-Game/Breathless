@@ -426,6 +426,7 @@ export class Workbench {
     this.sheet.curl = 0; // lying on the table, its edges rest on the tabletop
     this.sheet.reset();
     this.guideOpen = 0;
+    this.guideReturning = false;
     this.guideLift = 0;
     this.guide.position.copy(GUIDE_AT);
     this.guide.rotation.set(-0.04, -0.12, 0);
@@ -479,6 +480,7 @@ export class Workbench {
     this.chartEl.classList.add('hidden');
     this.tip.classList.add('hidden');
     this.guideOpen = 0;
+    this.guideReturning = false;
     this.guideLift = 0;
     this.guide.position.copy(GUIDE_AT);
     this.guide.rotation.set(-0.04, -0.12, 0);
