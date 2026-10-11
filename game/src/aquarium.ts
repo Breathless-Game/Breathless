@@ -44,7 +44,13 @@ const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 
 export interface AquariumHooks {
   /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
   pan(u: number): void;
-  buyFood(food: FishFoodDef): Promise<boolean>;
+  /**
+   * Pay for one food (legacy Pearls first, then on-chain PEARL, like gear upgrades).
+   * Resolves with the split actually spent, or null when nothing was spent: the fish is fed only then.
+   */
+  buyFood(food: FishFoodDef): Promise<{ fromLegacy: number; fromChain: number } | null>;
+  /** Spendable Pearls (legacy + cached on-chain), for the feed button's affordability state. */
+  pearls(): number;
   message(text: string): void;
 }
 
@@ -656,8 +662,19 @@ export class Aquarium {
     body.append(foodPanel);
     const feed = document.createElement('button');
     feed.className = 'mini primary aq-feed';
-    feed.textContent = `Feed · ${food.nameZh} · ${food.price} ✦`;
-    feed.addEventListener('click', () => void this.feed(f));
+    const affordable = this.hooks.pearls() >= food.price;
+    feed.textContent = affordable
+      ? `Feed · ${food.nameZh} · ${food.price} ✦`
+      : `Need ${food.price - this.hooks.pearls()} more ✦ · Pearl 不足`;
+    feed.disabled = !affordable || this.feeding;
+    feed.title = `${food.price} Pearls · legacy Pearls are spent first, then on-chain PEARL`;
+    feed.addEventListener('click', () => {
+      // Locked while the payment is in flight, so rapid clicks cannot pay twice.
+      feed.disabled = true;
+      void this.feed(f).finally(() => {
+        if (feed.isConnected) feed.disabled = this.hooks.pearls() < food.price;
+      });
+    });
     const star = document.createElement('button');
     star.className = fav ? 'mini' : 'mini primary';
     const full = !fav && this.favoriteFish().length >= TANK_SIZE;
@@ -695,9 +712,10 @@ export class Aquarium {
     }
     if (this.feeding) return;
     this.feeding = true;
+    let rerendered = false;
     try {
-      const purchased = await this.hooks.buyFood(food);
-      if (!purchased) return;
+      const paid = await this.hooks.buyFood(food);
+      if (!paid) return;
       this.aquariumState = { ...result.state, light: { ...this.aquariumState.light } };
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
       const swimmer = this.swimmers.get(f);
@@ -706,7 +724,7 @@ export class Aquarium {
         swimmer.speed = 0.035 + RARITY[f.rarity].speed * 0.008;
         swimmer.glowIntensity = activeFoodEffects(this.aquariumState.growth[f.id]).glow;
       }
-      this.hooks.message(`${f.name} grew after a meal · 喂食后长大了`);
+      this.hooks.message(`${f.name} grew after a meal · 喂食后长大了 · ${spentText(paid)}`);
       if (swimmer) {
         swimmer.growthPulse = 1;
         for (let i = 0; i < 5; i++) this.bubbles.push({
@@ -717,9 +735,14 @@ export class Aquarium {
           v: 0.12 + Math.random() * 0.1,
         });
       }
-      if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) this.pick(swimmer);
+      if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) {
+        this.pick(swimmer);
+        rerendered = true;
+      }
     } finally {
       this.feeding = false;
+      // A card re-rendered mid-payment has a disabled Feed button; rebuild it if the success path did not.
+      if (!rerendered && this.picked) this.pick(this.picked);
     }
   }
 
@@ -1020,4 +1043,12 @@ export class Aquarium {
     ctx.lineWidth = 1;
     ctx.stroke();
   }
+}
+
+/** What a feeding cost, split by balance: legacy Pearls never move the on-chain PEARL badge. */
+export function spentText(spend: { fromLegacy: number; fromChain: number }): string {
+  const parts: string[] = [];
+  if (spend.fromChain > 0) parts.push(`−${spend.fromChain} PEARL`);
+  if (spend.fromLegacy > 0) parts.push(`−${spend.fromLegacy} legacy Pearls`);
+  return parts.join(' + ') || 'free';
 }
