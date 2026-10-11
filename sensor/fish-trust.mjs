@@ -188,6 +188,13 @@ export function pluginProblem(asset) {
 const NOT_SELLABLE = 'only fish minted by the game (the Breathless Fish collection) can be sold';
 
 /**
+ * Does the asset carry a fish's attributes at all (a seed)? The game's Boat and Dive Kit NFTs
+ * (game/src/gear-nft.ts: kind, schema, levels) are minted by the same session key, outside any
+ * collection, like a fish from before the collection: without this they would be told to migrate.
+ */
+const hasFishFacts = (asset) => readFacts(asset?.attributes?.attributeList).id !== '';
+
+/**
  * THE gate before any price (quote, quote-batch, sell, sell-batch, program-mode quotes): returns
  * the fish's price in PEARL or throws HttpError(422). The market pays only fish in its collection
  * whose on-chain facts its own generator agrees with.
@@ -196,7 +203,7 @@ export function assertTrustedFish(asset, { collection }) {
   const ua = asset?.updateAuthority;
   if (!collection) throw new HttpError(503, 'The market is still creating its fish collection, try again shortly');
   if (ua?.type !== 'Collection' || String(ua.address) !== String(collection)) {
-    const legacy = ua?.type === 'Address';
+    const legacy = ua?.type === 'Address' && hasFishFacts(asset);
     throw new HttpError(
       422,
       legacy
@@ -313,6 +320,7 @@ export function migrationProblem(asset, { owner, payer, collection }) {
   if (ua?.type === 'Collection' && String(ua.address) === String(collection)) return 'Already in the Breathless Fish collection';
   if (String(asset.owner) !== owner) return 'This fish belongs to another wallet';
   if (ua?.type !== 'Address') return `Not a Breathless fish: ${NOT_SELLABLE}`;
+  if (!hasFishFacts(asset)) return `Not a Breathless fish: ${NOT_SELLABLE}`;
   if (String(ua.address) !== payer) return 'Minted with this wallet\'s game key on another device or browser: open the game there to make it sellable';
   const plugin = pluginProblem(asset);
   if (plugin) return plugin;

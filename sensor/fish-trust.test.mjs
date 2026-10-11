@@ -82,6 +82,15 @@ function asset({ attributeList, ua = { type: 'Collection', address: COLLECTION }
 /** Is a (seed, rarity) a different species in v1 and v2? */
 const renamed = (rarity) => (x) => GENERATOR_V1.fishOf(x, rarity).species !== GENERATOR_V2.fishOf(x, rarity).species;
 
+/** Attributes of the game's gear NFTs (game/src/gear-nft.ts gearAttributes). */
+const GEAR_KIT = [
+  { key: 'kind', value: 'kit' },
+  { key: 'schema', value: '1' },
+  ...['rod', 'reel', 'net', 'fins', 'tank', 'lamp', 'sonar'].map((key) => ({ key, value: '2' })),
+  ...['rod', 'net', 'fins', 'tank', 'lamp', 'reel'].map((s) => ({ key: `${s}Branch`, value: 'a' })),
+];
+const GEAR_BOAT = [{ key: 'kind', value: 'boat' }, { key: 'schema', value: '1' }, { key: 'ship', value: '3' }, { key: 'shipName', value: 'Echo Scout' }, ...['bait', 'boat', 'boatSpeed', 'boatHull', 'boatDeck'].map((key) => ({ key, value: '1' }))];
+
 const facts = (f) => ({ id: f.id, rarity: f.rarity, species: f.species, depth: f.depthM, value: f.value });
 
 // ---- The generator check ----------------------------------------------------------------------
@@ -218,6 +227,13 @@ test('assertTrustedFish refuses forged fish: no collection, the wrong collection
     assert.throws(() => assertTrustedFish(a, { collection: COLLECTION }), (e) => e instanceof HttpError && e.status === 422 && why.test(e.message));
   }
   assert.throws(() => assertTrustedFish(asset({ attributeList: attributesOf(goodFish) }), { collection: null }), (e) => e.status === 503);
+  // The game's Boat / Dive Kit NFTs: same session key, no collection, no fish attributes.
+  for (const gear of [GEAR_KIT, GEAR_BOAT]) {
+    assert.throws(
+      () => assertTrustedFish(asset({ attributeList: gear, ua: { type: 'Address', address: SESSION } }), { collection: COLLECTION }),
+      (e) => e.status === 422 && e.extra?.code === 'not-a-fish' && /Not a Breathless fish/.test(e.message),
+    );
+  }
   assert.equal(pluginProblem(asset({ attributeList: [], extra: { oracles: [], lifecycleHooks: [] } })), null, 'empty adapter lists are fine');
 });
 
@@ -356,6 +372,7 @@ test('migration validates the legacy fish like a new mint, and only the session 
   assert.match(migrationProblem(legacy(attributesOf(goodFish), { extra: { updateDelegate: {} } }), opts), /updateDelegate/);
   assert.match(migrationProblem(asset({ attributeList: attributesOf(goodFish) }), opts), /Already/);
   assert.match(migrationProblem(null, opts), /not found/);
+  assert.match(migrationProblem(legacy(GEAR_KIT), opts), /Not a Breathless fish/, 'a Dive Kit NFT is never migrated');
   // Created before the collection (or within the grace) only.
   assert.ok(isLegacyEra(100, 1000, 0));
   assert.ok(isLegacyEra(1500, 1000, 9000));

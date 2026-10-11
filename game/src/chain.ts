@@ -7,6 +7,9 @@ import { zoneName } from './depth-odds';
 import { ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
 import { cosignInfo, cosignMint, makeSellable, mintRoute, type FishTrust } from './fish-cosign';
+import * as gearOps from './gear-chain';
+import type { GearCtx } from './gear-chain';
+import type { GearMintRequest, GearUpdateRequest } from './gear-sync';
 import { fishImagePath, fishMetaPath, nftName, nftOrigin } from './nft-uri';
 import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
 
@@ -156,6 +159,18 @@ export async function repairFishUri(spec: FishSpec & { assetId: string; serial?:
     .sendAndConfirm(u);
   return 'updated';
 }
+
+// ---- Boat and Dive Kit NFTs (gear-sync.ts schedules them, gear-chain.ts builds the transactions) ----
+
+const gearCtx = (): GearCtx => {
+  const u = getUmi();
+  return { umi: u, session: sessionSigner(u), owner: ownerAddress(u), origin: NFT_ORIGIN };
+};
+
+export const newGearKey = (): Uint8Array => gearOps.newGearKey(getUmi());
+export const mintGear = (req: GearMintRequest) => gearOps.mintGear(gearCtx(), req);
+export const updateGear = (req: GearUpdateRequest) => gearOps.updateGear(gearCtx(), req);
+export const readGear = (assetId: string) => gearOps.readGear(getUmi(), assetId);
 
 /** Burning is the sink: the NFT is destroyed on-chain. */
 export async function burnFish(assetId: string): Promise<string> {

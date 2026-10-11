@@ -101,7 +101,6 @@
         <div class="zh">屏息</div>
         <div class="en">BREATHLESS</div>
         <div class="title-hint">Grab the fish · click <b>START</b> or press Enter</div>
-        <div class="title-hint">点击船只升级 · Click the boat to upgrade</div>
       </div>
       <!-- Over the title and the workbench (which sits under this layer): who is logged in, and Log out. -->
       <div id="wallet-chip" class="wallet-row wallet-chip hidden"></div>
@@ -152,6 +151,10 @@
           <div id="wb-place-warn" class="small hidden"></div>
           <section id="wb-place-conditions" class="wb-weather-card" aria-label="Entry conditions">
             <div class="wb-weather-title">FIELD NOTES · 入场记录</div>
+            <div id="wb-fishing-advice" class="wb-fishing-advice" role="status">
+              <b id="wb-fishing-label"></b>
+              <span id="wb-fishing-reason"></span>
+            </div>
             <div class="wb-weather-grid">
               <span>Entry time · 进入时间</span><b id="wb-entry-time">--:--</b>
               <span>Surface temp · 水温</span><b id="wb-entry-temp">--°C</b>
