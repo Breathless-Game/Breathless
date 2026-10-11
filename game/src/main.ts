@@ -29,7 +29,7 @@ import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -585,7 +585,11 @@ const loadoutWheel = new LoadoutWheel({
 hud.setActiveGear(activeTool, true);
 let nowMs = 0;
 
+/** Set once the workbench exists: its pieces follow levels bought and ships picked. */
+let onGearChange = () => {};
+
 function refreshEquipment() {
+  onGearChange();
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
@@ -613,39 +617,44 @@ async function syncPearls(earned = 0) {
 }
 
 let buying = false;
-async function buyNextUpgrade(slot: UpgradeSlot = 'net') {
-  if (buying) return;
+/** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
+async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
+  if (buying) return 'Already upgrading…';
   if (phase === 'play') {
     gear.showNotice('Return to the workbench before upgrading gear.');
-    return;
+    return 'Return to the workbench before upgrading gear.';
   }
   const next = nextSlotTier(equipment, slot);
   if (!next) {
     gear.showNotice(`${nextSlotLabel(slot)} is already at maximum level.`);
-    return;
+    return 'Already at the top level.';
   }
   const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
-    gear.showNotice(`Need ${pearls(next.cost - totalPearls(equipment))} more.`);
-    hud.message(`Need ${pearls(next.cost - totalPearls(equipment))} more`, 1500);
-    return;
+    const need = `Need ${pearls(next.cost - totalPearls(equipment))} more`;
+    gear.showNotice(`${need}.`);
+    hud.message(need, 1500);
+    return need;
   }
   // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
   buying = true;
   gear.setBusy(true);
+  let failed: string | null = null;
   try {
     if (plan.fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
     Object.assign(equipment, applySlotUpgrade(equipment, plan));
     hud.message(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, 1800);
   } catch (e) {
     console.error('upgrade failed', e);
-    gear.showNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
+    failed = `Upgrade failed: ${(e as Error).message ?? e}`;
+    gear.showNotice(failed);
   } finally {
     buying = false;
     gear.setBusy(false);
     refreshEquipment();
     if (plan.fromChain > 0) void syncPearls();
   }
+  return failed;
 }
 
 function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
@@ -1252,7 +1261,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
   paused = open;
   keys.clear();
   if (!open) breathSince = null;
-}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); }, scene, root => world.colorGrade.apply(root));
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
 const boatRay = new THREE.Raycaster();
 document.addEventListener('click', (e) => {
   if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible) return;
@@ -1315,12 +1324,32 @@ const workbench = new Workbench({
       startGame();
     } else openStartCard();
   },
-  // Only the net (equipment.ts's rod tiers) can be upgraded so far; the rest is starting gear.
-  owned: (id) => (id === 'net' ? equipment.rodLevel : 1),
+  // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
+  owned: (id) => (isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1),
+  buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve('Not upgradable here')),
+  pearls: () => totalPearls(equipment),
+  paths: (id) =>
+    isEquipmentSlot(id)
+      ? EQUIPMENT_PATHS[id].map((p) => ({ id: p.id, name: p.name, nameZh: p.nameZh, summary: p.summary, effects: p.tiers.map((t) => t.effect) }))
+      : null,
+  activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
+  selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),
+  ship: () => ({ key: shipyard.shipIndex, model: shipyard.shipModel() }),
+  openShipyard: () => shipyard.show(),
   sonarColor(color) {
     sonar.setColor(color);
   },
 });
+// The gear panel (G) buys too: whatever buys or picks a ship, the pieces on the table follow.
+onGearChange = () => workbench.visible && workbench.refreshGear();
+
+function isUpgradeSlot(id: UpgradeId): id is UpgradeSlot {
+  return id in EQUIPMENT_TIERS;
+}
+
+function isEquipmentSlot(id: UpgradeId): id is EquipmentSlot {
+  return id in EQUIPMENT_PATHS;
+}
 
 function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
@@ -1750,6 +1779,8 @@ frame();
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
   workbench,
+  equipment,
+  shipyard,
   settingsDesk,
   loadout: () => loadout,
   /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
