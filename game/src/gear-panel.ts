@@ -14,6 +14,7 @@ import {
   type UpgradeSlot,
   type EquipmentState,
 } from './equipment';
+import { ACCESSORIES, type AccessoryDef, type AccessoryId, type AccessorySlot } from './accessories';
 import { pearls as pearlText } from './market';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -34,6 +35,19 @@ const SLOT_UI: readonly SlotUi[] = [
   { slot: 'lamp', title: '探照灯', icon: '✦', tradeoff: '照明距离和亮度提升；光束角度随等级变化。' },
   { slot: 'sonar', title: '深潜声纳', icon: '⌇', tradeoff: '缆绳更长、脉冲节点更多；只提供微光和快速引导，不延长憋气时间。下潜中按 V 投放。' },
 ];
+
+const ACCESSORY_SLOT_NAMES: Record<AccessorySlot, string> = {
+  fins: '脚蹼',
+  finPlugin: '脚蹼插件',
+  lampCore: '灯体',
+  lampAttachment: '灯光附件',
+  tank: '气瓶',
+  suit: '潜水服',
+  belt: '配重带',
+  gloves: '手套',
+  mask: '面镜',
+  chestPlugin: '胸口插件',
+};
 
 function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot): string {
   switch (slot) {
@@ -73,6 +87,14 @@ export class GearPanel {
   private icon = $('gear-icon');
   private onUpgrade: (slot: UpgradeSlot) => void;
   private onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void;
+  private upgradeView = $('gear-upgrade-view');
+  private assemblyView = $('gear-assembly-view');
+  private tabUpgrades = $<HTMLButtonElement>('gear-tab-upgrades');
+  private tabAssembly = $<HTMLButtonElement>('gear-tab-assembly');
+  private assemblyGrid = $('gear-assembly-grid');
+  private assemblySummary = $('gear-assembly-summary');
+  private assembly: Partial<Record<AccessorySlot, AccessoryId>> = this.loadAssembly();
+  private view: 'upgrades' | 'assembly' = 'upgrades';
   private selectedSlot: UpgradeSlot = 'net';
   private lastState: EquipmentState | null = null;
   private busy = false;
@@ -82,8 +104,15 @@ export class GearPanel {
     this.onPathChange = onPathChange;
     $('gear-close').addEventListener('click', () => this.toggle(false));
     this.upgrade.addEventListener('click', () => this.onUpgrade(this.selectedSlot));
+    this.tabUpgrades.addEventListener('click', () => this.setView('upgrades'));
+    this.tabAssembly.addEventListener('click', () => this.setView('assembly'));
+    $('gear-assembly-clear').addEventListener('click', () => {
+      this.assembly = {};
+      this.saveAssembly();
+      this.renderAssembly();
+    });
     window.addEventListener('keydown', (event) => {
-      if (!this.open || event.defaultPrevented) return;
+      if (!this.open || this.view !== 'upgrades' || event.defaultPrevented) return;
       const columns = window.matchMedia('(max-width: 640px)').matches ? 1 : 2;
       const delta = event.key === 'ArrowLeft' ? -1
         : event.key === 'ArrowRight' ? 1
@@ -120,6 +149,96 @@ export class GearPanel {
     this.lastState = state;
     this.renderSlots(state);
     this.renderDetail(state);
+    this.renderAssembly();
+  }
+
+  private setView(view: 'upgrades' | 'assembly') {
+    this.view = view;
+    const assembly = view === 'assembly';
+    this.upgradeView.classList.toggle('hidden', assembly);
+    this.assemblyView.classList.toggle('hidden', !assembly);
+    this.tabUpgrades.classList.toggle('selected', !assembly);
+    this.tabAssembly.classList.toggle('selected', assembly);
+    this.tabUpgrades.setAttribute('aria-selected', String(!assembly));
+    this.tabAssembly.setAttribute('aria-selected', String(assembly));
+    if (assembly) this.renderAssembly();
+    else if (this.lastState) this.renderSlots(this.lastState);
+  }
+
+  private loadAssembly(): Partial<Record<AccessorySlot, AccessoryId>> {
+    try {
+      const raw = JSON.parse(localStorage.getItem('deepbreath.assembly') ?? '{}') as Record<string, unknown>;
+      const valid: Partial<Record<AccessorySlot, AccessoryId>> = {};
+      for (const def of ACCESSORIES) {
+        if (raw[def.slot] === def.id) valid[def.slot] = def.id;
+      }
+      return valid;
+    } catch {
+      return {};
+    }
+  }
+
+  private saveAssembly() {
+    try {
+      localStorage.setItem('deepbreath.assembly', JSON.stringify(this.assembly));
+    } catch {
+      // Cosmetic assembly remains available for the current session if storage is blocked.
+    }
+  }
+
+  private selectAccessory(def: AccessoryDef) {
+    if (this.assembly[def.slot] === def.id) delete this.assembly[def.slot];
+    else this.assembly[def.slot] = def.id;
+    this.saveAssembly();
+    this.renderAssembly();
+  }
+
+  private renderAssembly() {
+    if (!this.assemblyGrid || !this.assemblySummary) return;
+    const selected = ACCESSORIES.filter((def) => this.assembly[def.slot] === def.id);
+    this.assemblySummary.replaceChildren(
+      ...(selected.length
+        ? selected.map((def) => {
+            const tag = document.createElement('span');
+            tag.className = 'assembly-chip';
+            tag.textContent = `${ACCESSORY_SLOT_NAMES[def.slot]} · ${def.nameZh}`;
+            return tag;
+          })
+        : [Object.assign(document.createElement('span'), { className: 'muted', textContent: '尚未装配配件 · 选择下方卡片开始' })]),
+    );
+    this.assemblyGrid.replaceChildren(
+      ...ACCESSORIES.map((def) => {
+        const active = this.assembly[def.slot] === def.id;
+        const card = document.createElement('article');
+        card.className = `assembly-card${active ? ' selected' : ''}`;
+        card.dataset.accessory = def.id;
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-pressed', String(active));
+        const head = document.createElement('div');
+        head.className = 'assembly-card-head';
+        const title = document.createElement('div');
+        title.className = 'assembly-card-title';
+        title.textContent = def.nameZh;
+        const slot = document.createElement('span');
+        slot.className = 'assembly-card-slot';
+        slot.textContent = ACCESSORY_SLOT_NAMES[def.slot];
+        head.append(title, slot);
+        const effect = document.createElement('p');
+        effect.textContent = def.effectZh;
+        const status = document.createElement('div');
+        status.className = 'assembly-card-status';
+        status.textContent = active ? '已装配 · 点击拆下' : '可装配';
+        card.append(head, effect, status);
+        card.addEventListener('click', () => this.selectAccessory(def));
+        card.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          this.selectAccessory(def);
+        });
+        return card;
+      }),
+    );
   }
 
   private renderDetail(state: EquipmentState) {

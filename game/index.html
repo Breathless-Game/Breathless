@@ -386,6 +386,11 @@
         </div>
         <button id="gear-close">Close (G)</button>
       </div>
+      <div id="gear-tabs" class="gear-tabs" role="tablist" aria-label="Equipment workshop">
+        <button id="gear-tab-upgrades" class="gear-tab selected" type="button" role="tab" aria-selected="true">合成箱 · Upgrades</button>
+        <button id="gear-tab-assembly" class="gear-tab" type="button" role="tab" aria-selected="false">装配箱 · Assembly</button>
+      </div>
+      <div id="gear-upgrade-view" role="tabpanel">
       <div id="gear-slots" class="gear-slots"></div>
       <div class="gear-card">
         <div id="gear-icon" class="gear-icon">◌</div>
@@ -409,6 +414,19 @@
         <div id="gear-notice" class="gear-notice hidden"></div>
       </div>
       <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. 每次下潜前可自由组合配件；升级只改变装备属性，绝不延长真实憋气时间。气瓶只在水下换气后提供紧急返航窗口。</p>
+      </div>
+      <div id="gear-assembly-view" class="hidden" role="tabpanel" aria-label="Assembly box">
+        <div class="assembly-intro">
+          <div>
+            <div class="small muted">ACCESSORY FITTING · 配件装配</div>
+            <h3>把配件装到装备上</h3>
+          </div>
+          <button id="gear-assembly-clear" class="mini" type="button">清空装配</button>
+        </div>
+        <p class="small muted">点击配件即可装配到对应卡槽；每个卡槽保留一个配件。装配预览独立于合成箱，不会改变现有等级、价格或下潜属性。</p>
+        <div id="gear-assembly-summary" class="assembly-summary" role="status"></div>
+        <div id="gear-assembly-grid" class="assembly-grid"></div>
+      </div>
     </div>
 
     <div id="report" class="hidden"></div>
