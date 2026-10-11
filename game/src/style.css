@@ -3803,8 +3803,6 @@ button:disabled {
 .wb-path.on small {
   color: var(--hold);
 }
-<<<<<<< HEAD
-=======
 /* Ship mode (the boat): the intro is a paragraph, not a one-line effect. */
 /* Dressing the diver figure: each piece of gear is a row to click (on / off). */
 #wb-inspect.diver #wb-inspect-levels li {
@@ -3837,4 +3835,3 @@ button:disabled {
   line-height: 1.5;
   color: var(--muted);
 }
->>>>>>> origin/main
