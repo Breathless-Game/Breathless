@@ -54,6 +54,8 @@ export interface AquariumHooks {
   message(text: string): void;
   /** Open the Collection (the C panel) on top of the aquarium, to sell, burn or list fish. */
   openCollection(): void;
+  /** Close the Collection again (C while it sits over the tank, same as Esc). */
+  closeCollection(): void;
 }
 
 // Tank box: where its front glass sits on the canvas (in fractions) when it faces you,
@@ -242,11 +244,22 @@ export class Aquarium {
       this.yawTarget = -clamp((e.clientX / window.innerWidth) * 2 - 1, -1, 1) * MAX_YAW;
     });
     window.addEventListener('keydown', (e) => {
-      if (!this.open || this.collectionOpen()) return;
+      if (!this.open) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
-      if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && !this.foodPickerOpen() && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      const plainC = e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey;
+      if (this.collectionOpen()) {
+        // C closes the Collection it opened over the tank. Handled here (not in main.ts) so
+        // one key press can't close it and then reopen it in the same dispatch.
+        if (plainC && !typing) {
+          e.preventDefault();
+          if (!e.repeat) this.hooks.closeCollection();
+        }
+        return;
+      }
+      if (plainC && !this.foodPickerOpen() && !typing) {
         e.preventDefault();
-        this.manageFish();
+        if (!e.repeat) this.manageFish();
       } else if (e.key === 'ArrowLeft') this.step(-1);
       else if (e.key === 'ArrowRight') this.step(1);
     });

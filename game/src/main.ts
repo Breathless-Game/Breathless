@@ -735,6 +735,9 @@ const aquarium = new Aquarium(bank, {
     fieldGuide?.mark('collection');
     void syncPearls();
   },
+  closeCollection() {
+    vault.toggle(false);
+  },
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
@@ -1885,7 +1888,7 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
 ]);
 // The fish are built with their English names (which also fixes how each one hangs); the carved names follow the UI language.
 const TITLE_LABELS: readonly (readonly [number, string, string])[] = [
-  [1, 'AQUARIUM', '图鉴'],
+  [1, 'AQUARIUM', '鱼缸'],
   [2, 'SETTINGS', '设置'],
 ];
 function labelTitleFish() {
