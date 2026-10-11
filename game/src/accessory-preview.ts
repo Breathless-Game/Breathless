@@ -132,7 +132,7 @@ function loadModel(id: AccessoryId, level: number) {
     scene.remove(currentGroup);
   }
 
-  const model = buildAccessoryModel(id, level, 1.8);
+  const model = buildAccessoryModel(id, level, 1.8, { preserveTierScale: true });
   applyWireframe(model, wireframe);
   currentGroup = model;
   scene.add(model);

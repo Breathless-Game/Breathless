@@ -61,6 +61,8 @@ export class GearInspector {
   constructor(private hooks: InspectHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.1;
     this.renderer.setClearColor(0x000000, 0);
     this.scene.add(new THREE.HemisphereLight('#e6f6ff', '#4a3420', 1.4));
     const key = new THREE.DirectionalLight('#fff1dc', 2.6);
@@ -190,8 +192,8 @@ export class GearInspector {
   private model(level: UpgradeLevel): THREE.Group {
     let m = this.models.get(level);
     if (!m) {
-      m = buildUpgradeModel(this.def!.id, level);
-      m.scale.setScalar(1.15); // buildUpgradeModel sizes it to 2 units across
+      m = buildUpgradeModel(this.def!.id, level, { preserveTierScale: true });
+      m.scale.setScalar(1.15); // preserve the tier silhouette inside the inspector frame
       this.models.set(level, m);
     }
     return m;

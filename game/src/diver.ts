@@ -51,6 +51,7 @@ export class Diver {
   private netArm: THREE.Group;
   private netMouth: THREE.Group;
   private netTip: THREE.Object3D;
+  private reelGroup: THREE.Group | null = null;
   /** Visible emergency-tank model; level one deliberately has no cylinder. */
   private tankGroup = new THREE.Group();
   private tankBody: THREE.Mesh | null = null;
@@ -176,6 +177,7 @@ export class Diver {
     this.netMouth = net.mouth;
     this.netArm.position.set(0.6, 0, 0.3);
     this.netTip = net.tip;
+    this.reelGroup = this.netArm.getObjectByName('Fishing_Reel') as THREE.Group | null;
     this.body.add(this.netArm);
 
     this.group.add(this.body);
@@ -411,13 +413,13 @@ export class Diver {
 
   /** Make the visible hoop grow with the equipped net tier. */
   setNetLevel(level: number) {
-    this.netScale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.15;
+    this.netScale = [1, 1.22, 1.46][THREE.MathUtils.clamp(Math.floor(level), 1, 3) - 1];
     this.updateNetScale();
   }
 
   /** Extend the visible shaft/hoop for the separate rod-body upgrade slot. */
   setRodLevel(level: number) {
-    this.rodReachScale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.12;
+    this.rodReachScale = [1, 1.16, 1.34][THREE.MathUtils.clamp(Math.floor(level), 1, 3) - 1];
     this.updateNetScale();
   }
 
@@ -437,8 +439,8 @@ export class Diver {
   /** Update the visible fin size for the selected diver upgrade tier. */
   setFinsLevel(level: number) {
     const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
-    const length = 0.84 + tier * 0.16;
-    const width = 0.9 + tier * 0.05;
+    const length = [1, 1.2, 1.42][tier - 1];
+    const width = [0.95, 1.06, 1.18][tier - 1];
     this.finL.scale.set(length, 1, width);
     this.finR.scale.set(length, 1, width);
   }
@@ -447,7 +449,7 @@ export class Diver {
   setTankLevel(level: number) {
     const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
     this.tankGroup.visible = tier >= 2;
-    this.tankGroup.scale.setScalar(tier === 3 ? 1.18 : 1);
+    this.tankGroup.scale.setScalar([1, 1.12, 1.3][tier - 1]);
   }
 
   /** Set lamp visual tier and its light reach; intensity still follows depth. */
@@ -456,7 +458,7 @@ export class Diver {
     this.headlamp.distance = [18, 28, 38][this.lampLevel - 1];
     this.headlamp.angle = [0.65, 0.85, 1.05][this.lampLevel - 1];
     this.lampMaxIntensity = [48, 64, 82][this.lampLevel - 1];
-    this.lampGroup.scale.setScalar(this.lampLevel === 3 ? 1.18 : this.lampLevel === 2 ? 1.08 : 1);
+    this.lampGroup.scale.setScalar([1, 1.16, 1.32][this.lampLevel - 1]);
   }
 
   /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
@@ -469,6 +471,7 @@ export class Diver {
   /** Configure how quickly the net can be swung again after a catch attempt. */
   setReelLevel(level: number) {
     const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    this.reelGroup?.scale.setScalar([1, 1.14, 1.3][tier - 1]);
     this.setReelRecovery(1 + (tier - 1) * 0.2);
   }
 

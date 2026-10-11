@@ -99,6 +99,18 @@ test('each upgrade tier has a distinct normalized display geometry', () => {
   }
 });
 
+test('preserveTierScale keeps real growth without letting a replacement shrink', () => {
+  for (const id of ['rod', 'fins', 'sonar', 'boatSpeed']) {
+    const sizes = [1, 2, 3].map((level) => {
+      const model = buildUpgradeModel(id, level, { preserveTierScale: true });
+      return Math.max(...new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).toArray());
+    });
+    assert.ok(sizes[1] >= sizes[0] - 1e-6, `${id} Lv2 must not shrink`);
+    assert.ok(sizes[2] >= sizes[1] - 1e-6, `${id} Lv3 must not shrink`);
+    assert.ok(sizes[2] > sizes[0] + 1e-3 || id === 'boatSpeed', `${id} must expose tier growth or structural replacement`);
+  }
+});
+
 test('separate previews own their materials, so disposal cannot affect a live workbench model', () => {
   for (const definition of UPGRADES) {
     const live = surfaces(buildUpgradeModel(definition.id, 1));

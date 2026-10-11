@@ -247,6 +247,8 @@ export class Workbench {
   constructor(private hooks: WorkbenchHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x000000, 0);
@@ -262,6 +264,8 @@ export class Workbench {
 
     this.chartRenderer = new THREE.WebGLRenderer({ canvas: $<HTMLCanvasElement>('wb-chart-gl'), antialias: true, alpha: true });
     this.chartRenderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.chartRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.chartRenderer.toneMappingExposure = 1.0;
     this.chartRenderer.setClearColor(0x000000, 0);
     this.chartScene.add(new THREE.HemisphereLight('#e6f6ff', '#4a3420', 1.25));
     const key = new THREE.DirectionalLight('#fff1dc', 2.4);
@@ -493,7 +497,10 @@ export class Workbench {
       return ship.model ? { model: ship.model, key: ship.key } : { model: buildUpgradeModel('boat', 1), key: -1 };
     }
     const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
-    return { model: buildUpgradeModel(id, level), key: level };
+    // Keep the tier's physical growth visible after the workbench applies its
+    // family-level tray size. buildUpgradeModel stores the relative scale in
+    // userData so a long Lv3 rod is not shrunk back to the Lv1 silhouette.
+    return { model: buildUpgradeModel(id, level, { preserveTierScale: true }), key: level };
   }
 
   private buildPiece(id: UpgradeId, i: number): Piece {
@@ -508,7 +515,8 @@ export class Workbench {
     const size = box.getSize(new THREE.Vector3());
     // The model boat stands on its keel, a little bigger than the gear; everything else lies flat.
     const upright = id === 'boat';
-    model.scale.multiplyScalar(((upright ? BOAT_SIZE : GEAR_SIZE) / Math.max(size.x, size.y, size.z)));
+    const tierScale = typeof model.userData.tierScale === 'number' ? model.userData.tierScale : 1;
+    model.scale.multiplyScalar(((upright ? BOAT_SIZE : GEAR_SIZE) * tierScale / Math.max(size.x, size.y, size.z)));
     box = new THREE.Box3().setFromObject(holder);
     model.position.sub(box.getCenter(new THREE.Vector3()));
     size.copy(box.getSize(new THREE.Vector3()));
