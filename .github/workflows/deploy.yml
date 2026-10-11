@@ -59,6 +59,14 @@ jobs:
           node --check sensor/fish-trust.mjs
           node --check sensor/fish-collection.mjs
 
+      # deploy.sh runs on the Dell, where a broken script means a broken site: test its
+      # backup, health checks and rollback here first (fakes for sudo, curl and npm).
+      - name: Test deploy script
+        run: |
+          bash -n deploy/deploy.sh
+          if command -v shellcheck >/dev/null; then shellcheck -S warning deploy/deploy.sh deploy/test-deploy.sh; fi
+          bash deploy/test-deploy.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: game-dist

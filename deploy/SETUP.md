@@ -131,8 +131,16 @@ curl -I http://127.0.0.1:8794/
 ### 8. 日常运维
 
 - 看日志：`journalctl -u breathless -f`；重启：`sudo systemctl restart breathless`。
-- 回滚：在 GitHub Actions 里找到旧的那次 Deploy 运行，**Re-run all jobs**（用那次的代码重新构建并部署）。
+- 回滚：部署失败会自动回滚（见第 9 节）；要回到更早的版本，在 GitHub Actions 里找到旧的那次 Deploy 运行，**Re-run all jobs**（用那次的代码重新构建并部署）。
 - 升级 Node：`sudo NODE_MAJOR=<版本> bash deploy/bootstrap-dell.sh`，再触发一次部署（会重装 sensor 依赖）。
+
+### 9. 回滚
+
+- **保留什么**：每次部署前，`deploy.sh` 把当前线上版本（`sensor/` 连同 `node_modules`、`game/dist/`、`package.json`）用硬链接快照到 `/srv/breathless/app/.rollback/`，只保留**一份**（上一个版本）。硬链接几乎不占磁盘；依赖变了的那次部署之后，旧的 `node_modules` 会多占一份空间，直到下一次部署。`.rollback/RELEASE` 是那个版本的 commit，`/srv/breathless/app/RELEASE` 是当前线上的 commit。
+- **健康检查**：重启后在 `HEALTH_TIMEOUT`（60 秒）内，`http://127.0.0.1:8794/` 必须返回新的 `index.html`，并且 `http://127.0.0.1:8794/api/market/info` 必须返回 200 和 JSON。没有市场的环境可以在 workflow 的 deploy 步骤里设 `HEALTH_MARKET=0` 跳过第二项。
+- **自动回滚**：同步开始之后任何一步失败（`npm ci`、重启、健康检查、任务被取消），就把 `.rollback` 恢复回去、重启、再做一次健康检查。部署任务仍然是**红的**，日志里写 `ROLLED BACK to previous release <commit>`；如果回滚后也不健康，写 `ROLLBACK FAILED`，需要人工处理。第一次部署没有备份，失败就和以前一样直接报错。
+- **手动回滚**（回到 `.rollback` 里的那个版本，比如新版本通过了健康检查但有 bug）：在 Dell 上以 `breathless` 用户运行仓库里任意一份 `deploy/deploy.sh --rollback`，例如 runner 工作目录里的那份：`sudo -u breathless bash <checkout>/deploy/deploy.sh --rollback`。它只用 `.rollback`，不需要构建产物，只用上面三条允许的 sudo 命令。回滚后 `.rollback` 不变，下一次部署会重新备份。
+- **永远不碰**：`/srv/breathless/app/.env`、`sensor/.market-*`（市场密钥和状态、鱼的集合与种子登记）和 `sensor/recordings/`。它们不进备份，部署和回滚都不会覆盖或删除它们，所以回滚不会让市场状态倒退。
 
 ---
 
@@ -263,5 +271,13 @@ curl -I http://127.0.0.1:8794/
 ### 8. Day-to-day
 
 - Logs: `journalctl -u breathless -f`. Restart: `sudo systemctl restart breathless`.
-- Roll back: in GitHub Actions, open an older Deploy run and **Re-run all jobs** (rebuilds and deploys that commit).
+- Roll back: a failed deploy rolls back by itself (section 9). To go further back, open an older Deploy run in GitHub Actions and **Re-run all jobs** (rebuilds and deploys that commit).
 - Upgrade Node: `sudo NODE_MAJOR=<major> bash deploy/bootstrap-dell.sh`, then deploy again (the sensor's dependencies get reinstalled).
+
+### 9. Rollback
+
+- **What is kept**: before each deploy, `deploy.sh` snapshots the live release (`sensor/` with its `node_modules`, `game/dist/`, `package.json`) into `/srv/breathless/app/.rollback/` with hard links, and keeps exactly **one** (the previous release). Hard links cost almost no disk; after a deploy that changed dependencies, the old `node_modules` takes its own space until the next deploy. `.rollback/RELEASE` holds that release's commit, `/srv/breathless/app/RELEASE` the live one.
+- **Health check**: within `HEALTH_TIMEOUT` (60 s) of the restart, `http://127.0.0.1:8794/` must serve the new `index.html` and `http://127.0.0.1:8794/api/market/info` must answer 200 with JSON. For a setup without the market, set `HEALTH_MARKET=0` on the workflow's deploy step to skip the second check.
+- **Automatic rollback**: if anything fails once the sync has started (`npm ci`, the restart, the health check, the job being cancelled), `.rollback` is restored, the service restarted and checked again. The deploy job still goes **red**, with `ROLLED BACK to previous release <commit>` in the log; if the restored release isn't healthy either, it says `ROLLBACK FAILED` and needs a human. A first deploy has no backup and fails as before.
+- **Manual rollback** (back to the release in `.rollback`, e.g. when a new release passed the health check but has a bug): on the Dell, as `breathless`, run any checkout's `deploy/deploy.sh --rollback`, e.g. the runner's: `sudo -u breathless bash <checkout>/deploy/deploy.sh --rollback`. It uses only `.rollback` (no build artifact) and only the three allowed sudo commands. `.rollback` stays as it is; the next deploy takes a fresh backup.
+- **Never touched**: `/srv/breathless/app/.env`, `sensor/.market-*` (the market's keys and state, the fish collection and seed registry) and `sensor/recordings/`. They are not in the backup, and neither a deploy nor a rollback overwrites or deletes them, so a rollback never winds the market's state back.
