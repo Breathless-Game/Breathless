@@ -506,16 +506,32 @@ body {
 }
 
 /* ---- net + bank ---- */
-#net {
+/* bottom lane: [equipped over net] [help] [bank] share one flex row so they never overlap */
+#hud-bottom {
   position: absolute;
-  bottom: 16px;
   left: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+#hud-bl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+#net {
+  max-width: 100%;
 }
 
 #active-gear {
-  position: absolute;
-  bottom: 110px;
-  left: 16px;
   min-width: 176px;
   border-color: rgba(62, 240, 168, 0.45);
   box-shadow: 0 0 20px rgba(62, 240, 168, 0.08);
@@ -544,6 +560,7 @@ body {
   display: flex;
   gap: 8px;
   margin-top: 6px;
+  flex-wrap: wrap;
 }
 
 .slot {
@@ -567,9 +584,8 @@ body {
 }
 
 #bank {
-  position: absolute;
-  bottom: 16px;
-  right: 16px;
+  flex: 0 0 auto;
+  margin-left: auto;
   text-align: right;
   min-width: 150px;
 }
@@ -592,13 +608,14 @@ body {
 }
 
 #help {
-  position: absolute;
-  bottom: 22px;
-  left: 50%;
-  transform: translateX(-50%);
+  flex: 1 1 0;
+  min-width: 160px; /* hud-bl shrinks (net wraps) before help collapses */
+  align-self: flex-end;
+  text-align: center;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--muted);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /* ---- Tomb Raider style hold-to-select wheel --------------------------- */
@@ -1490,6 +1507,23 @@ button.danger {
   margin-top: 6px;
 }
 
+/* Narrower than a wide net + bank + help: help drops to its own row and the
+   row stops short of the #depth gauge on the right edge. */
+@media (max-width: 1180px) {
+  #hud-bottom {
+    flex-wrap: wrap;
+    right: 48px;
+  }
+  #bank {
+    flex: 0 1 auto;
+    max-width: 100%;
+  }
+  #help {
+    order: 3;
+    flex: 1 0 100%;
+  }
+}
+
 @media (max-width: 720px) {
   #cam-wrap {
     width: 112px;
@@ -1498,8 +1532,15 @@ button.danger {
   #breath {
     width: 200px;
   }
-  #help {
-    display: none;
+  #time-of-day {
+    top: 108px; /* top-right, under the camera preview, beside the breath panel */
+    left: auto;
+    right: 16px;
+    transform: none;
+    padding: 6px 10px;
+    white-space: normal;
+    max-width: 130px;
+    text-align: right;
   }
   h1 {
     font-size: 40px;
