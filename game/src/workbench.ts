@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
 import { MAPS, MAP_ORDER, isUnlocked, mapDepth, type MapId, type MapProgress } from './maps';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { loadSonarConfig, saveSonarConfig, sonarLengthMeters } from './sonar-config';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -22,6 +23,8 @@ export interface WorkbenchHooks {
   pan(u: number, tableY: number): void;
   /** Called at the end of the zoom into the chosen place. */
   dive(map: MapId, gear: UpgradeId[]): void;
+  /** The ready-room color for the deep sonar beacon. */
+  sonarColor?(color: string): void;
 }
 
 const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'bait'];
@@ -126,6 +129,8 @@ export class Workbench {
   private pinsEl = $('wb-pins');
   private placeEl = $('wb-place');
   private demoBox = $<HTMLInputElement>('wb-demo-box');
+  private sonarColorInput = $<HTMLInputElement>('wb-sonar-color');
+  private sonarLength = $('wb-sonar-length');
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -190,6 +195,13 @@ export class Workbench {
       if (this.picked && !isUnlocked(MAPS[this.picked], this.hooks.progress())) this.picked = null;
       this.paintMap();
       this.renderPins();
+    });
+    const sonar = loadSonarConfig();
+    this.sonarColorInput.value = sonar.color;
+    this.sonarColorInput.addEventListener('input', () => {
+      const saved = saveSonarConfig({ ...loadSonarConfig(), color: this.sonarColorInput.value });
+      this.sonarColorInput.value = saved.color;
+      this.hooks.sonarColor?.(saved.color);
     });
     window.addEventListener('resize', () => this.visible && this.resize());
   }
@@ -1011,6 +1023,9 @@ export class Workbench {
     }
     const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
     $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
+    const sonar = loadSonarConfig();
+    this.sonarColorInput.value = sonar.color;
+    this.sonarLength.textContent = `${sonarLengthMeters(sonar.lengthLevel)} m cable`;
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
   }
 
