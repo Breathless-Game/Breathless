@@ -35,6 +35,10 @@ export function getUmi(): Umi {
 export const explorer = (kind: 'address' | 'tx', id: string) =>
   `https://explorer.solana.com/${kind}/${id}?cluster=devnet`;
 
+/** Helius Orb: the wallet's NFTs on devnet. The owner wallet holds the fish, not the session key. */
+export const orbNfts = (address: string) =>
+  `https://orbmarkets.io/address/${encodeURIComponent(address)}/portfolio?cluster=devnet&tab=nfts`;
+
 export function walletAddress(): string {
   return getUmi().identity.publicKey.toString();
 }

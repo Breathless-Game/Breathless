@@ -7,6 +7,8 @@ import type { TimeOfDay } from './daylight';
 import type { WeatherMode } from './weather';
 import { type Quality, type Settings, type SharkChoice, saveSettings } from './settings';
 import { closeDropdown, enhanceSelect } from './dropdown';
+import { orbNfts } from './chain';
+import { onWalletChange, walletState } from './wallet';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -79,13 +81,24 @@ export class PauseMenu {
     this.help.addEventListener('change', () => this.update({ showHelp: this.help.checked }));
     this.sharks.addEventListener('change', () => this.update({ sharks: this.sharks.value as SharkChoice }));
     hooks.applySettings(settings);
+    onWalletChange(() => this.refreshChainLink());
+    this.refreshChainLink();
   }
 
   get open() {
     return !this.root.classList.contains('hidden');
   }
 
+  /** The "View on chain" link follows the signed-in wallet; no wallet, no link. */
+  private refreshChainLink() {
+    const link = $<HTMLAnchorElement>('pause-chain');
+    const owner = walletState().owner;
+    link.href = owner ? orbNfts(owner) : '#';
+    link.classList.toggle('hidden', !owner);
+  }
+
   show(view: View = 'main') {
+    this.refreshChainLink();
     clearInterval(this.countTimer);
     closeDropdown();
     if (view !== 'settings') this.standalone = false;
