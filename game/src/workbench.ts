@@ -173,6 +173,11 @@ const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
 
 const SYNTH_PAD = { x0: -2.15, x1: 2.15, z0: -1.55, z1: 0.72 };
+// Where the synthesis case stands. Stowed, it is behind the table's back edge (z = -2.7), clear
+// of the chart, the boat, the tray and the diver; opened, it slides forward so its mat lies on
+// the middle of the table.
+const SYNTH_STOW_Z = -3.55;
+const SYNTH_OPEN_Z = -1.72;
 const SYNTH_SLOTS: [number, number][] = [[-0.78, -0.42], [0.78, -0.42]];
 
 type SynthMaterialId = 'scale' | 'fiber' | 'scrap' | 'crystal';
@@ -489,7 +494,7 @@ export class Workbench {
     this.tweens = [];
     this.resetSynthesisVisuals();
     this.synthesisLift = -0.65;
-    this.synthesisRig.position.y = this.synthesisLift;
+    this.synthesisRig.position.set(0, this.synthesisLift, SYNTH_STOW_Z);
     this.synthesisCrates[0]?.position.set(-3.48, 0.55, 0.05);
     this.synthesisCrates[1]?.position.set(3.48, 0.55, 0.05);
     this.synthesisLids[0]?.rotation.set(0, 0, 0);
@@ -666,7 +671,7 @@ export class Workbench {
     const greenEdge = metal('#263128', 0.88);
     const crateMat = metal('#151a1b', 0.86);
     const crateEdge = metal('#56605c', 0.72);
-    this.synthesisRig.position.set(0, this.synthesisLift, -1.72);
+    this.synthesisRig.position.set(0, this.synthesisLift, SYNTH_STOW_Z);
     const plinth = new THREE.Mesh(new THREE.BoxGeometry(8.0, 0.28, 1.25), green);
     plinth.position.set(0, 0.14, 0.12);
     this.synthesisRig.add(plinth);
@@ -713,8 +718,11 @@ export class Workbench {
       this.synthesisLids.push(hinge);
       this.synthesisRig.add(crate);
     }
-    this.synthesisHit = new THREE.Mesh(new THREE.BoxGeometry(8.5, 1.55, 3.2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    this.synthesisHit.position.set(0, 0.55, 0.7);
+    // What a click on the stowed case lands on: the crates and the back wall, and nothing in
+    // front of them. It used to reach over half the table and took the clicks meant for the
+    // chart, the boat and the gear lying there.
+    this.synthesisHit = new THREE.Mesh(new THREE.BoxGeometry(8.5, 1.5, 1.5), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    this.synthesisHit.position.set(0, 0.6, -0.05);
     this.synthesisRig.add(this.synthesisHit);
     this.synthesisRig.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
     s.add(this.synthesisRig);
@@ -1660,12 +1668,13 @@ export class Workbench {
     this.figure.visible = false;
     this.resetSynthesisVisuals();
     const fromY = this.synthesisLift;
+    const fromZ = this.synthesisRig.position.z;
     const fromL = this.synthesisCrates[0]?.position.x ?? -3.48;
     const fromR = this.synthesisCrates[1]?.position.x ?? 3.48;
     this.tween(0.85, (u) => {
       const e = easeOut(u);
       this.synthesisLift = lerp(fromY, 0, e);
-      this.synthesisRig.position.y = this.synthesisLift;
+      this.synthesisRig.position.set(0, this.synthesisLift, lerp(fromZ, SYNTH_OPEN_Z, e));
       this.synthesisCrates[0]?.position.set(lerp(fromL, -3.48, e), 0.55, 0.05);
       this.synthesisCrates[1]?.position.set(lerp(fromR, 3.48, e), 0.55, 0.05);
       this.synthesisLids[0]?.rotation.set(-0.72 * e, 0, 0);
@@ -1681,10 +1690,11 @@ export class Workbench {
     this.state = 'closing';
     this.resetSynthesisVisuals();
     const fromY = this.synthesisLift;
+    const fromZ = this.synthesisRig.position.z;
     this.tween(0.55, (u) => {
       const e = easeInOut(u);
       this.synthesisLift = lerp(fromY, -0.65, e);
-      this.synthesisRig.position.y = this.synthesisLift;
+      this.synthesisRig.position.set(0, this.synthesisLift, lerp(fromZ, SYNTH_STOW_Z, e));
       this.synthesisLids[0]?.rotation.set(-0.72 * (1 - e), 0, 0);
       this.synthesisLids[1]?.rotation.set(0.72 * (1 - e), 0, 0);
     }, () => {
@@ -1812,9 +1822,12 @@ export class Workbench {
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
     targets.push(...this.synthesisMaterials.filter((m) => m.obj.visible && m.mode !== 'moving').map((m) => m.hit));
     if (this.map.visible) targets.push(this.mapMesh);
-    targets.push(this.figureHit);
+    // The diver is put away while the synthesis case is open; its stand is where a crate opens.
+    if (this.figure.visible) targets.push(this.figureHit);
     targets.push(this.guideHit);
-    if (this.synthesisRig.visible) targets.push(this.synthesisHit);
+    // The case is only something to click while it is stowed. Open, the clicks belong to the
+    // materials in its crates and on its mat.
+    if (this.synthesisRig.visible && this.state === 'idle') targets.push(this.synthesisHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
     if (hit.object === this.figureHit) return 'figure';
