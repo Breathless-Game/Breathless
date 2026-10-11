@@ -25,7 +25,8 @@ import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { loadEquipment, nextRodTier, planUpgrade, rodTier, saveEquipment, totalPearls, type EquipmentState } from './equipment';
+import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
+import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -34,11 +35,8 @@ import { WorldEvents, type EventContext } from './events';
 import { disposeTree } from './lowpoly';
 
 // ---- Tuning -------------------------------------------------------------
-const SWIM_ACCEL = 24;
 const DRAG = 2.4;
-const MAX_SPEED = 7.5;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
-const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 // Keep encounter density stable as the playable width doubles.
@@ -288,6 +286,43 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+// The persistent inventory is filtered by the workbench for each dive. A null
+// loadout means the debug/title state where all owned upgrades are available.
+let activeLoadout: readonly UpgradeId[] | null = null;
+let activeTool: EquipmentSlot = 'net';
+let shipBonus: (typeof SHIPS)[number] = SHIPS[0];
+// The ship's bonus goes on top of the packed gear: extra net slots, a wider catch, a faster swim.
+const currentStats = () => {
+  const stats = deriveStats(equipment, activeLoadout ?? undefined);
+  return {
+    ...stats,
+    netCapacity: stats.netCapacity + shipBonus.capacity,
+    catchRadius: stats.catchRadius * (1 + shipBonus.range),
+    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed),
+  };
+};
+const activeLevel = (slot: EquipmentSlot): number => {
+  const packed = activeLoadout;
+  if (packed && !packed.includes(slot)) return 1;
+  if (slot === 'net') return equipment.netLevel;
+  if (slot === 'rod') return equipment.rodGearLevel;
+  if (slot === 'reel') return equipment.reelLevel;
+  if (slot === 'fins') return equipment.finsLevel;
+  if (slot === 'tank') return equipment.tankLevel;
+  return equipment.lampLevel;
+};
+function applyEquipmentVisuals() {
+  const stats = currentStats();
+  diver.setNetLevel(activeLevel('net'));
+  diver.setRodLevel(activeLevel('rod'));
+  diver.setRodRange(stats.rodRange);
+  diver.setFinsLevel(activeLevel('fins'));
+  diver.setTankLevel(activeLevel('tank'));
+  diver.setLampLevel(activeLevel('lamp'));
+  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
+  diver.setReelLevel(activeLevel('reel'));
+  diver.setReelRecovery(stats.reelRecovery);
+}
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
@@ -313,9 +348,8 @@ function saveBank() {
   } catch {}
 }
 
-let shipBonus: (typeof SHIPS)[number] = SHIPS[0];
 const currentTier = () => { const tier = rodTier(equipment); return { ...tier, capacity: tier.capacity + shipBonus.capacity, catchRadius: tier.catchRadius * (1 + shipBonus.range) }; };
-hud.setNet(net, currentTier().capacity);
+hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
@@ -329,19 +363,35 @@ const vault = new Vault(bank, nftQueue);
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
 const report = new Report(health);
-const gear = new GearPanel(() => buyNextRod());
+const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => selectEquipmentPath(slot, path));
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
 diver.setNetLevel(currentTier().level);
+applyEquipmentVisuals();
+const loadoutWheel = new LoadoutWheel({
+  isAvailable: (slot) => activeLoadout == null || activeLoadout.includes(slot),
+  onSelect: (slot) => {
+    activeTool = slot;
+    hud.setActiveGear(slot, activeLoadout == null || activeLoadout.includes(slot));
+    const label = QUICK_SLOTS.find((item) => item.slot === slot)?.label ?? slot;
+    hud.message(`${label} 已装备`, 900);
+  },
+  onUnavailable: (slot) => {
+    const label = QUICK_SLOTS.find((item) => item.slot === slot)?.label ?? slot;
+    hud.message(`${label} 未装配 · 下次下潜前在工作台打包`, 1800);
+  },
+});
+hud.setActiveGear(activeTool, true);
 let nowMs = 0;
 
 function refreshEquipment() {
   const tier = currentTier();
+  const stats = currentStats();
   saveEquipment(equipment);
   hud.setEquipment(equipment, tier);
-  hud.setNet(net, tier.capacity);
+  hud.setNet(net, stats.netCapacity);
   gear.render(equipment);
-  diver.setNetLevel(tier.level);
+  applyEquipmentVisuals();
 }
 
 /** Re-read the on-chain PEARL balance into the cache. `earned` shows a sale's Pearls before the read lands. */
@@ -359,14 +409,18 @@ async function syncPearls(earned = 0) {
 }
 
 let buying = false;
-async function buyNextRod() {
+async function buyNextUpgrade(slot: EquipmentSlot = 'net') {
   if (buying) return;
-  const next = nextRodTier(equipment);
-  if (!next) {
-    gear.showNotice('The net is already at maximum level.');
+  if (phase === 'play') {
+    gear.showNotice('Return to the workbench before upgrading gear.');
     return;
   }
-  const plan = planUpgrade(equipment);
+  const next = nextSlotTier(equipment, slot);
+  if (!next) {
+    gear.showNotice(`${nextSlotLabel(slot)} is already at maximum level.`);
+    return;
+  }
+  const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
     gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
     hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
@@ -376,13 +430,9 @@ async function buyNextRod() {
   buying = true;
   gear.setBusy(true);
   try {
-    if (plan.fromChain > 0) {
-      await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
-      equipment.pearls = Math.max(0, equipment.pearls - plan.fromChain);
-    }
-    equipment.legacyPearls -= plan.fromLegacy;
-    equipment.rodLevel = plan.tier.level;
-    hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+    if (plan.fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
+    Object.assign(equipment, applySlotUpgrade(equipment, plan));
+    hud.message(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, 1800);
   } catch (e) {
     console.error('upgrade failed', e);
     gear.showNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
@@ -394,13 +444,39 @@ async function buyNextRod() {
   }
 }
 
+function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
+  if (phase === 'play') {
+    gear.showNotice('Return to the workbench before changing a module.');
+    return;
+  }
+  const next = setEquipmentPath(equipment, slot, path);
+  if (!next) {
+    gear.showNotice('Upgrade this slot to Lv2 before selecting a branch.');
+    return;
+  }
+  Object.assign(equipment, next);
+  refreshEquipment();
+  hud.message(`${nextSlotLabel(slot)} module changed`, 1200);
+}
+
+function nextSlotLabel(slot: EquipmentSlot) {
+  return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp' } as const)[slot];
+}
+
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (loadoutWheel.open) {
+      loadoutWheel.closeWheel(false);
+      return;
+    }
     onEscape();
     return;
   }
+  // Tab is a hold-to-open radial wheel. Number keys and Q/E are instant
+  // quick-slot shortcuts; consume them before movement/catch handling.
+  if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
   if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !loginGate.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
@@ -410,6 +486,12 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.key.toLowerCase());
   // Not on the workbench: the report would pop up over the table and the chart.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
+  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
+    e.preventDefault();
+    gear.toggle();
+    if (gear.open) void syncPearls();
+    return;
+  }
   if (phase !== 'play') return;
   if (e.code === 'Space') {
     e.preventDefault();
@@ -444,7 +526,10 @@ function setTimeOfDay(mode: TimeOfDay) {
   const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
   hud.message(labels[mode]);
 }
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  if (loadoutWheel.handleKeyUp(e)) return;
+  keys.delete(e.key.toLowerCase());
+});
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 document.getElementById('gear-open')!.addEventListener('click', () => {
   gear.toggle(true);
@@ -458,16 +543,19 @@ function axis(neg: string[], pos: string[]) {
 
 // ---- Catching -----------------------------------------------------------
 function tryCatch() {
+  // The net must finish its visible recovery before another throw. The reel
+  // upgrade shortens that recovery without changing breath input or rarity.
+  if (diver.swinging) return;
   diver.swing();
   if (diver.pos.y > -SURFACE_DEPTH) return;
-  const tier = currentTier();
-  if (net.length >= tier.capacity) {
+  const stats = currentStats();
+  if (net.length >= stats.netCapacity) {
     hud.message('Net full! Surface to bank it.');
     return;
   }
   const p = diver.netPoint();
   let best: Fish | null = null;
-  let bestD = tier.catchRadius;
+  let bestD = stats.catchRadius;
   for (const f of fishes) {
     const d = Math.hypot(f.pos.x - p.x, f.pos.y - p.y);
     if (d < bestD) {
@@ -481,7 +569,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
-  hud.setNet(net, tier.capacity);
+  hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
   if (!inTrench) {
@@ -502,7 +590,7 @@ function bankNet() {
   hud.toast(rarest, 'BANKED');
   noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  hud.setNet(net, currentStats().netCapacity);
   hud.setBank(bank);
   nftQueue.kick();
 }
@@ -568,7 +656,7 @@ function blackout() {
   const lost = net.length;
   health.end(nowMs, 'blackout', lost);
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  hud.setNet(net, currentStats().netCapacity);
   hud.message(lost ? `BLACKOUT · ${lost} fish lost` : 'BLACKOUT', 2200);
   hud.setEmergency(null);
   setTimeout(() => {
@@ -595,7 +683,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
-  shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity);
+  shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   phase = 'play';
   resetWorldBounds();
   overlay.classList.add('hidden');
@@ -686,6 +774,7 @@ function pause() {
   if (phase !== 'play' || paused) return;
   paused = true;
   keys.clear();
+  loadoutWheel.closeWheel(false);
   vault.toggle(false);
   gear.toggle(false);
   report.toggle(false);
@@ -710,7 +799,13 @@ function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  activeLoadout = null;
+  loadout = [];
+  activeTool = 'net';
+  loadoutWheel.setActive(activeTool);
+  hud.setActiveGear(activeTool, true);
+  applyEquipmentVisuals();
+  hud.setNet(net, currentStats().netCapacity);
   hud.setEmergency(null);
   outOfAir = false;
   breathSince = null;
@@ -770,7 +865,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
   paused = open;
   keys.clear();
   if (!open) breathSince = null;
-}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity); }, scene, root => world.colorGrade.apply(root));
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); }, scene, root => world.colorGrade.apply(root));
 const boatRay = new THREE.Raycaster();
 document.addEventListener('click', (e) => {
   if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
@@ -794,7 +889,8 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
-// Gear set in the workbench's READY tray for this dive. Not used by the dive yet: upgrades aren't wired in.
+// Gear set in the workbench's READY tray for this dive. The selected slots are
+// applied when the dive starts, so an omitted accessory falls back to tier 1.
 let loadout: UpgradeId[] = [];
 
 // How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
@@ -810,6 +906,13 @@ const workbench = new Workbench({
   preview: mapPreview,
   dive(id, gear) {
     loadout = gear;
+    activeLoadout = [...gear];
+    const firstPacked = QUICK_SLOTS.find((item) => gear.includes(item.slot));
+    activeTool = firstPacked?.slot ?? 'net';
+    loadoutWheel.setActive(activeTool);
+    hud.setActiveGear(activeTool, activeLoadout.includes(activeTool));
+    applyEquipmentVisuals();
+    hud.setNet(net, currentStats().netCapacity);
     selectMap(id, true);
     // The preview frame expanding over the screen was taken from exactly here.
     benchPan = 0;
@@ -952,20 +1055,22 @@ function update(dt: number, time: number) {
       if (Math.random() < 0.02) hud.message('Hold your breath to dive', 900);
     }
     if (outOfAir && ay < 0) ay = 0;
-    diver.vel.x += ax * SWIM_ACCEL * dt;
-    diver.vel.y += ay * SWIM_ACCEL * dt;
+    const stats = currentStats();
+    diver.vel.x += ax * stats.swimAcceleration * dt;
+    diver.vel.y += ay * stats.swimAcceleration * dt;
   }
 
   if (outOfAir) {
     diver.vel.y += EMERGENCY_LIFT * dt;
-    emergency -= dt / EMERGENCY_SECONDS;
+    emergency -= dt / currentStats().emergencySeconds;
     if (Math.random() < dt * 8) diver.exhale(1);
     if (emergency <= 0 && phase === 'play') blackout();
   }
 
   // Water drag, speed cap, and gentle buoyancy at the surface.
   diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  const cap = outOfAir ? 10 : MAX_SPEED * (1 + shipBonus.speed);
+  // Fins (and the ship's bonus) improve ordinary swimming only. Emergency ascent keeps its own cap.
+  const cap = outOfAir ? 10 : currentStats().swimSpeed;
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   // Below the shelf you're inside the trench; above it, the shelf is the floor

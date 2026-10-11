@@ -12,19 +12,32 @@ export class Diver {
   pos = new THREE.Vector3(0, -0.4, 0);
   vel = new THREE.Vector3();
   facing = 1;
-  headlamp: THREE.PointLight;
+  headlamp: THREE.SpotLight;
   private body = new THREE.Group();
   private legL: THREE.Group;
   private legR: THREE.Group;
+  private finL!: THREE.Mesh;
+  private finR!: THREE.Mesh;
   private freeArm: THREE.Group;
   private netArm: THREE.Group;
   private netMouth: THREE.Group;
   private netTip: THREE.Object3D;
+  /** Visible emergency-tank model; level one deliberately has no cylinder. */
+  private tankGroup = new THREE.Group();
+  private tankBody: THREE.Mesh | null = null;
+  /** Small head-mounted lamp housing, separate from the actual PointLight. */
+  private lampGroup = new THREE.Group();
+  private lampLens: THREE.Mesh | null = null;
+  private lampLevel = 1;
   private breathPoint: THREE.Object3D;
   private breathOrigin = new THREE.Vector3();
   private bubbleOffset = new THREE.Vector3();
   private netPointWorld = new THREE.Vector3();
   private netSwing = 0;
+  private netScale = 1;
+  private rodReachScale = 1;
+  private reelRecovery = 1;
+  private lampMaxIntensity = 48;
   private kickPhase = 0;
   private armPhase = 1.2;
   private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number; size: number; phase: number }[] = [];
@@ -91,6 +104,28 @@ export class Diver {
     this.freeArm = this.makeFreeArm(suit, skin, -0.28);
     this.body.add(this.freeArm);
 
+    // Optional dive accessories are attached to the diver body so they follow
+    // the same pitch/yaw animation as the suit.  Keep the tank hidden until a
+    // reserve-air tier is selected by the loadout.
+    this.tankGroup.position.set(-0.25, 0, -0.34);
+    this.tankGroup.rotation.z = Math.PI / 2;
+    this.tankBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.18, 0.82, 8),
+      mat('#287ea6', { metalness: 0.25, roughness: 0.45 }),
+    );
+    this.tankGroup.add(this.tankBody);
+    this.tankGroup.visible = false;
+    this.body.add(this.tankGroup);
+
+    this.lampGroup.position.set(1.42, 0.18, 0.28);
+    this.lampGroup.rotation.x = Math.PI / 2;
+    this.lampLens = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.12, 0.18, 6),
+      mat('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 2.4, metalness: 0.1, roughness: 0.25 }),
+    );
+    this.lampGroup.add(this.lampLens);
+    this.body.add(this.lampGroup);
+
     // The old design called this item a fishing rod; the fused game design
     // uses its shaft and hoop as an underwater net. Keep the model pivot at
     // the shoulder so the whole tool follows the swing animation.
@@ -118,9 +153,13 @@ export class Diver {
     this.waterRing.renderOrder = 2;
     this.waterRing.visible = false;
     this.group.add(this.waterRing);
-    this.headlamp = new THREE.PointLight('#fff1c4', 0, 22, 1.6);
+    // A spotlight gives the diver a readable forward beam at depth. Its
+    // target is parented to the body, so yaw/pitch animation carries the beam
+    // with the diver instead of leaving a world-space light behind.
+    this.headlamp = new THREE.SpotLight('#fff1c4', 0, 22, 0.65, 0.55, 1.6);
     this.headlamp.position.set(1.4, 0.2, 0.6);
-    this.body.add(this.headlamp);
+    this.headlamp.target.position.set(4.5, 0.05, 0.6);
+    this.body.add(this.headlamp, this.headlamp.target);
     scene.add(this.group);
   }
 
@@ -179,6 +218,8 @@ export class Diver {
     const fin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.04, 0.34), accent);
     fin.position.x = -1.3;
     leg.add(thigh, fin);
+    if (z > 0) this.finL = fin;
+    else this.finR = fin;
     return leg;
   }
 
@@ -205,8 +246,70 @@ export class Diver {
 
   /** Make the visible hoop grow with the equipped net tier. */
   setNetLevel(level: number) {
-    const scale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.15;
-    this.netMouth.scale.setScalar(scale);
+    this.netScale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.15;
+    this.updateNetScale();
+  }
+
+  /** Extend the visible shaft/hoop for the separate rod-body upgrade slot. */
+  setRodLevel(level: number) {
+    this.rodReachScale = 1 + THREE.MathUtils.clamp(level - 1, 0, 2) * 0.12;
+    this.updateNetScale();
+  }
+
+  /** Apply the derived shaft reach, including the selected specialization path. */
+  setRodRange(range: number) {
+    this.rodReachScale = THREE.MathUtils.clamp(range / 1.2, 0.6, 2);
+    this.updateNetScale();
+  }
+
+  // The shaft slot stretches the whole tool along its length; the net tier
+  // grows only the hoop, kept round by undoing the shaft's stretch on it.
+  private updateNetScale() {
+    this.netArm.scale.set(this.rodReachScale, 1, 1);
+    this.netMouth.scale.set(this.netScale / this.rodReachScale, this.netScale, this.netScale);
+  }
+
+  /** Update the visible fin size for the selected diver upgrade tier. */
+  setFinsLevel(level: number) {
+    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    const length = 0.84 + tier * 0.16;
+    const width = 0.9 + tier * 0.05;
+    this.finL.scale.set(length, 1, width);
+    this.finR.scale.set(length, 1, width);
+  }
+
+  /** Toggle and size the emergency tank model. Level one is the no-tank tier. */
+  setTankLevel(level: number) {
+    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    this.tankGroup.visible = tier >= 2;
+    this.tankGroup.scale.setScalar(tier === 3 ? 1.18 : 1);
+  }
+
+  /** Set lamp visual tier and its light reach; intensity still follows depth. */
+  setLampLevel(level: number) {
+    this.lampLevel = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    this.headlamp.distance = [18, 28, 38][this.lampLevel - 1];
+    this.headlamp.angle = [0.65, 0.85, 1.05][this.lampLevel - 1];
+    this.lampMaxIntensity = [48, 64, 82][this.lampLevel - 1];
+    this.lampGroup.scale.setScalar(this.lampLevel === 3 ? 1.18 : this.lampLevel === 2 ? 1.08 : 1);
+  }
+
+  /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
+  setLampStats(distance: number, intensity: number, angle: number) {
+    this.headlamp.distance = THREE.MathUtils.clamp(distance, 1, 100);
+    this.headlamp.angle = THREE.MathUtils.clamp(angle, 0.2, 1.5);
+    this.lampMaxIntensity = Math.max(1, intensity);
+  }
+
+  /** Configure how quickly the net can be swung again after a catch attempt. */
+  setReelLevel(level: number) {
+    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    this.setReelRecovery(1 + (tier - 1) * 0.2);
+  }
+
+  /** Apply branch-adjusted recovery to the visible swing animation. */
+  setReelRecovery(recovery: number) {
+    this.reelRecovery = THREE.MathUtils.clamp(recovery, 0.25, 3);
   }
 
   swing() {
@@ -275,14 +378,14 @@ export class Diver {
     this.freeArm.rotation.z = -0.1 + Math.sin(this.armPhase) * (0.08 + Math.min(speed, 5) * 0.018);
 
     if (this.netSwing > 0) {
-      this.netSwing = Math.max(0, this.netSwing - dt * 3.2);
+      this.netSwing = Math.max(0, this.netSwing - dt * 3.2 * this.reelRecovery);
       const s = Math.sin(this.netSwing * Math.PI);
       this.netArm.rotation.z = -0.9 + s * 1.6;
     } else {
       this.netArm.rotation.z = -0.35 + Math.sin(time * 1.5) * 0.05;
     }
 
-    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * 60;
+    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
     this.updateWaterContact(dt, time, depth);
 
     this.bubbleUpdateAccumulator += dt;
