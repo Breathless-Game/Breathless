@@ -5,6 +5,7 @@ import { onLangChange, t } from './i18n';
 import { MAPS, type MapId } from './maps';
 import { compute, wellnessDisclaimer } from './report';
 import { storageKey } from './wallet';
+import { clearAllHealthData } from './wallet-storage';
 
 // A trip: from the first dive off the title until you're back at the main menu.
 // Climbing aboard, changing maps and diving again all count toward the same trip.
@@ -190,6 +191,7 @@ export function clearTrips() {
       localStorage.removeItem(k);
     } catch {}
   }
+  clearAllHealthData(); // every wallet's trips on this device
 }
 
 function saveTrip(r: TripRecord) {

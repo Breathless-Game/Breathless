@@ -1,5 +1,6 @@
 import type { DiveRecord, HealthLog } from './health';
 import { lang, onLangChange, t } from './i18n';
+import { hasHealthData } from './wallet-storage';
 
 // The health report is built only when the player presses the button. It reads
 // the dive log, works out a handful of wellness numbers, and draws two charts.
@@ -284,7 +285,9 @@ export class Report {
         </div>
       </div>`;
     if (!dives.length) {
-      this.panel.innerHTML = `${head}<p class="report-empty">${t('No dives recorded yet. Hold your breath, dive, and come back.', '还没有下潜记录。屏住呼吸，潜一次，再回来看看。')}</p>`;
+      this.panel.innerHTML = `${head}<p class="report-empty">${t('No dives recorded yet. Hold your breath, dive, and come back.', '还没有下潜记录。屏住呼吸，潜一次，再回来看看。')}</p>${
+        hasHealthData() ? `<button id="report-delete" class="link small">${t('Delete my health data', '删除我的健康数据')}</button>` : ''
+      }`;
       this.wire();
       return;
     }

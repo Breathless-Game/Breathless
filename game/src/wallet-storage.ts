@@ -251,3 +251,44 @@ export function isUserRejection(e: unknown): boolean {
   if (err?.code === 4001) return true;
   return typeof err?.message === 'string' && /user rejected|rejected the request|cancel/i.test(err.message);
 }
+
+/**
+ * Which of these keys hold health data: `deepbreath.<owner>.health` / `.trips` for any owner,
+ * plus the legacy unscoped `deepbreath.health` / `deepbreath.trips`. Nothing else, never `.session`.
+ */
+export function healthDataKeys(keys: string[]): string[] {
+  const names = ['health', 'trips'];
+  return keys.filter((k) => {
+    if (!k.startsWith(PREFIX)) return false;
+    const rest = k.slice(PREFIX.length);
+    const dot = rest.lastIndexOf('.');
+    const name = dot < 0 ? rest : rest.slice(dot + 1);
+    if (!names.includes(name)) return false;
+    return dot < 0 || (dot > 0 && !rest.slice(0, dot).includes('.'));
+  });
+}
+
+function allStorageKeys(): string[] {
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k !== null) keys.push(k);
+    }
+  } catch {}
+  return keys;
+}
+
+/** Is there any health or trip data on this device, for any wallet? */
+export function hasHealthData(): boolean {
+  return healthDataKeys(allStorageKeys()).length > 0;
+}
+
+/** Remove every health and trip record on this device, for all wallets. */
+export function clearAllHealthData(): void {
+  for (const k of healthDataKeys(allStorageKeys())) {
+    try {
+      localStorage.removeItem(k);
+    } catch {}
+  }
+}

@@ -17,12 +17,15 @@ globalThis.localStorage = {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
   setItem: (k, v) => store.set(k, String(v)),
   removeItem: (k) => store.delete(k),
+  get length() { return store.size; },
+  key: (i) => [...store.keys()][i] ?? null,
 };
 // The wallet scopes keys per owner and throws with none connected (trip.ts then uses deepbreath.trips).
 globalThis.__owner = null;
 const walletStub = dataUrl("export const storageKey = (name) => { if (!globalThis.__owner) throw new Error('Connect a wallet first'); return globalThis.__owner + '.' + name; };");
 const trip = await import(await transpile('trip.ts', {
   './wallet': walletStub,
+  './wallet-storage': await transpile('wallet-storage.ts'),
   './fish': dataUrl('export const fishValue = () => 1; export const RARITY = {}; export const RARITY_ORDER = [];'),
   './i18n': dataUrl('export const t = (en) => en; export const onLangChange = () => () => {};'),
   './maps': dataUrl('export const MAPS = {};'),
