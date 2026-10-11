@@ -1,6 +1,7 @@
 import './field-guide.css';
 import { guideArt, type GuideArt } from './guide-art';
 import { currentLesson, LESSONS, loadTutorial, recordLesson, saveTutorial, type LessonId } from './tutorial';
+import { isAction } from './controls';
 import { lang, onLangChange, t } from './i18n';
 import { SYNTHESIS_ENABLED } from './synthesis';
 import { clampPosition, exceedsDragThreshold, fromFraction, LAUNCHER_POS_KEY, parseSavedPos, placePanel, toFraction } from './launcher-drag';
@@ -278,6 +279,19 @@ export class FieldGuide {
   toggleTutorial() {
     this.setEnabled(!this.state.enabled);
   }
+  /** The tutorial on or off (the 新手引导 button, or the title's TUTORIAL fish). */
+  toggleTour() {
+    this.setEnabled(!this.state.enabled);
+  }
+
+  /** The corner buttons (手册 · 新手引导): hidden while the title's GUIDE and TUTORIAL fish hang there instead, shown everywhere else. */
+  showLauncher(show: boolean) {
+    if (show === this.launcherShown) return; // cheap to call every frame
+    this.launcherShown = show;
+    this.launcher.classList.toggle('hidden', !show);
+  }
+  private launcherShown: boolean | null = null;
+
   private setEnabled(enabled: boolean) {
     this.state = { ...this.state, enabled, chosen: true };
     this.collapsed = false;
@@ -371,7 +385,7 @@ export class FieldGuide {
     const target = event.target;
     const editing = target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
     if (!this.open && (editing || event.ctrlKey || event.metaKey || event.altKey)) return;
-    const bookKey = event.code === 'KeyB' || event.key.toLowerCase() === 'b';
+    const bookKey = isAction('fieldGuide', event); // B by default; changeable in Settings → Controls
     if (!this.open && (!bookKey || !this.hooks.canOpen())) return;
     event.stopImmediatePropagation();
     if (bookKey || event.key === 'Escape') {

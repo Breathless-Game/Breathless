@@ -31,6 +31,8 @@ export interface DeskHooks {
    * can move with it.
    */
   view?(move: THREE.Vector3, yaw: number, pitch: number): void;
+  /** The CONTROLS plaque: show the key list (controls.ts), where keys can be changed. */
+  openControls?(): void;
 }
 
 type Option = [value: string, en: string, zh: string];
@@ -304,7 +306,7 @@ export class SettingsDesk {
       ],
       [{ kind: 'toggle', title: ['LIGHTING EFFECTS', '光影特效'], get: () => s().lightingEffects, set: (v) => h.change({ lightingEffects: v }) }, -3.4, 0.55, 3.1, 1.1],
       [{ kind: 'toggle', title: ['CAMERA PREVIEW', '摄像头画面'], get: () => s().showCamera, set: (v) => h.change({ showCamera: v }) }, 0, 0.55, 3.1, 1.1],
-      [{ kind: 'toggle', title: ['CONTROLS HINT', '操作提示'], get: () => s().showHelp, set: (v) => h.change({ showHelp: v }) }, 3.4, 0.55, 3.1, 1.1],
+      [{ kind: 'action', title: ['CONTROLS', '操作'], line: () => t('Click to see or change keys', '点击查看或修改按键'), act: () => h.openControls?.() }, 3.4, 0.55, 3.1, 1.1],
       [
         {
           kind: 'action',

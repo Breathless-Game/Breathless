@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
+import ts from 'typescript';
 
 // The UI shows one language at a time (src/i18n.ts). These guard against the old
 // side-by-side "English · 中文" text creeping back into player-facing strings.
@@ -64,22 +65,47 @@ test('index.html: data-zh elements hold no id-ed children (their content is repl
   }
 });
 
+/**
+ * Every string and template literal in a source file, multi-line templates and innerHTML
+ * markup included (read with the TypeScript parser, so comments are skipped). A template's
+ * interpolations become "${}"; `raw` is its source, for the `${a.en} · ${a.zh}` check.
+ */
+function literals(file, src) {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2022, true);
+  const out = [];
+  const visit = (n) => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) out.push({ n, text: n.text });
+    else if (ts.isTemplateExpression(n)) out.push({ n, text: [n.head.text, ...n.templateSpans.map((sp) => sp.literal.text)].join('${}'), raw: n.getText(sf) });
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out.map(({ n, text, raw }) => ({ line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, text, raw }));
+}
+// An English name and its Chinese one interpolated side by side: `${a.en} · ${a.zh}`.
+// Also bare destructured names (`${en}` … `${zh}`) in one template, with or without a " · " between.
+const INTERP_PAIR = /\$\{(?:[^}]*\.)?(en|name)\}[^`]*\$\{(?:[^}]*\.)?(zh|nameZh)\}/;
+const pairHits = (file, src) =>
+  literals(file, src)
+    .filter(({ text, raw }) => text.split('\n').some(isPair) || (raw && INTERP_PAIR.test(raw)))
+    .map(({ line, text }) => `${file}:${line}: ${text.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
+
+test('the literal scan catches multi-line markup and interpolated pairs', () => {
+  const src = [
+    'el.innerHTML = `',
+    '  <div class="card">',
+    '    <h2>Controls · 操作</h2>',
+    '  </div>`;',
+    'name.innerHTML = `${a.en} <span class="muted">· ${a.zh}</span>`;',
+    "const ok = t('Controls', '操作'); // Controls · 操作 in a comment is fine",
+    'const fine = `${n} 条鱼 · 2.4 m`;',
+  ].join('\n');
+  assert.deepEqual(pairHits('x.ts', src).map((h) => h.split(':')[1]), ['1', '5']);
+});
+
 test('src: no "English · 中文" pairs inside one string literal', async () => {
   const dir = new URL('src/', root);
   const files = (await readdir(dir)).filter((f) => f.endsWith('.ts') && !DEV.test(f));
   const hits = [];
-  for (const file of files) {
-    const lines = (await readFile(new URL(file, dir), 'utf8')).split('\n');
-    lines.forEach((line, i) => {
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return; // comments
-      const code = line.replace(/\/\/ .*$/, '');
-      for (const m of code.matchAll(/'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)) {
-        const lit = m[1] ?? m[2] ?? m[3] ?? '';
-        // Code between two template literals (a `${t('…', '…')}` call), not a literal itself.
-        if (/\bt\(['`]/.test(lit)) continue;
-        if (isPair(lit)) hits.push(`${file}:${i + 1}: ${lit}`);
-      }
-    });
-  }
+  for (const file of files) hits.push(...pairHits(file, await readFile(new URL(file, dir), 'utf8')));
   assert.deepEqual(hits, []);
 });

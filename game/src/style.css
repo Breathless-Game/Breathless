@@ -85,11 +85,53 @@ body {
 }
 
 /* ---- breath panel ---- */
+/* A small tag over the diver's head (main.ts places it every frame via hud.placeBreath). */
 #breath {
   position: absolute;
-  top: 16px;
-  left: 16px;
-  width: 252px;
+  top: 0;
+  left: 0;
+  width: 168px;
+  padding: 8px 10px 6px;
+  border-radius: 14px;
+  will-change: transform;
+}
+
+/* Transparent over the scene: no panel, just the readout with a shadow to keep it legible. */
+#breath.panel {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+#breath #trace {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+}
+
+#breath.offscreen {
+  visibility: hidden;
+}
+
+#breath .chip {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+
+#breath #hold-time {
+  font-size: 18px;
+}
+
+#breath #trace {
+  height: 26px;
+  margin: 4px 0 2px;
+}
+
+#breath .small {
+  font-size: 10px;
+}
+
+#breath #hint:empty {
+  display: none;
 }
 
 .chip {
@@ -142,12 +184,13 @@ body {
 }
 
 /* ---- camera bubble ---- */
+/* Top left: the breath numbers ride over the diver's head instead. */
 #cam-wrap {
   position: absolute;
   top: 16px;
-  right: 16px;
-  width: 168px;
-  height: 126px;
+  left: 16px;
+  width: 224px;
+  height: 168px;
   border-radius: 16px;
   overflow: hidden;
   border: 3px solid var(--breathe);
@@ -584,6 +627,105 @@ body {
 
 #net {
   max-width: 100%;
+}
+
+/* The equipped label and the net moved into the hotbar (bottom centre). */
+#hud-bl {
+  display: none;
+}
+
+#help {
+  display: none; /* the controls live in Settings now */
+}
+
+#hotbar {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  padding: 8px 12px 10px;
+  max-width: calc(100vw - 32px - 360px); /* clear of the bank panel on the right */
+}
+
+.hotbar-tabs {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.hotbar-tabs .on {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.hotbar-key {
+  margin-left: auto;
+}
+
+.hotbar-key b {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+#hotbar-gear {
+  display: flex;
+  gap: 8px;
+}
+
+.hotbar-cell {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
+}
+
+.hotbar-cell.on {
+  border: 2px solid var(--hold);
+  background: rgba(62, 240, 168, 0.14);
+  box-shadow: 0 0 16px rgba(62, 240, 168, 0.3);
+}
+
+.hotbar-cell.unpacked {
+  opacity: 0.35;
+}
+
+.hotbar-num {
+  position: absolute;
+  top: 3px;
+  left: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.hotbar-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.hotbar-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#hotbar #net-slots {
+  margin-top: 0;
+  flex-wrap: nowrap;
+}
+
+#hotbar .slot {
+  width: 64px;
+  height: 64px;
 }
 
 #active-gear {
@@ -2294,10 +2436,10 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
     height: 84px;
   }
   #breath {
-    width: 200px;
+    width: 140px;
   }
   #time-of-day {
-    top: 108px; /* top-right, under the camera preview, beside the breath panel */
+    top: 108px; /* top-right */
     left: auto;
     right: 16px;
     transform: none;
@@ -3032,35 +3174,25 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
 }
 
 /* ---- aquarium (图鉴) ---- */
-/* Over the title screen, like the workbench: the camera pans down and the tank
-   rises from below (aquarium.ts drives the transform). */
+/* The tank itself is 3D, on the aquarium's table (aquarium-tank.ts). Over it, only
+   the bar at the bottom, the empty-tank note and a fish's card. */
 #aquarium {
   position: fixed;
   inset: 0;
   z-index: 31;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-}
-
-/* The scene behind blurs and darkens as the tank comes up (--aq-bg: 0..1, set by aquarium.ts). */
-#aquarium::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgba(2, 8, 18, 0.45);
-  backdrop-filter: blur(8px);
-  opacity: var(--aq-bg, 0);
   pointer-events: none;
 }
 
 .aq-stage {
-  position: relative; /* above the blurred backdrop */
-  width: min(1100px, 100%, calc((100vh - 120px) * 1.75));
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 16px;
+  margin: 0 auto; /* no transform: the feeder and the empty note are fixed to the viewport */
+  width: min(980px, calc(100vw - 32px));
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse; /* the bar at the bottom, the card above it */
   gap: 10px;
-  transform: translateY(110vh);
 }
 
 .aq-bar {
@@ -3069,6 +3201,19 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   gap: 8px;
   flex-wrap: wrap;
   opacity: 0;
+  transition: opacity 0.35s;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  pointer-events: auto;
+}
+
+/* The tank has landed: its bar fades in. */
+#aquarium.landed .aq-bar,
+#aquarium.landed #aq-feeder {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .aq-title {
@@ -3165,14 +3310,20 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   align-self: start;
 }
 
+/* Only the card sits over the bar; the feeder floats at the right edge, beside the tank. */
 .aq-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
-  align-items: stretch;
-  gap: 12px;
+  display: block;
 }
 
 #aq-feeder {
+  position: fixed;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 190px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -3342,48 +3493,37 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   white-space: normal;
 }
 
+/* The old 2D tank's canvas: the tank is 3D now. */
 #aq-canvas {
-  display: block;
-  width: 100%;
-  aspect-ratio: 1.75;
-  cursor: pointer;
-}
-
-#aq-canvas.top-view {
-  cursor: zoom-out;
+  display: none;
 }
 
 #aq-empty {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  box-sizing: border-box;
-  width: min(100%, 36em);
-  padding: 0 16px;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 46%;
   text-align: center;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  color: var(--muted);
-  font-size: 15px;
+  color: var(--ink);
+  font-size: 16px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
   pointer-events: none;
 }
 
 #aq-card {
-  position: absolute;
-  left: 50%;
-  bottom: 18%;
-  transform: translateX(-50%);
+  position: relative;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 12px;
   width: max-content;
-  max-width: calc(100% - 32px);
+  max-width: 100%;
   padding: 8px 12px 8px 8px;
   border-radius: 14px;
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(8px);
+  pointer-events: auto;
   flex-wrap: wrap;
 }
 
@@ -3428,11 +3568,11 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
 }
 
 @media (max-width: 560px) {
-  .aq-layout {
-    grid-template-columns: 1fr;
-  }
-
   #aq-feeder {
+    top: 12px;
+    right: 12px;
+    transform: none;
+    width: 160px;
     display: grid;
     grid-template-columns: 72px minmax(0, 1fr);
     align-items: center;
@@ -4287,4 +4427,364 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   font-weight: 500;
   line-height: 1.5;
   color: var(--muted);
+}
+
+/* ---- controls list (Settings → Controls) ---- */
+#controls {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 18, 0.55);
+  backdrop-filter: blur(6px);
+  padding: 16px;
+}
+
+#controls .card {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 22px 24px;
+}
+
+.controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.controls-head h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+#controls-list {
+  display: grid;
+  margin: 12px 0 16px;
+}
+
+.controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.controls-keys {
+  display: flex;
+  gap: 6px;
+}
+
+.controls-key {
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+}
+
+.controls-key.empty {
+  opacity: 0.4;
+}
+
+.controls-key.listening {
+  background: var(--gold);
+  color: #2a1d00;
+  border-color: transparent;
+}
+
+.controls-fixed {
+  min-width: 64px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.controls-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* ---- trip report (back at the main menu): the health desk's sheet of paper ---- */
+#trip-report {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px 64px;
+  background: rgba(2, 8, 18, 0.55);
+  backdrop-filter: blur(6px);
+  transition: background 0.5s, backdrop-filter 0.5s;
+  cursor: pointer;
+}
+
+#trip-report.leaving {
+  background: rgba(2, 8, 18, 0);
+  backdrop-filter: blur(0);
+}
+
+.trip-paper {
+  position: relative;
+  width: min(1000px, calc(100vw - 32px), calc((100vh - 120px) * 1.42));
+}
+
+.trip-paper canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.trip-paper #trip-done {
+  position: absolute;
+  right: 3%;
+  bottom: -22px;
+}
+
+#trip-report .table-hint {
+  bottom: 18px;
+}
+
+.trip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.trip-head h2 {
+  margin: 4px 0 0;
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.trip-score {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 26px;
+}
+
+.trip-grade {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 36px;
+  font-weight: 900;
+  border: 3px solid currentColor;
+}
+
+.grade-S { color: #ff5fd2; }
+.grade-A { color: var(--gold); }
+.grade-B { color: var(--hold); }
+.grade-C { color: var(--breathe); }
+.grade-D { color: var(--muted); }
+
+.trip-cols {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 28px;
+  margin-top: 12px;
+}
+
+.trip-cols h3 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.trip-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.trip-line b {
+  font-variant-numeric: tabular-nums;
+}
+
+.trip-line .bad {
+  color: var(--danger);
+}
+
+.trip-rarity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.trip-rarity span {
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trip-traces {
+  width: 100%;
+  height: 120px;
+  margin-top: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.trip-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+@media (max-width: 720px) {
+  .trip-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- tables from table-scene.ts (health desk, the aquarium's table) ---- */
+/* Under the title layer like the workbench: the title fish hang in front of the table. */
+.table-scene {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  pointer-events: none;
+}
+
+.table-scene canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.table-hint {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Hovering a stick in the health desk's jar: that trip, by the pointer. */
+#health-tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 34;
+  pointer-events: none;
+  width: 260px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(243, 234, 214, 0.97);
+  color: #3a2210;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+#health-tip .muted {
+  color: rgba(58, 34, 16, 0.6);
+}
+
+#health-tip .trip-line {
+  border-color: rgba(90, 60, 30, 0.18);
+  font-size: 13px;
+}
+
+#health-tip .health-tip-disclaimer {
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: rgba(58, 34, 16, 0.55);
+}
+
+.health-tip-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 4px;
+  font-size: 20px;
+}
+
+.health-tip-score .trip-grade {
+  width: 40px;
+  height: 40px;
+  font-size: 22px;
+  border-width: 2px;
+}
+
+/* The health report held up (health-desk.ts): over the blurred table and the title fish. */
+#hd-held {
+  position: fixed;
+  inset: 0;
+  z-index: 33;
+}
+
+#hd-held canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.hd-held-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.5);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+
+#hd-held.open .hd-held-bg {
+  opacity: 1;
+}
+
+#hd-held .table-hint {
+  z-index: 1;
+}
+
+/* The title's second rope, behind the main one (main.ts: backRope). Takes no pointer itself. */
+#title-back {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#title-back canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#title-back .title-name {
+  display: none;
+}
+
+/* The bottom-right BANKED panel (count, gear line, Rod upgrades, Health report) is gone:
+   the workbench and the HEALTH fish have those. Kept in the page for the code that fills it. */
+#bank {
+  display: none !important;
 }

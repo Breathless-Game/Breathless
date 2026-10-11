@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { TankTable } from './aquarium-tank';
 import { coreAsset } from './explorer-links';
 import { fishValue, rarityLabel, RARITY, zoneForDepth, zoneName } from './fish';
 import { lang, onLangChange, pickName, t } from './i18n';
@@ -9,11 +10,9 @@ import { MAPS, type MapId } from './maps';
 import type { BankedFish } from './market';
 import { nftName } from './nft-uri';
 import { fishIcon } from './portrait';
-import { Rng } from './rng';
 import { storageKey } from './wallet';
 import {
   AQUARIUM_STORAGE_KEY,
-  DEFAULT_AQUARIUM_LIGHT,
   loadAquariumState,
   normalizeLightColor,
   saveAquariumState,
@@ -23,27 +22,25 @@ import {
   type AquariumState,
 } from './aquarium-state';
 
-// The aquarium (图鉴): the fish you've banked, swimming in a 2.5D glass tank. It comes
-// in the way the workbench does: the camera pans down, the title's rope and fish ride
-// straight up off the screen, and the tank rises into view from below. Every TANK_SIZE
-// fish fill one tank, in the order they were caught; starred fish move to their own
-// Favorites tank instead.
-// Drawn on a 2D canvas: the tank is a box seen in one-point perspective, and each
-// fish is its rendered sprite placed at a depth (smaller, dimmer further back).
+// The aquarium (图鉴): the fish you've banked, swimming in a real 3D glass tank on a
+// table (aquarium-tank.ts). The table comes up the way the workbench does (the
+// title's fish ride up off the screen), then the tank drops from above and lands on
+// it with a thud; leaving, the tank is lifted off and the table sinks. Every
+// TANK_SIZE fish fill one tank, in the order they were caught; starred fish move to
+// their own Favorites tank instead. Double-click the tank to look down into it.
+// Food bought in PEARL is poured in: it sinks, the school rushes over, and fed fish
+// grow (and some glow) in the aquarium only; the NFT stays as caught. The ambience
+// light tints the lamp and the water. This file runs the tanks, favourites, feeder,
+// bar and card; the table draws the tank and swims the fish.
 
-export const TANK_SIZE = 50;
+export const TANK_SIZE = 10;
 /** Compatibility alias for callers that still display the default pellet cost. */
 export const AQUARIUM_FOOD_COST = fishFood('pellet').price;
 const FAVORITES_KEY = 'favorites';
-const ICONS_PER_FRAME = 3; // sprites rendered per frame while a tank fills, so opening never stalls
-// The pan in and out, as long as the workbench's.
-const OPEN_S = 1.15;
-const CLOSE_S = 0.9;
-const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
 
 export interface AquariumHooks {
-  /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
-  pan(u: number): void;
+  /** The table and tank (aquarium-tank.ts). */
+  table: TankTable;
   /**
    * Pour one food over these fish with the on-chain feed instruction (it burns the PEARL and
    * grows them in one transaction; the chain decides who can eat). Resolves with how many ate and
@@ -66,42 +63,7 @@ export interface AquariumHooks {
   closeCollection(): void;
 }
 
-// Tank box: where its front glass sits on the canvas (in fractions) when it faces you,
-// how much smaller the back wall looks, and the eye height on the canvas (a little
-// above the tank, so the floor and the water surface show). The box sways about its
-// vertical centre line after the mouse, at most MAX_YAW either way.
-const FRONT = { x0: 0.05, x1: 0.95, y0: 0.1, y1: 0.86 };
-const BACK_SCALE = 0.72;
-const VANISH_Y = 0.02;
-const MAX_YAW = 0.09;
-const YAW_EASE = 3; // per second: slow enough that it swings rather than snaps
-const SURFACE = 0.07; // water line, as a fraction of the tank's height
-// Where fish swim, in tank space (x, y: 0..1 across and down the front glass; z: 0 front .. 1 back).
-const SWIM = { x0: 0.07, x1: 0.93, y0: 0.17, y1: 0.84, z0: 0.04, z1: 0.94 };
-
 type TankId = number | 'fav';
-
-interface Swimmer {
-  fish: BankedFish;
-  img: HTMLImageElement | null;
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  tx: number;
-  ty: number;
-  tz: number;
-  face: number; // -1..1: which way it faces; passing 0 is the fish turning edge-on
-  size: number; // 0..1 by length
-  speed: number;
-  phase: number;
-  alpha: number;
-  leaving: boolean;
-  growthPulse: number;
-  glowIntensity: number;
-}
 
 interface FoodPreview {
   renderer: THREE.WebGLRenderer;
@@ -110,34 +72,7 @@ interface FoodPreview {
   model: THREE.Group | null;
 }
 
-interface Plant {
-  x: number;
-  z: number;
-  h: number;
-  hue: number;
-  blades: number;
-  phase: number;
-}
-
-interface Bubble {
-  x: number;
-  y: number;
-  z: number;
-  r: number;
-  v: number;
-}
-
-interface FoodDrop {
-  x: number;
-  y: number;
-  z: number;
-  life: number;
-  count: number;
-}
-
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
-const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
 
 function loadFavorites(): Set<string> {
   try {
@@ -155,11 +90,6 @@ function saveFavorites(ids: Set<string>) {
 
 export class Aquarium {
   private root = $('aquarium');
-  private stage = this.root.querySelector<HTMLElement>('.aq-stage')!;
-  private bar = this.root.querySelector<HTMLElement>('.aq-bar')!;
-  private canvas = $<HTMLCanvasElement>('aq-canvas');
-  private tankEl = this.canvas.parentElement!;
-  private ctx = this.canvas.getContext('2d')!;
   private tabs = $('aq-tabs');
   private label = $('aq-label');
   private empty = $('aq-empty');
@@ -167,30 +97,13 @@ export class Aquarium {
 
   private favorites = new Set<string>();
   private tank: TankId = 0;
-  private swimmers = new Map<BankedFish, Swimmer>();
-  private plants: Plant[] = [];
-  private bubbles: Bubble[] = [];
-  private picked: Swimmer | null = null;
-  private hover: Swimmer | null = null;
-  private w = 0;
-  private h = 0;
-  private t = 0;
-  private slosh = 0;
-  private last = 0;
-  private raf = 0;
+  private picked: BankedFish | null = null;
   private state: 'closed' | 'opening' | 'open' | 'closing' = 'closed';
-  private panU = 0;
-  private tween: { t: number; dur: number; from: number; to: number } | null = null;
-  private yaw = 0; // radians the tank is turned; + brings its right side toward you
-  private yawTarget = 0;
-  // 0 is the normal eye-level view, 1 is a plan view looking down through the water.
-  // It eases between the two so a double-click feels like turning the tank over rather
-  // than snapping the fish and glass to a new projection.
-  private view = 0;
-  private viewTarget = 0;
-  private aquariumState: AquariumState = { growth: {}, light: { color: DEFAULT_AQUARIUM_LIGHT } };
+  private t = 0;
+  private raf = 0;
+  private last = 0;
+  private aquariumState: AquariumState = loadAquariumState();
   private lightInput = $<HTMLInputElement>('aq-light');
-  private lightRgb = this.parseRgb(DEFAULT_AQUARIUM_LIGHT);
   private feederModel = $('aq-feeder-model');
   private foodPicker = $('aq-food-picker');
   private foodTrigger = $<HTMLButtonElement>('aq-food-trigger');
@@ -201,12 +114,18 @@ export class Aquarium {
   private feeding = false;
   private selectedFood: FishFoodId = 'plankton';
   private foodPreview: FoodPreview | null = null;
-  private foodDrop: FoodDrop | null = null;
 
   constructor(
     private bank: BankedFish[],
     private hooks: AquariumHooks,
   ) {
+    const table = hooks.table;
+    // How feeding has changed each fish, for the 3D tank (size, glow, speed).
+    table.look = (f) => {
+      const growth = this.aquariumState.growth[f.id];
+      const effects = activeFoodEffects(growth);
+      return { scale: growthScaleForGrowth(growth), glow: effects.glow, speed: effects.speed };
+    };
     onLangChange(() => {
       this.renderBar();
       this.renderFoodOptions();
@@ -214,7 +133,6 @@ export class Aquarium {
       if (this.picked) this.pick(this.picked);
     });
     // The balance often lands after show(): re-render the Pour button's affordability whenever it moves.
-    // While a payment is in flight renderFeederButton() keeps it locked, so no extra guard is needed.
     onPearlBalance(() => this.renderFeederButton());
     hooks.onChainChange(() => this.refreshGrowth());
     $('aq-close').addEventListener('click', () => this.close());
@@ -226,31 +144,28 @@ export class Aquarium {
         ...this.aquariumState,
         light: { color: normalizeLightColor(this.lightInput.value) },
       };
-      this.setAmbientColor(this.aquariumState.light.color);
+      table.setLight(this.aquariumState.light.color);
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
     });
     this.renderFoodOptions();
     this.initFoodPicker();
     this.feederButton.addEventListener('click', () => void this.feedSchool());
-    this.canvas.addEventListener('pointermove', (e) => {
-      this.hover = this.fishAt(e);
-      this.canvas.style.cursor = this.hover ? 'pointer' : '';
-    });
-    this.canvas.addEventListener('pointerleave', () => (this.hover = null));
-    this.canvas.addEventListener('click', (e) => this.pick(this.fishAt(e)));
-    this.tankEl.addEventListener('dblclick', (e) => {
-      // The info card sits above the canvas. Let a double-click anywhere on the tank
-      // switch views, but keep its buttons and links as normal controls.
-      if ((e.target as HTMLElement).closest('#aq-card, button, a, input')) return;
-      e.preventDefault();
-      this.viewTarget = this.viewTarget > 0.5 ? 0 : 1;
-      this.canvas.classList.toggle('top-view', this.viewTarget > 0.5);
-    });
-    // The tank sways gently after the mouse, like a card tilting under it: the side
-    // the mouse is on leans away a little.
+    // The fish are in the table's 3D scene: hover, click and double-click land on the canvas over it.
     window.addEventListener('pointermove', (e) => {
-      if (!this.open) return;
-      this.yawTarget = -clamp((e.clientX / window.innerWidth) * 2 - 1, -1, 1) * MAX_YAW;
+      if (this.state !== 'open') return;
+      const f = this.overScene(e) ? table.fishAt(e) : null;
+      table.setHover(f);
+      document.body.style.cursor = f ? 'pointer' : '';
+    });
+    window.addEventListener('click', (e) => {
+      if (this.state !== 'open' || !this.overScene(e)) return;
+      this.pick(table.fishAt(e));
+    });
+    window.addEventListener('dblclick', (e) => {
+      // Look down into the tank, or back to the front.
+      if (this.state !== 'open' || !this.overScene(e)) return;
+      e.preventDefault();
+      table.setTopView(!table.topView);
     });
     window.addEventListener('keydown', (e) => {
       if (!this.open) return;
@@ -272,9 +187,80 @@ export class Aquarium {
       } else if (e.key === 'ArrowLeft') this.step(-1);
       else if (e.key === 'ArrowRight') this.step(1);
     });
-    new ResizeObserver(() => this.resize()).observe(this.canvas);
     // Text only: the 3D food preview (a WebGL context) is built on the first show().
     this.renderFeederText();
+  }
+
+  /** Up, or on its way up: Esc and the title's keys belong to it. */
+  get open() {
+    return this.state === 'opening' || this.state === 'open';
+  }
+
+  /** A pointer on the scene itself, not on the bar, the card, the feeder or the Collection. */
+  private overScene(e: MouseEvent) {
+    const el = e.target as HTMLElement | null;
+    if (this.collectionOpen()) return false;
+    return !el?.closest('#aq-card, .aq-bar, #aq-feeder, button, a, input, select');
+  }
+
+  /** The table comes up; once it's there, the tank drops onto it. */
+  show() {
+    if (this.state !== 'closed') return;
+    const table = this.hooks.table;
+    this.favorites = loadFavorites(); // per wallet, so read fresh each time
+    this.aquariumState = loadAquariumState(undefined, this.stateKey());
+    this.applyChainGrowth();
+    this.lightInput.value = this.aquariumState.light.color;
+    table.setLight(this.aquariumState.light.color);
+    this.renderFeeder();
+    this.state = 'opening';
+    this.root.classList.remove('hidden', 'landed');
+    table.show(() => {
+      if (this.state !== 'opening') return;
+      table.dropTank(() => {
+        if (this.state !== 'opening') return;
+        this.state = 'open';
+        this.root.classList.add('landed'); // the bar and the feeder fade in
+      });
+    });
+    table.hold();
+    this.pick(null);
+    this.setTank(0, true);
+    // Spins the food model in the feeder while the aquarium is up.
+    this.last = performance.now();
+    cancelAnimationFrame(this.raf);
+    this.raf = requestAnimationFrame((now) => this.frame(now));
+  }
+
+  private frame(now: number) {
+    if (this.state === 'closed') return;
+    this.t += Math.min((now - this.last) / 1000, 0.05);
+    this.last = now;
+    if (this.foodPreview?.model) {
+      this.foodPreview.model.rotation.y = this.t * 0.8;
+      this.foodPreview.renderer.render(this.foodPreview.scene, this.foodPreview.camera);
+    }
+    this.raf = requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /** Esc or ×: the tank is lifted off, then the table sinks and the title's fish come back down. */
+  close() {
+    if (!this.open) return;
+    const table = this.hooks.table;
+    const landed = this.state === 'open';
+    this.setFoodPickerOpen(false);
+    this.state = 'closing';
+    this.pick(null);
+    this.root.classList.remove('landed');
+    if (table.topView) table.setTopView(false);
+    const sink = () =>
+      table.leave(() => {
+        this.state = 'closed';
+        this.root.classList.add('hidden');
+        document.body.style.cursor = '';
+      });
+    if (landed) table.liftTank(sink);
+    else sink();
   }
 
   private collectionOpen() {
@@ -308,32 +294,6 @@ export class Aquarium {
   private refreshFromBank() {
     const order = this.order();
     this.setTank(order.includes(this.tank) ? this.tank : order[order.length - 2] ?? 'fav');
-  }
-
-  private parseRgb(hex: string) {
-    const value = hex.replace('#', '');
-    return {
-      r: Number.parseInt(value.slice(0, 2), 16),
-      g: Number.parseInt(value.slice(2, 4), 16),
-      b: Number.parseInt(value.slice(4, 6), 16),
-    };
-  }
-
-  private setAmbientColor(hex: string) {
-    this.lightRgb = this.parseRgb(normalizeLightColor(hex));
-  }
-
-  private ambientCss(alpha: number, mix = 1) {
-    const r = Math.round(255 * (1 - mix) + this.lightRgb.r * mix);
-    const g = Math.round(255 * (1 - mix) + this.lightRgb.g * mix);
-    const b = Math.round(255 * (1 - mix) + this.lightRgb.b * mix);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-
-  private mixHex(hex: string, amount: number) {
-    const base = this.parseRgb(hex);
-    const t = clamp(amount, 0, 1);
-    return `rgb(${Math.round(base.r + (this.lightRgb.r - base.r) * t)}, ${Math.round(base.g + (this.lightRgb.g - base.g) * t)}, ${Math.round(base.b + (this.lightRgb.b - base.b) * t)})`;
   }
 
   private stateKey() {
@@ -589,89 +549,6 @@ export class Aquarium {
     }
   }
 
-  /** Up, or on its way up: Esc and the title's keys belong to it. */
-  get open() {
-    return this.state === 'opening' || this.state === 'open';
-  }
-
-  /** Pan down from the title: its fish ride up out of sight and the tank rises from below. */
-  show() {
-    if (this.open) return;
-    if (this.state === 'closed') {
-      this.yaw = this.yawTarget = 0;
-      this.view = this.viewTarget = 0;
-      this.canvas.classList.remove('top-view');
-      this.favorites = loadFavorites(); // per wallet, so read fresh each time
-      this.aquariumState = loadAquariumState(undefined, this.stateKey());
-      this.applyChainGrowth();
-      this.lightInput.value = this.aquariumState.light.color;
-      this.setAmbientColor(this.aquariumState.light.color);
-      this.renderFeeder();
-      this.swimmers.clear();
-      this.foodDrop = null;
-      this.pick(null);
-      this.setTank(0, true);
-    }
-    this.root.classList.remove('hidden');
-    this.state = 'opening';
-    this.animate(1, OPEN_S);
-    this.resize();
-    if (!this.raf) {
-      this.last = performance.now();
-      const loop = (now: number) => {
-        this.frame(Math.min((now - this.last) / 1000, 0.05));
-        this.last = now;
-        if (this.state !== 'closed') this.raf = requestAnimationFrame(loop);
-      };
-      this.raf = requestAnimationFrame(loop);
-    }
-  }
-
-  /** Esc or ×: the tank sinks away and the title's fish come back down. */
-  close() {
-    if (!this.open) return;
-    // The food preview keeps its renderer across closes; frame() stops drawing it once closed.
-    this.setFoodPickerOpen(false);
-    this.state = 'closing';
-    this.foodDrop = null;
-    this.animate(0, CLOSE_S);
-  }
-
-  private animate(to: number, dur: number) {
-    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    this.tween = { t: 0, dur: reduced ? 0.01 : dur, from: this.panU, to };
-  }
-
-  /** The tank sits below the screen at 0 and in place at 1; the bar fades in as it arrives. */
-  private setPan(u: number) {
-    this.panU = u;
-    const e = easeInOut(u);
-    this.stage.style.transform = e < 1 ? `translateY(${((1 - e) * 110).toFixed(2)}vh)` : 'none';
-    this.bar.style.opacity = String(clamp((u - 0.75) / 0.25, 0, 1));
-    this.root.style.setProperty('--aq-bg', e.toFixed(3)); // the scene behind blurs as the tank comes up
-    this.hooks.pan(e);
-  }
-
-  private advance(dt: number) {
-    const tw = this.tween;
-    if (!tw) return;
-    tw.t = Math.min(tw.dur, tw.t + dt);
-    this.setPan(lerp(tw.from, tw.to, tw.t / tw.dur));
-    if (tw.t < tw.dur) return;
-    this.tween = null;
-    if (this.state === 'opening') {
-      this.state = 'open';
-      this.slosh = 1; // the water rocks as the tank comes to a stop
-    } else if (this.state === 'closing') {
-      this.state = 'closed';
-      this.root.classList.add('hidden');
-      this.raf = 0;
-    }
-  }
-
-  // ---- Tanks ------------------------------------------------------------
-
-  /** Banked fish not starred, in catch order, TANK_SIZE to a tank (always at least one tank). */
   private regularTanks(): BankedFish[][] {
     const loose = this.bank.filter((f) => !this.favorites.has(f.id));
     const tanks: BankedFish[][] = [];
@@ -697,23 +574,16 @@ export class Aquarium {
     this.setTank(order[(i + d + order.length) % order.length]);
   }
 
-  /** Show a tank: fish no longer in it swim off (fade), new ones fade in where they are. */
+  /** Show a tank: the table swaps its school (fish not in it swim off, new ones swim in). */
   private setTank(tank: TankId, fresh = false) {
     const changed = tank !== this.tank || fresh;
     this.tank = tank;
+    const table = this.hooks.table;
+    if (fresh) table.clearFish();
     const fish = this.fishIn(tank);
-    const keep = new Set(fish);
-    for (const s of this.swimmers.values()) s.leaving = !keep.has(s.fish);
-    for (const f of fish) {
-      const s = this.swimmers.get(f);
-      if (s) s.leaving = false;
-      else this.swimmers.set(f, this.spawn(f));
-    }
-    if (this.picked?.leaving) this.pick(null);
-    if (changed) {
-      this.plants = this.scenery(tank);
-      this.bubbles = [];
-    }
+    table.setFish(fish);
+    if (this.picked && !fish.includes(this.picked)) this.pick(null);
+    if (changed) table.setScenery(tank === 'fav' ? 0xfa7 : 0x7a4c + tank * 977, tank === 'fav');
     this.renderBar();
   }
 
@@ -753,177 +623,11 @@ export class Aquarium {
           : t('No fish yet. Dive, and what you bring home swims here.', '还没有鱼。下潜一趟，带回家的鱼会游在这里。');
   }
 
-  // ---- Fish -------------------------------------------------------------
-
-  private spawn(fish: BankedFish): Swimmer {
-    const x = lerp(SWIM.x0, SWIM.x1, Math.random());
-    const y = lerp(SWIM.y0, SWIM.y1, Math.random());
-    const z = lerp(SWIM.z0, SWIM.z1, Math.random());
-    const dir = Math.random() < 0.5 ? -1 : 1;
-    // 15 cm reads as small, 150 cm as large. Feeding changes only the aquarium
-    // presentation; the banked/NFT fish metadata remains unchanged.
-    const size = this.sizeFor(fish);
-    const growth = this.aquariumState.growth[fish.id];
-    return {
-      fish,
-      img: null,
-      x,
-      y,
-      z,
-      vx: dir * 0.02,
-      vy: 0,
-      vz: 0,
-      tx: x,
-      ty: y,
-      tz: z,
-      face: dir,
-      size,
-      speed: 0.035 + RARITY[fish.rarity].speed * 0.008,
-      phase: Math.random() * Math.PI * 2,
-      alpha: 0,
-      leaving: false,
-      growthPulse: 0,
-      glowIntensity: activeFoodEffects(growth).glow,
-    };
-  }
-
-  private sizeFor(fish: BankedFish) {
-    const growth = this.aquariumState.growth[fish.id];
-    return clamp(Math.log(Math.max(fish.lengthCm * growthScaleForGrowth(growth), 1) / 15) / Math.log(10), 0, 1);
-  }
-
-  private swim(s: Swimmer, dt: number) {
-    if (Math.hypot(s.tx - s.x, (s.ty - s.y) * 1.5, (s.tz - s.z) * 0.6) < 0.04) {
-      if (this.foodDrop && this.foodDrop.life > 0 && !s.leaving && this.fishIn(this.tank).includes(s.fish)) {
-        // Keep circling the falling food so the whole school visibly competes for it.
-        s.tx = clamp(this.foodDrop.x + (Math.random() - 0.5) * 0.2, SWIM.x0, SWIM.x1);
-        s.ty = clamp(this.foodDrop.y + 0.12 + (Math.random() - 0.5) * 0.18, SWIM.y0, SWIM.y1);
-        s.tz = clamp(this.foodDrop.z + (Math.random() - 0.5) * 0.2, SWIM.z0, SWIM.z1);
-      } else {
-        // Mostly sideways, with some drift in height and depth.
-        s.tx = clamp(s.x + (Math.random() - 0.5) * 0.9, SWIM.x0, SWIM.x1);
-        s.ty = clamp(s.y + (Math.random() - 0.5) * 0.35, SWIM.y0, SWIM.y1);
-        s.tz = clamp(s.z + (Math.random() - 0.5) * 0.5, SWIM.z0, SWIM.z1);
-      }
-    }
-    const dx = s.tx - s.x;
-    const dy = s.ty - s.y;
-    const dz = s.tz - s.z;
-    const d = Math.hypot(dx, dy, dz) || 1;
-    // The fish you're looking at idles in place.
-    const effects = activeFoodEffects(this.aquariumState.growth[s.fish.id]);
-    s.glowIntensity = effects.glow;
-    const speed = (s === this.picked ? s.speed * 0.15 : s.speed) * effects.speed;
-    const k = Math.min(1, dt * 1.4);
-    s.vx += ((dx / d) * speed - s.vx) * k;
-    s.vy += ((dy / d) * speed * 0.6 - s.vy) * k;
-    s.vz += ((dz / d) * speed * 0.5 - s.vz) * k;
-    s.x += s.vx * dt;
-    s.y += s.vy * dt;
-    s.z += s.vz * dt;
-    if (Math.abs(s.vx) > 0.006) s.face += (Math.sign(s.vx) - s.face) * Math.min(1, dt * 3.5);
-    s.alpha = clamp(s.alpha + (s.leaving ? -dt * 2.5 : dt * 1.6), 0, 1);
-  }
-
-  // ---- Projection -------------------------------------------------------
-
-  /**
-   * Tank space to the eye's space, in pixels: X across, d = distance from the eye.
-   * The focal length is the front glass's width, so facing you the front glass
-   * is at scale 1 and the back wall at BACK_SCALE, and turning swings the box
-   * about its middle.
-   */
-  private cam(x: number, z: number, view = this.view) {
-    const f = (FRONT.x1 - FRONT.x0) * this.w;
-    const depth = f * (1 / BACK_SCALE - 1);
-    const X = (x - 0.5) * f;
-    const Z = (z - 0.5) * depth;
-    const c = Math.cos(this.yaw);
-    const s = Math.sin(this.yaw);
-    const front = { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c, f };
-    if (view <= 0) return front;
-    // In plan view screen depth is the tank's vertical position. X remains the
-    // horizontal position so sorting still puts plants/fish nearest the glass first.
-    const top = { X: (x - 0.5) * f, d: 1 + (1 - z) * f * 0.5, f };
-    return {
-      X: lerp(front.X, top.X, view),
-      d: lerp(front.d, top.d, view),
-      f,
-    };
-  }
-
-  /**
-   * Tank space to canvas pixels, and the scale at that depth. Turned, the near
-   * front corner swings toward you; the whole tank shrinks to match, so it never
-   * grows out of the canvas.
-   */
-  private proj(x: number, y: number, z: number) {
-    const f = (FRONT.x1 - FRONT.x0) * this.w;
-    const depth = f * (1 / BACK_SCALE - 1);
-    const X = (x - 0.5) * f;
-    const Z = (z - 0.5) * depth;
-    const c = Math.cos(this.yaw);
-    const s = Math.sin(this.yaw);
-    const frontCam = { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c };
-    // Use the unblended camera here: the front projection must keep its scale
-    // stable while the tank eases toward the overhead view.
-    const frontNear = Math.min(this.cam(0, 0, 0).d, this.cam(1, 0, 0).d);
-    const frontScale = (f / frontCam.d) * Math.min(1, frontNear / f);
-    const front = {
-      x: this.w / 2 + frontCam.X * frontScale,
-      y: VANISH_Y * this.h + (lerp(FRONT.y0, FRONT.y1, y) * this.h - VANISH_Y * this.h) * frontScale,
-      s: frontScale,
-    };
-    if (this.view <= 0) return front;
-
-    // A top-down projection uses z as screen depth and y as a small lift toward
-    // the viewer. This keeps the fish and plants readable while exposing the tank floor.
-    const topDepth = (FRONT.y1 - FRONT.y0) * this.h;
-    const topX = this.w * (FRONT.x0 + x * (FRONT.x1 - FRONT.x0));
-    const topY = this.h * (FRONT.y0 + (1 - z) * (FRONT.y1 - FRONT.y0)) + (0.5 - y) * topDepth * 0.18;
-    const top = { x: topX, y: topY, s: lerp(1.02, 0.86, clamp(y, 0, 1)) };
-    return {
-      x: lerp(front.x, top.x, this.view),
-      y: lerp(front.y, top.y, this.view),
-      s: lerp(front.s, top.s, this.view),
-    };
-  }
-
-  /** Whether a side wall (x = 0 or 1) faces the eye from outside, so it's in front of the fish. */
-  private sideInFront(side: 0 | 1) {
-    if (this.view > 0.5) return false;
-    const wall = this.cam(side, 0.5);
-    const mid = this.cam(0.5, 0.5);
-    // The eye is at the origin: is it on the wall's outward side?
-    return (wall.X - mid.X) * -wall.X + (wall.d - mid.d) * -wall.d > 0;
-  }
-
-  private spriteSize(s: Swimmer, scale: number) {
-    return (FRONT.x1 - FRONT.x0) * this.w * lerp(0.085, 0.16, s.size) * scale;
-  }
-
-  private fishAt(e: MouseEvent): Swimmer | null {
-    const r = this.canvas.getBoundingClientRect();
-    const mx = e.clientX - r.left;
-    const my = e.clientY - r.top;
-    // Nearest the glass first: it's drawn on top.
-    const near = (s: Swimmer) => this.cam(s.x, s.z).d;
-    const list = [...this.swimmers.values()].filter((s) => !s.leaving && s.alpha > 0.3).sort((a, b) => near(a) - near(b));
-    for (const s of list) {
-      const p = this.proj(s.x, s.y, s.z);
-      const size = this.spriteSize(s, p.s);
-      if (Math.abs(mx - p.x) < size * 0.42 && Math.abs(my - p.y) < size * 0.26) return s;
-    }
-    return null;
-  }
-
-  // ---- Info card --------------------------------------------------------
-
-  private pick(s: Swimmer | null) {
-    this.picked = s;
-    this.card.classList.toggle('hidden', !s);
-    if (!s) return;
-    const f = s.fish;
+  private pick(f: BankedFish | null) {
+    this.picked = f;
+    this.hooks.table.setPicked(f);
+    this.card.classList.toggle('hidden', !f);
+    if (!f) return;
     const where = f.map && f.map in MAPS ? pickName(MAPS[f.map as MapId]) : zoneName(zoneForDepth(f.depthM));
     const fav = this.favorites.has(f.id);
     const img = document.createElement('img');
@@ -997,15 +701,12 @@ export class Aquarium {
     return true;
   }
 
-  /** The on-chain Aquarium was read again: resize the fish swimming now and repaint the card. */
+  /** The on-chain Aquarium was read again: take its growth (the tank redraws from it) and repaint the card. */
   refreshGrowth() {
     // Closed, aquariumState is not loaded yet (show() loads it and applies the chain's growth):
     // saving it now would write the default light over the player's.
+    // The tank reads growth through its look callback every frame, so the fish resize on their own.
     if (!this.open || !this.applyChainGrowth()) return;
-    for (const [f, swimmer] of this.swimmers) {
-      swimmer.size = this.sizeFor(f);
-      swimmer.glowIntensity = activeFoodEffects(this.aquariumState.growth[f.id]).glow;
-    }
     this.renderFeederButton();
     if (this.picked) this.pick(this.picked);
   }
@@ -1031,29 +732,19 @@ export class Aquarium {
     this.feeding = true;
     this.renderFeederButton();
     try {
+      // Taken before paying: the re-read after the tx may already land via refreshGrowth() mid-await.
+      const before = this.aquariumState.growth;
       // Who can eat (fully grown, still full) is the program's rule: the hook plans and refuses.
       const paid = await this.hooks.buyFood(food, fish.map((f) => f.id));
       if (!paid) return;
       const fedCount = paid.fed;
+      // Growth comes from the re-read on-chain Aquarium, never from a local guess.
       this.applyChainGrowth();
-      this.foodDrop = { x: 0.5, y: SURFACE + 0.04, z: 0.25, life: 4.2, count: fedCount };
+      // Flakes sink from the surface and the school rushes over; each fish the chain fed swells as it grows.
+      const table = this.hooks.table;
+      table.pourFood();
       for (const f of fish) {
-        const swimmer = this.swimmers.get(f);
-        if (!swimmer) continue;
-        swimmer.size = this.sizeFor(f);
-        swimmer.speed = 0.035 + RARITY[f.rarity].speed * 0.008;
-        swimmer.glowIntensity = activeFoodEffects(this.aquariumState.growth[f.id]).glow;
-        swimmer.growthPulse = 1;
-        swimmer.tx = clamp(this.foodDrop.x + (Math.random() - 0.5) * 0.18, SWIM.x0, SWIM.x1);
-        swimmer.ty = clamp(this.foodDrop.y + 0.12 + (Math.random() - 0.5) * 0.16, SWIM.y0, SWIM.y1);
-        swimmer.tz = clamp(this.foodDrop.z + (Math.random() - 0.5) * 0.18, SWIM.z0, SWIM.z1);
-        for (let i = 0; i < 3; i++) this.bubbles.push({
-          x: swimmer.x + (Math.random() - 0.5) * 0.06,
-          y: swimmer.y + (Math.random() - 0.5) * 0.04,
-          z: swimmer.z,
-          r: 1.5 + Math.random() * 2.5,
-          v: 0.12 + Math.random() * 0.1,
-        });
+        if ((this.aquariumState.growth[f.id]?.feedCount ?? 0) > (before[f.id]?.feedCount ?? 0)) table.pulse(f);
       }
       this.feederStatus.textContent = t(`${fedCount} fish are rushing in · ${pickName(food)} is sinking`, `${fedCount} 条鱼正在冲过来 · ${pickName(food)} 正在下落`);
       this.hooks.message(t(`${fedCount} fish rushed in for food · ${spentText(paid.paid)}`, `${fedCount} 条鱼正在抢食 · ${spentText(paid.paid)}`));
@@ -1075,329 +766,6 @@ export class Aquarium {
     const regular = this.regularTanks().length;
     this.setTank(this.tank !== 'fav' && this.tank >= regular ? regular - 1 : this.tank);
     if (this.picked) this.pick(this.picked);
-  }
-
-  // ---- Scenery ----------------------------------------------------------
-
-  /** Plants seeded by the tank, so each one keeps its own look. */
-  private scenery(tank: TankId): Plant[] {
-    const rng = new Rng(tank === 'fav' ? 0xfa7 : 0x7a4c + tank * 977);
-    const n = rng.int(6, 10);
-    return Array.from({ length: n }, () => ({
-      x: rng.range(0.04, 0.96),
-      z: rng.range(0.15, 1),
-      h: rng.range(0.2, 0.55),
-      hue: tank === 'fav' ? rng.range(320, 350) : rng.range(95, 160),
-      blades: rng.int(2, 4),
-      phase: rng.range(0, Math.PI * 2),
-    }));
-  }
-
-  // ---- Frame ------------------------------------------------------------
-
-  private resize() {
-    const r = this.canvas.getBoundingClientRect();
-    if (!r.width) return;
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    this.w = r.width;
-    this.h = r.height;
-    this.canvas.width = Math.round(r.width * dpr);
-    this.canvas.height = Math.round(r.height * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  private frame(dt: number) {
-    this.advance(dt);
-    if (this.state === 'closed') return;
-    this.t += dt;
-    if (this.foodPreview?.model) {
-      this.foodPreview.model.rotation.y = this.t * 0.8;
-      this.foodPreview.renderer.render(this.foodPreview.scene, this.foodPreview.camera);
-    }
-    this.yaw += (this.yawTarget - this.yaw) * Math.min(1, dt * YAW_EASE);
-    this.view += (this.viewTarget - this.view) * Math.min(1, dt * 4.5);
-    if (Math.abs(this.viewTarget - this.view) < 0.001) this.view = this.viewTarget;
-    this.slosh = Math.max(0, this.slosh - dt * 0.35);
-    if (this.foodDrop) {
-      this.foodDrop.life -= dt;
-      this.foodDrop.y = Math.min(SURFACE + 0.04, this.foodDrop.y + dt * 0.28);
-      if (this.foodDrop.life <= 0) this.foodDrop = null;
-    }
-    let budget = ICONS_PER_FRAME;
-    for (const [f, s] of this.swimmers) {
-      if (!s.img && !s.leaving && budget-- > 0) {
-        const img = new Image();
-        img.src = fishIcon(f);
-        s.img = img;
-      }
-      this.swim(s, dt);
-      s.growthPulse = Math.max(0, s.growthPulse - dt * 1.8);
-      if (s.leaving && s.alpha === 0) this.swimmers.delete(f);
-    }
-    if (Math.random() < dt * 5) {
-      for (const bx of [0.22, 0.81]) {
-        this.bubbles.push({ x: bx + (Math.random() - 0.5) * 0.02, y: SWIM.y1 + 0.05, z: 0.8, r: 1.5 + Math.random() * 3, v: 0.12 + Math.random() * 0.1 });
-      }
-    }
-    for (const b of this.bubbles) {
-      b.y -= b.v * dt;
-      b.x += Math.sin(this.t * 3 + b.r * 5) * 0.004 * dt * 10;
-    }
-    this.bubbles = this.bubbles.filter((b) => b.y > SURFACE + 0.01);
-    if (this.w) this.draw();
-  }
-
-  private quad(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }, d: { x: number; y: number }) {
-    const ctx = this.ctx;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(c.x, c.y);
-    ctx.lineTo(d.x, d.y);
-    ctx.closePath();
-  }
-
-  private draw() {
-    const ctx = this.ctx;
-    const P = (x: number, y: number, z: number) => this.proj(x, y, z);
-    ctx.clearRect(0, 0, this.w, this.h);
-    const fav = this.tank === 'fav';
-    const STAND = 1.1; // the stand's bottom, in tank heights
-
-    // Stand under the tank: its sides first (the far one is hidden behind the rest), then its front.
-    const sides = ([0, 1] as const).slice().sort((a, b) => this.cam(b, 0.5).d - this.cam(a, 0.5).d);
-    for (const side of sides) {
-      this.quad(P(side, 1, 0), P(side, 1, 1), P(side, STAND, 1), P(side, STAND, 0));
-      ctx.fillStyle = '#0f0b08';
-      ctx.fill();
-    }
-    this.quad(P(0, 1, 0), P(1, 1, 0), P(1, STAND, 0), P(0, STAND, 0));
-    ctx.fillStyle = '#1a1410';
-    ctx.fill();
-
-    // Back wall: deep water with light shafts.
-    const back = [P(0, 0, 1), P(1, 0, 1), P(1, 1, 1), P(0, 1, 1)] as const;
-    const wall = ctx.createLinearGradient(0, Math.min(back[0].y, back[1].y), 0, Math.max(back[2].y, back[3].y));
-    wall.addColorStop(0, this.mixHex(fav ? '#2a3b6b' : '#1d5a7a', 0.5));
-    wall.addColorStop(1, this.mixHex(fav ? '#120f2e' : '#06233a', 0.42));
-    this.quad(...back);
-    ctx.fillStyle = wall;
-    ctx.fill();
-    const ambientGlow = ctx.createRadialGradient(this.w * 0.5, this.h * 0.28, 0, this.w * 0.5, this.h * 0.52, this.w * 0.72);
-    ambientGlow.addColorStop(0, this.ambientCss(0.34, 0.85));
-    ambientGlow.addColorStop(1, this.ambientCss(0, 0.85));
-    this.quad(...back);
-    ctx.fillStyle = ambientGlow;
-    ctx.fill();
-    ctx.save();
-    this.quad(...back);
-    ctx.clip();
-    ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < 5; i++) {
-      const u = (i + 0.5) / 5 + Math.sin(this.t * 0.25 + i * 1.7) * 0.05;
-      const top = P(u, 0, 1);
-      const bottom = P(u + 0.03, 1, 1);
-      const g = ctx.createLinearGradient(0, top.y, 0, bottom.y);
-      g.addColorStop(0, this.ambientCss(0.18, 0.85));
-      g.addColorStop(1, this.ambientCss(0, 0.85));
-      ctx.fillStyle = g;
-      this.quad(P(u - 0.012, 0, 1), P(u + 0.012, 0, 1), P(u + 0.05, 1, 1), P(u - 0.01, 1, 1));
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Side walls, a little lighter where the glass catches the room. One seen from
-    // outside is in front of the fish, so it's drawn after them.
-    const sideGlass = (side: 0 | 1) => {
-      this.quad(P(side, 0, 0), P(side, 0, 1), P(side, 1, 1), P(side, 1, 0));
-      ctx.fillStyle = this.ambientCss(0.27, 0.72);
-      ctx.fill();
-    };
-    const outside = ([0, 1] as const).filter((side) => this.sideInFront(side));
-    for (const side of [0, 1] as const) if (!outside.includes(side)) sideGlass(side);
-
-    // Sand floor, lighter toward the glass.
-    this.quad(P(0, 1, 0), P(1, 1, 0), P(1, 1, 1), P(0, 1, 1));
-    const sand = ctx.createLinearGradient(0, P(0.5, 1, 1).y, 0, P(0.5, 1, 0).y);
-    sand.addColorStop(0, this.mixHex('#6f6450', 0.24));
-    sand.addColorStop(1, this.mixHex('#c9b48a', 0.2));
-    ctx.fillStyle = sand;
-    ctx.fill();
-    const rng = new Rng(0x5a4d);
-    for (let i = 0; i < 40; i++) {
-      const p = P(rng.next(), 1, rng.next());
-      ctx.fillStyle = `rgba(60, 50, 40, ${0.25 + rng.next() * 0.3})`;
-      ctx.beginPath();
-      ctx.ellipse(p.x, p.y, (2 + rng.next() * 5) * p.s, (1 + rng.next() * 2) * p.s, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Plants and fish, far to near (by distance from the eye, which turning changes).
-    type Item = { d: number; draw: () => void };
-    const d = (x: number, z: number) => this.cam(x, z).d;
-    const items: Item[] = [
-      ...this.plants.map((p) => ({ d: d(p.x, p.z), draw: () => this.drawPlant(p) })),
-      ...[...this.swimmers.values()].map((s) => ({ d: d(s.x, s.z), draw: () => this.drawFish(s) })),
-      ...this.bubbles.map((b) => ({ d: d(b.x, b.z), draw: () => this.drawBubble(b) })),
-      ...(this.foodDrop ? [{ d: d(this.foodDrop.x, this.foodDrop.z), draw: () => this.drawFoodDrop(this.foodDrop!) }] : []),
-    ];
-    items.sort((a, b) => b.d - a.d);
-    for (const it of items) it.draw();
-
-    // Water surface: a band seen from just above, with a wave that sloshes after the rise.
-    const amp = 0.006 + this.slosh * 0.03;
-    const wave = (x: number, z: number) => SURFACE + Math.sin(x * 9 + this.t * 2.2 + z * 3) * amp * (1 - z * 0.5) + Math.sin(x * 3 - this.t * 1.3) * this.slosh * 0.02;
-    ctx.beginPath();
-    for (let i = 0; i <= 24; i++) {
-      const p = P(i / 24, wave(i / 24, 0), 0);
-      if (i) ctx.lineTo(p.x, p.y);
-      else ctx.moveTo(p.x, p.y);
-    }
-    for (let i = 24; i >= 0; i--) {
-      const p = P(i / 24, wave(i / 24, 1), 1);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.closePath();
-    ctx.fillStyle = this.ambientCss(0.22, 0.82);
-    ctx.fill();
-    ctx.beginPath();
-    for (let i = 0; i <= 24; i++) {
-      const p = P(i / 24, wave(i / 24, 0), 0);
-      if (i) ctx.lineTo(p.x, p.y);
-      else ctx.moveTo(p.x, p.y);
-    }
-    ctx.strokeStyle = this.ambientCss(0.68, 0.9);
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    for (const side of outside) sideGlass(side);
-
-    // Front glass: a faint tint, two highlights, and the frame.
-    const front = [P(0, 0, 0), P(1, 0, 0), P(1, 1, 0), P(0, 1, 0)] as const;
-    this.quad(...front);
-    ctx.fillStyle = this.ambientCss(0.14, 0.86);
-    ctx.fill();
-    ctx.save();
-    this.quad(...front);
-    ctx.clip();
-    for (const [u, wdt, a] of [[0.12, 0.05, 0.07], [0.2, 0.015, 0.09]] as const) {
-      ctx.fillStyle = this.ambientCss(a, 0.15);
-      this.quad(P(u, 0, 0), P(u + wdt, 0, 0), P(u + wdt - 0.12, 1, 0), P(u - 0.12, 1, 0));
-      ctx.fill();
-    }
-    ctx.restore();
-    // The glass edges: along the top, and the back corners.
-    ctx.strokeStyle = this.ambientCss(0.38, 0.88);
-    ctx.lineWidth = 1.5;
-    const edges = [
-      [P(0, 0, 0), P(0, 0, 1)],
-      [P(1, 0, 0), P(1, 0, 1)],
-      [P(0, 0, 1), P(1, 0, 1)],
-      [P(0, 0, 1), P(0, 1, 1)],
-      [P(1, 0, 1), P(1, 1, 1)],
-    ];
-    for (const [a, b] of edges) {
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-    }
-    this.quad(...front);
-    ctx.strokeStyle = '#11181f';
-    ctx.lineWidth = 6;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-    ctx.strokeStyle = fav ? 'rgba(255, 204, 77, 0.55)' : this.ambientCss(0.46, 0.9);
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  }
-
-  private drawPlant(p: Plant) {
-    const ctx = this.ctx;
-    const base = this.proj(p.x, 1, p.z);
-    const top = this.proj(p.x, 1 - p.h, p.z);
-    const len = base.y - top.y;
-    const shade = 1 - p.z * 0.45;
-    for (let b = 0; b < p.blades; b++) {
-      const off = (b - (p.blades - 1) / 2) * 6 * base.s;
-      ctx.beginPath();
-      ctx.moveTo(base.x + off - 3 * base.s, base.y);
-      const segs = 6;
-      const pts: [number, number][] = [];
-      for (let i = 1; i <= segs; i++) {
-        const u = i / segs;
-        const sway = Math.sin(this.t * 1.1 + p.phase + b + u * 2.5) * 10 * u * u * base.s;
-        pts.push([base.x + off + sway, base.y - len * u * (1 - b * 0.12)]);
-      }
-      for (const [x, y] of pts) ctx.lineTo(x - 3 * base.s * (1 - y / base.y), y);
-      for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i][0] + 3 * base.s, pts[i][1]);
-      ctx.closePath();
-      ctx.fillStyle = `hsl(${p.hue}, 45%, ${Math.round(32 * shade + b * 4)}%)`;
-      ctx.fill();
-    }
-  }
-
-  private drawFish(s: Swimmer) {
-    if (!s.img?.complete || !s.img.naturalWidth || s.alpha <= 0) return;
-    const ctx = this.ctx;
-    const bob = Math.sin(this.t * 1.6 + s.phase) * 0.006;
-    const p = this.proj(s.x, s.y + bob, s.z);
-    const size = this.spriteSize(s, p.s);
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    // Nose up or down a little with its climb; the sprite faces right, so mirror it to face left.
-    // Turning the tank shortens fish swimming across it a little.
-    ctx.rotate(clamp(s.vy * 3, -0.25, 0.25) * Math.sign(s.face || 1));
-    const pulse = 1 + Math.sin((1 - s.growthPulse) * Math.PI) * 0.1;
-    ctx.scale(s.face * Math.cos(this.yaw) * pulse, pulse);
-    ctx.globalAlpha = s.alpha * (1 - s.z * 0.25);
-    // Further back is dimmer and bluer, as if through more water.
-    const ambientLuma = (this.lightRgb.r * 0.299 + this.lightRgb.g * 0.587 + this.lightRgb.b * 0.114) / 255;
-    const dim = (1 - s.z * 0.4) * (0.72 + ambientLuma * 0.48);
-    ctx.filter = `brightness(${dim.toFixed(2)}) saturate(${(1 - s.z * 0.35 + ambientLuma * 0.22).toFixed(2)})`;
-    if (s.glowIntensity > 0) {
-      ctx.shadowColor = '#7fffe0';
-      ctx.shadowBlur = 8 + s.glowIntensity * 24;
-    }
-    if (s === this.picked || s === this.hover) {
-      ctx.shadowColor = RARITY[s.fish.rarity].color;
-      ctx.shadowBlur = Math.max(s.glowIntensity > 0 ? 8 + s.glowIntensity * 24 : 0, s === this.picked ? 24 : 12);
-    }
-    ctx.drawImage(s.img, -size / 2, -size / 2, size, size);
-    ctx.restore();
-  }
-
-  private drawFoodDrop(drop: FoodDrop) {
-    const ctx = this.ctx;
-    const p = this.proj(drop.x, drop.y, drop.z);
-    const pulse = 1 + Math.sin(this.t * 8) * 0.12;
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowColor = this.ambientCss(0.9, 0.9);
-    ctx.shadowBlur = 14 * p.s;
-    ctx.fillStyle = this.ambientCss(0.88, 0.82);
-    ctx.beginPath();
-    ctx.arc(0, 0, (5 + Math.min(8, drop.count)) * p.s * pulse, 0, Math.PI * 2);
-    ctx.fill();
-    for (let i = 0; i < Math.min(7, drop.count + 2); i++) {
-      const a = this.t * 1.8 + i * 2.399;
-      const r = (7 + (i % 3) * 4) * p.s;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, (1.5 + (i % 2)) * p.s, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  private drawBubble(b: Bubble) {
-    const ctx = this.ctx;
-    const p = this.proj(b.x, b.y, b.z);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, b.r * p.s, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(220, 250, 255, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
   }
 }
 

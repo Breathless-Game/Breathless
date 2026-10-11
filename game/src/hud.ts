@@ -148,7 +148,9 @@ export class Hud {
     this.chip.textContent = danger ? t('OUT OF AIR', '缺氧') : holding ? t('HOLDING', '屏息中') : t('BREATHING', '呼吸中');
     this.chip.className = `chip ${danger ? 'danger' : holding ? 'holding' : 'breathing'}`;
     this.holdTime.textContent = `${(s.holdMs / 1000).toFixed(1)}s`;
-    this.camWrap.className = danger ? 'danger' : holding ? 'holding' : '';
+    // Toggled, not assigned: the camera bubble also carries `.off` (Settings → camera preview).
+    this.camWrap.classList.toggle('danger', danger);
+    this.camWrap.classList.toggle('holding', holding && !danger);
     this.source.textContent =
       s.mode === 'presage' && !s.connected
         ? t('Presage · sensor offline', 'Presage · 传感器离线')
@@ -161,6 +163,16 @@ export class Hud {
     this.vitals.textContent = parts.join(' · ');
     this.hint.textContent = s.mode === 'presage' ? s.hint || (s.calibrated ? '' : t('Calibrating: breathe normally', '校准中：请正常呼吸')) : s.error;
     this.drawTrace(s.trace, holding, danger);
+  }
+
+  /**
+   * The breath readout rides above the diver's head: x, y is that point on screen
+   * (null: off screen, or no diver to follow).
+   */
+  placeBreath(at: { x: number; y: number } | null) {
+    const el = $('breath');
+    el.classList.toggle('offscreen', !at);
+    if (at) el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px) translate(-50%, -100%)`;
   }
 
   private drawTrace(trace: number[], holding: boolean, danger: boolean) {
@@ -275,7 +287,52 @@ export class Hud {
     this.msgTimer = window.setTimeout(() => this.centerMsg.classList.remove('show'), ms);
   }
 
+  // ---- Hotbar (bottom centre) -------------------------------------------
+  // GEAR: the six quick slots, the equipped one lit, unpacked ones dimmed.
+  // BAG (Tab): the fish caught this dive, in the net slots.
+  private hotbarKey = '';
+  private bagCount = '';
+
+  /** Redraws the gear row only when the equipped slot or what's packed changed. */
+  setHotbar(slots: readonly { slot: EquipmentSlot; en: string; zh: string; icon: string }[], active: EquipmentSlot, packed: (slot: EquipmentSlot) => boolean) {
+    const key = t('en', 'zh') + active + slots.map((s) => (packed(s.slot) ? 1 : 0)).join('');
+    if (key === this.hotbarKey) return;
+    this.hotbarKey = key;
+    $('hotbar-gear').replaceChildren(
+      ...slots.map((s, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'hotbar-cell';
+        cell.classList.toggle('on', s.slot === active);
+        cell.classList.toggle('unpacked', !packed(s.slot));
+        const num = document.createElement('span');
+        num.className = 'hotbar-num';
+        num.textContent = String(i + 1);
+        const icon = document.createElement('span');
+        icon.className = 'hotbar-icon';
+        icon.textContent = s.icon;
+        const label = document.createElement('span');
+        label.className = 'hotbar-label';
+        label.textContent = t(s.en, s.zh);
+        cell.append(num, icon, label);
+        return cell;
+      }),
+    );
+  }
+
+  /** Tab: between the gear row and the bag of caught fish. */
+  toggleBag(show = $('net').classList.contains('hidden')) {
+    $('net').classList.toggle('hidden', !show);
+    $('hotbar-gear').classList.toggle('hidden', show);
+    $('hotbar-tab-bag').classList.toggle('on', show);
+    $('hotbar-tab-gear').classList.toggle('on', !show);
+  }
+
   setNet(net: FishSpec[], capacity: number) {
+    const count = `${net.length}/${capacity}`;
+    if (count !== this.bagCount) {
+      this.bagCount = count;
+      $('hotbar-bag-count').textContent = count;
+    }
     this.netSlots.innerHTML = '';
     for (let i = 0; i < capacity; i++) {
       const slot = document.createElement('div');
