@@ -961,6 +961,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  diver.group.visible = true;
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
@@ -1120,6 +1121,7 @@ function climbAboard() {
 /** Not aboard any more: START reads START again and the title comes back. */
 function leaveBoat() {
   aboard = null;
+  diver.group.visible = true;
   leavingBoat = false;
   titleScreen.setLabel(START_FISH, 'START');
   titleScreen.setLift(0);
@@ -1344,7 +1346,6 @@ const workbench = new Workbench({
     if (aboard) {
       // Mid-trip: the breath input is already set up, so straight back in off the bow.
       leaveBoat();
-      diver.group.visible = true;
       titleScreen.hide();
       startGame();
     } else openStartCard();
