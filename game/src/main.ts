@@ -32,7 +32,7 @@ import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { activePath, applyPearlSpend, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planPearlSpend, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type PearlSpend, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
@@ -684,6 +684,7 @@ const aquarium = new Aquarium(bank, {
     titleScreen.setLift(u);
   },
   buyFood: buyAquariumFood,
+  pearls: () => totalPearls(equipment),
   message(text) {
     hud.message(text, 1600);
   },
@@ -750,53 +751,48 @@ async function syncPearls(earned = 0) {
 }
 
 let foodBuying = false;
-/** Buy one selected aquarium food. Legacy Pearls are spent first; chain PEARL covers the rest. */
-async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<boolean> {
-  if (foodBuying) return false;
-  const cost = food.price;
-  const available = totalPearls(equipment);
-  if (available < cost) {
-    hud.message(`Need ${cost - available} more Pearls for ${food.nameZh}`, 1600);
-    return false;
-  }
-  const fromLegacy = Math.min(equipment.legacyPearls, cost);
-  const fromChain = cost - fromLegacy;
+/**
+ * Buy one selected aquarium food through the same split as gear upgrades and synthesis:
+ * legacy local Pearls are spent first, and only the rest is burned as on-chain PEARL.
+ * Resolves with what was taken from each balance, or null when nothing was spent.
+ */
+async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<PearlSpend | null> {
+  if (foodBuying) return null;
   foodBuying = true;
   try {
-    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
-    equipment.legacyPearls -= fromLegacy;
-    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
-    refreshEquipment();
-    if (fromChain > 0) void syncPearls();
-    return true;
-  } catch (e) {
-    hud.message(`Food purchase failed · ${(e as Error).message ?? e}`, 1800);
-    return false;
+    return await spendPearlsFor(food.price, 'Food purchase failed', `for ${food.nameZh}`);
   } finally {
     foodBuying = false;
+  }
+}
+
+/**
+ * Pay a flat Pearl price (food, synthesis fees): plan the legacy/on-chain split, burn the
+ * on-chain part, and only then take it off the cached balances. Null when unaffordable or
+ * the burn failed (the purchase must not apply).
+ */
+async function spendPearlsFor(cost: number, failure: string, what = ''): Promise<PearlSpend | null> {
+  const plan = planPearlSpend(equipment, cost);
+  if (!plan) {
+    hud.message(`Need ${Math.max(0, cost - totalPearls(equipment))} more Pearls${what ? ` ${what}` : ''}`, 1600);
+    return null;
+  }
+  try {
+    if (plan.fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
+    Object.assign(equipment, applyPearlSpend(equipment, plan));
+    refreshEquipment();
+    if (plan.fromChain > 0) void syncPearls();
+    return plan;
+  } catch (e) {
+    hud.message(`${failure} · ${(e as Error).message ?? e}`, 1800);
+    return null;
   }
 }
 
 let synthesisBusy = false;
 /** Spend a synthesis station fee with the same legacy-first accounting as gear upgrades. */
 async function spendSynthesisPearls(cost: number): Promise<boolean> {
-  if (totalPearls(equipment) < cost) {
-    hud.message(`Need ${cost - totalPearls(equipment)} more Pearls`, 1500);
-    return false;
-  }
-  const fromLegacy = Math.min(equipment.legacyPearls, cost);
-  const fromChain = cost - fromLegacy;
-  try {
-    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
-    equipment.legacyPearls -= fromLegacy;
-    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
-    refreshEquipment();
-    if (fromChain > 0) void syncPearls();
-    return true;
-  } catch (e) {
-    hud.message(`Synthesis payment failed · ${(e as Error).message ?? e}`, 1800);
-    return false;
-  }
+  return (await spendPearlsFor(cost, 'Synthesis payment failed')) !== null;
 }
 
 async function synthCraft(id: RecipeDef['id']) {

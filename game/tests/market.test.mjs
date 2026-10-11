@@ -277,6 +277,24 @@ test('upgrades spend legacy Pearls first and burn only the rest on-chain', () =>
   assert.equal(equipment.planUpgrade({ rodLevel: 3, pearls: 1e6, legacyPearls: 0 }), null, 'maxed out');
 });
 
+test('flat Pearl prices (fish food, synthesis) split legacy-first and burn only the rest', () => {
+  // A migrated save holding only legacy Pearls pays food entirely locally: no on-chain PEARL moves.
+  assert.deepEqual(equipment.planPearlSpend({ pearls: 50, legacyPearls: 500 }, 24), { fromLegacy: 24, fromChain: 0 });
+  assert.deepEqual(equipment.planPearlSpend({ pearls: 50, legacyPearls: 10 }, 24), { fromLegacy: 10, fromChain: 14 });
+  assert.deepEqual(equipment.planPearlSpend({ pearls: 50, legacyPearls: 0 }, 24), { fromLegacy: 0, fromChain: 24 });
+  assert.equal(equipment.planPearlSpend({ pearls: 0, legacyPearls: 0 }, 8), null, 'empty balance never pays');
+  assert.equal(equipment.planPearlSpend({ pearls: 3, legacyPearls: 4 }, 8), null, 'one short');
+  assert.equal(equipment.planPearlSpend({ pearls: 100, legacyPearls: 0 }, 0), null, 'zero cost is not a purchase');
+  assert.equal(equipment.planPearlSpend({ pearls: 100, legacyPearls: 0 }, 2.5), null, 'whole Pearls only');
+  const start = { rodLevel: 2, reelLevel: 3, pearls: 50, legacyPearls: 10 };
+  const after = equipment.applyPearlSpend(start, equipment.planPearlSpend(start, 24));
+  assert.equal(after.legacyPearls, 0);
+  assert.equal(after.pearls, 36);
+  assert.equal(after.netLevel, 2, 'gear levels are untouched');
+  assert.equal(after.reelLevel, 3);
+  assert.equal(equipment.totalPearls(after), equipment.totalPearls(start) - 24);
+});
+
 test('slot upgrades follow the same legacy-first PEARL rule and keep the other slots', () => {
   const start = { rodLevel: 2, pearls: 250, legacyPearls: 100, finsLevel: 3 };
   const fins = equipment.planSlotUpgrade(start, 'fins');
