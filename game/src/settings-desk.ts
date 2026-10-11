@@ -544,18 +544,28 @@ export class SettingsDesk {
   }
 
   /** Our clicks land on a bare canvas (the title's, over ours); the title fish claim theirs (defaultPrevented). */
+  /** A modal (the Aquarium) is up over the scene: ignore the pointer. */
+  blocked: () => boolean = () => false;
+
   private ours(e: PointerEvent) {
     return this.state === 'idle' && e.target instanceof HTMLCanvasElement && !e.defaultPrevented;
   }
 
   private onDown(e: PointerEvent) {
-    if (!this.ours(e)) return;
+    if (this.blocked() || !this.ours(e)) return;
     const hit = this.pick(e);
     this.press = { plaque: hit?.plaque ?? null, uv: hit?.uv ?? null, x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
     if (!this.visible) return;
+    if (this.blocked()) {
+      if (this.hovered) {
+        this.hovered = null;
+        document.body.style.cursor = '';
+      }
+      return;
+    }
     this.hovered = this.ours(e) ? (this.pick(e)?.plaque ?? null) : null;
     document.body.style.cursor = this.hovered ? 'pointer' : '';
   }
@@ -563,6 +573,7 @@ export class SettingsDesk {
   private onUp(e: PointerEvent) {
     const press = this.press;
     this.press = null;
+    if (this.blocked()) return;
     if (!press?.plaque || this.state !== 'idle') return;
     if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_MOVE_PX || performance.now() - press.t > CLICK_MS) return;
     const p = press.plaque;
