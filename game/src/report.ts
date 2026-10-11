@@ -117,7 +117,7 @@ function insights(s: Stats): string[] {
   if (!s.vitals.length) {
     out.push(
       s.sharkDives === s.n
-        ? 'Every dive so far had sharks in the water. Dive without them (Esc → Settings) to get heart-rate figures.'
+        ? 'Every dive so far had sharks in the water. Dive the Fjord or Heaven Lake, where there are none, to get heart-rate figures.'
         : 'Play with the camera to add heart rate and breathing rate to this report.',
     );
   }

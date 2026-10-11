@@ -451,7 +451,7 @@ body {
   background: linear-gradient(90deg, #5fd38d, #ffb340 55%, var(--danger));
 }
 
-#shark-ask {
+.shark-card {
   position: fixed;
   inset: 0;
   z-index: 36;
@@ -461,7 +461,7 @@ body {
   padding: 16px;
 }
 
-#shark-ask .card {
+.shark-card .card {
   max-width: 520px;
   width: 100%;
   max-height: 100%;
@@ -473,18 +473,18 @@ body {
   backdrop-filter: blur(10px);
 }
 
-#shark-ask h2 {
+.shark-card h2 {
   margin: 0 0 12px;
   font-size: 26px;
   font-weight: 900;
 }
 
-#shark-ask ul {
+.shark-card ul {
   margin: 12px 0 0;
   padding-left: 20px;
 }
 
-#shark-ask li {
+.shark-card li {
   margin: 8px 0;
 }
 
@@ -1282,6 +1282,28 @@ button.link {
 
 #wb-place-gear {
   margin-bottom: 14px;
+}
+
+/* Shark waters: what a bite costs, in the place card before you dive. */
+#wb-place-warn {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 107, 107, 0.55);
+  border-radius: 12px;
+  background: rgba(120, 20, 28, 0.32);
+  line-height: 1.45;
+}
+
+#wb-place-warn b {
+  color: var(--danger);
+}
+
+.shark-danger {
+  padding: 10px 14px;
+  border-left: 3px solid var(--danger);
+  background: rgba(120, 20, 28, 0.28);
+  border-radius: 8px;
+  line-height: 1.5;
 }
 
 #wb-place-conditions {
