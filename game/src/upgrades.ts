@@ -110,6 +110,42 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   sonar: buildSonarDisplay,
 };
 
+export interface UpgradeModelOptions {
+  /** Keep the physical growth between levels in a shared display frame. */
+  preserveTierScale?: boolean;
+}
+
+type TierBounds = readonly [number, number, number];
+const tierBoundsCache = new Map<UpgradeId, TierBounds>();
+
+function disposeBoundsProbe(model: THREE.Group) {
+  model.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.dispose();
+  });
+}
+
+/**
+ * Find a stable reference frame for one upgrade family. Fitting each level
+ * independently makes a longer rod, fin, or sonar cable look the same size
+ * as its starter version. The probe keeps the largest raw tier as the common
+ * frame, so lower tiers retain their real silhouette and growth.
+ */
+function tierBounds(id: UpgradeId): TierBounds {
+  const cached = tierBoundsCache.get(id);
+  if (cached) return cached;
+  const values = ([1, 2, 3] as const).map((level) => {
+    const probe = builders[id](level);
+    probe.updateMatrixWorld(true);
+    const size = new THREE.Box3().setFromObject(probe).getSize(new THREE.Vector3());
+    disposeBoundsProbe(probe);
+    return Math.max(size.x, size.y, size.z);
+  }) as [number, number, number];
+  const result = Object.freeze(values) as TierBounds;
+  tierBoundsCache.set(id, result);
+  return result;
+}
+
 /**
  * The boat on the workbench is the boat from the map (boat.ts), as it is. Each
  * level adds a little on top: a radar on the wheelhouse roof, then spotlights
@@ -147,18 +183,40 @@ function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
 }
 
 /** Build a centred, two-unit display model shared by the workbench and catalog. */
-export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel): THREE.Group {
+export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel, options: UpgradeModelOptions = {}): THREE.Group {
   const inner = builders[id](level);
   const bounds = new THREE.Box3().setFromObject(inner);
   const centre = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const scale = 2 / Math.max(size.x, size.y, size.z);
+  const rawMax = Math.max(size.x, size.y, size.z);
+  let tierScale = 1;
+  let scale = 2 / rawMax;
+  if (options.preserveTierScale) {
+    const familyBounds = tierBounds(id);
+    const familyMax = Math.max(...familyBounds);
+    // Do not let an upgraded assembly that is naturally more compact (for
+    // example an outboard motor replacing long oars) appear smaller. A tier's
+    // display scale is at least the largest previous tier, while genuinely
+    // longer equipment keeps its authored growth.
+    tierScale = rawMax / familyMax;
+    for (let index = 0; index < level; index++) tierScale = Math.max(tierScale, familyBounds[index] / familyMax);
+    scale = (2 * tierScale) / rawMax;
+  }
   inner.scale.multiplyScalar(scale);
   // Scale the translation too; otherwise an off-centre raw model stays offset.
   inner.position.sub(centre).multiplyScalar(scale);
   const outer = new THREE.Group();
   outer.name = `HackRU_${id}_Lv${level}`;
-  outer.userData = { upgradeId: id, level, source: 'buildUpgradeModel', visualOnly: true };
+  outer.userData = {
+    upgradeId: id,
+    level,
+    source: 'buildUpgradeModel',
+    visualOnly: true,
+    // Consumers that put different gear families on one table can preserve
+    // the tier growth after applying their own family-level display size.
+    tierScale: options.preserveTierScale ? tierScale : 1,
+    preserveTierScale: options.preserveTierScale === true,
+  };
   outer.add(inner);
   return outer;
 }

@@ -117,6 +117,7 @@ function buildEllipticalHoop(radiusY: number, radiusZ: number, material: Materia
 
 function buildSpinningReel(reelMaterial: Material, metalMaterial: Material): THREE.Group {
   const reel = new THREE.Group();
+  reel.name = 'Fishing_Reel';
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 10), reelMaterial);
   body.scale.set(0.82, 1.18, 0.78);
   body.position.set(1.25, -0.16, 0);
