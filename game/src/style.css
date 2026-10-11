@@ -2217,6 +2217,21 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   gap: 6px;
 }
 
+/* Tablets: the single row overflows below about 1100px, so wrap into a fixed two-row bar. */
+@media (max-width: 1100px) {
+  #market-bar {
+    height: 84px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 6px 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  #market-bar > * { flex: 0 0 auto; }
+  #market-bar .sale { flex: 0 1 auto; max-width: 100%; }
+  .select-bar { flex-wrap: wrap; gap: 6px; }
+}
+
 @media (max-width: 560px) {
   #collection {
     inset: 8px;
