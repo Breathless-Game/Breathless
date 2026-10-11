@@ -152,3 +152,39 @@ test('declined Phantom prompts are recognised', () => {
   assert.ok(!W.isUserRejection(new Error('insufficient funds')));
   assert.ok(!W.isUserRejection(null));
 });
+
+/** memoryStore plus removeItem, as localStorage has. */
+function removableStore(entries = {}) {
+  const store = memoryStore(entries);
+  store.removeItem = (k) => store.map.delete(k);
+  return store;
+}
+
+test('a fresh browser may silently reconnect Phantom, as before the picker', () => {
+  assert.equal(W.restoreTarget(removableStore()), 'Phantom');
+});
+
+test('an explicit logout sticks across page loads until the player connects again', () => {
+  const store = removableStore();
+  W.markLoggedIn(store, 'Solflare');
+  assert.equal(W.restoreTarget(store), 'Solflare');
+  W.markLoggedOut(store);
+  assert.equal(W.restoreTarget(store), null);
+  assert.equal(W.restoreTarget(store), null, 'a second load is still logged out');
+  W.markLoggedIn(store, 'MetaMask');
+  assert.equal(W.restoreTarget(store), 'MetaMask');
+});
+
+test('logging out keeps every wallet’s progress and session key', () => {
+  const entries = {
+    [`deepbreath.${OWNER_A}.session`]: JSON.stringify(SECRET),
+    [`deepbreath.${OWNER_A}.bank`]: '[{"id":"1"}]',
+    [`deepbreath.${OWNER_B}.bank`]: '[{"id":"2"}]',
+  };
+  const store = removableStore(entries);
+  W.markLoggedIn(store, 'Phantom');
+  W.markLoggedOut(store);
+  for (const [k, v] of Object.entries(entries)) assert.equal(store.getItem(k), v);
+  assert.deepEqual([...store.map.keys()].sort(), [...Object.keys(entries), W.AUTOCONNECT_KEY, W.LAST_WALLET_KEY].sort());
+  assert.equal(store.getItem(W.LAST_WALLET_KEY), 'Phantom', 'remembers the wallet name, nothing secret');
+});

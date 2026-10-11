@@ -2,12 +2,14 @@ import './polyfills';
 import { createSignerFromKeypair, publicKey, transactionBuilder, type Signer, type Umi } from '@metaplex-foundation/umi';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import {
-  AUTOCONNECT_KEY,
   SESSION_NAME,
   addressOfSecret,
+  markLoggedIn,
+  markLoggedOut,
   migrateLegacy,
   namespacedKey,
   parseSecretKey,
+  restoreTarget,
 } from './wallet-storage';
 
 // Phantom is the account. The connected Phantom address owns fish NFTs and
@@ -35,6 +37,8 @@ interface PhantomProvider {
   signAllTransactions<T>(txs: T[]): Promise<T[]>;
   signMessage(message: Uint8Array): Promise<{ signature: Uint8Array }>;
   on(event: 'accountChanged' | 'disconnect', cb: (arg?: PhantomKey | null) => void): void;
+  off?(event: 'accountChanged' | 'disconnect', cb: (arg?: PhantomKey | null) => void): void;
+  removeListener?(event: 'accountChanged' | 'disconnect', cb: (arg?: PhantomKey | null) => void): void;
 }
 
 declare global {
@@ -52,7 +56,7 @@ export interface WalletState {
 let owner: string | null = null;
 let secret: Uint8Array | null = null;
 const listeners = new Set<(s: WalletState) => void>();
-let hooked: PhantomProvider | null = null;
+let hooked: { p: PhantomProvider; off: () => void } | null = null;
 // Connect, restore, account switches and disconnects run one at a time.
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -139,25 +143,47 @@ function drop() {
 }
 
 function hook(p: PhantomProvider) {
-  if (hooked === p) return;
-  hooked = p;
-  p.on('accountChanged', (pk) => void serial(() => accountChanged(p, pk ?? null)));
-  p.on('disconnect', () => void serial(async () => drop()));
+  if (hooked?.p === p) return;
+  unhook();
+  const changed = (pk?: PhantomKey | null) => void serial(async () => accountChanged(pk ?? null));
+  // Disconnecting the site inside Phantom is a logout too: don't reconnect on the next page load.
+  const disconnected = () =>
+    void serial(async () => {
+      if (!owner) return;
+      try {
+        markLoggedOut(localStorage);
+      } catch {}
+      drop();
+    });
+  p.on('accountChanged', changed);
+  p.on('disconnect', disconnected);
+  hooked = {
+    p,
+    off() {
+      const off = (p.off ?? p.removeListener)?.bind(p);
+      off?.('accountChanged', changed);
+      off?.('disconnect', disconnected);
+    },
+  };
 }
 
-async function accountChanged(p: PhantomProvider, pk: PhantomKey | null) {
-  if (!owner) return; // not logged in: the next connect picks up whatever account is active
-  if (pk) {
-    await adopt(keyString(pk));
-    return;
-  }
-  // Phantom switched to an account that hasn't approved this site yet.
+function unhook() {
   try {
-    const res = await p.connect({ onlyIfTrusted: true });
-    await adopt(keyString(res.publicKey));
-  } catch {
-    drop();
-  }
+    hooked?.off();
+  } catch {}
+  hooked = null;
+}
+
+/**
+ * Phantom switched accounts. Nothing is adopted in place: the old owner is
+ * dropped first (so a save still in flight can't land in the new owner's
+ * storage), main.ts reloads, and that page load reconnects whichever account
+ * Phantom now has active if it has approved this site, or shows the gate.
+ */
+async function accountChanged(pk: PhantomKey | null) {
+  if (!owner) return; // not logged in: the next connect picks up whatever account is active
+  if (pk && keyString(pk) === owner) return;
+  drop();
 }
 
 /** Ask Phantom to connect (shows its prompt the first time). */
@@ -168,20 +194,20 @@ export function connectWallet(): Promise<WalletState> {
     hook(p);
     const { publicKey: pk } = await p.connect();
     try {
-      localStorage.removeItem(AUTOCONNECT_KEY);
+      markLoggedIn(localStorage, 'Phantom');
     } catch {}
     return adopt(keyString(pk));
   });
 }
 
-/** Silent reconnect on page load, if this site is already trusted and the player didn't disconnect. */
+/** Silent reconnect on page load, if this site is already trusted and the player didn't log out. */
 export function restoreWallet(): Promise<WalletState> {
   return serial(async () => {
     const p = phantom();
     if (!p || owner) return walletState();
-    hook(p);
     try {
-      if (localStorage.getItem(AUTOCONNECT_KEY) === '0') return walletState();
+      if (restoreTarget(localStorage) !== 'Phantom') return walletState();
+      hook(p);
       const { publicKey: pk } = await p.connect({ onlyIfTrusted: true });
       return await adopt(keyString(pk));
     } catch {
@@ -190,13 +216,20 @@ export function restoreWallet(): Promise<WalletState> {
   });
 }
 
+/**
+ * Log out: forget the owner in memory and stop listening to the wallet. Their
+ * progress and session key stay in storage for the next login, and page loads
+ * stop reconnecting until the player connects again.
+ */
 export function disconnectWallet(): Promise<void> {
   return serial(async () => {
     try {
-      localStorage.setItem(AUTOCONNECT_KEY, '0');
+      markLoggedOut(localStorage);
     } catch {}
+    const p = hooked?.p ?? phantom();
+    unhook(); // first, so our own disconnect isn't handled as an event
     try {
-      await phantom()?.disconnect();
+      await p?.disconnect();
     } catch {}
     drop();
   });

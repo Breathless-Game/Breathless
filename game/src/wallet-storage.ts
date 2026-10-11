@@ -10,6 +10,12 @@ export const MIGRATED_KEY = 'deepbreath.migratedTo';
 /** Device-wide: '0' after the player pressed Disconnect, so page loads stop reconnecting silently. */
 export const AUTOCONNECT_KEY = 'deepbreath.autoConnect';
 
+/** Device-wide: the name of the wallet app the player last connected with ("Phantom"). Never anything secret. */
+export const LAST_WALLET_KEY = 'deepbreath.lastWallet';
+
+/** Before the picker existed, Phantom was the only wallet: restore it for players who logged in back then. */
+export const DEFAULT_WALLET = 'Phantom';
+
 /** Per-wallet name of the in-game session keypair (pays fees, signs mints). */
 export const SESSION_NAME = 'session';
 
@@ -39,6 +45,31 @@ export function namespacedKey(owner: string, name: string): string {
 export interface KeyValueStore {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+}
+
+export interface RemovableStore extends KeyValueStore {
+  removeItem(key: string): void;
+}
+
+/**
+ * Which wallet a page load may reconnect without asking, or null. Only the one
+ * the player last used, and never after they logged out: an explicit logout
+ * sticks across reloads until they connect again.
+ */
+export function restoreTarget(store: Pick<KeyValueStore, 'getItem'>): string | null {
+  if (store.getItem(AUTOCONNECT_KEY) === '0') return null;
+  return store.getItem(LAST_WALLET_KEY) || DEFAULT_WALLET;
+}
+
+/** The player logged out (or disconnected inside their wallet): stop reconnecting on page load. */
+export function markLoggedOut(store: KeyValueStore) {
+  store.setItem(AUTOCONNECT_KEY, '0');
+}
+
+/** The player connected `wallet` themselves: page loads may reconnect it silently again. */
+export function markLoggedIn(store: RemovableStore, wallet: string) {
+  store.removeItem(AUTOCONNECT_KEY);
+  store.setItem(LAST_WALLET_KEY, wallet);
 }
 
 export interface MigrationStep {

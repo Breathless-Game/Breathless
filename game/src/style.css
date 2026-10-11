@@ -1983,3 +1983,51 @@ button:disabled {
 #overlay .card {
   margin: auto;
 }
+
+/* ---- wallet: log out (pause menu, collection, title chip) ---- */
+.wallet-pause {
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+  font-size: 13px;
+}
+
+.wallet-collection {
+  margin-left: auto;
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+.wallet-chip {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  max-width: calc(100vw - 32px);
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  font-size: 13px;
+}
+
+.wallet-chip.wallet-confirming {
+  border-radius: 14px;
+}
+
+.wallet-row .wallet-question {
+  color: var(--gold);
+  font-size: 12px;
+  max-width: 300px;
+}
+
+.wallet-confirming {
+  flex-wrap: wrap;
+}
+
+.wallet-row button.wallet-logout:hover,
+.wallet-row button.wallet-logout:focus-visible {
+  border-color: var(--danger);
+  color: #fff;
+}
