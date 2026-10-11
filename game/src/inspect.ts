@@ -5,8 +5,11 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 // A closer look at one piece of gear from the workbench: it grows from where it
 // lies on the table to the middle of the screen over the blurred table, turning
 // slowly. What it does is on the left; the upgrade (equipment.ts, through main's
-// buyNextUpgrade) and, from Lv2, its branch are on the right. ← / → or a sideways swipe flips through its three levels; levels not
-// owned yet show as a dark silhouette with their price.
+// buyNextUpgrade) and, from Lv2, its branch are on the right. ← / → or a sideways
+// swipe flips through its three levels; levels not owned yet show as a dark
+// silhouette with their price. The boat opens the same view on the ships
+// (ships.ts): ‹ › flips through all six, each with its bonuses, its banked-value
+// threshold, and Equip.
 
 const LEVELS: UpgradeLevel[] = [1, 2, 3];
 const GROW_S = 0.35;
@@ -34,7 +37,33 @@ export interface InspectHooks {
   paths(def: UpgradeDef): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
   activePath(def: UpgradeDef): string | null;
   selectPath(def: UpgradeDef, id: string): void;
+  /** The ships, for the boat (showShips). */
+  ships: ShipHooks;
   closed(): void;
+}
+
+/** One ship as the inspector shows it. */
+export interface ShipEntry {
+  name: string;
+  nameZh: string;
+  intro: string;
+  introZh: string;
+  /** Total banked value that unlocks it. */
+  threshold: number;
+  /** Its bonuses, one short line each. */
+  bonuses: string[];
+}
+
+export interface ShipHooks {
+  list(): readonly ShipEntry[];
+  /** The ship sailed now (index). */
+  current(): number;
+  /** Total banked value so far. */
+  progress(): number;
+  /** A fresh copy of ship i's model, null while the models load. */
+  model(i: number): THREE.Object3D | null;
+  /** Sail ship i; false if it's still locked. */
+  equip(i: number): boolean;
 }
 
 export class GearInspector {
@@ -45,10 +74,12 @@ export class GearInspector {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
   private turntable = new THREE.Group();
-  private models = new Map<UpgradeLevel, THREE.Group>();
+  private models = new Map<number, THREE.Group>();
 
   private def: UpgradeDef | null = null;
-  private level: UpgradeLevel = 1;
+  /** Looking at the ships (the boat) rather than one piece of gear's levels. */
+  private shipMode = false;
+  private level = 1;
   private spin = 0;
   private swap: { t: number; dir: number; from: THREE.Group; to: THREE.Group } | null = null;
   private swipe: { x: number; id: number } | null = null;
@@ -121,14 +152,32 @@ export class GearInspector {
   }
 
   get open() {
-    return this.def !== null;
+    return this.def !== null || this.shipMode;
+  }
+
+  /** How many models ‹ › flips through: three levels, or every ship. */
+  private get count() {
+    return this.shipMode ? this.hooks.ships.list().length : 3;
   }
 
   /** Look at `def`, growing it out of the screen point `from` (where it lies on the table). */
   show(def: UpgradeDef, from: { x: number; y: number }) {
     this.def = def;
+    this.shipMode = false;
+    this.level = Math.min(3, Math.max(1, this.hooks.owned(def)));
+    this.open3d(from);
+  }
+
+  /** The ships, from the boat on the table: opens on the one sailed now. */
+  showShips(from: { x: number; y: number }) {
+    this.def = null;
+    this.shipMode = true;
+    this.level = this.hooks.ships.current() + 1;
+    this.open3d(from);
+  }
+
+  private open3d(from: { x: number; y: number }) {
     this.notice = '';
-    this.level = Math.min(3, Math.max(1, this.hooks.owned(def))) as UpgradeLevel;
     this.models.forEach((m) => this.turntable.remove(m));
     this.models.clear();
     this.swap = null;
@@ -162,8 +211,9 @@ export class GearInspector {
   }
 
   close() {
-    if (!this.def) return;
+    if (!this.open) return;
     this.def = null;
+    this.shipMode = false;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.root.classList.remove('open');
@@ -173,15 +223,15 @@ export class GearInspector {
 
   /** The next or previous level; the model slides out that way and the new one slides in. */
   private step(d: number) {
-    if (!this.def) return;
+    if (!this.open) return;
     const next = this.level + d;
-    if (next < 1 || next > 3) {
+    if (next < 1 || next > this.count) {
       // Nothing further that way: a little nudge says so.
       this.stage.animate([{ transform: 'none' }, { transform: `translateX(${-d * 14}px)` }, { transform: 'none' }], { duration: 220 });
       return;
     }
     const from = this.model(this.level);
-    this.level = next as UpgradeLevel;
+    this.level = next;
     const to = this.model(this.level);
     if (this.swap) this.turntable.remove(this.swap.from);
     this.turntable.add(to);
@@ -189,10 +239,19 @@ export class GearInspector {
     this.renderInfo();
   }
 
-  private model(level: UpgradeLevel): THREE.Group {
+  private model(level: number): THREE.Group {
     let m = this.models.get(level);
     if (!m) {
-      m = buildUpgradeModel(this.def!.id, level, { preserveTierScale: true });
+      if (this.shipMode) {
+        // Ships come in their own sizes: centre each and fit it to the same 2 units as the gear.
+        const ship = this.hooks.ships.model(level - 1) ?? buildUpgradeModel('boat', 1);
+        const box = new THREE.Box3().setFromObject(ship);
+        const k = 2 / Math.max(...box.getSize(new THREE.Vector3()).toArray());
+        ship.position.copy(box.getCenter(new THREE.Vector3())).multiplyScalar(-k);
+        ship.scale.multiplyScalar(k);
+        m = new THREE.Group();
+        m.add(ship);
+      } else m = buildUpgradeModel(this.def!.id, level as UpgradeLevel, { preserveTierScale: true });
       m.scale.setScalar(1.15); // preserve the tier silhouette inside the inspector frame
       this.models.set(level, m);
     }
@@ -200,6 +259,7 @@ export class GearInspector {
   }
 
   private renderInfo() {
+    if (this.shipMode) return this.renderShip();
     const def = this.def;
     if (!def) return;
     const owned = this.hooks.owned(def);
@@ -207,6 +267,8 @@ export class GearInspector {
     const unlocked = lv <= owned;
     $('wb-inspect-name').textContent = def.name;
     $('wb-inspect-zh').textContent = def.nameZh;
+    $('wb-inspect-up-kind').textContent = 'UPGRADE · 升级';
+    this.root.classList.remove('ships');
     $('wb-inspect-kind').textContent = def.group === 'dive' ? 'Dive gear · 潜水装备' : 'Boat gear · 船上装备';
     $('wb-inspect-level').textContent = `Level ${lv} / 3${unlocked ? '' : ' · locked'}`;
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
@@ -263,8 +325,69 @@ export class GearInspector {
     $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${def.prices[lv - 1]} Pearls`;
   }
 
+  /** Ship mode: the ship being looked at, its bonuses, and whether it can be sailed. */
+  private renderShip() {
+    const ships = this.hooks.ships;
+    const list = ships.list();
+    const i = this.level - 1;
+    const ship = list[i];
+    const current = ships.current();
+    const progress = ships.progress();
+    const unlocked = progress >= ship.threshold;
+    $('wb-inspect-kind').textContent = 'Ship · 船只';
+    $('wb-inspect-up-kind').textContent = 'SHIP · 船只';
+    this.root.classList.add('ships');
+    $('wb-inspect-name').textContent = ship.name;
+    $('wb-inspect-zh').textContent = ship.nameZh;
+    $('wb-inspect-level').textContent = `Level ${String(i).padStart(2, '0')} · ${i === current ? 'sailing · 当前使用' : unlocked ? 'unlocked · 已解锁' : 'locked · 未解锁'}`;
+    $('wb-inspect-level').classList.toggle('locked', !unlocked);
+    $('wb-inspect-effect').textContent = `${ship.introZh} ${ship.intro}`;
+    // Every ship's bonuses, so they can be compared; the one shown is marked.
+    $('wb-inspect-levels').replaceChildren(
+      ...list.map((s, j) => {
+        const li = document.createElement('li');
+        li.textContent = `${String(j).padStart(2, '0')} ${s.name} · ${s.bonuses.join(' · ') || 'no bonus'}`;
+        li.classList.toggle('on', j === i);
+        li.classList.toggle('locked', progress < s.threshold);
+        return li;
+      }),
+    );
+    $('wb-inspect-ready').classList.add('hidden');
+    $('wb-inspect-paths').classList.add('hidden');
+
+    // The right panel: its bonuses, how far the banked value has come, and Equip.
+    $('wb-inspect-up-title').textContent = i === current ? 'Sailing · 当前船只' : unlocked ? 'Equip this ship · 装备船只' : 'Locked · 未解锁';
+    $('wb-inspect-up-effect').textContent = ship.bonuses.join(' · ') || 'The starter boat: no bonus';
+    $('wb-inspect-up-price').textContent = ship.threshold ? `Unlocks at ${ship.threshold} banked value` : 'Starter ship';
+    const buy = $<HTMLButtonElement>('wb-inspect-buy');
+    buy.classList.remove('hidden');
+    buy.disabled = i === current || !unlocked;
+    buy.classList.toggle('primary', !buy.disabled);
+    buy.textContent = i === current ? 'Equipped · 已装备' : unlocked ? 'Equip · 装备' : `Bank ${Math.ceil(ship.threshold - progress)} more · 未解锁`;
+    $('wb-inspect-pearls').textContent = this.notice || `Total banked value ${Math.floor(progress)} · 累计入库价值 (no fish are spent)`;
+
+    $('wb-inspect-dots').replaceChildren(
+      ...list.map((s, j) => {
+        const dot = document.createElement('span');
+        dot.classList.toggle('on', j === i);
+        dot.classList.toggle('locked', progress < s.threshold);
+        return dot;
+      }),
+    );
+    $<HTMLButtonElement>('wb-inspect-prev').disabled = i === 0;
+    $<HTMLButtonElement>('wb-inspect-next').disabled = i === list.length - 1;
+    this.stage.classList.toggle('locked', !unlocked);
+    $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${ship.threshold} banked value`;
+  }
+
+  private equipShip() {
+    this.notice = this.hooks.ships.equip(this.level - 1) ? '' : 'Still locked: bank more fish first.';
+    this.renderInfo();
+  }
+
   /** Buys the next level; the piece on the table and the dots follow (the workbench rebuilds its model). */
   private async buy() {
+    if (this.shipMode) return this.equipShip();
     const def = this.def;
     if (!def || this.buying) return;
     this.buying = true;

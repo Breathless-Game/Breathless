@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { Shipyard, SHIPS } from './ships';
+import { Shipyard, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
+import { SkinPicker } from './skins';
+import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
@@ -32,6 +34,7 @@ import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
+import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
@@ -42,6 +45,8 @@ import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { FieldGuide } from './field-guide';
+import type { LessonId } from './tutorial';
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
@@ -98,7 +103,7 @@ diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 diver.setWaterSurface((x, z) => world.surfaceAt(x, z));
 // Between dives the diver sits on the bow (it rocks with the boat); a dive starts with a jump off it.
 const bowSeat = new THREE.Object3D();
-bowSeat.position.set(3.38, 0.66, 0);
+bowSeat.position.set(3.02, 0.66, 0);
 world.boat.add(bowSeat);
 diver.sit(bowSeat);
 const JUMP_OUT = 2.6; // where the jump lands: this far past the bow, and this deep
@@ -108,6 +113,9 @@ const JUMP_DEPTH = 1.4;
 const BOARD_REACH = 6.5;
 const BOARD_AFTER_M = 3;
 let wentDown = false;
+let guideWasPaused = false;
+let tutorialDescended = false;
+let fieldGuide: FieldGuide | null = null;
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -331,8 +339,9 @@ const currentStats = () => {
   return {
     ...stats,
     netCapacity: stats.netCapacity + shipBonus.capacity,
-    catchRadius: stats.catchRadius * (1 + shipBonus.range),
-    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed),
+    catchRadius: stats.catchRadius * (1 + shipBonus.range) * (diver.skinIndex===1&&world.map.id==='tianchi'?1.1:1),
+    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed) * (diver.skinIndex===0&&world.map.id==='fjord'?1.1:1),
+    lampDistance: stats.lampDistance * (diver.skinIndex===2&&world.map.id==='ocean'?1.15:1),
   };
 };
 const activeLevel = (slot: EquipmentSlot): number => {
@@ -359,6 +368,7 @@ function applyEquipmentVisuals() {
 }
 const sonar = new DeepSonar({ color: loadSonarConfig().color, lengthLevel: equipment.sonarLevel, detail: renderQuality.settings.detail, startsCarried: false });
 scene.add(sonar.group);
+world.colorGrade.apply(sonar.group);
 sonar.group.visible = false;
 let sonarCarried = false;
 let sonarGuiding = false;
@@ -596,6 +606,7 @@ function refreshEquipment() {
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
+  nudgePearlBalance(equipment.pearls);
   const sonarConfig = saveSonarConfig({ ...loadSonarConfig(), lengthLevel: equipment.sonarLevel });
   sonar.setLengthLevel(equipment.sonarLevel);
   sonar.setColor(sonarConfig.color);
@@ -613,9 +624,11 @@ async function syncPearls(earned = 0) {
   }
   try {
     equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    setPearlBalance(equipment.pearls);
     refreshEquipment();
   } catch (e) {
     console.warn('PEARL balance unavailable', e);
+    setPearlsUnavailable(e);
   }
 }
 
@@ -682,6 +695,7 @@ function nextSlotLabel(slot: UpgradeSlot) {
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  if(skinPicker.open)return;
   // An open settings dropdown has the keyboard. It stops its own keys; this is the backstop.
   if (dropdownOpen()) return;
   if (e.key === 'Escape') {
@@ -708,6 +722,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     gear.toggle();
     if (gear.open) void syncPearls();
+    if (gear.open) fieldGuide?.mark('upgrade');
     return;
   }
   if (phase !== 'play') return;
@@ -716,6 +731,7 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+    if (vault.open) fieldGuide?.mark('collection');
     if (vault.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
@@ -877,6 +893,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
+  fieldGuide?.mark('catch');
   hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
@@ -898,6 +915,7 @@ function bankNet() {
   hud.toast(rarest, 'BANKED');
   noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
+  fieldGuide?.mark('bank');
   hud.setNet(net, currentStats().netCapacity);
   hud.setBank(bank);
   nftQueue.kick();
@@ -995,6 +1013,7 @@ function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
+  fieldGuide?.mark('launch');
   askAboutSharks();
   resetWorldBounds();
   overlay.classList.add('hidden');
@@ -1005,7 +1024,9 @@ function startGame() {
   hud.message('Hold your breath and dive!', 2400);
   const bow = bowSeat.getWorldPosition(new THREE.Vector3());
   diver.jumpTo(new THREE.Vector3(bow.x + JUMP_OUT, -JUMP_DEPTH, 0));
+  visitSkinMap(world.map.id);
   wentDown = false;
+  tutorialDescended = false;
 }
 
 /** Beside the boat at the surface, not in trouble: close enough to climb aboard. */
@@ -1097,6 +1118,68 @@ function updateCalibration() {
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
 let paused = false;
+let trialSkinActive=false;
+const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
+const endSkinTrial=()=>{if(!trialSkinActive)return;trialSkinActive=false;diver.setSkin(0);skinPicker.resetChoice();applyEquipmentVisuals();};
+const skinHint=document.createElement('div');skinHint.className='skin-hint';skinHint.textContent='长按角色或 E 换装 · Hold diver or E';skinHint.hidden=true;document.body.append(skinHint);
+setInterval(()=>{skinHint.hidden=phase!=='play'||diver.seated||diver.jumping||paused||-diver.pos.y>SURFACE_DEPTH;},400);
+let skinHold:ReturnType<typeof setTimeout>|null=null;
+const skinRing=document.createElement('div');skinRing.style.cssText='position:fixed;width:30px;height:30px;transform:translate(-50%,-50%);pointer-events:none;z-index:9999;filter:drop-shadow(0 0 2px #7aead9);display:none';
+skinRing.innerHTML='<svg viewBox="0 0 64 64" width="30" height="30"><circle cx="32" cy="32" r="26" fill="#0b273850" stroke="#ffffff40" stroke-width="3"/><circle data-progress cx="32" cy="32" r="26" fill="none" stroke="#b6fff0" stroke-width="3" stroke-linecap="round" stroke-dasharray="163.363" stroke-dashoffset="163.363" transform="rotate(-90 32 32)"/></svg>';document.body.append(skinRing);
+let skinProgressFrame=0;
+let skinPointer:number|null=null,skinX=0,skinY=0,skinOpened=false;
+let skinHoldMode:'pointer'|'keyboard'|null=null;
+const clearSkinHold=()=>{if(skinHold!==null)clearTimeout(skinHold);skinHold=null;skinPointer=null;skinHoldMode=null;cancelAnimationFrame(skinProgressFrame);skinRing.style.display='none';};
+const canHoldSkin=()=>phase==='play'&&!paused&&!diver.seated&&!diver.jumping&&-diver.pos.y<=SURFACE_DEPTH;
+const startSkinProgress=(mode:'pointer'|'keyboard')=>{
+  skinHoldMode=mode;
+  const rect=canvas.getBoundingClientRect();
+  const holdStarted=performance.now();skinRing.style.display='block';
+  const drawProgress=()=>{
+    if(!canHoldSkin()){clearSkinHold();return;}
+    const center=diver.group.getWorldPosition(new THREE.Vector3()).project(camera);
+    skinRing.style.left=`${rect.left+(center.x+1)*rect.width/2}px`;skinRing.style.top=`${rect.top+(1-center.y)*rect.height/2}px`;
+    skinRing.querySelector('[data-progress]')!.setAttribute('stroke-dashoffset',String(163.363*(1-Math.min(1,(performance.now()-holdStarted)/500))));
+    skinProgressFrame=requestAnimationFrame(drawProgress);
+  };drawProgress();
+  skinHold=setTimeout(()=>{const pointer=skinHoldMode==='pointer';clearSkinHold();if(!canHoldSkin())return;skinOpened=pointer;skinPicker.show();},500);
+};
+canvas.addEventListener('pointerdown',e=>{
+  if(!canHoldSkin()||e.button!==0||skinHoldMode==='keyboard')return;
+  const rect=canvas.getBoundingClientRect();
+  const screen=diver.group.getWorldPosition(new THREE.Vector3()).project(camera);
+  const x=rect.left+(screen.x+1)*rect.width/2,y=rect.top+(1-screen.y)*rect.height/2;
+  if(screen.z>1||Math.hypot(e.clientX-x,e.clientY-y)>55)return;
+  clearSkinHold();skinPointer=e.pointerId;skinX=e.clientX;skinY=e.clientY;skinOpened=false;
+  startSkinProgress('pointer');
+},true);
+window.addEventListener('keydown',e=>{
+  if(e.code!=='KeyE'||!canHoldSkin())return;
+  const target=e.target as HTMLElement;
+  if(target.closest('input,textarea,select,[contenteditable="true"]'))return;
+  e.preventDefault();e.stopImmediatePropagation();
+  if(e.repeat)return;
+  clearSkinHold();startSkinProgress('keyboard');
+},true);
+window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('e');}},true);
+window.addEventListener('pointermove',e=>{if(e.pointerId===skinPointer&&Math.hypot(e.clientX-skinX,e.clientY-skinY)>14)clearSkinHold();},true);
+window.addEventListener('pointerup',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
+window.addEventListener('pointercancel',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
+window.addEventListener('blur',()=>clearSkinHold());
+let catchClickStart=-Infinity,catchClickX=0,catchClickY=0,catchClickReady=false;
+canvas.addEventListener('pointerdown',e=>{
+  catchClickReady=e.button===0&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickStart=performance.now();catchClickX=e.clientX;catchClickY=e.clientY;
+},true);
+window.addEventListener('pointermove',e=>{if(Math.hypot(e.clientX-catchClickX,e.clientY-catchClickY)>14)catchClickReady=false;},true);
+window.addEventListener('pointercancel',()=>{catchClickReady=false;},true);
+window.addEventListener('blur',()=>{catchClickReady=false;});
+canvas.addEventListener('click',e=>{
+  if(skinOpened){e.preventDefault();e.stopImmediatePropagation();skinOpened=false;catchClickReady=false;return;}
+  const catchNow=catchClickReady&&e.button===0&&performance.now()-catchClickStart<350&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickReady=false;
+  if(catchNow){e.preventDefault();e.stopImmediatePropagation();tryCatch();}
+},true);
 let resetDayClock = false;
 
 function pause() {
@@ -1123,6 +1206,7 @@ let aboard: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
 let leavingBoat = false;
 
 function climbAboard() {
+  endSkinTrial();
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
@@ -1226,6 +1310,7 @@ function onEscape() {
 
 /** Ends the dive: back to the title, with the diver sitting back on the bow. */
 function goToMenu() {
+  endSkinTrial();
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   diver.sit(bowSeat);
@@ -1271,6 +1356,7 @@ function applySettings(s: Settings) {
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   sonar.setDetail(renderQuality.settings.detail);
+  sonar.setLightingEnabled(s.lightingEffects);
   syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -1392,10 +1478,52 @@ const workbench = new Workbench({
   activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
   selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),
   ship: () => ({ key: shipyard.shipIndex, model: shipyard.shipModel() }),
-  openShipyard: () => shipyard.show(),
+  // The boat opens the ships in the inspector (the same as gear): the shipyard's ships, unlocks and equip.
+  ships: {
+    list: () =>
+      SHIPS.map((s, i) => ({
+        name: s.en,
+        nameZh: s.cn,
+        intro: SHIP_INTROS_EN[i],
+        introZh: s.intro,
+        threshold: s.threshold,
+        bonuses: [
+          s.speed ? `+${Math.round(s.speed * 100)}% swim speed` : '',
+          s.range ? `+${Math.round(s.range * 100)}% catch radius` : '',
+          s.capacity ? `+${s.capacity} net slot${s.capacity > 1 ? 's' : ''}` : '',
+        ].filter(Boolean),
+      })),
+    current: () => shipyard.shipIndex,
+    progress: () => mapProgress.bestValue,
+    model: (i) => shipyard.modelAt(i),
+    equip: (i) => shipyard.equip(i),
+  },
   sonarColor(color) {
     sonar.setColor(color);
+    world.colorGrade.apply(sonar.group);
   },
+  tutorial(id: LessonId) {
+    fieldGuide?.mark(id);
+  },
+});
+
+fieldGuide = new FieldGuide({
+  canOpen: () => phase !== 'calibrating' && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
+  toggled(open) {
+    if (open) {
+      guideWasPaused = paused;
+      paused = true;
+      keys.clear();
+    } else {
+      paused = guideWasPaused;
+      keys.clear();
+      breathSince = null;
+    }
+  },
+  syncTutorial() {
+    if (workbench.packed.includes('net')) fieldGuide?.mark('pack');
+  },
+  packed: () => workbench.packed,
 });
 // The gear panel (G) buys too: whatever buys or picks a ship, the pieces on the table follow.
 onGearChange = () => workbench.visible && workbench.refreshGear();
@@ -1540,6 +1668,7 @@ onWalletChange((s) => {
   }
   walletOwner = s.owner;
   loadWalletProgress();
+  void syncPearls(); // first read after login feeds the title badge
   if (loginGate.visible) {
     loginGate.hide();
     workbench.show(true);
@@ -1640,7 +1769,13 @@ function update(dt: number, time: number) {
   }
 
   if (!flying) swimPhysics(dt, s);
-  if (playing && -diver.pos.y > BOARD_AFTER_M) wentDown = true;
+  if (playing && -diver.pos.y > BOARD_AFTER_M) {
+    wentDown = true;
+    if (!tutorialDescended) {
+      tutorialDescended = true;
+      fieldGuide?.mark('descend');
+    }
+  }
   hud.setBoardPrompt(canBoard());
   const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench (as in swimPhysics)
 
@@ -1688,6 +1823,19 @@ function update(dt: number, time: number) {
   }
   world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
+  // Read the post-swell hull pose so the wake follows the same crest that is
+  // visible in this frame, including the rogue-wave pitch and roll.
+  if (phase === 'play') {
+    stormFx.boatWake(
+      dt,
+      time,
+      world.boat.position.x,
+      world.boat.position.y,
+      world.boat.rotation.x,
+      world.boat.rotation.z,
+      seaSurface,
+    );
+  }
 
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
   cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);

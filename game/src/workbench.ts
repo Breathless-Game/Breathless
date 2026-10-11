@@ -13,8 +13,9 @@ import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
 import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
 import { SoftPaper } from './paper';
-import { GearInspector } from './inspect';
+import { GearInspector, type ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import type { LessonId } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -35,6 +36,8 @@ export interface WorkbenchHooks {
   conditions(map: MapId): WorkbenchConditions;
   /** The workbench sonar piece applies its chosen beacon color to the dive model. */
   sonarColor?(color: string): void;
+  /** Optional progress hooks for the action-driven field guide. */
+  tutorial?(id: LessonId): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
   buy(id: UpgradeId): Promise<string | null>;
   pearls(): number;
@@ -44,8 +47,8 @@ export interface WorkbenchHooks {
   selectPath(id: UpgradeId, path: string): void;
   /** The ship you sail (ships.ts): which one (key), and a fresh copy of its model once loaded. */
   ship(): { key: number; model: THREE.Object3D | null };
-  /** The boat on the table opens the shipyard. */
-  openShipyard(): void;
+  /** The ships the boat on the table opens on (in the inspector). */
+  ships: ShipHooks;
 }
 
 export interface WorkbenchConditions {
@@ -293,6 +296,7 @@ export class Workbench {
       paths: (def) => this.hooks.paths(def.id),
       activePath: (def) => this.hooks.activePath(def.id),
       selectPath: (def, path) => this.hooks.selectPath(def.id, path),
+      ships: this.hooks.ships,
       closed: () => {
         if (this.state === 'inspect') this.state = 'idle';
       },
@@ -338,6 +342,7 @@ export class Workbench {
    * table as it was. rise: pan the table up into view (with intro, always).
    */
   show(intro: boolean, rise = intro) {
+    this.hooks.tutorial?.('bench');
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
@@ -1061,6 +1066,7 @@ export class Workbench {
       },
       () => {
         p.mode = 'ready';
+        this.hooks.tutorial?.('pack');
         p.yaw = 0;
         this.puff(x, z, 0.5);
         this.lightSlot(this.slotRings[slot], true);
@@ -1213,8 +1219,7 @@ export class Workbench {
     if (press.map) this.openChart();
     else if (press.piece) {
       this.setHover(null, e);
-      if (press.piece.id === 'boat') this.hooks.openShipyard();
-      else this.inspect(press.piece);
+      this.inspect(press.piece);
     }
   }
 
@@ -1224,7 +1229,10 @@ export class Workbench {
     this.tip.classList.add('hidden');
     document.body.style.cursor = '';
     const at = p.pos.clone().project(this.camera);
-    this.inspector.show(p.def, { x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
+    const from = { x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight };
+    // The boat shows the ships (pick one to sail); gear shows its levels.
+    if (p.id === 'boat') this.inspector.showShips(from);
+    else this.inspector.show(p.def, from);
   }
 
   private setHover(hit: Piece | 'map' | null, e: PointerEvent) {
@@ -1239,7 +1247,7 @@ export class Workbench {
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
         : [
             `${hit.def.name} · ${hit.def.nameZh}`,
-            hit.id === 'boat' ? 'Your ship · 当前船只 — click for the shipyard' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
+            hit.id === 'boat' ? 'Your ship · 当前船只 — click to see the ships' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
             hit.mode === 'ready' ? 'Ready · click for a closer look' : hit.def.group === 'dive' ? 'Click for a closer look · drag to the tray' : 'Click to upgrade the boat',
           ];
     this.tip.replaceChildren(
@@ -1263,6 +1271,7 @@ export class Workbench {
    * laid out, which then takes over.
    */
   private openChart() {
+    this.hooks.tutorial?.('chart');
     this.state = 'opening';
     this.hovered = null;
     this.tip.classList.add('hidden');
