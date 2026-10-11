@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { coreAsset } from './explorer-links';
-import { fishValue, RARITY, zoneForDepth } from './fish';
+import { fishDisplayName, fishValue, rarityLabel, RARITY, zoneForDepth, zoneName } from './fish';
+import { lang, onLangChange, pickName, t } from './i18n';
 import { FISH_FOODS, fishFood, type FishFoodDef, type FishFoodId } from './fish-food';
 import { buildFishFoodModel } from './fish-food-models';
 import { MAPS, type MapId } from './maps';
@@ -178,6 +179,10 @@ export class Aquarium {
     private bank: BankedFish[],
     private hooks: AquariumHooks,
   ) {
+    onLangChange(() => {
+      this.renderBar();
+      if (this.picked) this.pick(this.picked);
+    });
     $('aq-close').addEventListener('click', () => this.close());
     $('aq-prev').addEventListener('click', () => this.step(-1));
     $('aq-next').addEventListener('click', () => this.step(1));
@@ -413,7 +418,7 @@ export class Aquarium {
       const b = document.createElement('button');
       b.className = 'mini';
       b.textContent = `${i + 1}`;
-      b.title = `Tank ${i + 1}`;
+      b.title = t(`Tank ${i + 1}`, `鱼缸 ${i + 1}`);
       b.classList.toggle('on', this.tank === i);
       b.addEventListener('click', () => this.setTank(i));
       return b;
@@ -421,7 +426,7 @@ export class Aquarium {
     const fav = document.createElement('button');
     fav.className = 'mini fav';
     fav.textContent = '★';
-    fav.title = 'Favorites tank';
+    fav.title = t('Favorites tank', '收藏鱼缸');
     fav.classList.toggle('on', this.tank === 'fav');
     fav.addEventListener('click', () => this.setTank('fav'));
     this.tabs.replaceChildren(...tabs, fav);
@@ -429,18 +434,18 @@ export class Aquarium {
 
     const n = this.fishIn(this.tank).length;
     if (this.tank === 'fav') {
-      this.label.textContent = `★ Favorites · 收藏 · ${n} / ${TANK_SIZE}`;
+      this.label.textContent = t(`★ Favorites · ${n} / ${TANK_SIZE}`, `★ 收藏 · ${n} / ${TANK_SIZE}`);
     } else {
       const first = this.tank * TANK_SIZE;
-      this.label.textContent = `Tank ${this.tank + 1} · 鱼缸 · ${n ? `#${first + 1}–${first + n}` : 'empty'} · ${n} / ${TANK_SIZE}`;
+      this.label.textContent = t(`Tank ${this.tank + 1} · ${n ? `#${first + 1}–${first + n}` : 'empty'} · ${n} / ${TANK_SIZE}`, `鱼缸 ${this.tank + 1} · ${n ? `#${first + 1}–${first + n}` : '空'} · ${n} / ${TANK_SIZE}`);
     }
     this.empty.classList.toggle('hidden', n > 0);
     this.empty.textContent =
       this.tank === 'fav'
-        ? 'No favorites yet. Click a fish in a tank and star it to move it here.'
+        ? t('No favorites yet. Click a fish in a tank and star it to move it here.', '还没有收藏。点一条鱼并加星，它就会来到这里。')
         : this.bank.length
-          ? 'This tank is empty.'
-          : 'No fish yet. Dive, and what you bring home swims here.';
+          ? t('This tank is empty.', '这个鱼缸是空的。')
+          : t('No fish yet. Dive, and what you bring home swims here.', '还没有鱼。下潜一趟，带回家的鱼会游在这里。');
   }
 
   // ---- Fish -------------------------------------------------------------
@@ -608,7 +613,7 @@ export class Aquarium {
     this.card.classList.toggle('hidden', !s);
     if (!s) return;
     const f = s.fish;
-    const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
+    const where = f.map && f.map in MAPS ? pickName(MAPS[f.map as MapId]) : zoneName(zoneForDepth(f.depthM));
     const fav = this.favorites.has(f.id);
     const img = document.createElement('img');
     img.src = fishIcon(f);
@@ -618,7 +623,7 @@ export class Aquarium {
     name.textContent = nftName(f);
     const rarity = document.createElement('div');
     rarity.className = 'aq-rarity';
-    rarity.textContent = RARITY[f.rarity].label;
+    rarity.textContent = rarityLabel(f.rarity);
     rarity.style.color = RARITY[f.rarity].color;
     const meta = document.createElement('div');
     meta.className = 'small muted';
@@ -630,7 +635,7 @@ export class Aquarium {
     if (feeds > 0) {
       const grown = document.createElement('div');
       grown.className = 'aq-growth';
-      grown.textContent = `Grown +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`;
+      grown.textContent = t(`Grown +${Math.round((scale - 1) * 100)}% · fed ${feeds}`, `已长大 +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`);
       body.append(grown);
     }
     const food = fishFood(this.selectedFood);
@@ -640,11 +645,11 @@ export class Aquarium {
     if (modelCanvas) foodPanel.append(modelCanvas);
     const foodSelect = document.createElement('select');
     foodSelect.className = 'aq-food-select';
-    foodSelect.setAttribute('aria-label', 'Fish food · 鱼食');
+    foodSelect.setAttribute('aria-label', t('Fish food', '鱼食'));
     for (const option of FISH_FOODS) {
       const item = document.createElement('option');
       item.value = option.id;
-      item.textContent = `${option.nameZh} · ${option.price} ✦`;
+      item.textContent = `${pickName(option)} · ${option.price} ✦`;
       item.selected = option.id === this.selectedFood;
       foodSelect.append(item);
     }
@@ -656,16 +661,16 @@ export class Aquarium {
     });
     const foodEffect = document.createElement('div');
     foodEffect.className = 'aq-food-effect';
-    foodEffect.textContent = `${food.descriptionZh} · 成长 ×${food.growthMultiplier} · 饱腹 ${Math.round(FEED_COOLDOWN_MS * food.feedCooldownMultiplier / 1000)}s · 游速/荧光 ${Math.round(FOOD_EFFECT_MS / 1000)}s`;
-    foodEffect.title = food.description;
+    foodEffect.textContent = `${lang() === 'zh' ? food.descriptionZh : food.description} · ${t('growth', '成长')} ×${food.growthMultiplier} · ${t('full for', '饱腹')} ${Math.round(FEED_COOLDOWN_MS * food.feedCooldownMultiplier / 1000)}s · ${t('speed/glow', '游速/荧光')} ${Math.round(FOOD_EFFECT_MS / 1000)}s`;
+    foodEffect.title = lang() === 'zh' ? food.descriptionZh : food.description;
     foodPanel.append(foodSelect, foodEffect);
     body.append(foodPanel);
     const feed = document.createElement('button');
     feed.className = 'mini primary aq-feed';
     const affordable = this.hooks.pearls() >= food.price;
     feed.textContent = affordable
-      ? `Feed · ${food.nameZh} · ${food.price} ✦`
-      : `Need ${food.price - this.hooks.pearls()} more ✦ · Pearl 不足`;
+      ? `${t('Feed', '喂食')} · ${pickName(food)} · ${food.price} ✦`
+      : t(`Need ${food.price - this.hooks.pearls()} more ✦`, `还差 ${food.price - this.hooks.pearls()} ✦ · 珍珠不足`);
     feed.disabled = !affordable || this.feeding;
     feed.title = `${food.price} PEARL`;
     feed.addEventListener('click', () => {
@@ -678,7 +683,7 @@ export class Aquarium {
     const star = document.createElement('button');
     star.className = fav ? 'mini' : 'mini primary';
     const full = !fav && this.favoriteFish().length >= TANK_SIZE;
-    star.textContent = fav ? '☆ Unfavorite · 移出收藏' : full ? 'Favorites tank is full' : '★ Favorite · 收藏';
+    star.textContent = fav ? t('☆ Unfavorite', '☆ 移出收藏') : full ? t('Favorites tank is full', '收藏鱼缸已满') : t('★ Favorite', '★ 收藏');
     star.disabled = full;
     star.addEventListener('click', () => this.toggleFavorite(f));
     const actions = document.createElement('div');
@@ -690,14 +695,14 @@ export class Aquarium {
       link.href = coreAsset(f.assetId);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.textContent = 'View NFT on chain ↗';
+      link.textContent = t('View NFT on chain ↗', '在链上查看 NFT ↗');
       link.addEventListener('click', (e) => e.stopPropagation());
       actions.append(link);
     }
     const x = document.createElement('button');
     x.className = 'mini';
     x.textContent = '✕';
-    x.title = 'Close';
+    x.title = t('Close', '关闭');
     x.addEventListener('click', () => this.pick(null));
     actions.prepend(feed);
     this.card.replaceChildren(img, body, actions, x);
@@ -707,7 +712,7 @@ export class Aquarium {
     const food = fishFood(this.selectedFood);
     const result = feedAquariumFish(this.aquariumState, f.id, food.id);
     if (!result.fed) {
-      this.hooks.message(result.reason === 'max' ? 'This fish is fully grown · 已经长到最大' : 'The fish is still full · 稍后再喂');
+      this.hooks.message(result.reason === 'max' ? t('This fish is fully grown', '这条鱼已经长到最大') : t('The fish is still full', '鱼还饱着，稍后再喂'));
       return;
     }
     if (this.feeding) return;
@@ -724,7 +729,7 @@ export class Aquarium {
         swimmer.speed = 0.035 + RARITY[f.rarity].speed * 0.008;
         swimmer.glowIntensity = activeFoodEffects(this.aquariumState.growth[f.id]).glow;
       }
-      this.hooks.message(`${f.name} grew after a meal · 喂食后长大了 · ${spentText(paid)}`);
+      this.hooks.message(t(`${f.name} grew after a meal · ${spentText(paid)}`, `${fishDisplayName(f)} 吃饱后长大了 · ${spentText(paid)}`));
       if (swimmer) {
         swimmer.growthPulse = 1;
         for (let i = 0; i < 5; i++) this.bubbles.push({

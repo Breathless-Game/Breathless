@@ -26,6 +26,7 @@ import { walletState } from './wallet';
 // cannot answer, the fish stays queued and the queue asks again later. A number is never made up.
 
 type Chain = typeof import('./chain');
+type FishTrust = import('./fish-cosign').FishTrust;
 type Pearl = typeof import('./pearl');
 
 /** 'needs-sol': mints paused until the game (session) wallet has devnet SOL. 'offline': the RPC did not answer. */
@@ -50,6 +51,14 @@ export interface NftQueueHooks {
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** Fish per market check while syncing the collection (the server migrates 12 per request). */
+const TRUST_CHUNK = 24;
+/** A market limit (HTTP 429 from a co-sign request, fish-cosign.ts CosignError): how long to wait, else null. */
+function limitOf(e: unknown): number | null {
+  const x = e as { status?: unknown; retryAfterMs?: unknown } | null;
+  if (x?.status !== 429) return null;
+  return typeof x.retryAfterMs === 'number' && x.retryAfterMs > 0 ? Math.min(x.retryAfterMs, 60 * 60_000) : 60_000;
+}
 
 export class NftQueue {
   /** Lazy module loaders. Kept as fields so a browser test can swap in a fake chain. */
@@ -73,11 +82,15 @@ export class NftQueue {
   batch: { step: SellStep | null; fish: number; txs?: number } | null = null;
   /** The player declined the last batch's wallet prompt: shown once, not on every card. */
   declined: number = 0;
+  /** The market's per-wallet mint limit was reached: mints wait until `until` (the server's message in `reason`). */
+  mintPause: { until: number; reason: string } | null = null;
 
   private mintBusy = false;
   private sellBusy = false;
   private repairBusy = false;
   private repairsDone = false;
+  private trustBusy = false;
+  private trustDone = false;
   private airdropTried = false;
   private wakeTimer = 0;
   private pollTimer = 0;
@@ -282,6 +295,15 @@ export class NftQueue {
     this.mintBusy = true;
     try {
       while (!this.stopped && nextToMint(this.bank, Date.now())) {
+        if (this.mintPause) {
+          const wait = this.mintPause.until - Date.now();
+          if (wait > 0) {
+            this.schedulePoll(wait);
+            return;
+          }
+          this.mintPause = null;
+          this.hooks.changed();
+        }
         if (!(await this.ensureFunds(MIN_MINT_SOL))) return;
         // Pick after the await: the player may have sold or cancelled in the meantime.
         const f = nextToMint(this.bank, Date.now());
@@ -300,9 +322,19 @@ export class NftQueue {
           });
           f.metaFixed = true; // minted with a URI on our host and its number; saved by apply
           f.nameFixed = true;
+          if (res.collection) f.trusted = true; // co-signed into the market's collection
+
           this.apply(f, { type: 'minted', assetId: res.asset, tx: res.signature });
         } catch (e) {
           const msg = errorText(e);
+          const limit = limitOf(e);
+          if (limit) {
+            // The market's per-wallet mint limit: not the fish's fault. Wait until it opens again.
+            this.apply(f, { type: 'paused' });
+            this.mintPause = { until: Date.now() + limit, reason: msg };
+            this.schedulePoll(limit);
+            return;
+          }
           console.error('mint failed', e);
           // A real shortfall pauses the queue without costing the fish an attempt. If the wallet looks
           // funded after all, count it as a failure so a misread error cannot loop.
@@ -318,8 +350,57 @@ export class NftQueue {
       this.mintBusy = false;
       // Fish minted for a sale go to the market together, in one batch, once the minting stops.
       void this.runSells();
-      void this.runRepairs();
+      void this.runRepairs().then(() => this.runTrustSync());
     }
+  }
+
+  /**
+   * Once per page load, after repairs: make sure every minted fish is one the market will buy.
+   * Fish minted before the market's collection are moved into it (the market co-signs, the game
+   * wallet pays a fee); fish this device can't move are marked not sellable, with the reason.
+   */
+  private async runTrustSync() {
+    if (this.stopped || this.trustBusy || this.trustDone || this.mintBusy || this.repairBusy || !walletState().connected) return;
+    const todo = this.bank.filter((f) => f.nft === 'minted' && f.assetId && !f.trusted && !f.legacy && !f.sellQueued && !this.selling.has(f));
+    if (!todo.length) return;
+    this.trustBusy = true;
+    this.trustDone = true;
+    try {
+      const c = await this.loadChain();
+      for (let i = 0; i < todo.length && !this.stopped; i += TRUST_CHUNK) {
+        const part = todo.slice(i, i + TRUST_CHUNK);
+        const res = await c.makeFishSellable(part.map((f) => f.assetId!));
+        if (this.stopped) break;
+        if (this.applyTrust(part, res).retry) this.trustDone = false; // e.g. offline or a limit: the next page load tries again
+      }
+    } catch (e) {
+      console.warn('collection check skipped', e);
+      this.trustDone = false;
+    } finally {
+      this.trustBusy = false;
+    }
+  }
+
+  /** Record what the market check said about each fish. Returns the ones that may be sold now. */
+  private applyTrust(fish: BankedFish[], res: Map<string, FishTrust>): { ready: BankedFish[]; retry: boolean } {
+    const ready: BankedFish[] = [];
+    let retry = false;
+    for (const f of fish) {
+      const t = res.get(f.assetId!);
+      if (t?.state === 'trusted' || t?.state === 'unchecked') {
+        if (t.state === 'trusted') f.trusted = true;
+        delete f.sellBlock;
+        ready.push(f);
+      } else if (t?.state === 'blocked') {
+        f.sellBlock = t.reason;
+        if (f.sellQueued) this.apply(f, { type: 'cancel-sell' });
+      } else {
+        retry = true;
+      }
+    }
+    this.save();
+    this.hooks.changed();
+    return { ready, retry };
   }
 
   /**
@@ -414,8 +495,25 @@ export class NftQueue {
     let declined = 0;
     try {
       const pearl = await this.loadPearl();
+      // The market buys only fish in its collection: fish minted before it are moved in first
+      // (fish-cosign.ts); a fish that can't be (minted on another device, …) stays, with the reason.
+      let list = batch;
+      const unchecked = batch.filter((f) => !f.trusted);
+      if (unchecked.length) {
+        const c = await this.loadChain();
+        const res = await c.makeFishSellable(unchecked.map((f) => f.assetId!));
+        const { ready } = this.applyTrust(unchecked, res);
+        for (const f of unchecked) {
+          if (ready.includes(f)) continue;
+          const t = res.get(f.assetId!);
+          this.sellErrors.set(f, (t && 'reason' in t ? t.reason : 'Could not check this fish with the market').slice(0, 200));
+          this.apply(f, { type: 'cancel-sell' });
+        }
+        list = batch.filter((f) => f.trusted || ready.includes(f));
+        if (!list.length) return true;
+      }
       const outcomes = await pearl.sellManyToMarket(
-        batch.map((f) => f.assetId!),
+        list.map((f) => f.assetId!),
         (p) => {
           this.batch = { ...p, fish: batch.length };
           for (const f of batch) this.selling.set(f, p.step);
@@ -424,7 +522,7 @@ export class NftQueue {
       );
       const sold: { fish: BankedFish; result: SellResult }[] = [];
       outcomes.forEach((o, i) => {
-        const f = batch[i];
+        const f = list[i];
         if (o.result) {
           const at = this.bank.indexOf(f);
           if (at >= 0) this.bank.splice(at, 1);
@@ -433,6 +531,7 @@ export class NftQueue {
         }
         if (o.rejected) declined++;
         else this.sellErrors.set(f, (o.error ?? 'Sale failed').slice(0, 200));
+        if (o.error && /not in the Breathless Fish collection/.test(o.error)) delete f.trusted; // check it again
         this.apply(f, { type: 'cancel-sell' });
       });
       this.save();
