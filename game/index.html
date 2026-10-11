@@ -79,6 +79,8 @@
         <div class="title-hint">Grab the fish · click <b>START</b> or press Enter</div>
         <div class="title-hint">点击船只升级 · Click the boat to upgrade</div>
       </div>
+      <!-- Over the title and the workbench (which sits under this layer): who is logged in, and Log out. -->
+      <div id="wallet-chip" class="wallet-row wallet-chip hidden"></div>
     </div>
 
     <div id="workbench" class="hidden">
@@ -173,6 +175,7 @@
             <button id="pause-settings">Settings</button>
             <button id="pause-menu">Main menu</button>
           </div>
+          <div id="pause-wallet" class="wallet-row wallet-pause hidden"></div>
           <p class="small muted">Esc to resume</p>
         </div>
 
@@ -240,6 +243,7 @@
           <div id="wallet" class="small"></div>
           <div id="market-bar" class="small"></div>
         </div>
+        <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
         <button id="collection-close">Close (C)</button>
       </div>
       <div id="collection-grid"></div>
