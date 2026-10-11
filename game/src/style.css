@@ -1882,6 +1882,9 @@ button:disabled {
 
 #collection-grid .err {
   color: var(--danger);
+  /* Addresses and signatures have no break points: let them break anywhere, inside the card. */
+  overflow-wrap: anywhere;
+  min-width: 0;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -1897,6 +1900,19 @@ button:disabled {
 
 #collection-grid .explorer:hover,
 #collection .wallet-explorer:hover {
+  text-decoration: underline;
+}
+
+#collection .wallet-orb {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+#collection .wallet-orb:hover,
+#collection .wallet-orb:focus-visible {
   text-decoration: underline;
 }
 
