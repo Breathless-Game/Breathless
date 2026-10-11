@@ -1153,8 +1153,10 @@ function startFish() {
   if (aboard) aboardToTitle();
   else if (workbench.visible) {
     if (workbench.atRest) workbench.escape(); // pans back up to the title
-  } else if (settingsDesk.visible) settingsDesk.escape();
-  else openWorkbench();
+  } else if (settingsDesk.visible) {
+    deskFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
+    settingsDesk.escape();
+  } else openWorkbench();
 }
 
 /**
@@ -1294,12 +1296,29 @@ const BENCH_CAMERA_DROP = 1.4;
 let benchPan = 0;
 let aquariumPan = 0; // the aquarium pans the same way
 
+// The workbench and the settings desk each report their own pan. Switching from
+// one to the other, one sinks while the other rises: the camera, the title's rope
+// and the START fish follow whichever is further in.
+const tablePan = { bench: 0, desk: 0 };
+const tableY = { bench: 0, desk: 0 };
+let deskFromBench = false; // the settings desk was opened from the workbench, and goes back to it
+
+function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
+  tablePan[which] = u;
+  tableY[which] = y;
+  const bench = workbench.visible ? tablePan.bench : 0;
+  const desk = settingsDesk.visible ? tablePan.desk : 0;
+  const top = bench >= desk ? 'bench' : 'desk';
+  // Mid-swap (both tables up) the rope and the sea stay where they are: only the tables move.
+  benchPan = workbench.visible && settingsDesk.visible ? 1 : Math.max(bench, desk);
+  titleScreen.setPan(benchPan, tableY[top]);
+  labelStartFish(benchPan);
+}
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
-    benchPan = u;
-    titleScreen.setPan(u, tableY);
-    labelStartFish(u);
+    setTablePan('bench', u, tableY);
     // Leaving the boat, the fish rise away off the top while the table sinks.
     if (leavingBoat) titleScreen.setLift(1 - u);
   },
@@ -1356,6 +1375,7 @@ function showTitle(intro: boolean) {
   loginGate.hide();
   workbench.hide();
   settingsDesk.hide();
+  deskFromBench = false;
   benchPan = 0;
   titleScreen.setPan(0);
   labelStartFish(0);
@@ -1382,16 +1402,32 @@ const settingsDesk = new SettingsDesk({
   connectWallet: () => loginGate.show(),
   logOut: () => void logOut(),
   pan(u, tableY) {
-    benchPan = u;
-    titleScreen.setPan(u, tableY);
-    labelStartFish(u);
+    setTablePan('desk', u, tableY);
+  },
+  view(move, yaw, pitch) {
+    deskView.move.copy(move);
+    deskView.yaw = yaw;
+    deskView.pitch = pitch;
+  },
+  leaving() {
+    // Opened from the workbench: that table comes back up as this one sinks.
+    if (!deskFromBench) return;
+    deskFromBench = false;
+    workbench.show(false, true);
   },
 });
 // The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
 titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
+/** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
-  if (!workbench.visible && !settingsDesk.visible && !loginGate.visible) settingsDesk.show();
+  if (settingsDesk.visible || loginGate.visible) return;
+  if (workbench.visible) {
+    if (!workbench.atRest) return;
+    deskFromBench = true;
+    workbench.leave(); // the workbench sinks while the settings desk rises
+  }
+  settingsDesk.show();
 }
 
 function openWorkbench() {
@@ -1502,6 +1538,11 @@ document.addEventListener('visibilitychange', () => {
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
+const camLook = new THREE.Vector3();
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+// How far the settings desk's camera has moved and turned to lean in over a plaque (settings-desk.ts).
+const deskView = { move: new THREE.Vector3(), yaw: 0, pitch: 0 };
 const timeLabel = document.getElementById('time-of-day')!;
 let displayedMinute = -1;
 let displayedWeather = '';
@@ -1613,8 +1654,15 @@ function update(dt: number, time: number) {
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
   cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
   camera.position.sub(shakeOffset);
+  // The settings desk's camera leans in over a plaque: the sea camera moves and turns
+  // with it, so it reads as the camera moving rather than the table sliding over a
+  // still view. (The sea is in metres, the desk in table units: near enough the same.)
+  const leaning = settingsDesk.visible;
+  if (leaning) camTarget.add(deskView.move);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
-  camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+  const look = camLook.set(0, -1.6, -camera.position.z);
+  if (leaning) look.applyAxisAngle(AXIS_X, deskView.pitch).applyAxisAngle(AXIS_Y, -deskView.yaw);
+  camera.lookAt(look.add(camera.position));
 
   // World events, after World.update (the lightning flash tints what it wrote).
   // Only during a dive: leaving or starting one clears them and restarts the clock.
