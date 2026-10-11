@@ -205,3 +205,34 @@ export function addBankedValue(lifetime: number, added: number): number {
 export function isFundsError(message: string): boolean {
   return /insufficient|0x1\b|debit an account|not enough (balance|funds|sol)/i.test(message);
 }
+
+/**
+ * Split /sell-batch sales into requests the market accepts: at most `maxFish` fish and at most
+ * `maxTxs` different transfer transactions each (sensor/market-rules.mjs MAX_BATCH, MAX_BATCH_TXS).
+ * Fish moved by the same transfer stay together and keep their order; a resumed sale can mix many
+ * older transfers, which then simply take more requests.
+ */
+export function sellBatches<T extends { transferTx: string }>(sales: T[], maxFish: number, maxTxs: number): T[][] {
+  const byTx = new Map<string, T[]>();
+  for (const s of sales) {
+    const group = byTx.get(s.transferTx);
+    if (group) group.push(s);
+    else byTx.set(s.transferTx, [s]);
+  }
+  const out: T[][] = [];
+  let batch: T[] = [];
+  let txs = new Set<string>();
+  for (const [tx, group] of byTx) {
+    for (const s of group) {
+      if (batch.length >= maxFish || (!txs.has(tx) && txs.size >= maxTxs)) {
+        out.push(batch);
+        batch = [];
+        txs = new Set();
+      }
+      batch.push(s);
+      txs.add(tx);
+    }
+  }
+  if (batch.length) out.push(batch);
+  return out;
+}
