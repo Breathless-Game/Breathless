@@ -13,7 +13,13 @@ import { TitleScreen } from './title';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
-import { HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
+import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
+import {
+  advanceWorldBounds,
+  cameraTargetXToBounds,
+  clampWorldXToBounds,
+  createWorldBounds,
+} from './bounds';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
@@ -35,7 +41,8 @@ const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
 const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
-const FISH_PER_ZONE = [16, 16, 12];
+// Keep encounter density stable as the playable width doubles.
+const FISH_PER_ZONE = [32, 32, 24];
 // Every map's seabed is a shelf; under the boat a trench drops away with no
 // bottom. The map only sets how deep the shelf is (world.seabedY).
 const DEPTH_LIMIT = Infinity;
@@ -58,6 +65,9 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const mapProgress = loadMapProgress();
 if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
 const world = new World(renderQuality.settings, MAPS[mapProgress.selected]);
+// The generated terrain supports the full ±200 m safety corridor. Edges open
+// only when the diver is moving toward them, then ease back toward ±140 m.
+const worldBounds = createWorldBounds(HALF_WIDTH, MAX_HALF_WIDTH);
 const scene = world.scene;
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
 camera.position.set(0, 1.5, 24);
@@ -72,7 +82,9 @@ window.addEventListener('resize', resize);
 resize();
 
 const diver = new Diver(scene);
+diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
+diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -112,6 +124,16 @@ function syncEventDetail() {
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
+let fishCoverageLeft = worldBounds.left;
+let fishCoverageRight = worldBounds.right;
+const FISH_EDGE_BAND = 8;
+
+function resetWorldBounds() {
+  worldBounds.left = -worldBounds.baseHalfWidth;
+  worldBounds.right = worldBounds.baseHalfWidth;
+  fishCoverageLeft = worldBounds.left;
+  fishCoverageRight = worldBounds.right;
+}
 
 function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
@@ -125,8 +147,10 @@ function rollFor(depth: number): FishSpec {
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
 }
 
-function addFish(band: Band, depth: number, halfWidth: number) {
-  const fish = new Fish(rollFor(depth), band, THREE.MathUtils.randFloat(-halfWidth, halfWidth), -depth, halfWidth);
+function addFish(band: Band, depth: number, halfWidth: number, minX = -halfWidth, maxX = halfWidth) {
+  const left = Math.min(minX, maxX);
+  const right = Math.max(minX, maxX);
+  const fish = new Fish(rollFor(depth), band, THREE.MathUtils.randFloat(left, right), -depth, halfWidth);
   fishes.push(fish);
   scene.add(fish.mesh.group);
   world.colorGrade.apply(fish.mesh.group);
@@ -141,8 +165,10 @@ function removeFish(fish: Fish) {
   disposeTree(fish.mesh.group);
 }
 
-function spawnFish(band: Band) {
-  addFish(band, THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5), HALF_WIDTH);
+function spawnFish(band: Band, minX = worldBounds.left, maxX = worldBounds.right) {
+  const depth = THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5);
+  const fish = addFish(band, depth, worldBounds.maxHalfWidth, minX, maxX);
+  fish.setWorldBounds(worldBounds.left, worldBounds.right);
 }
 
 // Trench fish live in a window around the diver's depth. New ones appear
@@ -229,10 +255,28 @@ function tendTrench(diverDepth: number) {
 function populate() {
   for (const f of [...fishes]) removeFish(f);
   fishes.length = 0;
+  fishCoverageLeft = worldBounds.left;
+  fishCoverageRight = worldBounds.right;
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
   });
   for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
+}
+
+/** Keep encounter density continuous when a newly opened edge becomes reachable. */
+function extendFishCoverage() {
+  if (worldBounds.right - fishCoverageRight >= FISH_EDGE_BAND) {
+    const start = fishCoverageRight;
+    const end = worldBounds.right;
+    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    fishCoverageRight = end;
+  }
+  if (fishCoverageLeft - worldBounds.left >= FISH_EDGE_BAND) {
+    const start = worldBounds.left;
+    const end = fishCoverageLeft;
+    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    fishCoverageLeft = start;
+  }
 }
 populate();
 
@@ -489,6 +533,7 @@ function showMapOnHud() {
 /** Put the world on a map: scenery, its fish and trench school, and the HUD's zones and shelf. */
 function applyMap(id: MapId) {
   if (id === world.map.id) return;
+  resetWorldBounds();
   world.setMap(MAPS[id]);
   // The event pool follows the map, whether the picker or a restored wallet chose it.
   events.setMap(world.map);
@@ -552,6 +597,7 @@ function markCalib(phase: string) {
 function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity);
   phase = 'play';
+  resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
   workbench.hide();
@@ -671,6 +717,7 @@ function goToMenu() {
   lastHolding = false;
   diver.pos.set(0, -0.4, 0);
   diver.vel.set(0, 0, 0);
+  resetWorldBounds();
   paused = false;
   phase = 'menu';
   pauseMenu.close();
@@ -690,6 +737,7 @@ function goToMenu() {
 
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
+  diver.setQuality(renderQuality.settings);
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
@@ -927,7 +975,12 @@ function update(dt: number, time: number) {
   // pressing down on the shelf would pull the diver sideways into the trench.
   const wall = diver.pos.y < shelfY ? TRENCH_X : HALF_WIDTH;
   diver.pos.addScaledVector(diver.vel, dt);
-  diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -wall, wall);
+  advanceWorldBounds(worldBounds, diver.pos.x, diver.vel.x, dt);
+  extendFishCoverage();
+  // Inside the trench its walls hold the diver; over the shelf the map edges do.
+  diver.pos.x = wall === TRENCH_X
+    ? THREE.MathUtils.clamp(diver.pos.x, -TRENCH_X, TRENCH_X)
+    : clampWorldXToBounds(diver.pos.x, worldBounds);
   const floor = Math.abs(diver.pos.x) > TRENCH_X ? shelfY : -DEPTH_LIMIT;
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
 
@@ -951,6 +1004,8 @@ function update(dt: number, time: number) {
     scatterFresh = false;
   }
   for (const f of fishes) {
+    // The trench school keeps to the trench; only shelf fish follow the opening map edges.
+    if (!trenchFish.has(f)) f.setWorldBounds(worldBounds.left, worldBounds.right);
     const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
     // A threat just behind each nearby fish, on the diver's side: it darts away.
     f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
@@ -1012,7 +1067,7 @@ function cameraTarget(out: THREE.Vector3, drop: number) {
   const shelfY = world.seabedY + 1.2; // as in update(): lowest the diver can go outside the trench
   const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
   const camFloor = inTrench ? -Infinity : world.seabedY + 9;
-  return out.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - drop, 22);
+  return out.set(cameraTargetXToBounds(diver.pos.x, diver.vel.x, worldBounds), Math.max(camY, camFloor) - drop, 22);
 }
 
 /** Puts the camera exactly where a dive starts (no workbench drop, no easing). */
@@ -1054,6 +1109,7 @@ let time = 0;
 function frame() {
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+    diver.setQuality(renderQuality.settings);
     world.setQuality(renderQuality.settings);
     syncEventDetail();
     resize();
