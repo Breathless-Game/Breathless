@@ -1,5 +1,6 @@
 import { ZONES, fishValue, type FishSpec, type Zone } from './fish';
 import { storageKey } from './wallet';
+import type { Climate } from './weather';
 
 // The three waters from the design doc (design/game-design-document.md, section 6).
 // A map is pure data: how deep its shelf goes (which shallow zones it has),
@@ -29,6 +30,13 @@ export interface MapDef {
   surface: string;
   /** Wave height relative to the open ocean. */
   waves: number;
+  /** How the natural weather runs here. */
+  climate: Climate;
+  /**
+   * How much higher a full storm piles the swell, as a share of its height (0: storms
+   * only bring wind and rain). Above 0, rogue waves can capsize the boat (see storm.ts).
+   */
+  stormSwell: number;
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
   sand: string;
@@ -55,6 +63,8 @@ export const MAPS: Record<MapId, MapDef> = {
     haze: [50, 240],
     surface: '#a5e6ea',
     waves: 0.5,
+    climate: 'temperate',
+    stormSwell: 0,
     water: [
       [0, '#5fc9c4'],
       [8, '#2c8f9c'],
@@ -82,6 +92,8 @@ export const MAPS: Record<MapId, MapDef> = {
     haze: [30, 190],
     surface: '#93dfc6',
     waves: 0.3,
+    climate: 'temperate',
+    stormSwell: 0,
     water: [
       [0, '#4fbf9f'],
       [10, '#23876f'],
@@ -109,6 +121,8 @@ export const MAPS: Record<MapId, MapDef> = {
     haze: [40, 200],
     surface: '#8fe3f2',
     waves: 1,
+    climate: 'stormy',
+    stormSwell: 1,
     water: [
       [0, '#46c1d6'],
       [12, '#1f86a8'],

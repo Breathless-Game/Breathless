@@ -66,4 +66,3 @@ export function sonarLengthMeters(level: SonarLengthLevel): number {
   // Keep the display in lockstep with DeepSonar's purchased tiers.
   return [10, 17, 26][level - 1];
 }
-

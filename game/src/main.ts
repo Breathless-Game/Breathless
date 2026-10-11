@@ -32,6 +32,8 @@ import { NftQueue } from './nft-queue';
 import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
+import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
+import { StormFx } from './storm-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
@@ -336,6 +338,64 @@ let sonarGuiding = false;
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
+// ---- Rough seas ---------------------------------------------------------
+// On a map with storm swell (the Open Ocean), a storm sends rogue waves at the boat (storm.ts).
+const stormSea = new RogueWaves();
+const stormFx = new StormFx(scene);
+world.colorGrade.apply(stormFx.group);
+const seaSurface = (x: number, z: number) => world.surfaceAt(x, z);
+const GEAR_SLOTS: readonly EquipmentSlot[] = ['net', 'rod', 'reel', 'fins', 'tank', 'lamp'];
+let stormShake = 0;
+let capsizeHintAt = 0;
+
+/** The boat goes over: part of the catch and one piece of packed gear are lost, and nothing can be banked until it is righted. */
+function capsize() {
+  const packed = (activeLoadout ?? GEAR_SLOTS).filter((slot): slot is EquipmentSlot => GEAR_SLOTS.includes(slot as EquipmentSlot));
+  const loss = capsizeLoss(net.length, packed);
+  const spilled = loss.fish.map((i) => net.splice(i, 1)[0]);
+  // The wave breaks over the boat: spray, the deck cargo and the lost fish go into the sea.
+  stormFx.capsize(0, stormSea.dir, spilled, seaSurface);
+  if (loss.gear) {
+    // Gone for the rest of this dive: that slot works at its basic level, as if never packed.
+    activeLoadout = (activeLoadout ?? GEAR_SLOTS).filter((slot) => slot !== loss.gear);
+    if (activeTool === loss.gear) {
+      activeTool = 'net';
+      loadoutWheel.setActive(activeTool);
+    }
+    hud.setActiveGear(activeTool, true);
+    applyEquipmentVisuals();
+  }
+  hud.setNet(net, currentStats().netCapacity);
+  const lost = [
+    loss.fish.length ? `${loss.fish.length} fish` : '',
+    loss.gear ? `your ${nextSlotLabel(loss.gear).toLowerCase()}` : '',
+  ].filter(Boolean).join(' and ');
+  hud.message(lost ? `CAPSIZED · lost ${lost}` : 'CAPSIZED', 3200);
+  hud.setAlert('Boat capsized · swim to it and right it', 'F');
+  stormShake = 0.7;
+  capsizeHintAt = time + 5;
+}
+
+/** F: heave the boat back over, from the surface beside it. */
+function rightBoat() {
+  if (!stormSea.capsized) return;
+  if (!canRight(diver.pos.x - stormSea.boatX, -diver.pos.y)) {
+    hud.message('Surface beside the boat to right it', 1600);
+    return;
+  }
+  if (stormSea.right()) hud.message('Heave! Righting the boat…', ROGUE.rightSeconds * 1000);
+}
+
+/** Calm water and an upright boat: a new dive, or back on the menu. */
+function calmSea() {
+  stormSea.reset();
+  stormFx.clear();
+  stormShake = 0;
+  world.boatPose = null;
+  world.setRogueWave(null, 1, 0);
+  hud.setAlert(null);
+}
+
 function loadBank(): BankedFish[] {
   try {
     // Fish banked under the old rule were paid on surfacing: migrateBank marks them legacy.
@@ -524,6 +584,8 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'k') {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
+  } else if (e.key.toLowerCase() === 'f') {
+    rightBoat();
   }
 });
 
@@ -755,6 +817,7 @@ function markCalib(phase: string) {
 
 function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
+  calmSea();
   phase = 'play';
   resetWorldBounds();
   overlay.classList.add('hidden');
@@ -870,6 +933,7 @@ function onEscape() {
 function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
+  calmSea();
   net = [];
   activeLoadout = null;
   loadout = [];
@@ -1173,12 +1237,39 @@ function update(dt: number, time: number) {
       hud.message(net.length ? 'Made it!' : 'Phew.', 900);
     }
     if (phase === 'play') {
-      health.end(nowMs, net.length ? 'banked' : 'surfaced', net.length);
-      bankNet();
+      if (stormSea.capsized) {
+        // Nowhere to land the catch while the boat is keel up: it stays in the net.
+        health.end(nowMs, 'surfaced', 0);
+        if (net.length && time > capsizeHintAt) {
+          hud.message('The boat is capsized: right it to bank your catch', 2000);
+          capsizeHintAt = time + 8;
+        }
+      } else {
+        health.end(nowMs, net.length ? 'banked' : 'surfaced', net.length);
+        bankNet();
+      }
     }
   }
 
+  // Rough seas: only during a dive, and only where a storm piles up the swell.
+  const stormEvent = stormSea.tick(dt, world.weather.state.storm, phase === 'play' && world.map.stormSwell > 0);
+  world.setRogueWave(stormSea.x, stormSea.dir, stormSea.height);
+  world.boatPose = stormSea.capsized ? stormSea.pose : null;
+  stormFx.update(dt, time, stormSea.x, stormSea.dir, stormSea.height, seaSurface);
+  if (stormEvent === 'wave') hud.message('A rogue wave is bearing down on the boat!', 2600);
+  else if (stormEvent === 'capsize') capsize();
+  else if (stormEvent === 'righted') {
+    hud.setAlert(null);
+    hud.message('Boat righted', 1600);
+  }
+  // The sea shudders as the wave closes in, and jolts when it hits.
+  if (stormSea.x !== null && !stormSea.capsized) stormShake = Math.max(stormShake, 0.12 * (stormSea.height / ROGUE.height) * Math.exp(-Math.abs(stormSea.x - diver.pos.x) / 25));
+  stormShake = Math.max(0, stormShake - dt * 0.55);
+
   diver.update(dt, time, -diver.pos.y);
+  // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
+  // depth, air and banking still count from the mean waterline).
+  diver.group.position.y += world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6));
   sonar.update(time, dt);
   if (!sonarCarried && sonar.mode === 'anchored' && !sonarGuiding && sonar.group.visible) {
     sonarGuiding = true;
@@ -1233,7 +1324,7 @@ function update(dt: number, time: number) {
   // The storm's own sheet lightning holds off while an event bolt strikes.
   world.quietWeatherLightning = events.activeId === 'lightning';
   // A subtle shake (a few cm) on top of the follow, taken off again next frame.
-  const shake = events.shake;
+  const shake = events.shake + stormShake;
   shakeOffset.set(shake * Math.sin(time * 47.3) * Math.cos(time * 13.1), shake * Math.sin(time * 53.7 + 1.3) * Math.cos(time * 9.7), 0);
   camera.position.add(shakeOffset);
 
@@ -1250,7 +1341,8 @@ function update(dt: number, time: number) {
  * sinks it (the workbench pan).
  */
 function cameraTarget(out: THREE.Vector3, drop: number) {
-  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
+  // At the surface it rides above the swell, higher in a storm on the open ocean.
+  const camY = diver.pos.y > -2.5 ? 2.2 + world.surfaceLift : Math.min(diver.pos.y + 1.2, -1.2);
   // Over the shelf the camera stays above the seabed; in the trench it follows you down.
   const shelfY = world.seabedY + 1.2; // as in update(): lowest the diver can go outside the trench
   const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
@@ -1339,6 +1431,7 @@ Object.assign(window, {
   fishes,
   keys,
   renderQuality,
+  stormSea,
   nftQueue,
   /** The deep sonar mesh; deploySonar() is what V does during a dive with the sonar packed. */
   sonar,
