@@ -1,26 +1,95 @@
-import { ROD_TIERS, nextRodTier, rodTier, totalPearls, type EquipmentState } from './equipment';
+import {
+  activePath,
+  EQUIPMENT_TIERS,
+  EQUIPMENT_PATHS,
+  deriveStats,
+  equipmentPath,
+  nextSlotTier,
+  pathTier,
+  slotTier,
+  totalPearls,
+  upgradeSlot,
+  type EquipmentSlot,
+  type EquipmentPathId,
+  type EquipmentState,
+} from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-/** The small workshop UI for the diver's fishing-net/rod upgrades. */
+interface SlotUi {
+  slot: EquipmentSlot;
+  title: string;
+  icon: string;
+  tradeoff: string;
+}
+
+const SLOT_UI: readonly SlotUi[] = [
+  { slot: 'net', title: '网片 / 网圈', icon: '◌', tradeoff: '容量和收网判定距离提升；不改变憋气时间。' },
+  { slot: 'rod', title: '伸缩碳纤杆身', icon: '╱', tradeoff: '射程增加，远距离收网更依赖瞄准。' },
+  { slot: 'reel', title: '高速回收线轮', icon: '◎', tradeoff: '挥网恢复更快；不会提高鱼的稀有度。' },
+  { slot: 'fins', title: '流线脚蹼', icon: '≋', tradeoff: '游速和加速度提升；紧急上浮速度不变。' },
+  { slot: 'tank', title: '应急气瓶', icon: '▣', tradeoff: '只延长水下换气后的紧急返航窗口。' },
+  { slot: 'lamp', title: '探照灯', icon: '✦', tradeoff: '照明距离和亮度提升；光束角度随等级变化。' },
+];
+
+function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot): string {
+  switch (slot) {
+    case 'net': return `${stats.netCapacity} 条容量 · ${stats.catchRadius.toFixed(1)} m 捕捞范围`;
+    case 'rod': return `${stats.rodRange.toFixed(1)} m 杆身射程`;
+    case 'reel': return `恢复倍率 ${Math.round(stats.reelRecovery * 100)}%`;
+    case 'fins': return `${stats.swimSpeed.toFixed(1)} m/s 游速 · ${stats.swimAcceleration.toFixed(1)} 加速度`;
+    case 'tank': return `${stats.emergencySeconds.toFixed(1)} s 紧急返航窗口`;
+    case 'lamp': return `${stats.lampDistance.toFixed(0)} m 光距 · ${Math.round(stats.lampAngle * 57.3)}° 光束`;
+  }
+}
+
+function statCompare(before: ReturnType<typeof deriveStats>, after: ReturnType<typeof deriveStats>, slot: EquipmentSlot): string {
+  switch (slot) {
+    case 'net': return `容量 ${before.netCapacity} → ${after.netCapacity} · 范围 ${before.catchRadius.toFixed(1)} → ${after.catchRadius.toFixed(1)} m`;
+    case 'rod': return `射程 ${before.rodRange.toFixed(1)} → ${after.rodRange.toFixed(1)} m`;
+    case 'reel': return `回收效率 ${Math.round(before.reelRecovery * 100)}% → ${Math.round(after.reelRecovery * 100)}%`;
+    case 'fins': return `游速 ${before.swimSpeed.toFixed(1)} → ${after.swimSpeed.toFixed(1)} m/s`;
+    case 'tank': return `返航窗口 ${before.emergencySeconds.toFixed(1)} → ${after.emergencySeconds.toFixed(1)} s`;
+    case 'lamp': return `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 角度 ${Math.round(before.lampAngle * 57.3)} → ${Math.round(after.lampAngle * 57.3)}°`;
+  }
+}
+
+/** Multi-slot workshop for the diver's catching tool and personal equipment. */
 export class GearPanel {
   private panel = $('gear-panel');
   private level = $('gear-level');
   private effect = $('gear-effect');
   private pearls = $('gear-pearls');
+  private slots = $('gear-slots');
   private progress = $<HTMLProgressElement>('gear-progress');
   private progressLabel = $('gear-progress-label');
   private next = $('gear-next');
+  private compare = $('gear-compare');
   private upgrade = $<HTMLButtonElement>('gear-upgrade');
   private notice = $('gear-notice');
-  private onUpgrade: () => void;
-  private state: EquipmentState | null = null;
+  private icon = $('gear-icon');
+  private onUpgrade: (slot: EquipmentSlot) => void;
+  private onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void;
+  private selectedSlot: EquipmentSlot = 'net';
+  private lastState: EquipmentState | null = null;
   private busy = false;
 
-  constructor(onUpgrade: () => void) {
+  constructor(onUpgrade: (slot: EquipmentSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
     this.onUpgrade = onUpgrade;
+    this.onPathChange = onPathChange;
     $('gear-close').addEventListener('click', () => this.toggle(false));
-    this.upgrade.addEventListener('click', () => this.onUpgrade());
+    this.upgrade.addEventListener('click', () => this.onUpgrade(this.selectedSlot));
+    window.addEventListener('keydown', (event) => {
+      if (!this.open || event.defaultPrevented) return;
+      const columns = window.matchMedia('(max-width: 640px)').matches ? 1 : 2;
+      const delta = event.key === 'ArrowLeft' ? -1
+        : event.key === 'ArrowRight' ? 1
+          : event.key === 'ArrowUp' ? -columns
+            : event.key === 'ArrowDown' ? columns : 0;
+      if (!delta) return;
+      event.preventDefault();
+      this.selectSlot(this.offsetSlot(delta));
+    });
   }
 
   get open() {
@@ -29,6 +98,7 @@ export class GearPanel {
 
   toggle(show = !this.open) {
     this.panel.classList.toggle('hidden', !show);
+    if (show) this.focusSelected();
   }
 
   showNotice(message: string) {
@@ -40,36 +110,176 @@ export class GearPanel {
   /** While an upgrade's on-chain PEARL spend is in flight. */
   setBusy(busy: boolean) {
     this.busy = busy;
-    if (this.state) this.render(this.state);
+    if (this.lastState) this.render(this.lastState);
   }
 
   render(state: EquipmentState) {
-    this.state = state;
-    const tier = rodTier(state);
-    const nextTier = nextRodTier(state);
-    const pearls = totalPearls(state);
-    this.level.textContent = `LEVEL ${tier.level} · ${tier.name}`;
-    this.effect.textContent = `${tier.capacity} fish capacity · ${tier.catchRadius.toFixed(1)} m catch radius`;
-    this.pearls.textContent = `${pearls} Pearls${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''}`;
+    this.lastState = state;
+    this.renderSlots(state);
+    this.renderDetail(state);
+  }
 
-    if (!nextTier) {
+  private renderDetail(state: EquipmentState) {
+    const ui = SLOT_UI.find((item) => item.slot === this.selectedSlot) ?? SLOT_UI[0];
+    const current = slotTier(state, ui.slot);
+    const next = nextSlotTier(state, ui.slot);
+    const stats = deriveStats(state);
+    const pearls = totalPearls(state);
+    this.icon.textContent = ui.icon;
+    this.level.textContent = `${ui.title} · Lv${current.level} · ${current.name}`;
+    this.effect.textContent = statSummary(stats, ui.slot);
+    this.pearls.textContent = `${pearls} Pearls${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · 选择模块后再打包下潜`;
+
+    if (!next) {
       this.progress.max = 1;
       this.progress.value = 1;
       this.progressLabel.textContent = 'Fully upgraded';
-      this.next.textContent = 'The net is at its largest size.';
+      this.next.textContent = '已达最高等级 · 当前模块效果已完全解锁';
+      this.compare.textContent = '当前属性已达到该配件上限';
       this.upgrade.textContent = 'MAX LEVEL';
       this.upgrade.disabled = true;
       return;
     }
 
-    const missing = Math.max(0, nextTier.cost - pearls);
-    this.progress.max = nextTier.cost;
-    this.progress.value = Math.min(nextTier.cost, pearls);
-    this.progressLabel.textContent = `${Math.min(nextTier.cost, pearls)} / ${nextTier.cost} Pearls`;
-    this.next.textContent = `Next: Lv${nextTier.level} · ${nextTier.capacity} capacity · ${nextTier.catchRadius.toFixed(1)} m radius`;
-    this.upgrade.textContent = this.busy ? 'Spending PEARL…' : missing ? `Need ${missing} more Pearls` : `Upgrade for ${nextTier.cost} Pearls`;
+    // Give a real preview even when the player cannot yet afford the tier.
+    const preview = upgradeSlot({ ...state, pearls: Math.max(state.pearls, next.cost) }, ui.slot);
+    const missing = Math.max(0, next.cost - pearls);
+    this.progress.max = next.cost;
+    this.progress.value = Math.min(next.cost, pearls);
+    this.progressLabel.textContent = `${Math.min(next.cost, pearls)} / ${next.cost} Pearls`;
+    this.next.textContent = `Lv${next.level} · ${next.name} · ${next.effect}`;
+    this.compare.textContent = preview
+      ? `升级预览：${statCompare(stats, deriveStats(preview), ui.slot)}`
+      : '升级预览暂不可用';
+    this.upgrade.textContent = this.busy ? 'Spending PEARL…' : missing ? `还差 ${missing} ◇` : `升级 ${next.cost} ◇`;
     this.upgrade.disabled = this.busy || missing > 0;
+  }
+
+  private offsetSlot(delta: number): EquipmentSlot {
+    const index = SLOT_UI.findIndex((item) => item.slot === this.selectedSlot);
+    return SLOT_UI[(index + delta + SLOT_UI.length) % SLOT_UI.length].slot;
+  }
+
+  private selectSlot(slot: EquipmentSlot) {
+    if (this.selectedSlot === slot && this.lastState) {
+      this.focusSelected();
+      return;
+    }
+    this.selectedSlot = slot;
+    if (this.lastState) {
+      this.renderSlots(this.lastState);
+      this.renderDetail(this.lastState);
+    }
+    this.focusSelected();
+  }
+
+  private focusSelected() {
+    window.setTimeout(() => {
+      this.slots.querySelector<HTMLElement>(`[data-slot="${this.selectedSlot}"]`)?.focus();
+    }, 0);
+  }
+
+  private renderSlots(state: EquipmentState) {
+    this.slots.innerHTML = '';
+    for (const ui of SLOT_UI) {
+      const current = slotTier(state, ui.slot);
+      const next = nextSlotTier(state, ui.slot);
+      const card = document.createElement('article');
+      card.className = 'gear-slot-card';
+      card.dataset.slot = ui.slot;
+      card.tabIndex = 0;
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-current', ui.slot === this.selectedSlot ? 'true' : 'false');
+      card.classList.toggle('selected', ui.slot === this.selectedSlot);
+      card.addEventListener('click', (event) => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        this.selectSlot(ui.slot);
+      });
+      card.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        this.selectSlot(ui.slot);
+      });
+
+      const head = document.createElement('div');
+      head.className = 'gear-slot-head';
+      const icon = document.createElement('span');
+      icon.className = 'gear-slot-icon';
+      icon.textContent = ui.icon;
+      const title = document.createElement('div');
+      title.className = 'gear-slot-title';
+      title.textContent = ui.title;
+      const level = document.createElement('span');
+      level.className = 'gear-slot-level';
+      level.textContent = `Lv${current.level}`;
+      title.appendChild(level);
+      head.append(icon, title);
+
+      const currentLine = document.createElement('div');
+      currentLine.className = 'gear-slot-current';
+      currentLine.textContent = `${current.name} · ${current.effect}`;
+      const tradeoff = document.createElement('div');
+      tradeoff.className = 'gear-slot-tradeoff';
+      tradeoff.textContent = ui.tradeoff;
+
+      const paths = document.createElement('div');
+      paths.className = 'gear-paths';
+      const pathLabel = document.createElement('span');
+      pathLabel.className = 'gear-path-label';
+      pathLabel.textContent = current.level >= 2 ? '分支模块' : 'Lv2 解锁分支模块';
+      paths.appendChild(pathLabel);
+      const selectedPath = activePath(state, ui.slot);
+      const selectedDef = equipmentPath(ui.slot, selectedPath);
+      const selectedTier = pathTier(state, ui.slot);
+      for (const path of EQUIPMENT_PATHS[ui.slot]) {
+        const pathButton = document.createElement('button');
+        pathButton.type = 'button';
+        pathButton.className = 'gear-path-button';
+        pathButton.textContent = path.nameZh;
+        pathButton.title = `${path.name}: ${path.summary}`;
+        const pathSelected = current.level >= 2 && path.id === selectedPath;
+        pathButton.setAttribute('aria-pressed', String(pathSelected));
+        pathButton.disabled = current.level < 2;
+        pathButton.classList.toggle('selected', pathSelected);
+        pathButton.addEventListener('click', () => {
+          this.selectSlot(ui.slot);
+          this.onPathChange(ui.slot, path.id);
+        });
+        paths.appendChild(pathButton);
+      }
+      const pathSummary = document.createElement('div');
+      pathSummary.className = 'gear-path-summary';
+      pathSummary.textContent = current.level >= 2
+        ? `${selectedDef.summary} · Lv${selectedTier.level}: ${selectedTier.effect}`
+        : '升级到 Lv2 后可选择专精路线';
+      paths.appendChild(pathSummary);
+      card.appendChild(paths);
+
+      const footer = document.createElement('div');
+      footer.className = 'gear-slot-footer';
+      const nextLine = document.createElement('div');
+      nextLine.className = 'gear-slot-next';
+      const button = document.createElement('button');
+      button.className = 'mini gear-slot-button';
+      if (!next) {
+        nextLine.textContent = '已达最高等级';
+        button.textContent = 'MAX';
+        button.disabled = true;
+      } else {
+        const missing = Math.max(0, next.cost - totalPearls(state));
+        nextLine.textContent = `下一级：${next.name} · ${next.effect}`;
+        button.textContent = this.busy ? 'Spending PEARL…' : missing ? `还差 ${missing} ◇` : `升级 · ${next.cost} ◇`;
+        button.disabled = this.busy || missing > 0;
+        button.addEventListener('click', () => {
+          this.selectSlot(ui.slot);
+          this.onUpgrade(ui.slot);
+        });
+      }
+      footer.append(nextLine, button);
+      card.append(head, currentLine, tradeoff, footer);
+      this.slots.appendChild(card);
+    }
   }
 }
 
-export { ROD_TIERS };
+export { EQUIPMENT_TIERS };

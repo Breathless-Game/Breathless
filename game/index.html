@@ -46,6 +46,12 @@
         <div id="net-slots"></div>
       </section>
 
+      <section id="active-gear" class="panel" aria-live="polite">
+        <div class="small muted">EQUIPPED · <span id="active-gear-number">1</span></div>
+        <strong id="active-gear-label">捕捞网</strong>
+        <div id="active-gear-hint" class="small">按 1 快速切换 · Tab 轮盘</div>
+      </section>
+
       <section id="bank" class="panel">
         <div class="small muted">BANKED</div>
         <div id="bank-count">0 fish</div>
@@ -56,7 +62,13 @@
       </section>
 
       <div id="toasts"></div>
-      <div id="help">← → ↑ ↓ swim · <b>Space</b> net · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
+      <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>Esc</b> menu</div>
+
+      <div id="loadout-wheel" class="loadout-wheel hidden" role="dialog" aria-label="Dive gear wheel" aria-hidden="true">
+        <div id="loadout-wheel-center" class="loadout-wheel-center"></div>
+        <div id="loadout-wheel-slots" class="loadout-wheel-slots"></div>
+        <div class="loadout-wheel-caption">松开 Tab 确认 · 方向键 / Q E 选择</div>
+      </div>
     </div>
 
     <div id="title-screen" class="hidden">
@@ -65,6 +77,7 @@
         <div class="zh">屏息</div>
         <div class="en">BREATHLESS</div>
         <div class="title-hint">Grab the fish · click <b>START</b> or press Enter</div>
+        <div class="title-hint">点击船只升级 · Click the boat to upgrade</div>
       </div>
     </div>
 
@@ -235,16 +248,17 @@
     <div id="gear-panel" class="hidden">
       <div class="gear-head">
         <div>
-          <div class="small muted">FISHING GEAR</div>
-          <h2>Net workshop</h2>
+          <div class="small muted">DIVER LOADOUT</div>
+          <h2>改装工作台</h2>
           <div id="gear-level"></div>
         </div>
         <button id="gear-close">Close (G)</button>
       </div>
+      <div id="gear-slots" class="gear-slots"></div>
       <div class="gear-card">
-        <div class="gear-icon">◌</div>
+        <div id="gear-icon" class="gear-icon">◌</div>
         <div>
-          <div class="small muted">CURRENT LOADOUT</div>
+          <div class="small muted">SELECTED MODULE</div>
           <div id="gear-effect" class="gear-effect"></div>
           <div id="gear-pearls" class="gear-pearls"></div>
         </div>
@@ -258,10 +272,11 @@
           <div id="gear-progress-label" class="small"></div>
         </div>
         <progress id="gear-progress" value="0" max="1"></progress>
+        <div id="gear-compare" class="gear-compare"></div>
         <button id="gear-upgrade" class="primary">Upgrade</button>
         <div id="gear-notice" class="gear-notice hidden"></div>
       </div>
-      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. Upgrades change the net's visible size, capacity and catch radius; they never extend breath time.</p>
+      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. 每次下潜前可自由组合配件；升级只改变装备属性，绝不延长真实憋气时间。气瓶只在水下换气后提供紧急返航窗口。</p>
     </div>
 
     <div id="report" class="hidden"></div>

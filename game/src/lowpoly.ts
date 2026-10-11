@@ -102,14 +102,52 @@ export class Batch {
   }
 }
 
-/** Free the GPU buffers of everything under `root`. */
-export function disposeTree(root: THREE.Object3D) {
+/**
+ * Free the GPU buffers of everything under `root`: geometries, materials and the
+ * textures those materials hold (map, alphaMap, emissiveMap, shader uniforms...).
+ * A texture is kept when it is marked `userData.shared`, or when anything under
+ * `liveRoot` outside `root` still uses it (pass the scene when other live objects
+ * may share a texture with this tree).
+ */
+export function disposeTree(root: THREE.Object3D, liveRoot?: THREE.Object3D) {
+  const textures = new Set<THREE.Texture>();
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.geometry) return;
     // Instanced meshes also hold per-instance buffers on the GPU.
     if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
     m.geometry.dispose();
-    for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
+    for (const mat of materialsOf(m)) {
+      forEachTexture(mat, (t) => textures.add(t));
+      mat.dispose();
+    }
   });
+  if (!textures.size) return;
+  if (liveRoot) {
+    const keep = (t: THREE.Texture) => textures.delete(t);
+    const visit = (o: THREE.Object3D) => {
+      if (o === root) return;
+      for (const mat of materialsOf(o as THREE.Mesh)) forEachTexture(mat, keep);
+      for (const child of o.children) visit(child);
+    };
+    visit(liveRoot);
+    const scene = liveRoot as THREE.Scene;
+    if (scene.isScene) {
+      if ((scene.background as THREE.Texture | null)?.isTexture) keep(scene.background as THREE.Texture);
+      if (scene.environment) keep(scene.environment);
+    }
+  }
+  for (const t of textures) if (!t.userData.shared) t.dispose();
+}
+
+function materialsOf(m: THREE.Mesh): THREE.Material[] {
+  const mat = m.material;
+  return !mat ? [] : Array.isArray(mat) ? mat : [mat];
+}
+
+/** Every texture a material references, through its own maps or a shader's uniforms. */
+function forEachTexture(mat: THREE.Material, fn: (t: THREE.Texture) => void) {
+  for (const value of Object.values(mat)) if ((value as THREE.Texture | null)?.isTexture) fn(value as THREE.Texture);
+  const uniforms = (mat as THREE.ShaderMaterial).uniforms;
+  if (uniforms) for (const u of Object.values(uniforms)) if ((u?.value as THREE.Texture | null)?.isTexture) fn(u.value as THREE.Texture);
 }
