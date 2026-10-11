@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { DiverConcept } from './diver-designs';
 import { skinUnlocked,skinTrials,useSkinTrial } from './skin-access';
+import { onLangChange, t } from './i18n';
 export const SKINS = [
-  {zh:'逐浪者',en:'Current Runner',map:'fjord',scene:'峡湾 / Fjord',bonus:'游泳速度 +10% / Swim speed +10%',zhText:'轻装自由潜水员，擅长浅水巡游与快速推进。',enText:'An agile freediver built for shallow-water exploration and swift travel.',color:'#83ead5'},
-  {zh:'潮汐探险家',en:'Tidal Explorer',map:'tianchi',scene:'天池 / Heaven Lake',bonus:'捕鱼范围 +10% / Catch reach +10%',zhText:'玻璃头套下的沉静探索者，擅长湖泊与沉木水域采集。',enText:'A patient explorer specializing in lake habitats and submerged forests.',color:'#ddc38a'},
-  {zh:'深渊侦察员',en:'Abyss Scout',map:'ocean',scene:'外海 / Open Ocean',bonus:'照明距离 +15% / Lamp range +15%',zhText:'低阻力科技潜水服与横向视窗，为深水侦察而设计。',enText:'A streamlined technical suit and panoramic visor designed for deep-water reconnaissance.',color:'#8ed9ff'},
+  {zh:'逐浪者',en:'Current Runner',map:'fjord',scene:['Fjord','峡湾'],bonus:['Swim speed +10%','游泳速度 +10%'],zhText:'轻装自由潜水员，擅长浅水巡游与快速推进。',enText:'An agile freediver built for shallow-water exploration and swift travel.',color:'#83ead5'},
+  {zh:'潮汐探险家',en:'Tidal Explorer',map:'tianchi',scene:['Heaven Lake','天池'],bonus:['Catch reach +10%','捕鱼范围 +10%'],zhText:'玻璃头套下的沉静探索者，擅长湖泊与沉木水域采集。',enText:'A patient explorer specializing in lake habitats and submerged forests.',color:'#ddc38a'},
+  {zh:'深渊侦察员',en:'Abyss Scout',map:'ocean',scene:['Open Ocean','外海'],bonus:['Lamp range +15%','照明距离 +15%'],zhText:'低阻力科技潜水服与横向视窗，为深水侦察而设计。',enText:'A streamlined technical suit and panoramic visor designed for deep-water reconnaissance.',color:'#8ed9ff'},
 ] as const;
 
 export class SkinPicker {
@@ -27,9 +28,10 @@ export class SkinPicker {
     style.textContent+=`.skin-panel{width:min(490px,calc(100% - 24px));height:min(780px,calc(100dvh - 24px));padding:21px;border-radius:18px}.skin-view{height:255px}.skin-title{font-size:27px;margin-top:18px}.skin-en{font-size:11px}.skin-desc{font-size:13px;margin:15px 0}.skin-desc span{font-size:12px}.skin-specialty{padding:14px;font-size:13px}.skin-overlay button{padding:9px 14px}.skin-apply{margin-top:18px}@media(max-height:720px){.skin-panel{padding:16px}.skin-view{height:180px}.skin-title{margin-top:12px}.skin-desc{margin:11px 0}}`;
     style.textContent+=`.skin-panel{width:min(441px,calc(100% - 28px));height:min(702px,calc(100dvh - 28px));padding:19px;border-radius:16px}.skin-view{height:230px}.skin-title{font-size:24px;margin-top:16px}.skin-en{font-size:10px}.skin-desc{font-size:12px;margin:13px 0}.skin-desc span{font-size:11px}.skin-specialty{padding:12px;font-size:12px}.skin-overlay button{padding:8px 13px}.skin-apply{margin-top:16px}@media(max-height:720px){.skin-panel{padding:14px}.skin-view{height:162px}.skin-title{margin-top:11px}.skin-desc{margin:10px 0}}`;
     this.scene.add(this.rig);
-    this.root.className='skin-overlay';this.root.hidden=true;this.root.setAttribute('role','dialog');this.root.setAttribute('aria-modal','true');this.root.setAttribute('aria-label','潜水员皮肤 / Diver skins');
-    this.root.innerHTML=`<section class="skin-panel"><div class="skin-top"><span>DIVER / 角色换装</span><button data-close aria-label="关闭">✕</button></div><div class="skin-view"></div><div class="skin-nav"><button data-prev aria-label="上一款">←</button><span data-count></span><button data-next aria-label="下一款">→</button></div><h2 class="skin-title"></h2><div class="skin-en"></div><p class="skin-desc"></p><div class="skin-specialty"><small>SCENE SPECIALTY / 场景专精</small><div data-scene></div><div class="skin-bonus"></div><div class="skin-status"></div></div><button class="skin-apply">使用角色 / Equip diver</button></section>`;
+    this.root.className='skin-overlay';this.root.hidden=true;this.root.setAttribute('role','dialog');this.root.setAttribute('aria-modal','true');
+    this.root.innerHTML=`<section class="skin-panel"><div class="skin-top"><span data-head></span><button data-close>✕</button></div><div class="skin-view"></div><div class="skin-nav"><button data-prev>←</button><span data-count></span><button data-next>→</button></div><h2 class="skin-title"></h2><div class="skin-en"></div><p class="skin-desc"></p><div class="skin-specialty"><small data-specialty></small><div data-scene></div><div class="skin-bonus"></div><div class="skin-status"></div></div><button class="skin-apply"></button></section>`;
     document.body.append(this.root);
+    onLangChange(()=>{if(this.open)this.renderCard();});
     this.root.querySelector('[data-close]')!.addEventListener('click',()=>this.close());
     this.root.querySelector('[data-prev]')!.addEventListener('click',()=>this.change(-1));
     this.root.querySelector('[data-next]')!.addEventListener('click',()=>this.change(1));
@@ -80,18 +82,24 @@ export class SkinPicker {
   private change(delta:number){this.index=(this.index+delta+SKINS.length)%SKINS.length;this.renderCard();}
   private renderCard(){
     const skin=SKINS[this.index];this.root.style.setProperty('--skin-color',skin.color);
-    this.root.querySelector('.skin-title')!.textContent=skin.zh;this.root.querySelector('.skin-en')!.textContent=skin.en.toUpperCase();
-    this.root.querySelector('[data-count]')!.textContent=`0${this.index+1} / 03 · 左右滑动 / SWIPE`;
-    this.root.querySelector('.skin-desc')!.innerHTML=`${skin.zhText}<span>${skin.enText}</span>`;
-    this.root.querySelector('[data-scene]')!.textContent=skin.scene;this.root.querySelector('.skin-bonus')!.textContent=skin.bonus;
-    this.root.querySelector('.skin-status')!.textContent=this.context()===skin.map?'当前场景：专精加成生效 / Specialty active here':'当前场景不触发专精加成 / No specialty bonus in this scene';
+    this.root.setAttribute('aria-label',t('Diver skins','潜水员皮肤'));
+    this.root.querySelector('[data-head]')!.textContent=t('DIVER','角色换装');
+    this.root.querySelector('[data-close]')!.setAttribute('aria-label',t('Close','关闭'));
+    this.root.querySelector('[data-prev]')!.setAttribute('aria-label',t('Previous','上一款'));
+    this.root.querySelector('[data-next]')!.setAttribute('aria-label',t('Next','下一款'));
+    this.root.querySelector('[data-specialty]')!.textContent=t('SCENE SPECIALTY','场景专精');
+    this.root.querySelector('.skin-title')!.textContent=t(skin.en,skin.zh);this.root.querySelector('.skin-en')!.textContent='';
+    this.root.querySelector('[data-count]')!.textContent=`0${this.index+1} / 03 · ${t('SWIPE','左右滑动')}`;
+    this.root.querySelector('.skin-desc')!.textContent=t(skin.enText,skin.zhText);
+    this.root.querySelector('[data-scene]')!.textContent=t(skin.scene[0],skin.scene[1]);this.root.querySelector('.skin-bonus')!.textContent=t(skin.bonus[0],skin.bonus[1]);
+    this.root.querySelector('.skin-status')!.textContent=this.context()===skin.map?t('Specialty active here','当前场景：专精加成生效'):t('No specialty bonus in this scene','当前场景不触发专精加成');
     const unlocked=skinUnlocked(this.index),remaining=skinTrials(this.index);
     const equipped=this.index===this.chosen;
     const button=this.root.querySelector<HTMLButtonElement>('.skin-apply')!;
     button.disabled=!unlocked&&remaining===0&&!equipped;
-    button.textContent=equipped?'已装备 / Equipped':unlocked?'使用角色 / Equip diver':remaining>0?`试玩一次 · 剩余 ${remaining}/2 / Try skin`:'待解锁 · 试玩已用完 / Locked';
+    button.textContent=equipped?t('Equipped','已装备'):unlocked?t('Equip diver','使用角色'):remaining>0?t(`Try skin · ${remaining}/2 left`,`试玩一次 · 剩余 ${remaining}/2`):t('Locked · no trials left','待解锁 · 试玩已用完');
     if(!unlocked){
-      this.root.querySelector('.skin-status')!.textContent=`待解锁：游玩地图${this.index===1?'二 · 天池':'三 · 外海'} / Play ${this.index===1?'map 2':'map 3'} to unlock · 试玩 ${remaining}/2（本次下潜有效）`;
+      this.root.querySelector('.skin-status')!.textContent=t(`Play ${this.index===1?'map 2 · Heaven Lake':'map 3 · Open Ocean'} to unlock · trials ${remaining}/2 (this dive)`,`待解锁：游玩地图${this.index===1?'二 · 天池':'三 · 外海'} · 试玩 ${remaining}/2（本次下潜有效）`);
     }
     if(!this.renderer){this.renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});this.renderer.setPixelRatio(Math.min(devicePixelRatio,2));this.root.querySelector('.skin-view')!.append(this.renderer.domElement);this.scene.add(new THREE.HemisphereLight('#e4ffff','#18324b',2.4));const light=new THREE.DirectionalLight('#fff',3);light.position.set(2,5,6);this.scene.add(light);}
     if(this.model){this.rig.remove(this.model.group);this.model.group.traverse(obj=>{if(obj instanceof THREE.Mesh){obj.geometry.dispose();const mats=Array.isArray(obj.material)?obj.material:[obj.material];mats.forEach(m=>m.dispose());}});}
