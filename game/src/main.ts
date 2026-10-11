@@ -101,6 +101,8 @@ const bowSeat = new THREE.Object3D();
 bowSeat.position.set(3.38, 0.66, 0);
 world.boat.add(bowSeat);
 diver.sit(bowSeat);
+// Not on the title or the menus: the workbench has its own diver figure. It shows from the jump in (startGame).
+diver.group.visible = false;
 const JUMP_OUT = 2.6; // where the jump lands: this far past the bow, and this deep
 const JUMP_DEPTH = 1.4;
 // Floating at the surface this close to the boat, F climbs aboard and goes back to the workbench.
@@ -1229,6 +1231,7 @@ function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   diver.sit(bowSeat);
+  diver.group.visible = false; // back on the title: no diver on the bow
   hud.setBoardPrompt(false);
   calmSea();
   net = [];
@@ -1411,6 +1414,22 @@ const workbench = new Workbench({
     progress: () => mapProgress.bestValue,
     model: (i) => shipyard.modelAt(i),
     equip: (i) => shipyard.equip(i),
+  },
+  // The ready tray is saved per wallet whenever it changes, and comes back packed the same.
+  savedLoadout() {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(storageKey('loadout')) ?? 'null');
+      return Array.isArray(saved) ? saved.filter((id): id is UpgradeId => typeof id === 'string') : null;
+    } catch {
+      return null;
+    }
+  },
+  saveLoadout(gear) {
+    try {
+      localStorage.setItem(storageKey('loadout'), JSON.stringify(gear));
+    } catch {
+      // Private mode or full storage: it just isn't remembered.
+    }
   },
   sonarColor(color) {
     sonar.setColor(color);

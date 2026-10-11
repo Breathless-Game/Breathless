@@ -477,6 +477,23 @@ export class Diver {
     this.reelRecovery = THREE.MathUtils.clamp(recovery, 0.25, 3);
   }
 
+  /**
+   * Shows or hides what the diver has on, for the workbench's figure (a dress-up
+   * view): the fins, the tank (still only from its tier 2), the head lamp's
+   * housing, and the net on its shaft.
+   */
+  setWorn(worn: { fins: boolean; tank: boolean; lamp: boolean; net: boolean }) {
+    this.finL.visible = this.finR.visible = worn.fins;
+    if (!worn.tank) this.tankGroup.visible = false;
+    this.lampGroup.visible = worn.lamp;
+    this.netArm.visible = worn.net;
+  }
+
+  /** Stood up as a figure: the net held down at its side like a staff, not up over its head. */
+  holdNetDown() {
+    this.netArm.rotation.z = Math.PI * 0.9;
+  }
+
   /** Sit on `seat` (an object on the boat) until jumpTo(). */
   sit(seat: THREE.Object3D) {
     this.seat = seat;
