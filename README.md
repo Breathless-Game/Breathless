@@ -480,7 +480,9 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 ### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [16, 16, 12]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (the trench is bottomless on every map)
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [32, 32, 24]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (the trench is bottomless on every map)
+
+The playable corridor over the shelf is 280 m wide (`x = -140…140`); below the shelf, the trench walls keep the diver under the boat. Diver movement and camera look-ahead share the same clamped boundary, so pressing into either edge never reveals the empty side of the map.
 
 Net capacity and catch radius are no longer constants in `main.ts`: they come from the equipped net tier below.
 
@@ -605,20 +607,26 @@ The game picks the starting quality from the CPU logical core count and the devi
 | --- | --- | --- | --- |
 | DPR cap | 1 | 1.5 | 2 |
 | Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
-| Tall kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| Tall kelp per 140 m of shelf / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
 | Low plants per tall kelp | 1.5 (Heaven Lake 2) | same | same |
-| Water surface segments | 30 × 8 | 60 × 16 | 90 × 24 |
+| Water surface segments | 44 × 8 | 88 × 16 | 132 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
-| Water triangles | 480 | 1920 | 4320 |
+| Water triangles | 704 | 2816 | 6336 |
 | Sun / moon glitter | Same road, a little wider to read on the coarse facets | Same road | Same road, widest glints |
 | Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
 | Maximum raindrops | 160 | 420 | 800 |
+| Diver bubbles (limit / burst scale / geometry) | 12 / 0.5 / low | 32 / 0.75 / low | 72 / 1 / high |
+| Bubble physics update cap | 20 Hz | 30 Hz | 60 Hz |
 
 A large screen may use a DPR below 1 to stay within the pixel budget; the HUD still uses the browser's native resolution. After a start-up grace period, two consecutive 3-second windows that average below 45 FPS lower the quality by one level. A drop is followed by a 6-second cooldown, and within one session the quality only goes down, never up. Hidden tabs and isolated long stalls are not counted, but a sustained very low frame rate still triggers a drop.
 
-Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver, fish, breath and lighting; the headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all. Every plant on the seabed is part of one mesh that sways in the vertex shader, so a lower level only rebuilds that mesh with fewer plants; the plants that remain keep their place and shape.
+Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver body, fish, breath and lighting; bubble particles use the quality-specific physics update cap above. The headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all. Every plant on the seabed is part of one mesh that sways in the vertex shader, so a lower level only rebuilds that mesh with fewer plants; the plants that remain keep their place and shape.
+
+Diver bubbles spawn from the mask and snorkel anchor, rise with buoyancy and horizontal drag, and fade out before their lifetime ends. Low and medium quality use the low-poly bubble mesh with smaller particle budgets; high quality uses the subdivided mesh and full burst size. Switching quality trims excess live bubbles and rebinds the remaining meshes before releasing the old shared geometry.
+
+Near the surface, a shared ripple mesh marks the diver's contact with the water and briefly expands when the diver enters or exits. The boat's navigation lamps and a soft surface fill use the same day, night, cloud and lighting-effects state as the world lights, so the boat remains readable through the water without becoming a separate lighting style.
 
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
@@ -646,7 +654,7 @@ Morning highlights are gently warm, afternoon highlights become golden, and nigh
 
 Everything on the shelf rests on something. The sand is a height grid; rocks and plants are placed by reading the same triangles the sand is drawn with. On the near shelf, rocks form outcrops: one part-buried boulder, two or three rocks leaning on it and scree around it, with open sand between outcrops and no boulder in the lane the diver swims in. Along the back, rock is piled on rock from the bottom up, so the wall has tall stacks but nothing hangs in open water. Coral grows on the wall's rocks and on the sand; Heaven Lake's ledges jut out of its stacks.
 
-Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 5 m short of the surface (about 15 m on the Fjord, 35 m on Heaven Lake, 48 m on the Open Ocean). It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
+Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 5 m short of the surface (about 15 m on the Fjord, 35 m on Heaven Lake, 48 m on the Open Ocean). It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Outcrops, groves and meadows are counted per metre of shelf and laid out to the farthest edge a map can open (200 m each way), so the forest is as dense at the ends as under the boat. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
 
 Plants sway in the vertex shader. A slow wave of current crosses the bed, so neighbors move one after another; tall kelp bends into an S and its tips trace loops; leaf tips flutter; the swell that rocks the boat moves the upper water back and forth; wind makes all of it stronger. Plants within 4.5 m of the diver bend away and trail in the direction of the swim.
 
@@ -658,7 +666,7 @@ Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Sto
 
 Cloud cover affects the sky, sun / moon intensity, underwater rays, fog and water reflections. Wind changes wave strength, boat rocking and rain slant; storms increase rainfall. Rain animates on the GPU and adds at most one draw call. Clear / cloudy weather and underwater views do not draw rain. Low, medium and high use at most 160 / 420 / 800 raindrops. The atmospheric sky uses one draw and a seamless 256 × 256 noise texture generated once; low / medium / high use 2 / 3 / 4 cloud texture samples, and low omits the high cloud veil and stars. No sky texture is redrawn or uploaded each frame. Weather changes reuse the material and rain buffers.
 
-Pause and background states freeze automatic weather and rain animation; manual weather previews still blend in pause settings. Weather remains active when Lighting effects is off, while sun / moon lighting, rays and water reflections stay off. Weather does not change fish populations, breathing rules or the night rarity condition. Ambient light and the headlamp keep nighttime and rainy underwater scenes readable. The Open Ocean scenery's lightning follows storm intensity and the Lighting effects switch. Weather audio is not included.
+Pause and background states freeze automatic weather and rain animation; manual weather previews still blend in pause settings. Weather remains active when Lighting effects is off, while sun / moon lighting, rays and water reflections stay off. Weather does not change fish populations, breathing rules or the night rarity condition. Ambient light and the headlamp keep nighttime and rainy underwater scenes readable. The Open Ocean scenery's lightning follows storm intensity and the Lighting effects switch. In rain, the Fjord's peaks, Heaven Lake's pillars and crater rim, and the ocean's sea stacks lose their facets and snow and become flat silhouettes in the haze color, darker the nearer the ridge stands. Chimney and incense smoke leans with the wind. Weather audio is not included.
 
 - `npm --prefix game test` covers weather continuity, frame-rate independence, pauses, preset changes and returning to natural weather.
 - Inspect `world.weather.state` in the console. `world.setWeather('storm')` previews a storm temporarily; use the settings menu to save the choice.

@@ -15,15 +15,20 @@ const rng = await sourceUrl('../src/rng.ts');
 const { FLORA, understorySpecies, depthTint } = await import(await sourceUrl('../src/flora.ts'));
 const { Shelf, layoutSeabed, plantHeight } = await import(await sourceUrl('../src/seabed-layout.ts', { './rng': rng }));
 
-const BOUNDS = { trench: 14, outer: 130, zMin: -70, zMax: 20 };
+// The shelf world.ts builds: sand out to 210 m, the diver's widest corridor 200 m, and
+// kelp counted per 140 m of shelf (55 / 26 / 55 on the three maps).
+const BOUNDS = { trench: 14, outer: 210, zMin: -70, zMax: 20 };
+const REACH = 200;
+const SCALE = (REACH * 2) / 140;
 const MAPS = { fjord: [0xf10d5ea, 20, 55], tianchi: [0x71a2c41, 40, 26], ocean: [20261010, 60, 55] };
 
 function build(id) {
-  const [seed, depth, canopy] = MAPS[id];
-  const shelf = new Shelf(seed, BOUNDS);
+  const [seed, depth, perSpan] = MAPS[id];
+  const canopy = Math.round(perSpan * SCALE);
+  const shelf = new Shelf(seed, BOUNDS, 3.5);
   const flora = FLORA[id];
   const understory = Array.from({ length: Math.round(canopy * flora.undergrowth) }, (_, i) => understorySpecies(flora, i));
-  return { shelf, depth, canopy, understory, layout: layoutSeabed(shelf, { seed: seed ^ 0x5eabed, depth, reach: 70, canopy, understory }) };
+  return { shelf, depth, canopy, understory, layout: layoutSeabed(shelf, { seed: seed ^ 0x5eabed, depth, reach: REACH, canopy, understory }) };
 }
 
 test('heightAt reads back the triangles the sand is drawn with', () => {
@@ -45,7 +50,8 @@ test('heightAt reads back the triangles the sand is drawn with', () => {
 for (const id of Object.keys(MAPS)) {
   test(`${id}: every rock rests on sand or on the rock below it`, () => {
     const { shelf, depth, layout } = build(id);
-    assert.ok(layout.outcrops.length > 30 && layout.stacks.length > 25);
+    assert.ok(layout.outcrops.length > 90 && layout.stacks.length > 70);
+    for (const rock of [...layout.outcrops, ...layout.stacks]) assert.ok(Math.abs(rock.x) + rock.r <= BOUNDS.outer, 'on the sand');
     for (const rock of layout.outcrops) {
       const ground = shelf.heightAt(rock.x, rock.z);
       assert.ok(rock.y - rock.r * rock.squash < ground - 0.05, 'part-buried');
@@ -72,14 +78,16 @@ for (const id of Object.keys(MAPS)) {
       list.forEach((plant, i) => {
         const ground = shelf.heightAt(plant.x, plant.z);
         assert.ok(plant.y <= ground && plant.y > ground - 0.3, 'rooted just under the surface of the sand');
-        assert.ok(Math.abs(plant.x) >= BOUNDS.trench + 3);
+        assert.ok(Math.abs(plant.x) >= BOUNDS.trench + 3 && Math.abs(plant.x) <= BOUNDS.outer - 3);
         for (let j = 0; j < i; j++) assert.ok(Math.hypot(list[j].x - plant.x, list[j].z - plant.z) >= 0.74);
       });
     }
-    // The lowest quality shows the first 12 kelp: they must not all stand in one corner.
-    const first = layout.canopy.slice(0, 12);
+    // The lowest quality shows the first 12 per 140 m: they must not all stand in one corner.
+    const first = layout.canopy.slice(0, Math.round(12 * SCALE));
     assert.ok(first.some((p) => p.x < 0) && first.some((p) => p.x > 0));
-    assert.ok(new Set(first.map((p) => Math.round(p.x / 12))).size >= 6);
+    assert.ok(new Set(first.map((p) => Math.round(p.x / 12))).size >= 16);
+    // And the forest reaches the far ends of the widest corridor.
+    assert.ok(Math.max(...layout.canopy.map((p) => Math.abs(p.x))) > REACH - 25);
     // Seagrass keeps to its meadows; the understory is dealt in the order asked for.
     layout.understory.forEach((plant) => assert.ok(['ribbon', 'broadleaf', 'feather'].includes(plant.species)));
   });
