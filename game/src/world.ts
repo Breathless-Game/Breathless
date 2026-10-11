@@ -11,7 +11,7 @@ import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
-import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
+import { buildScenery, waterY, type Scenery, type SceneryEnv } from './scenery';
 import { auroraGlow } from './aurora';
 import { FLORA, understorySpecies } from './flora';
 import { KelpBed, type KelpPlant } from './kelp';
@@ -1096,6 +1096,11 @@ export class World {
   /** How much the wind lifts the waves; the scenery's floats ride the same swell. */
   private swell() {
     return 1 + this.weather.state.wind * 0.75;
+  }
+
+  /** Height of the sea at (x, z) right now, as the water shader draws it. */
+  waterHeight(x: number, z: number) {
+    return waterY(x, z, this.waveTime, this.swell() * this.map.waves);
   }
 
   private updateDecorations(time: number, dt: number, cameraY: number) {

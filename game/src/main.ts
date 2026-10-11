@@ -83,6 +83,7 @@ const diver = new Diver(scene);
 diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
 diver.setMaterialBinder((root) => world.colorGrade.apply(root));
+diver.setWaterSurface((x, z) => world.waterHeight(x, z));
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
