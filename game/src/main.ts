@@ -442,10 +442,12 @@ function deploySonar() {
   sonar.group.visible = true;
   sonar.group.scale.setScalar(1);
   sonar.group.rotation.set(0, 0, 0);
-  top.y -= 1;
+  const target = top.clone();
   top.z = 0;
+  target.y -= 1;
+  target.z = 0;
   sonar.group.position.copy(top);
-  sonar.deploy(top);
+  sonar.deploy(target);
   sonarCarried = false;
   hud.message('Deep sonar lowering…', 1400);
 }
