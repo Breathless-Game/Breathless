@@ -59,7 +59,9 @@ export class FieldGuide {
     this.tour.id = 'dive-tutorial';
     this.tour.className = 'dive-tutorial';
     this.tour.setAttribute('aria-label', '新手教程');
-    document.body.append(this.launcher, this.tour, this.root);
+    // The launcher's buttons aren't shown: the GUIDE and TUTORIAL fish on the title rope
+    // open the book and switch the tutorial (main.ts). It's kept off-page for its state.
+    document.body.append(this.tour, this.root);
     this.root.querySelector('#guide-close')!.addEventListener('click', () => this.close());
     this.launcher.querySelector('#guide-open')!.addEventListener('click', () => this.toggle());
     this.launcher.querySelector('#tour-toggle')!.addEventListener('click', () => this.setEnabled(!this.state.enabled));
@@ -106,6 +108,10 @@ export class FieldGuide {
     this.hooks.toggled(false);
     if (this.previousFocus?.isConnected && !this.previousFocus.closest('.hidden')) this.previousFocus.focus();
     else this.launcher.querySelector<HTMLButtonElement>('#guide-open')!.focus();
+  }
+  /** The TUTORIAL fish: switches the step-by-step tutorial on or off. */
+  toggleTutorial() {
+    this.setEnabled(!this.state.enabled);
   }
   private setEnabled(enabled: boolean) {
     this.state = { ...this.state, enabled, chosen: true };
