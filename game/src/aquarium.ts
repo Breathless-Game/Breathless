@@ -712,6 +712,7 @@ export class Aquarium {
     }
     if (this.feeding) return;
     this.feeding = true;
+    let rerendered = false;
     try {
       const paid = await this.hooks.buyFood(food);
       if (!paid) return;
@@ -734,9 +735,14 @@ export class Aquarium {
           v: 0.12 + Math.random() * 0.1,
         });
       }
-      if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) this.pick(swimmer);
+      if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) {
+        this.pick(swimmer);
+        rerendered = true;
+      }
     } finally {
       this.feeding = false;
+      // A card re-rendered mid-payment has a disabled Feed button; rebuild it if the success path did not.
+      if (!rerendered && this.picked) this.pick(this.picked);
     }
   }
 
