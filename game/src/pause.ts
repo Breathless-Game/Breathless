@@ -6,6 +6,7 @@ import type { BreathMode } from './breath';
 import type { TimeOfDay } from './daylight';
 import type { WeatherMode } from './weather';
 import { type Quality, type Settings, saveSettings } from './settings';
+import { closeDropdown, enhanceSelect } from './dropdown';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -59,6 +60,8 @@ export class PauseMenu {
     private settings: Settings,
     private hooks: PauseHooks,
   ) {
+    // Themed dropdowns in place of the native popups; the selects below keep working as before.
+    for (const select of [this.input, this.timeOfDay, this.weather, this.quality]) enhanceSelect(select);
     $('pause-resume').addEventListener('click', () => this.requestResume());
     $('pause-settings').addEventListener('click', () => this.showSettings());
     $('pause-menu').addEventListener('click', () => this.requestQuit());
@@ -82,6 +85,7 @@ export class PauseMenu {
 
   show(view: View = 'main') {
     clearInterval(this.countTimer);
+    closeDropdown();
     if (view !== 'settings') this.standalone = false;
     this.view = view;
     this.root.classList.remove('hidden');
@@ -104,6 +108,7 @@ export class PauseMenu {
 
   close() {
     clearInterval(this.countTimer);
+    closeDropdown();
     this.root.classList.add('hidden');
   }
 

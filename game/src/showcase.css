@@ -1,6 +1,8 @@
 /* Showcase page: one rounded card on a dark desk. `?capture` drops the frame so the card
    fills the viewport for the GIF recorder; `?clean` hides the title and gauge. */
 
+@import './scrollbar.css';
+
 :root {
   --ink: #eaf8ff;
   --breathe: #6ab8ff; /* same blue as the HUD's breathing chip */
