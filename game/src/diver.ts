@@ -5,6 +5,21 @@ function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterial
   return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.7, ...extra });
 }
 
+// Sitting on the bow: the body upright (hips at the seat), legs hanging forward
+// over the edge, hands empty (the net is put away). The jump off arcs out and down
+// into the water, turning head first on the way; the net comes out mid-jump.
+const SIT_TORSO = Math.PI / 2;
+const SIT_HIPS = 0.75; // torso centre above the hips, so the hips rest on the seat
+const SIT_LEGS = 0.7; // from straight down toward forward
+const SIT_ARM = Math.PI + 0.3; // hanging at the side, a little forward, empty-handed
+const SIT_HEAD = -1.1; // tipped forward from the spine, so the mask looks out to sea
+const NECK = 0.75; // along the body, where the head pivots
+const JUMP_S = 1.1;
+const JUMP_HEIGHT = 1.4;
+const DIVE_PITCH = -1.25; // head down as it enters the water
+
+const easeInOut = (u: number) => (u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2);
+
 /** Low-poly freediver, modelled lying along +x (head first). */
 export class Diver {
   group = new THREE.Group();
@@ -13,12 +28,16 @@ export class Diver {
   facing = 1;
   headlamp: THREE.PointLight;
   private body = new THREE.Group();
+  private head = new THREE.Group();
   private legL: THREE.Group;
   private legR: THREE.Group;
   private netArm: THREE.Group;
   private netTip: THREE.Object3D;
   private netPointWorld = new THREE.Vector3();
   private netSwing = 0;
+  /** While set, the diver sits here (it rides along with the boat), not at `pos`. */
+  private seat: THREE.Object3D | null = null;
+  private jump: { t: number; from: THREE.Vector3; to: THREE.Vector3 } | null = null;
   private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
   private bubbleGeo = new THREE.IcosahedronGeometry(0.12, 0);
   private bubbleMat = new THREE.MeshStandardMaterial({
@@ -39,16 +58,19 @@ export class Diver {
     const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.18, 6), accent);
     stripe.rotation.z = Math.PI / 2;
     stripe.position.x = 0.2;
+    // The head pivots at the neck: lying flat it looks ahead along the body; sitting up it tips forward.
+    this.head.position.x = NECK;
     const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 0), skin);
-    head.position.x = 1.0;
+    head.position.x = 1.0 - NECK;
     const hood = new THREE.Mesh(new THREE.IcosahedronGeometry(0.36, 0), suit);
-    hood.position.set(0.95, 0.06, 0);
+    hood.position.set(0.95 - NECK, 0.06, 0);
     hood.scale.set(0.9, 0.85, 1.02);
     const mask = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.2, 0.44), mat('#5fe1ff', { metalness: 0.6, roughness: 0.15 }));
-    mask.position.set(1.28, 0.05, 0);
+    mask.position.set(1.28 - NECK, 0.05, 0);
     const snorkel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.6, 4), accent);
-    snorkel.position.set(1.0, 0.45, 0.25);
-    this.body.add(torso, stripe, hood, head, mask, snorkel);
+    snorkel.position.set(1.0 - NECK, 0.45, 0.25);
+    this.head.add(hood, head, mask, snorkel);
+    this.body.add(torso, stripe, this.head);
 
     this.legL = this.makeLeg(suit, accent, 0.16);
     this.legR = this.makeLeg(suit, accent, -0.16);
@@ -93,6 +115,42 @@ export class Diver {
     this.netArm.scale.setScalar(scale);
   }
 
+  /** Sit on `seat` (an object on the boat) until jumpTo(). */
+  sit(seat: THREE.Object3D) {
+    this.seat = seat;
+    this.jump = null;
+    this.netSwing = 0;
+  }
+
+  get seated() {
+    return this.seat !== null;
+  }
+
+  /** Off the seat and into the water at `to`. `pos` follows the arc, so the camera does too. */
+  jumpTo(to: THREE.Vector3) {
+    if (!this.seat) return;
+    const from = this.seat.getWorldPosition(new THREE.Vector3());
+    this.seat = null;
+    this.jump = { t: 0, from, to: to.clone() };
+    this.pos.copy(from);
+    this.vel.set(0, 0, 0);
+    this.facing = 1;
+    this.group.rotation.set(0, 0, 0);
+  }
+
+  /** Off the seat without a jump: back to swimming at `pos`, wherever that is. */
+  stand() {
+    this.seat = null;
+    this.jump = null;
+    this.group.rotation.set(0, 0, 0);
+    this.head.rotation.z = 0;
+    this.showNet(true);
+  }
+
+  get jumping() {
+    return this.jump !== null;
+  }
+
   swing() {
     if (this.netSwing <= 0) this.netSwing = 1;
   }
@@ -116,6 +174,16 @@ export class Diver {
   }
 
   update(dt: number, time: number, depth: number) {
+    this.updateBubbles(dt, time);
+    if (this.seat) {
+      this.updateSeated(time);
+      return;
+    }
+    if (this.jump) {
+      this.updateJump(dt);
+      return;
+    }
+    this.body.position.y += (0 - this.body.position.y) * Math.min(1, dt * 8);
     const speed = this.vel.length();
     if (Math.abs(this.vel.x) > 0.2) this.facing = this.vel.x > 0 ? 1 : -1;
 
@@ -139,7 +207,54 @@ export class Diver {
     }
 
     this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * 60;
+  }
 
+  /** On the bow, rocking with the boat; the legs swing idly over the edge. */
+  private updateSeated(time: number) {
+    const seat = this.seat!;
+    seat.getWorldPosition(this.group.position);
+    seat.getWorldQuaternion(this.group.quaternion);
+    this.body.rotation.z = SIT_TORSO;
+    this.body.position.y = SIT_HIPS;
+    this.legL.rotation.z = SIT_LEGS + Math.sin(time * 1.3) * 0.12;
+    this.legR.rotation.z = SIT_LEGS + Math.sin(time * 1.3 + 1.9) * 0.12;
+    this.netArm.rotation.z = SIT_ARM + Math.sin(time * 0.9) * 0.04;
+    this.showNet(false);
+    this.head.rotation.z = SIT_HEAD + Math.sin(time * 0.5) * 0.06;
+    this.headlamp.intensity = 0;
+  }
+
+  /** The arc off the bow: up and out, then down into the water, rolling head first. */
+  private updateJump(dt: number) {
+    const j = this.jump!;
+    j.t = Math.min(1, j.t + dt / JUMP_S);
+    const u = j.t;
+    this.pos.lerpVectors(j.from, j.to, u);
+    this.pos.y += Math.sin(Math.PI * u) * JUMP_HEIGHT;
+    this.group.position.copy(this.pos);
+    const e = easeInOut(u);
+    this.body.rotation.z = SIT_TORSO + (DIVE_PITCH - SIT_TORSO) * e;
+    this.body.position.y = SIT_HIPS * (1 - e);
+    // Legs straighten out behind, net tucks in.
+    this.legL.rotation.z = this.legR.rotation.z = SIT_LEGS * (1 - e);
+    this.netArm.rotation.z = SIT_ARM + (-0.35 - SIT_ARM) * e;
+    this.showNet(u > 0.5);
+    this.head.rotation.z = SIT_HEAD * (1 - e);
+    if (u < 1) return;
+    this.jump = null;
+    // Carry the dive on into the water, with a splash of bubbles.
+    this.vel.set(2.5, -3.5, 0);
+    this.exhale(14);
+  }
+
+  /** The net in hand or put away; the arm it hangs from (the group's first part) always shows. */
+  private showNet(on: boolean) {
+    this.netArm.children.forEach((part, i) => {
+      if (i > 0) part.visible = on;
+    });
+  }
+
+  private updateBubbles(dt: number, time: number) {
     for (let i = this.bubbles.length - 1; i >= 0; i--) {
       const b = this.bubbles[i];
       b.life -= dt;
