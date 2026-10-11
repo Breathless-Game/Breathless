@@ -37,6 +37,8 @@ export interface MapDef {
    * only bring wind and rain). Above 0, rogue waves can capsize the boat (see storm.ts).
    */
   stormSwell: number;
+  /** Sharks hunt here at night, if the player has opted in (see shark.ts). */
+  sharks: boolean;
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
   sand: string;
@@ -65,6 +67,7 @@ export const MAPS: Record<MapId, MapDef> = {
     waves: 0.5,
     climate: 'temperate',
     stormSwell: 0,
+    sharks: false,
     water: [
       [0, '#5fc9c4'],
       [8, '#2c8f9c'],
@@ -94,6 +97,7 @@ export const MAPS: Record<MapId, MapDef> = {
     waves: 0.3,
     climate: 'temperate',
     stormSwell: 0,
+    sharks: false,
     water: [
       [0, '#4fbf9f'],
       [10, '#23876f'],
@@ -123,6 +127,7 @@ export const MAPS: Record<MapId, MapDef> = {
     waves: 1,
     climate: 'stormy',
     stormSwell: 1,
+    sharks: true,
     water: [
       [0, '#46c1d6'],
       [12, '#1f86a8'],

@@ -44,6 +44,10 @@ export class Hud {
   private bestDepth = 0;
   private emergency = $('emergency');
   private alert = $('alert');
+  private shark = $('shark');
+  private sharkLabel = $('shark-label');
+  private sharkPulse = $('shark-pulse');
+  private sharkFill = $('shark-fill');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
   private netSlots = $('net-slots');
@@ -194,6 +198,18 @@ export class Hud {
       cap.textContent = key;
       this.alert.append(' ', cap);
     }
+  }
+
+  /**
+   * Sharks are out: how many, the pulse they hunt by (`estimated` when no sensor measures it)
+   * and how worked up they are, 0..1. Null hides it.
+   */
+  setSharks(state: { count: number; bpm: number; estimated: boolean; intensity: number } | null) {
+    this.shark.classList.toggle('hidden', state == null);
+    if (!state) return;
+    this.sharkLabel.textContent = state.count > 1 ? `${state.count} SHARKS` : state.count ? 'SHARK' : 'SHARK WATERS';
+    this.sharkPulse.textContent = `♥ ${state.estimated ? '~' : ''}${Math.round(state.bpm)}`;
+    this.sharkFill.style.width = `${Math.round(Math.max(0.04, state.intensity) * 100)}%`;
   }
 
   message(text: string, ms = 1800) {

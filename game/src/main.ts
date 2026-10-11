@@ -13,7 +13,7 @@ import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
-import { loadSettings, type Settings } from './settings';
+import { loadSettings, saveSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import {
   advanceWorldBounds,
@@ -27,7 +27,7 @@ import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot } from './equipment';
+import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -35,7 +35,11 @@ import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
+import { PulseEstimate, RestingPulse, SHARK, SharkPack, biteFish, sharkIntensity, type SharkEvent } from './shark';
+import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
+import { DeepSonar } from './deep-sonar';
+import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
@@ -86,6 +90,7 @@ const diver = new Diver(scene);
 diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
 diver.setMaterialBinder((root) => world.colorGrade.apply(root));
+diver.setWaterSurface((x, z) => world.surfaceAt(x, z));
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -144,8 +149,10 @@ function rollFor(depth: number): FishSpec {
   const a = rollFish(randomSeed(), depth);
   if (!world.night) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
-  const b = rollFish(randomSeed(), depth);
-  return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
+  // With sharks out it is three: the price of swimming with them.
+  const rarer = (x: FishSpec, y: FishSpec) => (RARITY_ORDER.indexOf(y.rarity) > RARITY_ORDER.indexOf(x.rarity) ? y : x);
+  const b = rarer(a, rollFish(randomSeed(), depth));
+  return sharksOut() ? rarer(b, rollFish(randomSeed(), depth)) : b;
 }
 
 function addFish(band: Band, depth: number, halfWidth: number, minX = -halfWidth, maxX = halfWidth) {
@@ -212,9 +219,9 @@ function addTrenchFish(depth: number): Fish {
 }
 
 /** Point a trench fish at the depth in its band closest to the diver; true if that's on screen. */
-function headToward(f: Fish, diverDepth: number): boolean {
+function headToward(f: Fish, diverDepth: number, radius = NEAR_M): boolean {
   const depth = THREE.MathUtils.clamp(diverDepth, f.band.top + 1.5, f.band.bottom - 0.5);
-  if (Math.abs(depth - diverDepth) >= NEAR_M) return false;
+  if (Math.abs(depth - diverDepth) >= radius) return false;
   f.target.y = -depth;
   return true;
 }
@@ -228,22 +235,25 @@ function tendTrench(diverDepth: number) {
   while (trenchFish.size < TRENCH_FISH) spawnTrenchFish(diverDepth);
   if (diverDepth <= trenchTop()) return;
 
+  const guidanceRadius = sonarGuiding && sonar ? Math.max(NEAR_M, sonar.benefits.guidanceRadius + 4) : NEAR_M;
+  const guidanceWant = sonarGuiding ? NEAR_WANT + 1 : NEAR_WANT;
+
   // Keep a few fish on screen (or on their way) for a diver who stops: send in
   // the closest ones that can reach, else swap the farthest for a fresh fish
   // just out of view above or below. Nothing spawns within VIEW_M.
   const gap = (f: Fish) => Math.abs(-f.pos.y - diverDepth);
-  const coming = (f: Fish) => gap(f) < NEAR_M || Math.abs(-f.target.y - diverDepth) < NEAR_M;
+  const coming = (f: Fish) => gap(f) < guidanceRadius || Math.abs(-f.target.y - diverDepth) < guidanceRadius;
   const others = [...trenchFish].filter((f) => !coming(f)).sort((a, b) => gap(a) - gap(b));
   let seen = trenchFish.size - others.length;
   for (const f of others) {
-    if (seen >= NEAR_WANT) return;
-    if (headToward(f, diverDepth)) seen++;
+    if (seen >= guidanceWant) return;
+    if (headToward(f, diverDepth, guidanceRadius)) seen++;
   }
-  while (seen < NEAR_WANT && others.length && gap(others[others.length - 1]) >= VIEW_M) {
+  while (seen < guidanceWant && others.length && gap(others[others.length - 1]) >= VIEW_M) {
     removeFish(others.pop()!);
     const above = diverDepth - VIEW_M - 2 > trenchTop() && Math.random() < 0.5;
     const depth = diverDepth + (above ? -1 : 1) * THREE.MathUtils.randFloat(VIEW_M + 0.5, VIEW_M + 2);
-    headToward(addTrenchFish(depth), diverDepth);
+    headToward(addTrenchFish(depth), diverDepth, guidanceRadius);
     seen++;
   }
 }
@@ -326,8 +336,91 @@ function applyEquipmentVisuals() {
   diver.setReelLevel(activeLevel('reel'));
   diver.setReelRecovery(stats.reelRecovery);
 }
+const sonar = new DeepSonar({ color: loadSonarConfig().color, lengthLevel: equipment.sonarLevel, detail: renderQuality.settings.detail, startsCarried: false });
+scene.add(sonar.group);
+sonar.group.visible = false;
+let sonarCarried = false;
+let sonarGuiding = false;
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
+
+// ---- Sharks -------------------------------------------------------------
+// On a map with sharks (the Open Ocean), at night, if the player said yes (shark.ts).
+const sharkPack = new SharkPack();
+const sharkFx = new SharkFx(scene);
+world.colorGrade.apply(sharkFx.group);
+const restingPulse = new RestingPulse();
+const pulseEstimate = new PulseEstimate();
+const sharkEvents: SharkEvent[] = [];
+const sharkAsk = document.getElementById('shark-ask')!;
+
+/** Do sharks hunt right now? */
+function sharksOut() {
+  return settings.sharks === 'on' && world.map.sharks && world.night && phase === 'play';
+}
+
+/** Before a dive on shark waters, the player chooses once; Settings can change it later. */
+function askAboutSharks() {
+  if (!world.map.sharks || settings.sharks !== 'ask') return;
+  paused = true;
+  keys.clear();
+  sharkAsk.classList.remove('hidden');
+}
+
+function answerSharks(on: boolean) {
+  settings.sharks = on ? 'on' : 'off';
+  saveSettings(settings);
+  sharkAsk.classList.add('hidden');
+  paused = false;
+  // The pause was not a breath taken underwater.
+  breathSince = null;
+  hud.message(on ? 'Sharks come out after dark. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+}
+document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
+document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
+
+/** A shark reached the diver: it tears fish out of the net (more, the faster the heart beats) and knocks them aside. */
+function sharkBite(intensity: number) {
+  const taken = biteFish(net.length, intensity);
+  for (const i of taken) net.splice(i, 1);
+  hud.setNet(net, currentStats().netCapacity);
+  // Thrown away from the nearest shark: the one that bit.
+  let nearest = Infinity, from = 0;
+  for (const shark of sharkPack.sharks) {
+    const d = Math.hypot(shark.x - diver.pos.x, shark.y - diver.pos.y);
+    if (d < nearest) [nearest, from] = [d, shark.x];
+  }
+  diver.vel.x += (diver.pos.x >= from ? 1 : -1) * 7;
+  diver.vel.y += 2;
+  stormShake = Math.max(stormShake, 0.4);
+  hud.message(taken.length ? `SHARK BITE · ${taken.length} fish torn from your net` : 'A shark rams you!', 2200);
+}
+
+/** Runs every frame of a dive: learns the pulse, moves the sharks and shows what they are doing. */
+function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: number) {
+  const depth = -diver.pos.y;
+  restingPulse.tick(dt, pulse, depth < 1.2 && !holding);
+  // Without a sensor the pulse is estimated from how hard the diver swims.
+  const estimated = pulse == null;
+  const bpm = pulse ?? pulseEstimate.tick(dt, diver.vel.length() / Math.max(1, currentStats().swimSpeed));
+  const out = sharksOut();
+  const intensity = out ? sharkIntensity(bpm, estimated ? SHARK.rest : restingPulse.bpm) : 0;
+  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents);
+  for (const event of sharkEvents) {
+    if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
+    else if (event === 'bite') sharkBite(intensity);
+  }
+  sharkFx.update(dt, sharkPack.sharks, intensity);
+  health.sharks = out;
+  hud.setSharks(out ? { count: sharkPack.sharks.length, bpm, estimated, intensity } : null);
+}
+
+function noSharks() {
+  sharkPack.reset();
+  sharkFx.clear();
+  health.sharks = false;
+  hud.setSharks(null);
+}
 
 // ---- Rough seas ---------------------------------------------------------
 // On a map with storm swell (the Open Ocean), a storm sends rogue waves at the boat (storm.ts).
@@ -379,6 +472,7 @@ function rightBoat() {
 
 /** Calm water and an upright boat: a new dive, or back on the menu. */
 function calmSea() {
+  noSharks();
   stormSea.reset();
   stormFx.clear();
   stormShake = 0;
@@ -449,6 +543,9 @@ function refreshEquipment() {
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
+  const sonarConfig = saveSonarConfig({ ...loadSonarConfig(), lengthLevel: equipment.sonarLevel });
+  sonar.setLengthLevel(equipment.sonarLevel);
+  sonar.setColor(sonarConfig.color);
   hud.setEquipment(equipment, tier);
   hud.setNet(net, stats.netCapacity);
   gear.render(equipment);
@@ -470,7 +567,7 @@ async function syncPearls(earned = 0) {
 }
 
 let buying = false;
-async function buyNextUpgrade(slot: EquipmentSlot = 'net') {
+async function buyNextUpgrade(slot: UpgradeSlot = 'net') {
   if (buying) return;
   if (phase === 'play') {
     gear.showNotice('Return to the workbench before upgrading gear.');
@@ -520,8 +617,8 @@ function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
   hud.message(`${nextSlotLabel(slot)} module changed`, 1200);
 }
 
-function nextSlotLabel(slot: EquipmentSlot) {
-  return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp' } as const)[slot];
+function nextSlotLabel(slot: UpgradeSlot) {
+  return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp', sonar: 'Deep sonar' } as const)[slot];
 }
 
 // ---- Input --------------------------------------------------------------
@@ -569,6 +666,8 @@ window.addEventListener('keydown', (e) => {
     const nightSelected = world.dayCycle.mode === 'night'
       || (world.dayCycle.mode === 'cycle' && world.night);
     setTimeOfDay(nightSelected ? 'morning' : 'night');
+  } else if (e.key.toLowerCase() === 'v') {
+    deploySonar();
   } else if (e.key.toLowerCase() === 'k') {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
@@ -590,6 +689,62 @@ function setTimeOfDay(mode: TimeOfDay) {
   world.setTimeOfDay(mode);
   const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
   hud.message(labels[mode]);
+}
+
+function carrySonarForDive() {
+  if (!loadout.includes('sonar')) {
+    sonar.group.visible = false;
+    sonarCarried = false;
+    sonarGuiding = false;
+    return;
+  }
+  sonar.setLengthLevel(equipment.sonarLevel);
+  sonar.setColor(loadSonarConfig().color);
+  sonar.setCarried();
+  diver.group.add(sonar.group);
+  sonar.group.visible = true;
+  sonar.group.scale.setScalar(0.2);
+  sonar.group.position.set(-0.25, -0.4, 0.45);
+  sonar.group.rotation.set(0, 0, 0);
+  sonarCarried = true;
+  sonarGuiding = false;
+}
+
+/** How far the transducer weight hangs below the cable's rated length. */
+const SONAR_ANCHOR_DROP = 0.9;
+
+function deploySonar() {
+  if (phase !== 'play' || !sonarCarried || sonar.mode !== 'carried') return;
+  const top = new THREE.Vector3();
+  sonar.group.getWorldPosition(top);
+  scene.attach(sonar.group);
+  sonar.group.visible = true;
+  sonar.group.scale.setScalar(1);
+  sonar.group.rotation.set(0, 0, 0);
+  const target = top.clone();
+  top.z = 0;
+  target.y -= 1;
+  target.z = 0;
+  // Same floor rule as update(): the trench under the boat has no floor, the
+  // shelf does. Over the shelf, stop the weighted end on the seabed instead of
+  // lowering it through the ground (it still stays under the surface).
+  const floorY = Math.abs(target.x) <= TRENCH_X ? -Infinity : world.seabedY;
+  target.y = Math.min(-0.6, Math.max(target.y, floorY + sonar.length + SONAR_ANCHOR_DROP));
+  sonar.group.position.copy(top);
+  sonar.deploy(target);
+  sonarCarried = false;
+  hud.message('Deep sonar lowering…', 1400);
+}
+
+function resetSonar() {
+  if (sonar.group.parent !== scene) scene.attach(sonar.group);
+  sonar.group.visible = false;
+  sonar.group.scale.setScalar(1);
+  sonar.group.position.set(0, 0, 0);
+  sonar.group.rotation.set(0, 0, 0);
+  sonar.anchor(new THREE.Vector3(0, 0, 0));
+  sonarCarried = false;
+  sonarGuiding = false;
 }
 window.addEventListener('keyup', (e) => {
   if (loadoutWheel.handleKeyUp(e)) return;
@@ -751,11 +906,13 @@ function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
+  askAboutSharks();
   resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
   workbench.hide();
   hud.show();
+  carrySonarForDive();
   hud.message('Hold your breath and dive!', 2400);
 }
 
@@ -879,6 +1036,7 @@ function goToMenu() {
   lastHolding = false;
   diver.pos.set(0, -0.4, 0);
   diver.vel.set(0, 0, 0);
+  resetSonar();
   resetWorldBounds();
   paused = false;
   phase = 'menu';
@@ -903,6 +1061,7 @@ function applySettings(s: Settings) {
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
+  sonar.setDetail(renderQuality.settings.detail);
   syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -985,6 +1144,9 @@ const workbench = new Workbench({
     benchPan = 0;
     snapToDiveCamera();
     openStartCard();
+  },
+  sonarColor(color) {
+    sonar.setColor(color);
   },
 });
 
@@ -1206,6 +1368,9 @@ function update(dt: number, time: number) {
     }
   }
 
+  // Over the shelf the seabed is the sharks' floor; down the trench there is none.
+  tendSharks(dt, s.pulse, s.holding, Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY ? -Infinity : world.seabedY);
+
   // Rough seas: only during a dive, and only where a storm piles up the swell.
   const stormEvent = stormSea.tick(dt, world.weather.state.storm, phase === 'play' && world.map.stormSwell > 0);
   world.setRogueWave(stormSea.x, stormSea.dir, stormSea.height);
@@ -1221,10 +1386,14 @@ function update(dt: number, time: number) {
   if (stormSea.x !== null && !stormSea.capsized) stormShake = Math.max(stormShake, 0.12 * (stormSea.height / ROGUE.height) * Math.exp(-Math.abs(stormSea.x - diver.pos.x) / 25));
   stormShake = Math.max(0, stormShake - dt * 0.55);
 
-  diver.update(dt, time, -diver.pos.y);
   // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
   // depth, air and banking still count from the mean waterline).
-  diver.group.position.y += world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6));
+  diver.update(dt, time, -diver.pos.y, world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6)));
+  sonar.update(time, dt);
+  if (!sonarCarried && sonar.mode === 'anchored' && !sonarGuiding && sonar.group.visible) {
+    sonarGuiding = true;
+    hud.message('Sonar guidance online · follow the pulses', 2200);
+  }
   tendTrench(-diver.pos.y);
   const scattering = time >= scatterFrom && time < scatterUntil;
   if (scattering && scatterFresh) {
@@ -1341,6 +1510,7 @@ function frame() {
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
     diver.setQuality(renderQuality.settings);
     world.setQuality(renderQuality.settings);
+    sonar.setDetail(renderQuality.settings.detail);
     syncEventDetail();
     resize();
   }
@@ -1381,7 +1551,11 @@ Object.assign(window, {
   keys,
   renderQuality,
   stormSea,
+  sharkPack,
   nftQueue,
+  /** The deep sonar mesh; deploySonar() is what V does during a dive with the sonar packed. */
+  sonar,
+  deploySonar,
   setTimeOfDay,
   walletState,
   debugStep(seconds: number) {

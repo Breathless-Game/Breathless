@@ -39,6 +39,11 @@
         <div class="bar"><div id="emergency-fill"></div></div>
       </div>
       <div id="alert" class="hidden"></div>
+      <div id="shark" class="hidden">
+        <span id="shark-label">SHARKS</span>
+        <span id="shark-pulse">♥ 68</span>
+        <span class="bar"><i id="shark-fill"></i></span>
+      </div>
 
       <div id="center-msg"></div>
 
@@ -105,6 +110,17 @@
           <div id="wb-place-sub" class="small"></div>
           <p id="wb-place-text"></p>
           <div id="wb-place-gear" class="small muted"></div>
+          <section id="wb-sonar-config" aria-label="Deep sonar settings">
+            <div class="wb-sonar-heading">
+              <span>深潜声纳 · DEEP SONAR</span>
+              <span id="wb-sonar-length" class="small muted">10 m cable</span>
+            </div>
+            <label class="wb-sonar-color">
+              <span class="small">Beacon color · 信标颜色</span>
+              <input id="wb-sonar-color" type="color" value="#42e8d2" aria-label="Deep sonar beacon color" />
+            </label>
+            <p class="wb-sonar-note">Set before diving · weak light + quick guidance</p>
+          </section>
           <button id="wb-dive" class="primary">Dive · 下潜</button>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl">Click outside the chart or press Esc to fold it</div>
@@ -165,6 +181,22 @@
       </div>
     </div>
 
+    <div id="shark-ask" class="hidden">
+      <div class="card">
+        <h2>Sharks hunt here at night</h2>
+        <p>They home in on your heartbeat. The faster it beats, the more of them come, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
+        <ul>
+          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of twice and keeps the best.</li>
+          <li><b>No heart-rate reading.</b> Dives with sharks in the water are left out of the heart-rate figures in your health report: a chase is not a resting measurement. Breath-hold times still count.</li>
+        </ul>
+        <div class="menu-buttons">
+          <button id="shark-yes" class="primary">Dive with sharks</button>
+          <button id="shark-no">No sharks</button>
+        </div>
+        <p class="small muted">Change it any time: Esc → Settings → Sharks at night.</p>
+      </div>
+    </div>
+
     <div id="pause" class="hidden">
       <div class="card">
         <div id="pause-main">
@@ -212,6 +244,14 @@
           </label>
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <label class="setting">
+            <span>Sharks at night (Open Ocean)</span>
+            <select id="set-sharks">
+              <option value="ask">Ask before a dive</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
           <div class="setting"><span>Wallet</span><span id="set-wallet" class="wallet-row"></span></div>
           <div class="menu-buttons">
             <button id="settings-back">Back</button>
