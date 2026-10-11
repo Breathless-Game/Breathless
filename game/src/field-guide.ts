@@ -158,38 +158,50 @@ export class FieldGuide {
     };
     let start: { id: number; x: number; y: number; left: number; top: number } | null = null;
     let dragging = false, suppress = false;
-    el.addEventListener('pointerdown', event => {
-      if (event.pointerType === 'mouse' && event.button !== 0) return;
-      event.stopPropagation();
-      const r = el.getBoundingClientRect();
-      start = { id: event.pointerId, x: event.clientX, y: event.clientY, left: r.left, top: r.top };
-      dragging = false; suppress = false;
-      // No pointer capture yet: capturing here would retarget a plain click to this container.
-    });
-    el.addEventListener('pointermove', event => {
+    // Track the press on window, not on the launcher: a fast flick can leave the button before
+    // the first move, and a release outside it would otherwise leave the press stuck.
+    const stopTracking = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      el.classList.remove('dragging');
+      start = null; dragging = false;
+    };
+    const onMove = (event: PointerEvent) => {
       if (!start || event.pointerId !== start.id) return;
+      // The button was released somewhere we never heard about: abandon the press, do not drag.
+      if (event.pointerType === 'mouse' && event.buttons === 0) { stopTracking(); return; }
       const dx = event.clientX - start.x, dy = event.clientY - start.y;
       if (!dragging) {
         if (!exceedsDragThreshold(dx, dy)) return;
         dragging = true; el.classList.add('dragging');
-        // Capture only once the gesture is a real drag so it keeps tracking outside the button.
-        try { el.setPointerCapture(event.pointerId); } catch { /* ignore */ }
       }
       const w = el.offsetWidth, h = el.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
       const p = clampPosition(start.left + dx, start.top + dy, w, h, vw, vh);
       custom = toFraction(p.left, p.top, w, h, vw, vh);
       apply();
       event.preventDefault();
-    });
+    };
     const end = (event: PointerEvent) => {
       if (!start || event.pointerId !== start.id) return;
-      try { el.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
-      if (dragging) { suppress = true; save(); setTimeout(() => { suppress = false; }, 300); }
-      el.classList.remove('dragging');
-      start = null; dragging = false;
+      const wasDragging = dragging;
+      stopTracking();
+      if (wasDragging) { suppress = true; save(); setTimeout(() => { suppress = false; }, 300); }
     };
-    el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', end);
+    el.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.stopPropagation();
+      if (start) stopTracking();
+      const r = el.getBoundingClientRect();
+      start = { id: event.pointerId, x: event.clientX, y: event.clientY, left: r.left, top: r.top };
+      dragging = false; suppress = false;
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', end);
+      window.addEventListener('pointercancel', end);
+      // No pointer capture: window listeners keep tracking, and capturing would retarget plain clicks.
+    });
+    window.addEventListener('blur', () => { if (start) stopTracking(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden && start) stopTracking(); });
     // A drag finishes with a click on a button; swallow exactly that one.
     el.addEventListener('click', event => { if (suppress) { suppress = false; event.stopPropagation(); event.preventDefault(); } }, true);
     el.addEventListener('dblclick', () => { custom = null; save(); apply(); });

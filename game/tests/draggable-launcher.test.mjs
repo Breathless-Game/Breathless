@@ -48,18 +48,34 @@ test('panel flips below and left-aligns near the edges', () => {
 
 test('field guide wires pointer events and storage safely', async () => {
   const fg = await readFile(new URL('../src/field-guide.ts', import.meta.url), 'utf8');
-  for (const s of ['pointerdown', 'setPointerCapture', 'stopPropagation', 'LAUNCHER_POS_KEY', 'dblclick']) assert.ok(fg.includes(s), s);
+  for (const s of ['pointerdown', 'stopPropagation', 'LAUNCHER_POS_KEY', 'dblclick']) assert.ok(fg.includes(s), s);
 });
 
-test('pointer capture starts only after the drag threshold, never on pointerdown', async () => {
+test('press is tracked on window, added on pointerdown and removed on end', async () => {
   const fg = await readFile(new URL('../src/field-guide.ts', import.meta.url), 'utf8');
-  const downStart = fg.indexOf("addEventListener('pointerdown'");
-  const moveStart = fg.indexOf("addEventListener('pointermove'");
-  assert.ok(downStart >= 0 && moveStart > downStart, 'handlers found in order');
-  const downBody = fg.slice(downStart, moveStart);
+  const downStart = fg.indexOf("el.addEventListener('pointerdown'");
+  assert.ok(downStart >= 0, 'pointerdown handler found');
+  const downBody = fg.slice(downStart, fg.indexOf("window.addEventListener('blur'", downStart));
+  for (const ev of ['pointermove', 'pointerup', 'pointercancel']) {
+    assert.ok(downBody.includes(`window.addEventListener('${ev}'`), `${ev} added on window in pointerdown`);
+  }
   assert.ok(!downBody.includes('setPointerCapture('), 'capture in pointerdown would retarget plain clicks');
-  const moveEnd = fg.indexOf("const end =", moveStart);
-  const moveBody = fg.slice(moveStart, moveEnd);
-  assert.ok(moveBody.includes('setPointerCapture('), 'capture must start in pointermove');
-  assert.ok(moveBody.indexOf('exceedsDragThreshold') < moveBody.indexOf('setPointerCapture('), 'capture after threshold check');
+  const stopStart = fg.indexOf('const stopTracking');
+  const stopBody = fg.slice(stopStart, fg.indexOf('const onMove', stopStart));
+  for (const ev of ['pointermove', 'pointerup', 'pointercancel']) {
+    assert.ok(stopBody.includes(`window.removeEventListener('${ev}'`), `${ev} removed in stopTracking`);
+  }
+  assert.ok(!/el\.addEventListener\('pointer(move|up|cancel)'/.test(fg), 'no element-level move/up listeners');
+  assert.ok(!fg.includes('setPointerCapture('), 'capture is not used at all');
+});
+
+test('lost presses are abandoned instead of dragging', async () => {
+  const fg = await readFile(new URL('../src/field-guide.ts', import.meta.url), 'utf8');
+  const moveStart = fg.indexOf('const onMove');
+  const moveBody = fg.slice(moveStart, fg.indexOf('const end =', moveStart));
+  const guard = moveBody.indexOf("event.pointerType === 'mouse' && event.buttons === 0");
+  assert.ok(guard >= 0, 'buttons === 0 guard exists');
+  assert.ok(guard < moveBody.indexOf('exceedsDragThreshold'), 'guard runs before the drag threshold');
+  assert.ok(fg.includes("window.addEventListener('blur'"), 'blur clears the press');
+  assert.ok(fg.includes("'visibilitychange'"), 'visibilitychange clears the press');
 });
