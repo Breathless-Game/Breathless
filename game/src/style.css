@@ -626,20 +626,6 @@ button.link {
   pointer-events: none;
 }
 
-/* While the chart is picked up and held toward the camera it is nearer than the
-   fish: the table goes on top and the fish fade out (they'd be cut by the table). */
-body.wb-lifted #workbench {
-  z-index: 31;
-}
-
-#title-screen {
-  transition: opacity 0.25s;
-}
-
-body.wb-lifted #title-screen {
-  opacity: 0;
-}
-
 #wb-ui {
   position: fixed;
   inset: 0;
@@ -695,26 +681,10 @@ body.wb-lifted #title-screen {
   margin-top: 6px;
 }
 
-#wb-toast {
-  position: absolute;
-  z-index: 2;
-  top: 6%;
-  left: 50%;
-  transform: translate(-50%, -10px);
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-weight: 700;
-  opacity: 0;
-  transition: opacity 0.25s, transform 0.25s;
-}
-
-#wb-toast.show {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-
+/* The open chart: the 3D sheet (#wb-chart-gl) is drawn over a blurred, dimmed
+   table (#wb-chart-bg) and under the place pins and the panel (.wb-ctl).
+   .open fades the backdrop in while the sheet is carried up; .ready shows the
+   controls once it is held in place. */
 #wb-chart {
   position: absolute;
   inset: 0;
@@ -724,43 +694,90 @@ body.wb-lifted #title-screen {
   flex-wrap: wrap;
   gap: 22px;
   padding: 16px 16px 56px;
-  background: rgba(2, 8, 18, 0.5);
-  backdrop-filter: blur(6px);
-  pointer-events: auto;
-  transition: opacity 0.3s;
-}
-
-/* .pre: laid out (so the paper can be measured) but not shown yet, while the
-   3D map is carried up to exactly where the paper sits. */
-#wb-chart.pre,
-#wb-chart.closing {
-  opacity: 0;
   pointer-events: none;
 }
 
-#wb-chart.pre {
-  transition: none;
+#wb-chart.ready {
+  pointer-events: auto;
 }
 
+#wb-chart-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.5);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 0.6s;
+}
+
+#wb-chart.open #wb-chart-bg {
+  opacity: 1;
+}
+
+#wb-chart-gl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.wb-ctl {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+#wb-chart.ready .wb-ctl {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Buttons take the pointer by default (see `button`): not until the chart is in place. */
+#wb-chart:not(.ready) * {
+  pointer-events: none !important;
+}
+
+/* Reserves the sheet's place next to the panel; the sheet is measured to land on it. */
 #wb-paper {
   position: relative;
   /* Leaves room beside it for the place panel (300px + the gap). */
   width: min(calc(100vw - 354px), 940px, calc((100vh - 120px) * 1.5625));
   aspect-ratio: 1000 / 640;
-  border-radius: 6px;
-  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
 }
 
-#wb-paper.zooming {
-  transform: scale(4);
-  transition: transform 0.65s cubic-bezier(0.5, 0, 0.75, 0);
+#wb-pins {
+  position: absolute;
+  inset: 0;
 }
 
-#wb-chart-canvas {
+#wb-chart.ready #wb-pins {
+  pointer-events: none; /* only the pins themselves take clicks */
+}
+
+/* Diving: the place's preview grows over everything (#wb-reveal); the chart fades under it. */
+#wb-chart-gl {
+  transition: opacity 0.5s;
+}
+
+#wb-chart.revealing #wb-chart-gl {
+  opacity: 0;
+}
+
+#wb-reveal {
+  position: fixed;
+  z-index: 60;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+#wb-reveal canvas,
+#wb-place-preview canvas {
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: 6px;
+  object-fit: cover;
 }
 
 .wb-pin {
@@ -851,8 +868,20 @@ body.wb-lifted #title-screen {
   backdrop-filter: blur(10px);
 }
 
-#wb-chart:not(.pre) #wb-place {
+#wb-chart.ready #wb-place {
   animation: wb-place-in 0.4s ease-out;
+}
+
+#wb-place-preview {
+  aspect-ratio: 16 / 10;
+  margin: -6px -8px 14px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b2233;
+}
+
+#wb-place-preview:empty {
+  display: none;
 }
 
 #wb-place-title {
@@ -889,17 +918,6 @@ body.wb-lifted #title-screen {
     opacity: 0;
     transform: translateX(24px);
   }
-}
-
-#wb-demo {
-  position: absolute;
-  left: 16px;
-  bottom: 18px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: rgba(255, 240, 210, 0.8);
-  cursor: pointer;
 }
 
 #wb-chart-hint {

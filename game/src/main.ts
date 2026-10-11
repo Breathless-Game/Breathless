@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Shipyard, SHIPS } from './ships';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
@@ -23,6 +24,8 @@ import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type Ban
 import { NftQueue } from './nft-queue';
 import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
+import { WorldEvents, type EventContext } from './events';
+import { disposeTree } from './lowpoly';
 
 // ---- Tuning -------------------------------------------------------------
 const SWIM_ACCEL = 24;
@@ -71,6 +74,41 @@ resize();
 const diver = new Diver(scene);
 world.colorGrade.apply(diver.group);
 const hud = new Hud();
+
+// Random world events (avalanches, whales, a leviathan...). They play only during a
+// dive (see update()); menus show none and cost nothing.
+const events = new WorldEvents(scene, world.map, renderQuality.settings.detail);
+world.colorGrade.apply(scene);
+const eventCtx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
+let eventsLive = false;
+const shakeOffset = new THREE.Vector3();
+// Fish near the diver bolt for a moment when the ground shakes or something huge passes.
+const SCATTER: Record<string, number> = { avalanche: 5, rockfall: 1.5, leviathan: 2 }; // seconds until it hits
+const scatterAt = new THREE.Vector3();
+const scatterThreat = new THREE.Vector3();
+let scatterFrom = Infinity;
+let scatterUntil = -Infinity;
+let scatterFresh = false;
+events.onEvent = (e) => {
+  hud.message(e.label, 2600);
+  const delay = SCATTER[e.id];
+  if (delay !== undefined) {
+    scatterFrom = time + delay;
+    scatterUntil = scatterFrom + 2.5;
+    scatterFresh = true;
+  }
+};
+
+let eventDetail = renderQuality.settings.detail;
+/** Keep the events' detail level in step with the render quality. */
+function syncEventDetail() {
+  const detail = renderQuality.settings.detail;
+  if (detail === eventDetail) return;
+  eventDetail = detail;
+  events.setDetail(detail);
+  // The rebuild made new materials: give them the scene's colour grade too.
+  world.colorGrade.apply(scene);
+}
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
@@ -99,6 +137,8 @@ function removeFish(fish: Fish) {
   fishes.splice(fishes.indexOf(fish), 1);
   scene.remove(fish.mesh.group);
   trenchFish.delete(fish);
+  // Each fish owns its geometry and materials: free them with the mesh.
+  disposeTree(fish.mesh.group);
 }
 
 function spawnFish(band: Band) {
@@ -187,8 +227,7 @@ function tendTrench(diverDepth: number) {
  * trench, where that school covers them.
  */
 function populate() {
-  for (const f of [...trenchFish]) removeFish(f);
-  for (const f of fishes) scene.remove(f.mesh.group);
+  for (const f of [...fishes]) removeFish(f);
   fishes.length = 0;
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
@@ -230,7 +269,8 @@ function saveBank() {
   } catch {}
 }
 
-const currentTier = () => rodTier(equipment);
+let shipBonus: (typeof SHIPS)[number] = SHIPS[0];
+const currentTier = () => { const tier = rodTier(equipment); return { ...tier, capacity: tier.capacity + shipBonus.capacity, catchRadius: tier.catchRadius * (1 + shipBonus.range) }; };
 hud.setNet(net, currentTier().capacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
@@ -450,12 +490,16 @@ function showMapOnHud() {
 function applyMap(id: MapId) {
   if (id === world.map.id) return;
   world.setMap(MAPS[id]);
+  // The event pool follows the map, whether the picker or a restored wallet chose it.
+  events.setMap(world.map);
+  world.colorGrade.apply(scene);
   populate(); // also swaps the old trench school for one under the new shelf
   showMapOnHud();
 }
 
-function selectMap(id: MapId) {
-  if (phase !== 'menu' || id === world.map.id || !isUnlocked(MAPS[id], mapProgress)) return;
+/** anyMap: the workbench's chart lets you pick any place, locked or not. */
+function selectMap(id: MapId, anyMap = false) {
+  if (phase !== 'menu' || id === world.map.id || (!anyMap && !isUnlocked(MAPS[id], mapProgress))) return;
   mapProgress.selected = id;
   saveMapProgress(mapProgress);
   applyMap(id);
@@ -506,6 +550,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity);
   phase = 'play';
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
@@ -602,7 +647,8 @@ function pause() {
 }
 
 function onEscape() {
-  if (pauseMenu.open) pauseMenu.back();
+  if (shipyard.open) shipyard.close();
+  else if (pauseMenu.open) pauseMenu.back();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
@@ -647,6 +693,7 @@ function applySettings(s: Settings) {
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
+  syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
   document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
@@ -671,6 +718,27 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
+const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) => {
+  paused = open;
+  keys.clear();
+  if (!open) breathSince = null;
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity); }, scene, root => world.colorGrade.apply(root));
+const boatRay = new THREE.Raycaster();
+document.addEventListener('click', (e) => {
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat, true).length) { e.preventDefault(); e.stopPropagation(); shipyard.show(); }
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const target = e.target as HTMLCanvasElement;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open) { target.style.cursor = ''; return; }
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
+});
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
@@ -687,14 +755,17 @@ let benchPan = 0;
 
 const workbench = new Workbench({
   progress: () => mapProgress,
-  setUnlockAll: setDemoUnlock,
   pan(u, tableY) {
     benchPan = u;
     titleScreen.setPan(u, tableY);
   },
+  preview: mapPreview,
   dive(id, gear) {
     loadout = gear;
-    selectMap(id);
+    selectMap(id, true);
+    // The preview frame expanding over the screen was taken from exactly here.
+    benchPan = 0;
+    snapToDiveCamera();
     openStartCard();
   },
 });
@@ -740,6 +811,7 @@ function loadWalletProgress() {
   refreshEquipment();
   mapPicker.render();
   noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
+  shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
 }
@@ -845,7 +917,7 @@ function update(dt: number, time: number) {
 
   // Water drag, speed cap, and gentle buoyancy at the surface.
   diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  const cap = outOfAir ? 10 : MAX_SPEED;
+  const cap = outOfAir ? 10 : MAX_SPEED * (1 + shipBonus.speed);
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   // Below the shelf you're inside the trench; above it, the shelf is the floor
@@ -873,21 +945,55 @@ function update(dt: number, time: number) {
 
   diver.update(dt, time, -diver.pos.y);
   tendTrench(-diver.pos.y);
-  for (const f of fishes) f.update(dt, time, diver.pos);
+  const scattering = time >= scatterFrom && time < scatterUntil;
+  if (scattering && scatterFresh) {
+    scatterAt.copy(diver.pos);
+    scatterFresh = false;
+  }
+  for (const f of fishes) {
+    const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
+    // A threat just behind each nearby fish, on the diver's side: it darts away.
+    f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
+  }
   world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
 
-  // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
-  // the surface so we never look at the diver through the translucent waves.
-  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
-  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
-  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
   // On the menu the camera sinks a little as the workbench pans in.
-  const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - benchDrop, 22);
+  cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
+  camera.position.sub(shakeOffset);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+
+  // World events, after World.update (the lightning flash tints what it wrote).
+  // Only during a dive: leaving or starting one clears them and restarts the clock.
+  const diving = phase === 'play' || phase === 'blackout';
+  if (diving !== eventsLive) {
+    eventsLive = diving;
+    events.stop();
+    scatterFrom = Infinity;
+    scatterUntil = -Infinity;
+  }
+  if (diving) {
+    const weather = world.weather.state;
+    eventCtx.cameraY = camera.position.y;
+    eventCtx.cameraX = camera.position.x;
+    eventCtx.aspect = camera.aspect;
+    eventCtx.depth = -diver.pos.y;
+    eventCtx.night = world.night;
+    eventCtx.shelfDepth = mapDepth(world.map); // below it is the trench
+    const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY; // as in cameraTarget()
+    eventCtx.floorY = inTrench ? -Infinity : world.seabedY; // the trench has no floor
+    eventCtx.lightingEffects = world.lightingEffectsEnabled;
+    eventCtx.storm = weather.storm;
+    eventCtx.cloud = weather.cloud;
+    events.update(time, dt, eventCtx);
+  }
+  // The storm's own sheet lightning holds off while an event bolt strikes.
+  world.quietWeatherLightning = events.activeId === 'lightning';
+  // A subtle shake (a few cm) on top of the follow, taken off again next frame.
+  const shake = events.shake;
+  shakeOffset.set(shake * Math.sin(time * 47.3) * Math.cos(time * 13.1), shake * Math.sin(time * 53.7 + 1.3) * Math.cos(time * 9.7), 0);
+  camera.position.add(shakeOffset);
 
   hud.setBreath(s, outOfAir);
   hud.setDepth(-diver.pos.y);
@@ -896,16 +1002,66 @@ function update(dt: number, time: number) {
   if (phase === 'calibrating') updateCalibration();
 }
 
+/**
+ * Camera: side-on 2.5D follow with a little lead. Underwater it stays below the
+ * surface so we never look at the diver through the translucent waves. `drop`
+ * sinks it (the workbench pan).
+ */
+function cameraTarget(out: THREE.Vector3, drop: number) {
+  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
+  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
+  const shelfY = world.seabedY + 1.2; // as in update(): lowest the diver can go outside the trench
+  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
+  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
+  return out.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - drop, 22);
+}
+
+/** Puts the camera exactly where a dive starts (no workbench drop, no easing). */
+function snapToDiveCamera() {
+  cameraTarget(camera.position, 0);
+  camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+}
+
+// The workbench's live place preview: while it is on, every frame also renders the
+// scene from where the dive starts and copies it here. Diving grows this canvas to
+// the full screen over the live scene, which is then in exactly that view.
+const previewCanvas = document.createElement('canvas');
+const previewCamera = new THREE.PerspectiveCamera();
+let previewOn = false;
+
+/** Switches the world to that place and starts the live preview of it (null: stops it). */
+function mapPreview(id: MapId | null): HTMLCanvasElement | null {
+  previewOn = id != null;
+  if (!id) return null;
+  selectMap(id, true);
+  renderPreview(); // a first frame right away, so it never shows empty
+  return previewCanvas;
+}
+
+function renderPreview() {
+  previewCamera.copy(camera); // same lens and aspect
+  cameraTarget(previewCamera.position, 0);
+  previewCamera.lookAt(previewCamera.position.x, previewCamera.position.y - 1.6, 0);
+  renderer.render(scene, previewCamera);
+  if (previewCanvas.width !== canvas.width || previewCanvas.height !== canvas.height) {
+    previewCanvas.width = canvas.width;
+    previewCanvas.height = canvas.height;
+  }
+  // Copied in the same task as the render, so the drawing buffer is still there.
+  previewCanvas.getContext('2d')!.drawImage(canvas, 0, 0);
+}
+
 let time = 0;
 function frame() {
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
     world.setQuality(renderQuality.settings);
+    syncEventDetail();
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
   // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
-  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, (!paused || shipyard.open) && !document.hidden);
   resetDayClock = false;
   if (!paused) {
     time += dt;
@@ -914,6 +1070,7 @@ function frame() {
     world.updateLighting(time, camera.position.y, camera.position.x);
   }
   updateTimeLabel();
+  if (previewOn) renderPreview(); // before the main view, which is what the canvas then shows
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -923,10 +1080,16 @@ frame();
 Object.assign(window, {
   workbench,
   loadout: () => loadout,
+  /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
+  diveCameraOffset: () => camera.position.distanceTo(cameraTarget(new THREE.Vector3(), 0)),
   breath,
   breathTest,
   titleScreen,
   world,
+  events,
+  renderer,
+  /** Fire a world event now, e.g. trigger('whale'). Only during a dive, like the schedule. */
+  trigger: (id: string) => eventsLive && events.trigger(id),
   selectMap,
   diver,
   fishes,

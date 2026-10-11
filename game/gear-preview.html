@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HackRU · 多边体渔具素材预览</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #0c1822; color: #ecf3f5; font-family: system-ui, sans-serif; }
+      main { max-width: 1500px; margin: auto; padding: 36px 48px 28px; }
+      .eyebrow { color: #67c7c3; font-size: 12px; letter-spacing: .18em; }
+      h1 { margin: 12px 0 8px; font-size: 34px; font-weight: 600; }
+      p { color: #a2bac5; line-height: 1.6; margin: 0; }
+      #viewport { width: 100%; height: min(65vh, 680px); min-height: 360px; margin: 24px 0 16px; border: 1px solid #2b414c; border-radius: 16px; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      button { border: 1px solid #3c5663; background: #182d38; color: #e4eef1; padding: 10px 16px; border-radius: 8px; cursor: pointer; }
+      button:hover, button[aria-pressed="true"] { background: #275557; border-color: #67c7c3; }
+      .export { margin-left: auto; display: flex; gap: 10px; }
+      footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 18px; color: #829ca8; font-size: 12px; }
+      @media (max-width: 700px) { main { padding: 24px 20px; } h1 { font-size: 27px; } .export { margin-left: 0; } footer { flex-direction: column; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">HACKRU / FISHING GEAR ASSET</div>
+      <h1>多边体 3D · 潜水渔具</h1>
+      <p>渐缩杆身 · 分面握把 · 金属纺车轮 · 椭圆网圈 · 菱形尼龙网</p>
+      <div id="viewport" aria-label="可旋转的多边体渔具 3D 预览"></div>
+      <div class="toolbar">
+        <button id="angle">切换侧视角</button>
+        <button data-level="1" aria-pressed="true">Lv1</button>
+        <button data-level="2" aria-pressed="false">Lv2</button>
+        <button data-level="3" aria-pressed="false">Lv3</button>
+        <div class="export"><button id="png">导出 PNG</button><button id="glb">导出 3D 素材 GLB</button></div>
+      </div>
+      <footer><span>拖动旋转 · 滚轮缩放 · 升级仅扩大网口</span><span>实际游戏模型 / Faceted PBR / Lv<span id="level">1</span></span></footer>
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="/src/gear-preview.ts"></script>
+  </body>
+</html>

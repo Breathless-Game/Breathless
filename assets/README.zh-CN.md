@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-《屏息 Breathless》里的每条鱼和鱼竿都是用代码生成的低多边形模型，游戏不带任何模型文件和贴图。这个目录是这些素材的目录册：每个素材一张图、决定它外形的参数，以及怎么重新渲染、怎么加新的。
+《屏息 Breathless》里的每条鱼和鱼竿都用代码生成。鱼竿增加了更完整的五金结构和 PBR 材质，同时保留多面体着色。这个目录记录素材的渲染图、建模参数，以及可复用的 Lv1 抄网 GLB。游戏实时生成模型，导出文件可供其他项目使用。
 
 ---
 
@@ -24,7 +24,11 @@ assets/
 ├── README.md            本页的英文版
 ├── README.zh-CN.md      本页
 ├── fish/                17 张鱼的图，每个鱼种一张：512 × 512 PNG，透明背景
-├── gear/                鱼竿：1024 × 512 PNG，透明背景和深色水底各一张
+├── gear/                鱼竿渲染图和可复用的 Lv1 GLB
+│   ├── fishing-net.png                  1024 × 512 PNG，透明背景
+│   ├── fishing-net-dark.png             1024 × 512 PNG，深色水底
+│   ├── fishing-net-faceted-preview.png  模型检查预览图
+│   └── fishing-net-faceted.glb          基础 Lv1 模型，含逐面法线
 └── cards/               一张 NFT 卡牌示例：512 × 512 PNG
 ```
 
@@ -35,7 +39,10 @@ assets/
 | 鱼的模型 | `buildFishMesh(spec)` | [`game/src/fish.ts`](../game/src/fish.ts) |
 | 鱼的图片、图标和 NFT 卡牌 | `fishSprite` / `fishIcon` / `fishCard` | [`game/src/portrait.ts`](../game/src/portrait.ts) |
 | 鱼竿 | `buildFishingNetMesh()` | [`game/src/gear.ts`](../game/src/gear.ts) |
+| 13 款水下装备与配件 | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts)、[`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
+| 配件 3D 工坊预览与导出 | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html)、[`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | 预览页 | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html)、[`game/src/asset-library.ts`](../game/src/asset-library.ts) |
+| 鱼竿检查与导出 | `gear-preview.html` | [`game/gear-preview.html`](../game/gear-preview.html)、[`game/src/gear-preview.ts`](../game/src/gear-preview.ts) |
 
 ---
 
@@ -231,26 +238,41 @@ assets/
 
 ## 3. 鱼竿
 
-<img src="gear/fishing-net-dark.png" width="720" alt="鱼竿，在水下当抄网用">
+<img src="gear/fishing-net-dark.png" width="720" alt="保留多面体着色的鱼竿，在水下当抄网用">
 
-策划案里这件道具叫鱼竿。在水下，游戏把它当抄网用：保留鱼竿的握把、线轮、杆身和金属箍，前端装一个网圈和网兜。`buildFishingNetMesh()` 返回模型 `group` 和一个叫 `tip` 的标记点。
+[模型检查预览图](gear/fishing-net-faceted-preview.png) · [下载 Lv1 GLB](gear/fishing-net-faceted.glb)
+
+策划案里这件道具叫鱼竿。在水下，游戏把它当抄网用：碳纤维杆身、EVA 风格握把、纺车轮和导环连接前端的椭圆网圈与细尼龙网兜。`buildFishingNetMesh()` 返回完整模型 `group`、升级轴心 `mouth` 和抓鱼标记点 `tip`。网格材质使用 `flatShading: true`，通过金属度、粗糙度和清漆表现部件，不依赖贴图。GLB 是基础 Lv1 素材，导出时烘焙逐面法线，在其他查看器里也保留多面体效果。
 
 | 部件 | 几何体 | 尺寸（模型单位） | 颜色 | 沿杆方向的位置（x） |
 | --- | --- | --- | --- | --- |
 | 手臂 | 长方体 | 0.7 × 0.14 × 0.14 | `#1d2b3a`，潜水服的颜色 | 0–0.7 |
-| 握把 | 六边柱 | 半径 0.09–0.12，长 0.38 | `#7e4c32` | 0.59–0.97 |
-| 线轮 | 八边柱 | 半径 0.14，厚 0.1 | `#344956`，金属质感 | 0.98，在杆身下方 |
-| 线轮摇柄 | 长方体 | 0.22 × 0.035 × 0.035 | `#344956`，金属质感 | 1.1 |
-| 杆身 | 六边柱，一头细 | 半径 0.035–0.06，长 1.35 | `#c9d2d7`，金属质感 | 0.585–1.935 |
-| 金属箍 | 圆环 | 半径 0.07，管径 0.018 | `#ffd166` | 1.55 |
-| 网圈 | 十二边圆环 | 半径 0.42，管径 0.04 | `#ffd166` | 2.0 |
-| 网兜 | 线段 | 从半径 0.1 到半径 0.42 的圆锥 | `#dffaf7`，不透明度 58% | 1.45–2.0 |
-| `tip` | 空的标记点 | – | – | 2.0，网圈正中 |
+| 尾盖 | 十二边柱 | 半径 0.105–0.12，长 0.1 | `#142027` | 0.61–0.71 |
+| 握把与箍环 | 十二边锥柱、圆环 | 握把半径 0.105–0.135，长 0.46；箍环半径 0.12 | `#9b5d3c`，箍环 `#142027` | 握把 0.68–1.14；箍环 0.72 和 1.1 |
+| 轮座与金属箍 | 十二边锥柱、圆环 | 半径 0.073–0.082，长 0.28；金属箍半径 0.084 | `#46616a`，金属箍 `#9eafb2` | 轮座 1.12–1.4；金属箍 1.4 |
+| 线轮主体 | 球体，16 × 10 分段 | 半径 0.17，缩放 (0.82, 1.18, 0.78) | `#263b46` | 1.25，在杆身下方 |
+| 线轮侧板、线杯与导线环 | 十六边柱、圆环 | 侧板半径 0.185，厚 0.035；线杯半径 0.135，长 0.13；导线环半径 0.19 | `#9eafb2`，线杯 `#a9b6b8` | 1.25–1.3 |
+| 线轮摇柄与握球 | 八边柱、球体 | 摇柄半径 0.014；握球半径 0.045 | `#9eafb2`，握球 `#263b46` | 摇柄 1.34–1.53；握球 1.55 |
+| 碳纤维杆身与强调条 | 十二边锥柱、八边强调条 | 杆身半径 0.022–0.068，长 1.34；强调条半径 0.008–0.011，长 1.15 | `#17242d`，强调条 `#46616a` | 杆身 1.31–2.65；强调条 1.505–2.655 |
+| 导环 | 十二边圆环 | 半径 0.065、0.052、0.042、0.033；管半径 0.009 | `#9eafb2` | 1.67、1.93、2.18、2.4 |
+| 网圈与内圈护框 | 椭圆管，路径 32 段 × 横截面 8 段 | 网圈 y/z 半径 0.52/0.47；护框 0.47/0.42；管半径 0.038 | `#6f9698`，护框 `#46616a` | 2.7 |
+| 网兜 | 菱形编织线段 | 深 0.78；收口半径 0.075，扩至网圈半径 0.52/0.47 | `#b9d6d7`，不透明度 38% | 1.92–2.7 |
+| 网口支撑 | 八边柱 | 半径 0.014，从杆身连至 y ±0.52 | `#6f9698` | 2.5–2.7 |
+| `tip` / `Catch_Centre` | 空的标记点 | – | – | 2.7，网圈正中 |
 
 - **轴心**：模型的原点是潜水员的肩膀，鱼竿指向 +x。`diver.ts` 把它挂在身体的 `(0.6, 0, 0.3)` 处，挥动时整个 group 一起转。
-- **抓鱼点**：按 `Space` 挥竿。离 `tip` 最近、并且在当前渔网等级的收网范围以内的那条鱼被抓住，网里最多装这一等级的容量那么多条鱼。等级定义在 [`game/src/equipment.ts`](../game/src/equipment.ts) 的 `ROD_TIERS`：Lv1 是 2.4 m、6 条，Lv2 是 2.8 m、8 条，Lv3 是 3.2 m、10 条。`Diver.setNetLevel()` 让整个模型在 Lv1 之上每升一级放大 12%。
-- **网兜**：108 条线段，一次绘制调用（5 圈、每圈 12 个点，加上沿圆锥方向的 12 条线）。它用线来画，没有用实心圆锥，这样从任何角度看都像网。
-- **还没做的**：[策划案](../design/game-design-document.md#7-经济与升级)第 7.1 节里鱼竿、鱼饵、船的升级目前只有设计。上面的渔网等级是游戏里唯一的升级，三个等级共用这一个模型，只是放大。
+- **抓鱼点**：按 `Space` 挥竿。离 `tip` 最近、并且在当前渔网等级的收网范围以内的那条鱼被抓住，网里最多装这一等级的容量那么多条鱼。等级定义在 [`game/src/equipment.ts`](../game/src/equipment.ts) 的 `ROD_TIERS`：Lv1 是 2.4 m、6 条，Lv2 是 2.8 m、8 条，Lv3 是 3.2 m、10 条。
+- **网兜**：224 条线段，一次绘制调用。7 圈、每圈 16 个点交替错开半个网格，成对的斜线形成菱形，仅收口和边缘保留环形缝线。
+- **还没做的**：[策划案](../design/game-design-document.md#7-经济与升级)第 7.1 节里鱼竿、鱼饵、船的升级目前只有设计。渔网等级是游戏里唯一的升级。
+- **升级**：已实现三档。`Diver.setNetLevel()` 只缩放 `mouth`（网圈、护框、网兜和支撑），在 Lv1 之上每升一级放大 15%；握把、线轮、杆身与抓鱼中心位置保持不变。
+
+| 等级 | 网容量 | 抓鱼半径 | 网口缩放 |
+| --- | --- | --- | --- |
+| Lv1 · Basic Net | 6 条 | 2.4 | 1.00 |
+| Lv2 · Reinforced Net | 8 条 | 2.8 | 1.15 |
+| Lv3 · Abyssal Net | 10 条 | 3.2 | 1.30 |
+
+执行 `npm run game` 后，打开 <http://localhost:5173/gear-preview.html>，即可旋转、缩放实际游戏模型，检查三档等级，并导出 PNG 或 GLB。PNG 保存当前视角和等级；GLB 始终导出基础 Lv1 模型，不包含预览地面、灯光和相机。
 
 ---
 
