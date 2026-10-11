@@ -1,8 +1,8 @@
-// BreathDetector on synthetic chest traces: the baseline is learned once, during
-// calibration, and then stays fixed however long the player plays.
+// BreathDetector on synthetic chest traces: the baseline is learned once (or seeded
+// with a known one) and then stays fixed however long the player plays.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BreathDetector, DEFAULTS } from '../breath-detector.mjs';
+import { BreathDetector, DEFAULTS, SEED_MAX, SEED_MIN, parseSeedBaseline } from '../breath-detector.mjs';
 
 const A = 1; // normal breathing amplitude (trace units)
 const PERIOD_S = 4;
@@ -25,10 +25,10 @@ function rng(seed) {
 // then a high-pass decay back to flat; a release starts with an exhale well below it.
 // Each sample goes straight into the detector, and every state change is logged.
 class Session {
-  constructor(det = new BreathDetector(), seed = 1) {
+  constructor(det = new BreathDetector(), seed = 1, startUs = 1_000_000) {
     this.det = det;
     this.noise = rng(seed);
-    this.tUs = 1_000_000;
+    this.tUs = startUs;
     this.v = -A;
     this.events = []; // {ts, holding}
     this.calibratedAt = null;
@@ -65,6 +65,13 @@ class Session {
     return this;
   }
 
+  /** Presage's start-up swings: ~10x normal breathing, fast. */
+  swing(seconds) {
+    for (let i = 1; i <= seconds * HZ; i++) this.#push(10 * A * Math.sin((2 * Math.PI * i) / HZ));
+    this.#push(-A);
+    return this;
+  }
+
   /** The last inhale (to 1.5 A), a hold that decays to flat, then the exhale (to -1.5 A). */
   hold(seconds) {
     const from = this.v;
@@ -95,11 +102,11 @@ class Session {
   }
 }
 
-test('calibration finishes once, about warmup + calibrationUs into the session, then the baseline is fixed', () => {
+test('calibration finishes once, about warmup + minBaselineUs into the session, then the baseline is fixed', () => {
   const s = new Session();
   assert.equal(s.det.snapshot().calibrated, false);
   s.breathe(20); // 80 s of plain breathing
-  const expected = 1_000_000 + DEFAULTS.warmupUs + DEFAULTS.calibrationUs;
+  const expected = 1_000_000 + DEFAULTS.warmupUs + DEFAULTS.minBaselineUs;
   assert.equal(s.calibrations, 1);
   assert.ok(Math.abs(s.calibratedAt - expected) <= 300_000, `calibrated at ${s.calibratedAt}, expected ~${expected}`);
   assert.equal(s.baselines.size, 1, 'baseline never changes after it is set');
@@ -110,7 +117,7 @@ test('calibration finishes once, about warmup + calibrationUs into the session, 
 
 test('no hold is called before calibration, and a short pause during it does not spoil the baseline', () => {
   const s = new Session();
-  s.breathe(3).flat(4).breathe(2); // the pause falls inside the calibration window
+  s.breathe(2).flat(1.5).breathe(3); // the pause falls inside the 9-15 s calibration window
   assert.equal(s.events.length, 0);
   s.breathe(4);
   assert.equal(s.calibrations, 1);
@@ -154,7 +161,7 @@ test('a ten-minute session with many holds and big recovery breaths: no drift, s
   assert.ok(first.releaseMs < 1000, `release took ${first.releaseMs} ms`);
 });
 
-test('a new detector (new session or Presage restart) calibrates from scratch', () => {
+test('a new detector with no known baseline learns one from scratch', () => {
   const s = new Session();
   s.breathe(8);
   assert.equal(s.det.snapshot().calibrated, true);
@@ -164,4 +171,73 @@ test('a new detector (new session or Presage restart) calibrates from scratch', 
   fresh.breathe(8, 2 * A);
   assert.equal(fresh.calibrations, 1);
   assert.ok(Math.abs(fresh.det.baseline - 2 * A) < 0.2 * A, `baseline ${fresh.det.baseline}`);
+});
+
+test('a seeded detector skips learning: it is ready after the short warmup and calls a hold right away', () => {
+  const s = new Session(new BreathDetector({ baseline: A }));
+  assert.equal(s.det.seeded, true);
+  assert.equal(s.det.snapshot().calibrated, false, 'not ready before any trace');
+  s.flat(0.5);
+  assert.equal(s.det.snapshot().calibrated, false, 'baseline known but still warming up');
+  assert.equal(s.det.snapshot().warm, false);
+  s.breathe(1).hold(10).breathe(2);
+  const expected = 1_000_000 + DEFAULTS.seededWarmupUs;
+  assert.ok(Math.abs(s.calibratedAt - expected) <= 100_000, `ready at ${s.calibratedAt}, expected ~${expected}`);
+  assert.ok(DEFAULTS.seededWarmupUs < DEFAULTS.warmupUs + DEFAULTS.minBaselineUs);
+  const [h] = s.results();
+  assert.notEqual(h.detectMs, null, 'the hold was never called');
+  const calledAtUs = h.atS * 1e6 + h.detectMs * 1000;
+  assert.ok(calledAtUs < 1_000_000 + DEFAULTS.warmupUs + DEFAULTS.minBaselineUs, 'called before an unseeded detector could even finish learning');
+  assert.equal(h.why, 'exhale');
+  assert.equal(s.calibrations, 1);
+});
+
+test('a seeded baseline never moves, whatever the player breathes like', () => {
+  const s = new Session(new BreathDetector({ baseline: A }));
+  s.breathe(10, 2 * A).breathe(5, 0.6 * A).hold(15).breathe(10, 2 * A);
+  assert.deepEqual([...s.baselines], [A]);
+  assert.equal(s.det.base.length, 0, 'nothing is collected for learning');
+});
+
+test('a Presage restart in the same connection keeps the learned baseline (no relearning)', () => {
+  const first = new Session();
+  first.breathe(6).hold(15).breathe(2);
+  const learned = first.det.baseline;
+  assert.notEqual(learned, null);
+  // What index.mjs does when a new pipeline starts: a fresh detector, seeded with the
+  // connection's baseline. The new pipeline starts after a gap, with its start-up swings.
+  const next = new Session(new BreathDetector({ baseline: first.det.baseline }), 3, first.tUs + 5_000_000);
+  next.swing(2).breathe(1).hold(15).breathe(2);
+  assert.deepEqual([...next.baselines], [learned]);
+  assert.equal(next.calibrations, 1);
+  assert.ok(next.calibratedAt - (first.tUs + 5_000_000) <= DEFAULTS.seededWarmupUs + 100_000);
+  const [h] = next.results();
+  assert.notEqual(h.detectMs, null);
+  assert.equal(h.why, 'exhale');
+  assert.equal(next.events.filter((e) => e.holding).length, 1, 'the start-up swings never read as a hold');
+  // Same hold, same answer as on the first pipeline.
+  const [h0] = first.results();
+  assert.ok(Math.abs(h.detectMs - h0.detectMs) <= 100, `detect ${h0.detectMs} vs ${h.detectMs} ms`);
+  assert.ok(Math.abs(h.releaseMs - h0.releaseMs) <= 100, `release ${h0.releaseMs} vs ${h.releaseMs} ms`);
+});
+
+test('seed validation: only a finite number in [SEED_MIN, SEED_MAX] is accepted', () => {
+  for (const bad of [NaN, -1, -0.5, 0, -0, SEED_MIN / 2, SEED_MAX * 2, 1e9, Infinity, -Infinity, '1', '0.8', null, undefined, {}, [1], true]) {
+    assert.equal(parseSeedBaseline(bad), null, `accepted ${String(bad)}`);
+    const det = new BreathDetector({ baseline: bad });
+    assert.equal(det.baseline, null);
+    assert.equal(det.seeded, false);
+  }
+  for (const good of [SEED_MIN, 0.05, 1, 3.7, SEED_MAX]) assert.equal(parseSeedBaseline(good), good);
+});
+
+test('a seed never replaces a baseline the detector already has', () => {
+  const s = new Session();
+  s.breathe(5);
+  const learned = s.det.baseline;
+  assert.equal(s.det.seed(2 * A), false);
+  assert.equal(s.det.baseline, learned);
+  const seeded = new BreathDetector({ baseline: A });
+  assert.equal(seeded.seed(3 * A), false);
+  assert.equal(seeded.baseline, A);
 });
