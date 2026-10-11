@@ -15,6 +15,7 @@ import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps'
 import { SoftPaper } from './paper';
 import { GearInspector, type ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import type { LessonId } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -35,6 +36,8 @@ export interface WorkbenchHooks {
   conditions(map: MapId): WorkbenchConditions;
   /** The workbench sonar piece applies its chosen beacon color to the dive model. */
   sonarColor?(color: string): void;
+  /** Optional progress hooks for the action-driven field guide. */
+  tutorial?(id: LessonId): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
   buy(id: UpgradeId): Promise<string | null>;
   pearls(): number;
@@ -335,6 +338,7 @@ export class Workbench {
    * table as it was. rise: pan the table up into view (with intro, always).
    */
   show(intro: boolean, rise = intro) {
+    this.hooks.tutorial?.('bench');
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
@@ -1054,6 +1058,7 @@ export class Workbench {
       },
       () => {
         p.mode = 'ready';
+        this.hooks.tutorial?.('pack');
         p.yaw = 0;
         this.puff(x, z, 0.5);
         this.lightSlot(this.slotRings[slot], true);
@@ -1258,6 +1263,7 @@ export class Workbench {
    * laid out, which then takes over.
    */
   private openChart() {
+    this.hooks.tutorial?.('chart');
     this.state = 'opening';
     this.hovered = null;
     this.tip.classList.add('hidden');
