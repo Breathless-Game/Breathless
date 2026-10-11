@@ -282,7 +282,7 @@ Every dive key can be rebound in **Settings → Controls** (on the Settings desk
   "rate":  { "value": 15, "confidence": 90 },     // breathing rate (needs a ~30 s window)
   "pulse": { "value": 72, "confidence": 90 },     // heart rate
   "frames": 1234,
-  "holding": true, "holdMs": 8200,
+  "holding": true, "holdMs": 8200, "releasing": false,  // releasing: a release is waiting to be confirmed
   "calibrated": true,  // a hold can be called: baseline known and "warm" (past the start-up swings)
   "warm": true, "baseline": 0.8,  // baseline: null until learned or seeded; the game keeps it for its next seed
   "flatness": 0.93, "apnea": false, "talking": false,
@@ -314,8 +314,9 @@ File: `sensor/breath-detector.mjs`. The input is Presage's chest-movement trace,
 3. **Call a release, mainly on the exhale**: the detector tracks a "hold level". It follows the slow settling after the inhale, but freezes while the trace jumps around, so a glitch can't drag it along. The hold ends when the trace drops more than `1.1 × B` below that level, and also below the highest point of the last 1.5 seconds, for 0.1 seconds. A jump up of more than `2 × B` also counts; that covers someone who held with empty lungs and breathes in first.
 4. **In the first 2 seconds of a hold**, which may just be a pause between breaths, activity alone still ends it: the activity over 0.75 seconds is above `0.5 × B` for 0.2 seconds.
 5. **Fallback**: activity over 2 seconds above `0.8 × B` for 4 seconds in a row always ends a hold, so it can never get stuck. Talking for more than 0.5 seconds also counts as a release.
-6. **Right after a release**: no new hold is called for 2 seconds.
-7. **Debounce on the game side** (`RELEASE_DEBOUNCE_MS` in `main.ts`): "breathing" underwater has to last 0.5 seconds before it counts.
+6. **Blip tolerance**: the exhale, inhale and early-activity rules above only start a *pending* release (`releasing: true` in the state, `holding` stays true). If within 0.8 seconds the trace is back within `0.5 × B` of the hold level and has sat quiet there for 0.3 seconds, it was a blip (a spike, a short dip, a head twitch) and the hold carries on with its original start. Otherwise the release stands, with the reason that started it. A real exhale now ends a hold ~1.3 s after it starts (was ~0.5 s). Talking and the 4-second fallback end a hold at once.
+7. **Right after a release**: no new hold is called for 2 seconds.
+8. **Debounce on the game side** (`RELEASE_DEBOUNCE_MS` in `main.ts`): "breathing" underwater has to last 0.5 seconds before it counts.
 
 Replaying both recordings:
 
@@ -342,6 +343,7 @@ Releases are about 0.6 seconds slower. In return, a diver is never wrongly told 
 | `sustainedRatio` / `sustainedUs` | 0.8 / 4 s | Fallback: this much breathing for this long always ends a hold |
 | `warmupUs` | 8 s | Ignores the seconds when Presage swings wildly at start-up |
 | `minBaselineUs` | 6 s | How much normal breathing is learned, once, before any hold is called; the baseline is fixed after that |
+| `releaseConfirmUs` / `settleUs` / `settleRatio` | 0.8 s / 0.3 s / 0.5 | Blip tolerance: a release has 0.8 s to turn out to be a blip, i.e. the trace back within 0.5 × B of the hold level and quiet for 0.3 s |
 | `seededWarmupUs` | 3 s | Warmup when the baseline is already known: the start-up swings can't read as a hold then, so only one 2-s activity window plus margin is needed |
 | `useApnea` | false | Whether to use Presage's apnea flag |
 

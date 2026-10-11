@@ -23,6 +23,11 @@
 // up (someone who held with empty lungs breathes in first), or, as a slow
 // fallback, on sustained breathing-sized activity. Only in its first moments,
 // when a "hold" may just be a pause between breaths, does any activity end it.
+// An exhale, an inhale or that early activity only starts a pending release:
+// if within `releaseConfirmUs` the trace is back at the hold level and has sat
+// quiet there for `settleUs`, it was a blip and the hold carries on; otherwise
+// the release stands. Talking and the sustained fallback are already long
+// evidence and end a hold at once.
 //
 // Every threshold is an option so sensor/analyze.mjs can replay a recording
 // with different settings.
@@ -51,6 +56,15 @@ export const DEFAULTS = {
   // this pipeline's own samples, plus 1 s of margin, before its first decision.
   seededWarmupUs: 3_000_000,
   talkingHoldUs: 500_000, // talking this long ends a hold
+  // A release reason that fires has this long to turn out to be a blip. The
+  // glitches seen mid-hold last well under 0.5 s; one that fires ~0.2 s in
+  // still has to finish and sit still for settleUs (~0.5 s more), so 0.8 s
+  // covers it, while a real release still shows ~1.3 s after the exhale
+  // starts, under a third of a breath. Shorter would let the tail of a blip
+  // through; longer only adds lag to every real release.
+  releaseConfirmUs: 800_000,
+  settleUs: 300_000, // a blip is over once, for this long,
+  settleRatio: 0.5, // ...the trace stays within this * baseline of the hold level (and activity is below quietRatio)
   useApnea: false, // Presage's apnea flag: never fired in testing, off by default
 };
 
@@ -88,6 +102,8 @@ export class BreathDetector {
     this.lastUpdateTs = 0;
     this.releasedTs = 0;
     this.releaseReason = null; // what ended the last hold, for analyze.mjs
+    this.pending = null; // {ts, why, level}: a release waiting for confirmation
+    this.blips = 0; // pending releases cancelled as blips, for analyze.mjs
     this.talkingSince = null;
     this.apnea = null;
     this.talking = null;
@@ -194,8 +210,13 @@ export class BreathDetector {
         this.releaseSince = null;
         this.sustainedSince = null;
         this.exhaleSince = null;
+        this.pending = null;
         this.level = this.samples.at(-1).v;
       }
+      return;
+    }
+    if (this.pending) {
+      this.#confirm(talkingLong);
       return;
     }
     const v = this.samples.at(-1).v;
@@ -223,11 +244,50 @@ export class BreathDetector {
           : since(this.sustainedSince, o.sustainedUs)
             ? 'sustained'
             : null;
-    if (why) {
-      this.releaseReason = why;
-      this.holding = false;
-      this.releasedTs = this.lastTs;
+    if (why === 'talking' || why === 'sustained') this.#release(why);
+    else if (why) this.pending = { ts: this.lastTs, why, level: this.level };
+  }
+
+  #release(why) {
+    this.releaseReason = why;
+    this.holding = false;
+    this.pending = null;
+    // From confirmation: the guard on re-entering a hold counts from when we stopped holding.
+    this.releasedTs = this.lastTs;
+  }
+
+  /** A pending release: cancel it as a blip once the trace has settled, else confirm it in time. */
+  #confirm(talkingLong) {
+    const o = this.o;
+    const p = this.pending;
+    if (talkingLong) return this.#release('talking');
+    // The level stays frozen while pending.
+    const B = this.baseline;
+    const from = this.lastTs - o.settleUs;
+    let sum = 0;
+    let n = 0;
+    let near = true;
+    for (let i = this.samples.length - 1; i >= 0 && this.samples[i].ts >= from; i--) {
+      const v = this.samples[i].v;
+      if (Math.abs(v - p.level) > o.settleRatio * B) near = false;
+      sum += v;
+      n++;
     }
+    const r = this.#activity(o.settleUs);
+    if (!near || n === 0 || r == null || r >= o.quietRatio * B) {
+      // Still away from the hold level (breathing, or breathed out and staying
+      // empty), or still moving. Once the window is up, that is a real release,
+      // for the reason that started it.
+      if (this.lastTs - p.ts >= o.releaseConfirmUs) this.#release(p.why);
+      return;
+    }
+    // A blip: keep holding from the original start, re-anchored where the trace settled.
+    this.pending = null;
+    this.blips++;
+    this.level = sum / n;
+    this.exhaleSince = null;
+    this.releaseSince = null;
+    this.sustainedSince = null;
   }
 
   snapshot() {
@@ -235,6 +295,7 @@ export class BreathDetector {
     return {
       holding: this.holding,
       holdMs: this.holding ? Math.round((this.lastTs - this.holdStartTs) / 1000) : 0,
+      releasing: this.pending != null, // still holding, but a release is waiting for confirmation
       // True only once a hold can actually be called: baseline known and warm.
       calibrated: this.baseline != null && this.warm,
       warm: this.warm,
