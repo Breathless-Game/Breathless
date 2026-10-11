@@ -121,10 +121,20 @@
           </label>
           <button id="aq-close" class="mini" title="Back to the title (Esc)">×</button>
         </div>
-        <div class="aq-tank">
-          <canvas id="aq-canvas"></canvas>
-          <div id="aq-empty" class="hidden"></div>
-          <div id="aq-card" class="hidden"></div>
+        <div class="aq-layout">
+          <div class="aq-tank">
+            <canvas id="aq-canvas"></canvas>
+            <div id="aq-empty" class="hidden"></div>
+            <div id="aq-card" class="hidden"></div>
+          </div>
+          <aside id="aq-feeder" aria-label="Aquarium food feeder">
+            <div class="aq-feeder-title">Fish food · 鱼食</div>
+            <div id="aq-feeder-model" class="aq-feeder-model"></div>
+            <select id="aq-food-select" aria-label="Choose fish food"></select>
+            <div id="aq-feed-status" class="aq-feed-status"></div>
+            <button id="aq-feed-all" class="mini primary" type="button">Pour into tank · 倒入鱼缸</button>
+            <div class="aq-feeder-hint">Click the model or button; the whole school will rush in · 点击鱼食，所有鱼会来抢</div>
+          </aside>
         </div>
       </div>
     </div>
