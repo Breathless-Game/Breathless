@@ -45,11 +45,11 @@ export interface AquariumHooks {
   /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
   pan(u: number): void;
   /**
-   * Pay for one food (legacy Pearls first, then on-chain PEARL, like gear upgrades).
-   * Resolves with the split actually spent, or null when nothing was spent: the fish is fed only then.
+   * Pay for one food in on-chain PEARL, like gear upgrades.
+   * Resolves with the PEARL burned, or null when nothing was spent: the fish is fed only then.
    */
-  buyFood(food: FishFoodDef): Promise<{ fromLegacy: number; fromChain: number } | null>;
-  /** Spendable Pearls (legacy + cached on-chain), for the feed button's affordability state. */
+  buyFood(food: FishFoodDef): Promise<number | null>;
+  /** Spendable Pearls (the cached on-chain PEARL balance), for the feed button's affordability state. */
   pearls(): number;
   message(text: string): void;
 }
@@ -667,7 +667,7 @@ export class Aquarium {
       ? `Feed · ${food.nameZh} · ${food.price} ✦`
       : `Need ${food.price - this.hooks.pearls()} more ✦ · Pearl 不足`;
     feed.disabled = !affordable || this.feeding;
-    feed.title = `${food.price} Pearls · legacy Pearls are spent first, then on-chain PEARL`;
+    feed.title = `${food.price} PEARL`;
     feed.addEventListener('click', () => {
       // Locked while the payment is in flight, so rapid clicks cannot pay twice.
       feed.disabled = true;
@@ -1039,10 +1039,7 @@ export class Aquarium {
   }
 }
 
-/** What a feeding cost, split by balance: legacy Pearls never move the on-chain PEARL badge. */
-export function spentText(spend: { fromLegacy: number; fromChain: number }): string {
-  const parts: string[] = [];
-  if (spend.fromChain > 0) parts.push(`−${spend.fromChain} PEARL`);
-  if (spend.fromLegacy > 0) parts.push(`−${spend.fromLegacy} legacy Pearls`);
-  return parts.join(' + ') || 'free';
+/** What a feeding cost: on-chain PEARL burned. */
+export function spentText(burned: number): string {
+  return `−${burned} PEARL`;
 }

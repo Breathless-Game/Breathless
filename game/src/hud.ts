@@ -2,7 +2,7 @@ import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { fishIcon } from './portrait';
-import { totalPearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
+import { spendablePearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -270,7 +270,7 @@ export class Hud {
   }
 
   setEquipment(state: EquipmentState, tier: RodTier) {
-    this.gearSummary.textContent = `NET Lv${tier.level} · 杆身 ${state.rodGearLevel} · 线轮 ${state.reelLevel} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${totalPearls(state)} ◇`;
+    this.gearSummary.textContent = `NET Lv${tier.level} · 杆身 ${state.rodGearLevel} · 线轮 ${state.reelLevel} · 脚蹼 ${state.finsLevel} · 气瓶 ${state.tankLevel} · 灯 ${state.lampLevel} · ${spendablePearls(state)} ◇`;
   }
 
   /** Show the currently selected quick slot beside the net inventory. */
