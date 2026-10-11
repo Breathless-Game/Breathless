@@ -7,7 +7,7 @@ const source = await readFile(new URL('../src/weather.ts', import.meta.url), 'ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
-const { WeatherCycle, weatherArtProfile } = await import(
+const { WeatherCycle, chartWeather, chartWeatherShows } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 const amounts = ['cloud', 'rain', 'wind', 'storm'];
@@ -135,19 +135,68 @@ test('invalid input and external state mutation cannot corrupt the front', () =>
   assert.equal(cycle.advance(5, false).kind, 'rain');
 });
 
-test('the chart weather key follows the front without inventing marks in clear air', () => {
-  const clear = weatherArtProfile({ kind: 'clear', cloud: 0.04, rain: 0, wind: 0.12, storm: 0 });
-  const cloudy = weatherArtProfile({ kind: 'cloudy', cloud: 0.70, rain: 0, wind: 0.32, storm: 0 });
-  const rain = weatherArtProfile({ kind: 'rain', cloud: 0.90, rain: 0.68, wind: 0.56, storm: 0 });
-  const storm = weatherArtProfile({ kind: 'storm', cloud: 1, rain: 1, wind: 1, storm: 1 });
-  assert.deepEqual(clear, { cloudInk: 0, rainMarks: 0, windMarks: 0, lightning: 0 });
-  assert.ok(cloudy.cloudInk > clear.cloudInk);
-  assert.ok(cloudy.windMarks > clear.windMarks);
-  assert.ok(rain.rainMarks > cloudy.rainMarks);
-  assert.ok(storm.windMarks > rain.windMarks);
-  assert.ok(storm.lightning > rain.lightning);
-  for (const profile of [clear, cloudy, rain, storm]) {
-    assert.ok(profile.cloudInk >= 0 && profile.cloudInk <= 1);
-    assert.ok(profile.lightning >= 0 && profile.lightning <= 1);
+test('the chart scatters clouds and gusts for the front, and nothing in clear air', () => {
+  const states = {
+    clear: { kind: 'clear', cloud: 0.04, rain: 0, wind: 0.12, storm: 0 },
+    cloudy: { kind: 'cloudy', cloud: 0.70, rain: 0, wind: 0.32, storm: 0 },
+    rain: { kind: 'rain', cloud: 0.90, rain: 0.68, wind: 0.56, storm: 0 },
+    storm: { kind: 'storm', cloud: 1, rain: 1, wind: 1, storm: 1 },
+  };
+  // Mid-crossing for most marks, so edge fades do not hide them.
+  const at = (name, second = 40, seed = 7) => chartWeather(states[name], second, seed);
+  const raining = (marks) => marks.clouds.filter(cloud => cloud.rain > 0).length;
+  const thundering = (marks) => marks.clouds.filter(cloud => cloud.bolt > 0).length;
+
+  assert.deepEqual(at('clear'), { clouds: [], winds: [] });
+  assert.equal(chartWeatherShows(states.clear), false);
+  for (const name of ['cloudy', 'rain', 'storm']) assert.equal(chartWeatherShows(states[name]), true);
+
+  assert.ok(at('cloudy').clouds.length >= 3);
+  assert.equal(raining(at('cloudy')), 0);
+  assert.ok(at('cloudy').winds.length >= 1);
+  assert.ok(raining(at('rain')) >= 3 && thundering(at('rain')) === 0);
+  assert.ok(at('rain').clouds.length > at('cloudy').clouds.length);
+  assert.ok(at('rain').winds.length > at('cloudy').winds.length);
+  // A storm is a mix of cells: thunder in some, rain alone in others, one dry cloud.
+  const storm = at('storm');
+  assert.ok(thundering(storm) >= 2 && thundering(storm) < raining(storm));
+  assert.ok(raining(storm) < storm.clouds.length);
+  assert.ok(storm.winds.length > at('rain').winds.length);
+
+  for (const name of Object.keys(states)) {
+    for (const second of [0, 3.3, 40, 170.25, 9999]) {
+      const marks = at(name, second);
+      assert.deepEqual(chartWeather(states[name], second, 7), marks, 'same inputs, same chart');
+      for (const mark of [...marks.clouds, ...marks.winds]) {
+        assert.ok(mark.x >= -0.06 && mark.x <= 1.06 && mark.y >= 0.16 && mark.y <= 0.86);
+        assert.ok(mark.ink >= 0 && mark.ink <= 1 && mark.size >= 0.8 && mark.size <= 1.2);
+      }
+      for (const cloud of marks.clouds) {
+        assert.ok(cloud.rain >= 0 && cloud.rain <= 1 && cloud.bolt >= 0 && cloud.bolt <= 1);
+        assert.ok(!cloud.flash || cloud.bolt > 0, 'only a thundercloud strikes');
+      }
+    }
+  }
+});
+
+test('chart weather is scattered by the seed and drifts with time, never fixed in place', () => {
+  const storm = { kind: 'storm', cloud: 1, rain: 1, wind: 1, storm: 1 };
+  const places = (marks) => marks.clouds.map(cloud => [cloud.x, cloud.y]);
+  assert.notDeepEqual(places(chartWeather(storm, 40, 1)), places(chartWeather(storm, 40, 2)));
+  const earlier = chartWeather(storm, 40, 1);
+  const later = chartWeather(storm, 45, 1);
+  assert.notDeepEqual(places(earlier), places(later));
+  // Drift, not a reshuffle: over five seconds each cloud has moved a little way along,
+  // unless it left one edge and came back in at the other.
+  earlier.clouds.forEach((cloud, i) => {
+    const moved = later.clouds[i].x - cloud.x;
+    assert.ok((moved > 0 && moved < 0.08) || moved < -1, `cloud ${i} moved ${moved}`);
+  });
+  // Which clouds carry the thunder is part of the shuffle.
+  const heavy = (seed) => chartWeather(storm, 40, seed).clouds.map(cloud => cloud.bolt > 0).join();
+  assert.ok(new Set([1, 2, 3, 4, 5, 6, 7, 8].map(heavy)).size > 1);
+  // Bad input cannot move the chart off the paper.
+  for (const second of [NaN, -5, Infinity]) {
+    assert.deepEqual(chartWeather(storm, second, 1), chartWeather(storm, 0, 1));
   }
 });

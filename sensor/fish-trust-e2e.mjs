@@ -90,6 +90,7 @@ const fixImports = (code) =>
   code
     .replace(/from (['"])\.\/wallet\1/g, `from '${walletStub}'`)
     .replace(/from (['"])\.\/market\1/g, `from '${dataUrl(transpile('market.ts'))}'`)
+    .replace(/from (['"])\.\/payment-safety\1/g, () => `from '${dataUrl(transpile('payment-safety.ts'))}'`)
     // PEARL balances come from the market's GET /balance (in this process), like the game in a browser.
     .replace(/from (['"])\.\/balance-api\1/g, () => `from '${dataUrl(transpile('balance-api.ts').replace('fetch(`/api/market/balance', `fetch(\`${BASE}/api/market/balance`))}'`)
     .replace(/import\((['"])([^'"]+)\1\)/g, (_, q, spec) => `import('${local[spec] ?? import.meta.resolve(spec)}')`);
