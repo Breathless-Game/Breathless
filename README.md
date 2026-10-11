@@ -195,7 +195,7 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `H` | Health report (built only when you press it) |
 | `N` | Gradually switch morning / night; natural cycle and afternoon are available in pause settings |
 | `K` | Cycle the breath input: presage → sim → keyboard |
-| `F` | Right a capsized boat, from the surface beside it (Open Ocean storms) |
+| `F` | Mash it to heave a capsized boat upright, from the surface beside it (Open Ocean storms) |
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
@@ -700,9 +700,9 @@ While a dive is on and the storm is strong (0.55 or more), a rogue wave forms 10
 - One piece of the gear packed for this dive goes overboard. That slot works at its basic level for the rest of the dive, as if it had not been packed; what you own is untouched and it is back on the next dive. The net is never lost.
 - Nothing can be banked while the boat is keel up. Surfacing keeps the catch in the net.
 
-To right it, surface within 9 m of the boat (where the wave left it) and press `F`; it takes 1.8 s and brings the boat back to its mooring. Leaving the dive or starting a new one also rights it. A capsized boat is not capsized again. Fish already banked are NFTs and are never touched.
+To right it, surface within 9 m of the boat (where the wave left it). A large `F` appears in the middle of the screen with a ring around it: mash it. Each press heaves the boat 8.5% of the way up, with a lurch and a slap of water, and the ring fills; left alone the boat slumps back at 16% a second. So it takes about twenty presses at five a second (four seconds), fewer than two a second gets nowhere, and holding the key down does nothing. When the ring is full the boat tips, falls upright in 0.7 s with a crash of spray, and is back at its mooring. Away from the boat, the screen only says to surface beside it. Leaving the dive or starting a new one also rights it. A capsized boat is not capsized again. Fish already banked are NFTs and are never touched.
 
-- `npm --prefix game test` covers when waves form, the crossing time, the single capsize, righting, the losses and the two climates.
+- `npm --prefix game test` covers when waves form, the crossing time, the single capsize, how many presses righting takes and how it slumps, the losses and the two climates.
 - In the console, `world.setWeather('storm')` on the Open Ocean brings the waves; `stormSea.x = -40` puts one four seconds from the boat.
 
 ### Weather
