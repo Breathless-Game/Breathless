@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildUpgradeModel, type UpgradeDef, type UpgradeLevel } from './upgrades';
+import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 
 // A closer look at one piece of gear from the workbench: it grows from where it
@@ -137,6 +138,7 @@ export class GearInspector {
       const color = (e.target as HTMLInputElement).value;
       const saved = saveSonarConfig({ ...loadSonarConfig(), color });
       (e.target as HTMLInputElement).value = saved.color;
+      this.setSonarColor(saved.color);
       this.hooks.sonarColor?.(saved.color);
     });
     // Clicking the blurred table around it puts it down.
@@ -249,6 +251,12 @@ export class GearInspector {
     this.root.classList.remove('open');
     this.root.classList.add('hidden');
     this.hooks.closed();
+  }
+
+  /** Keep cached inspection models in sync with the selected sonar accent. */
+  setSonarColor(color: string) {
+    if (this.def?.id !== 'sonar') return;
+    this.models.forEach((model) => setDeepSonarColor(model, color));
   }
 
   /** The next or previous level; the model slides out that way and the new one slides in. */

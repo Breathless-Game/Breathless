@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { engraveName } from './engrave';
-import { buildFishMesh, type FishMesh, type FishSpec } from './fish';
+import { buildFishMesh, type FishMesh, type FishSpec } from './title-fish-legacy';
 
 // The title's hanging fish as real 3D models. title.ts still runs the rope and
 // line physics in screen space; every frame each fish is placed from its tail

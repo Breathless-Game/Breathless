@@ -33,7 +33,10 @@ import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, biteForfeit, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { GearSync } from './gear-sync';
+import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
+import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
 import { NftQueue } from './nft-queue';
 import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -46,6 +49,8 @@ import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { SynthesisPanel } from './synthesis-panel';
+import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
 import type { LessonId } from './tutorial';
 
@@ -331,6 +336,7 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+let synthesisState: SynthesisState = loadSynthesis();
 // The persistent inventory is filtered by the workbench for each dive. A null
 // loadout means the debug/title state where all owned upgrades are available.
 let activeLoadout: readonly UpgradeId[] | null = null;
@@ -365,7 +371,15 @@ function applyEquipmentVisuals() {
   diver.setFinsLevel(activeLevel('fins'));
   diver.setTankLevel(activeLevel('tank'));
   diver.setLampLevel(activeLevel('lamp'));
-  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
+  diver.setLampStats(
+    stats.lampDistance,
+    stats.lampIntensity,
+    stats.lampAngle,
+    stats.lampScatter,
+    stats.lampDecay,
+    stats.lampPenumbra,
+    stats.lampExtinction,
+  );
   diver.setReelLevel(activeLevel('reel'));
   diver.setReelRecovery(stats.reelRecovery);
 }
@@ -703,6 +717,9 @@ let onGearChange = () => {};
 
 function refreshEquipment() {
   onGearChange();
+  // Every level change passes through here (bought, branch switched, a shark bite's reset): the
+  // on-chain Boat / Dive Kit sync observes it (gear-levels.ts) and compares levels itself.
+  gearLevelsChanged();
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
@@ -760,6 +777,70 @@ async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<
   }
 }
 
+let synthesisBusy = false;
+/** Spend a synthesis station fee with the same legacy-first accounting as gear upgrades. */
+async function spendSynthesisPearls(cost: number): Promise<boolean> {
+  if (totalPearls(equipment) < cost) {
+    hud.message(`Need ${cost - totalPearls(equipment)} more Pearls`, 1500);
+    return false;
+  }
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
+  try {
+    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
+    equipment.legacyPearls -= fromLegacy;
+    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    refreshEquipment();
+    if (fromChain > 0) void syncPearls();
+    return true;
+  } catch (e) {
+    hud.message(`Synthesis payment failed · ${(e as Error).message ?? e}`, 1800);
+    return false;
+  }
+}
+
+async function synthCraft(id: RecipeDef['id']) {
+  if (synthesisBusy) return;
+  if (!canCraft(synthesisState, id)) {
+    hud.message('Materials missing · 材料不足', 1400);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id])) return;
+    const next = craftRecipe(synthesisState, id);
+    if (!next) return;
+    synthesisState = next;
+    saveSynthesis(synthesisState);
+    hud.message(id === 'bait' ? 'Tide bait crafted · 鱼饵已合成' : 'Composite plate crafted · 护板已合成', 1600);
+  } finally {
+    synthesisBusy = false;
+  }
+}
+
+async function synthUpgrade(slot: UpgradeSlot) {
+  if (synthesisBusy) return;
+  const level = slot === 'rod' ? equipment.rodGearLevel : equipment[`${slot}Level` as keyof EquipmentState] as number;
+  if (level >= 3) return;
+  const cost = SYNTHESIS_UPGRADE_COSTS[slot][level - 1];
+  const tier = nextSlotTier(equipment, slot);
+  if (!tier) return;
+  if (synthesisState.crafted.composite < 1) {
+    hud.message('Craft one composite plate first · 先合成复合护板', 1800);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(cost)) return;
+    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost }, fromLegacy: 0, fromChain: 0 }));
+    synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
+    saveSynthesis(synthesisState);
+    refreshEquipment();
+    hud.message(`${nextSlotLabel(slot)} upgraded in synthesis station`, 1800);
+  } finally {
+    synthesisBusy = false;
+  }
+ }
 let buying = false;
 /** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
 async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
@@ -909,17 +990,26 @@ function workbenchConditions(id: MapId): WorkbenchConditions {
   const lighting = world.dayCycle.state;
   const weather = world.weather.state;
   const minute = Math.round(lighting.hour * 60) % (24 * 60);
+  const windKmh = Math.round(4 + weather.wind * 30);
+  const rainMmh = weather.rain * 18;
+  const fishing: WorkbenchConditions['fishing'] = weather.kind === 'storm' || windKmh >= 28 || rainMmh >= 12
+    ? { level: 'poor', label: '不建议捕鱼 · Fishing Not Advised', reason: '风雨较强，建议等待天气转好 · Rough conditions; wait for calmer weather.' }
+    : weather.kind === 'rain' || windKmh >= 18 || rainMmh >= 4
+      ? { level: 'caution', label: '谨慎捕鱼 · Fish with Caution', reason: '有风浪或降雨，留意水面变化 · Wind or rain; watch the water conditions.' }
+      : { level: 'good', label: '推荐捕鱼 · Good for Fishing', reason: '风雨较弱，适合出航探索 · Calm conditions for a fishing trip.' };
   const temperatureC = map.surfaceTempC
     + (lighting.daylight - 1) * 3
     - weather.cloud * 1.2
     - weather.rain * 0.8
     - weather.wind * 0.4;
   return {
-    time: `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`,
+    time: `${Math.floor(minute / 60) % 12 || 12} ${minute < 720 ? 'a.m.' : 'p.m.'}`,
     temperatureC: Math.round(temperatureC * 10) / 10,
+    fishing,
     weather: WEATHER_LABELS[weather.kind],
     wind: `${Math.round(4 + weather.wind * 30)} km/h`,
     rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+    weatherState: weather,
   };
 }
 
@@ -1534,22 +1624,6 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
   keys.clear();
   if (!open) breathSince = null;
 }, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
-const boatRay = new THREE.Raycaster();
-document.addEventListener('click', (e) => {
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible) return;
-  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
-  const rect = canvas.getBoundingClientRect();
-  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
-  if (boatRay.intersectObject(world.boat, true).length) { e.preventDefault(); e.stopPropagation(); shipyard.show(); }
-}, true);
-document.addEventListener('pointermove', (e) => {
-  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
-  const target = e.target as HTMLCanvasElement;
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || aquarium.open) { target.style.cursor = ''; return; }
-  const rect = canvas.getBoundingClientRect();
-  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
-  if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
-});
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
@@ -1587,6 +1661,15 @@ function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
   labelStartFish(benchPan);
 }
 
+const synthPanel = new SynthesisPanel({
+  state: () => synthesisState,
+  equipment: () => equipment,
+  pearls: () => totalPearls(equipment),
+  craft: synthCraft,
+  upgrade: synthUpgrade,
+  close: () => workbench.escape(),
+});
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
@@ -1618,7 +1701,7 @@ const workbench = new Workbench({
   },
   conditions: workbenchConditions,
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
-  owned: (id) => (isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1),
+  owned: ownedGearLevel,
   buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve('Not upgradable here')),
   pearls: () => totalPearls(equipment),
   paths: (id) =>
@@ -1675,6 +1758,12 @@ const workbench = new Workbench({
     // Workbench has finished lifting the physical book; now reveal the pages.
     fieldGuide?.openFromWorkbench();
   },
+  synthesisOpen() {
+    synthPanel.show();
+  },
+  synthesisClose() {
+    synthPanel.hide();
+  },
 });
 
 fieldGuide = new FieldGuide({
@@ -1701,6 +1790,11 @@ onGearChange = () => workbench.visible && workbench.refreshGear();
 
 function isUpgradeSlot(id: UpgradeId): id is UpgradeSlot {
   return id in EQUIPMENT_TIERS;
+}
+
+/** The highest level owned of a piece (1 = the starting gear). Boat-group pieces are not sold yet, so they stay at 1. */
+function ownedGearLevel(id: UpgradeId): number {
+  return isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1;
 }
 
 function isEquipmentSlot(id: UpgradeId): id is EquipmentSlot {
@@ -1789,6 +1883,45 @@ function openWorkbench() {
 // timer, poll or mint keeps running for it.
 let walletOwner: string | null = null;
 
+// ---- On-chain gear --------------------------------------------------------
+// The player's Boat and Dive Kit NFTs follow their levels in the background (gear-sync.ts): minted
+// once to the owner by the game wallet, then updated after each settled batch of changes. The
+// game never waits on it. VITE_GEAR_NFT=0 (not a secret) turns it off; local levels are the truth.
+const GEAR_NFT_ON = (import.meta.env.VITE_GEAR_NFT as string | undefined) !== '0';
+
+/** The levels the NFTs should show now, or null before a wallet's progress has loaded. */
+function gearSnapshot(): GearLevels | null {
+  if (!walletOwner) return null;
+  const branches = Object.fromEntries((Object.keys(EQUIPMENT_PATHS) as EquipmentSlot[]).map((slot) => [slot, activePath(equipment, slot)]));
+  return {
+    boat: normalizeBoat({ ship: shipyard.shipIndex, ...Object.fromEntries(BOAT_IDS.map((id) => [id, ownedGearLevel(id)])) }),
+    kit: normalizeKit({
+      rod: ownedLevel(equipment, 'rod'),
+      reel: ownedLevel(equipment, 'reel'),
+      net: ownedLevel(equipment, 'net'),
+      fins: ownedLevel(equipment, 'fins'),
+      tank: ownedLevel(equipment, 'tank'),
+      lamp: ownedLevel(equipment, 'lamp'),
+      sonar: ownedLevel(equipment, 'sonar'),
+      branches,
+    }),
+  };
+}
+
+const gearSync = new GearSync({
+  key: () => (walletState().owner ? storageKey('gear-nft') : null),
+  store: localStorage,
+  session: () => walletState().session,
+  snapshot: gearSnapshot,
+  loadChain: () => import('./chain'),
+  isFundsError,
+  timers: { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id) },
+  changed: () => {}, // status is no longer shown anywhere; the sync runs in the background
+  hidden: () => document.hidden,
+});
+// Every level change (bought, branch switched, ship equipped, a penalty's reset) reaches the sync.
+onGearLevelsChanged(() => gearSync.levelsChanged());
+
 const diving = () => phase !== 'menu';
 
 /** What logging out right now would cost, or null when nothing. */
@@ -1808,6 +1941,7 @@ async function logOut() {
     // End a dive the way Main menu does: the hold still goes in this wallet's health log.
     if (diving()) goToMenu();
     nftQueue.stop();
+    gearSync.stop();
     await disconnectWallet(); // drops the owner: the listener below reloads
   } finally {
     loggingOut = false;
@@ -1817,6 +1951,7 @@ async function logOut() {
 function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());
   Object.assign(equipment, loadEquipment());
+  synthesisState = loadSynthesis();
   Object.assign(mapProgress, loadMapProgress());
   if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
@@ -1829,6 +1964,8 @@ function loadWalletProgress() {
   shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
+  // And bring its Boat and Dive Kit NFTs up to date (minting them the first time).
+  if (GEAR_NFT_ON) gearSync.start();
 }
 
 onWalletChange((s) => {
@@ -1973,6 +2110,7 @@ function update(dt: number, time: number) {
 
   // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
   // depth, air and banking still count from the mean waterline).
+  diver.setLampEnvironment(world.dayCycle.state.nightMix, world.lightingEffectsEnabled);
   diver.update(dt, time, -diver.pos.y, world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6)));
   sonar.update(time, dt);
   if (!sonarCarried && sonar.mode === 'anchored' && !sonarGuiding && sonar.group.visible) {
@@ -2206,6 +2344,8 @@ Object.assign(window, {
   stormSea,
   sharkPack,
   nftQueue,
+  /** The on-chain Boat and Dive Kit sync: gearSync.status('kit'), gearSync.log. */
+  gearSync,
   /** The deep sonar mesh; deploySonar() is what V does during a dive with the sonar packed. */
   sonar,
   deploySonar,

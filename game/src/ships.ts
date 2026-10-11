@@ -1,4 +1,5 @@
 import * as T from 'three';
+import { gearLevelsChanged } from './gear-levels';
 import { storageKey } from './wallet';
 import './ships.css';
 export const SHIP_INTROS_EN = [
@@ -41,7 +42,7 @@ export class Shipyard {
   /** Sail ship i if its banked-value threshold is reached: saved, put on the boat, bonus applied. */
   equip(i: number): boolean {
     if (!SHIPS[i] || this.progress() < SHIPS[i].threshold || !this.models.length) return false;
-    this.index = this.selected = i; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {}
+    this.index = this.selected = i; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {} gearLevelsChanged();
     this.apply(); this.onEquip();
     return true;
   }

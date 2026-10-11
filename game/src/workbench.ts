@@ -16,6 +16,9 @@ import { SoftPaper } from './paper';
 import { Diver } from './diver';
 import { GearInspector, type ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import type { WeatherState } from './weather';
+import { setDeepSonarColor } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -37,6 +40,8 @@ export interface WorkbenchHooks {
   conditions(map: MapId): WorkbenchConditions;
   /** The workbench sonar piece applies its chosen beacon color to the dive model. */
   sonarColor?(color: string): void;
+  synthesisOpen?(): void;
+  synthesisClose?(): void;
   /** Optional progress hooks for the action-driven field guide. */
   tutorial?(id: LessonId): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
@@ -63,6 +68,8 @@ export interface WorkbenchConditions {
   weather: string;
   wind: string;
   rain: string;
+  fishing: { level: 'good' | 'caution' | 'poor'; label: string; reason: string };
+  weatherState: WeatherState;
 }
 
 // The six pieces of dive gear you pack (five loadout slots plus the deployable
@@ -162,7 +169,7 @@ const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
 
 type Mode = 'wait' | 'free' | 'held' | 'moving' | 'ready';
-type State = 'closed' | 'idle' | 'opening' | 'guide' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect';
+type State = 'closed' | 'idle' | 'opening' | 'guide' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect' | 'synth';
 
 interface Piece {
   id: UpgradeId;
@@ -242,9 +249,14 @@ export class Workbench {
   private pointer = { x: 0.5, y: 0.5, t: 0 }; // fractions of the screen
   private stirFrom: { x: number; z: number; t: number } | null = null; // last pointer spot on the paper (its local x/z)
   private mapTex: THREE.CanvasTexture;
+  private chartWeatherKey = '';
   private mapHover = 0;
   private slotRings: THREE.Mesh[] = [];
   private dust: { mesh: THREE.Mesh; t: number }[] = [];
+  private synthesisRig = new THREE.Group();
+  private synthesisCrates: THREE.Group[] = [];
+  private synthesisHit!: THREE.Mesh;
+  private synthesisLift = -0.65;
 
   private state: State = 'closed';
   private placed = false; // pieces have landed at least once
@@ -255,10 +267,10 @@ export class Workbench {
   private last = 0;
   private raf = 0;
   private tweens: Tween[] = [];
-  private press: { piece: Piece | null; map: boolean; figure: boolean; guide?: boolean; x: number; y: number; t: number } | null = null;
+  private press: { piece: Piece | null; map: boolean; figure: boolean; guide: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
   private held: Piece | null = null;
   private holdTarget = new THREE.Vector3();
-  private hovered: Piece | 'map' | 'figure' | 'guide' | null = null;
+  private hovered: Piece | 'map' | 'figure' | 'guide' | 'synth' | null = null;
   private picked: MapId | null = null;
   private inspector: GearInspector;
   // The diver figure on its stand (not a piece: it never moves). It wears what's in the tray.
@@ -313,6 +325,7 @@ export class Workbench {
         else if (!ready && p.mode === 'ready') this.unready(p);
       },
       sonarColor: (color) => {
+        this.setSonarColor(color);
         this.hooks.sonarColor?.(color);
       },
       buy: async (def) => {
@@ -407,12 +420,19 @@ export class Workbench {
     this.guide.rotation.set(-0.04, -0.12, 0);
     this.guide.scale.setScalar(1);
     this.tweens = [];
+    this.synthesisLift = -0.65;
+    this.synthesisRig.position.y = this.synthesisLift;
+    this.synthesisCrates[0]?.position.set(-1.18, 0.56, 0.05);
+    this.synthesisCrates[1]?.position.set(1.18, 0.56, 0.05);
+    this.hooks.synthesisClose?.();
     this.held = null;
     this.press = null;
+    this.chartWeatherKey = '';
     this.paintMap();
     this.resize();
     // Levels bought (or a ship picked, or a wallet's save loaded) since the pieces were last built.
     this.refreshGear();
+    this.setSonarColor(loadSonarConfig().color);
     if (intro || !this.placed) this.scatter(intro);
     this.placed = true;
     this.time = 0;
@@ -440,6 +460,7 @@ export class Workbench {
 
   hide() {
     this.inspector.close();
+    this.hooks.synthesisClose?.();
     this.state = 'closed';
     cancelAnimationFrame(this.raf);
     this.root.classList.add('hidden');
@@ -459,6 +480,7 @@ export class Workbench {
     if (this.state === 'inspect') this.inspector.close();
     else if (this.state === 'guide') this.hooks.guide?.();
     else if (this.state === 'chart') this.closeChart();
+    else if (this.state === 'synth') this.closeSynthesis();
     else if (this.state === 'idle') this.leave();
   }
 
@@ -537,8 +559,8 @@ export class Workbench {
     // title rope fish. The page hinge is animated when it is clicked.
     const cover = new THREE.MeshStandardMaterial({ color: '#496650', roughness: 0.78 });
     const paper = new THREE.MeshStandardMaterial({ color: '#e8d8ad', roughness: 0.95 });
-    const back = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.09, 0.92), cover);
-    back.position.y = 0.06;
+    const guideBack = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.09, 0.92), cover);
+    guideBack.position.y = 0.06;
     const pages = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.075, 0.82), paper);
     pages.position.set(0.07, 0.115, 0);
     const spine = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.96), cover);
@@ -551,7 +573,7 @@ export class Workbench {
     title.position.set(0.58, 0.085, 0);
     this.guideCover.position.set(-0.58, 0.12, 0);
     this.guideCover.add(frontCover, title);
-    this.guide.add(back, pages, spine, this.guideCover);
+    this.guide.add(guideBack, pages, spine, this.guideCover);
     this.guide.position.copy(GUIDE_AT);
     this.guide.rotation.x = -0.04;
     this.guide.rotation.y = -0.12;
@@ -560,6 +582,40 @@ export class Workbench {
     this.guide.add(this.guideHit);
     this.guide.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
     s.add(this.guide);
+
+    // A half-hidden military-green metal station rises from behind the desk.
+    // Flat faces and chunky hardware keep it in the same low-poly language.
+    const metal = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.82, metalness: 0.55, flatShading: true });
+    const green = metal('#46543c');
+    const edge = metal('#263128');
+    const crateMat = metal('#151a1b');
+    const crateEdge = metal('#56605c');
+    this.synthesisRig.position.set(0, this.synthesisLift, TABLE.z1 + 0.32);
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.28, 0.95), green);
+    plinth.position.y = 0.16;
+    this.synthesisRig.add(plinth);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.25, 0.12), edge);
+    back.position.set(0, 0.72, -0.36);
+    this.synthesisRig.add(back);
+    const stationTop = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.12, 0.72), green);
+    stationTop.position.set(0, 0.55, 0.03);
+    this.synthesisRig.add(stationTop);
+    for (const sideSign of [-1, 1]) {
+      const crate = new THREE.Group();
+      crate.position.set(sideSign * 1.18, 0.56, 0.05);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.75, 0.82), crateMat);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.1, 0.9), crateEdge);
+      rim.position.y = 0.42;
+      crate.add(body, rim);
+      crate.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
+      this.synthesisCrates.push(crate);
+      this.synthesisRig.add(crate);
+    }
+    this.synthesisHit = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.45, 1.1), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }));
+    this.synthesisHit.position.set(0, 0.56, 0.05);
+    this.synthesisRig.add(this.synthesisHit);
+    this.synthesisRig.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
+    s.add(this.synthesisRig);
   }
 
   /** The folded sea chart: a soft sheet (paper.ts) lying on the table. */
@@ -668,10 +724,20 @@ export class Workbench {
     this.hooks.saveLoadout(this.packed);
   }
 
-  private paintMap() {
+  private paintMap(weather?: WeatherState) {
     // Twice the chart's size: it is held up nearly screen-wide.
     // Every place is open from the chart: no locks painted on.
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...this.hooks.progress(), unlockAll: true }, true);
+    const id = this.picked ?? this.hooks.progress().selected;
+    const snapshot = weather ?? this.hooks.conditions(id).weatherState;
+    // A canvas redraw is only needed when a visible weather bucket changes;
+    // the live note can still update four times a second during a transition.
+    const progress = this.hooks.progress();
+    const key = [id, progress.selected, progress.bestValue, snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
+      .map((value) => typeof value === 'number' ? Math.round(value * 20) : value)
+      .join(':');
+    if (key === this.chartWeatherKey && this.mapTex.image.width) return;
+    this.chartWeatherKey = key;
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...progress, unlockAll: true }, true, snapshot);
     this.mapTex.needsUpdate = true;
   }
 
@@ -687,6 +753,12 @@ export class Workbench {
     // family-level tray size. buildUpgradeModel stores the relative scale in
     // userData so a long Lv3 rod is not shrunk back to the Lv1 silhouette.
     return { model: buildUpgradeModel(id, level, { preserveTierScale: true }), key: level };
+  }
+
+  /** Apply the persisted beacon accent to the table piece and open inspector. */
+  private setSonarColor(color: string) {
+    const piece = this.pieces.find((item) => item.id === 'sonar');
+    if (piece) setDeepSonarColor(piece.obj, color);
   }
 
   private buildPiece(id: UpgradeId, i: number): Piece {
@@ -1021,7 +1093,10 @@ export class Workbench {
 
     // Refresh the field note at a low rate so the live random front stays readable
     // without touching the chart texture or rebuilding the workbench.
-    if (this.picked && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.renderConditions(this.picked);
+    if (this.state === 'chart' && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) {
+      if (this.picked) this.renderConditions(this.picked);
+      else this.paintMap(this.hooks.conditions(this.hooks.progress().selected).weatherState);
+    }
 
     for (const p of this.pieces) {
       p.hover = lerp(p.hover, this.hovered === p ? 1 : 0, 1 - Math.exp(-dt * 14));
@@ -1371,16 +1446,18 @@ export class Workbench {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1), this.camera);
   }
 
-  private pick(e: PointerEvent): Piece | 'map' | 'figure' | 'guide' | null {
+  private pick(e: PointerEvent): Piece | 'map' | 'figure' | 'guide' | 'synth' | null {
     this.setRay(e);
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
     if (this.map.visible) targets.push(this.mapMesh);
     targets.push(this.figureHit);
     targets.push(this.guideHit);
+    if (this.synthesisRig.visible) targets.push(this.synthesisHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
     if (hit.object === this.figureHit) return 'figure';
     if (hit.object === this.guideHit) return 'guide';
+    if (hit.object === this.synthesisHit) return 'synth';
     return hit.object === this.mapMesh ? 'map' : (this.pieces.find((p) => p.hit === hit.object) ?? null);
   }
 
@@ -1396,8 +1473,8 @@ export class Workbench {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
     if (this.blocked() || this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
-    const piece = hit && !['map', 'figure', 'guide'].includes(hit as string) ? hit as Piece : null;
-    this.press = { piece, map: hit === 'map', guide: hit === 'guide', figure: hit === 'figure', x: e.clientX, y: e.clientY, t: performance.now() };
+    const piece = hit && !['map', 'figure', 'guide', 'synth'].includes(hit as string) ? hit as Piece : null;
+    this.press = { piece, map: hit === 'map', guide: hit === 'guide', figure: hit === 'figure', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
@@ -1492,6 +1569,7 @@ export class Workbench {
     if (!click) return;
     if (press.guide) this.pickUpGuide();
     else if (press.map) this.openChart();
+    else if (press.synth) this.openSynthesis();
     else if (press.figure) {
       this.setHover(null, e);
       this.inspectDiver();
@@ -1522,7 +1600,7 @@ export class Workbench {
     this.inspector.showDiver({ x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
   }
 
-  private setHover(hit: Piece | 'map' | 'figure' | 'guide' | null, e: PointerEvent) {
+  private setHover(hit: Piece | 'map' | 'figure' | 'guide' | 'synth' | null, e: PointerEvent) {
     this.hovered = hit;
     document.body.style.cursor = hit ? 'pointer' : '';
     if (!hit) {
@@ -1536,6 +1614,8 @@ export class Workbench {
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
         : hit === 'figure'
         ? ['Your diver · 潜水员', `Wearing ${this.packed.length} / ${SLOTS.length} · saved for next time`, 'Click to dress · drop gear on the tray to put it on']
+        : hit === 'synth'
+        ? ['Field workbench · 合成工作台', 'Military steel · 物资箱', 'Click to raise and open']
         : [
             `${hit.def.name} · ${hit.def.nameZh}`,
             hit.id === 'boat' ? 'Your ship · 当前船只 — click to see the ships' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
@@ -1738,6 +1818,38 @@ export class Workbench {
     this.renderPlace();
   }
 
+  private openSynthesis() {
+    if (this.state !== 'idle') return;
+    this.state = 'synth';
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const fromY = this.synthesisLift;
+    const fromL = this.synthesisCrates[0]?.position.x ?? -1.18;
+    const fromR = this.synthesisCrates[1]?.position.x ?? 1.18;
+    this.tween(0.85, (u) => {
+      const e = easeOut(u);
+      this.synthesisLift = lerp(fromY, 0, e);
+      this.synthesisRig.position.y = this.synthesisLift;
+      this.synthesisCrates[0]?.position.set(lerp(fromL, -1.75, e), 0.56, 0.05);
+      this.synthesisCrates[1]?.position.set(lerp(fromR, 1.75, e), 0.56, 0.05);
+    }, () => this.hooks.synthesisOpen?.());
+  }
+
+  private closeSynthesis() {
+    if (this.state !== 'synth') return;
+    this.hooks.synthesisClose?.();
+    const fromY = this.synthesisLift;
+    const fromL = this.synthesisCrates[0]?.position.x ?? -1.75;
+    const fromR = this.synthesisCrates[1]?.position.x ?? 1.75;
+    this.tween(0.5, (u) => {
+      const e = easeInOut(u);
+      this.synthesisLift = lerp(fromY, -0.65, e);
+      this.synthesisRig.position.y = this.synthesisLift;
+      this.synthesisCrates[0]?.position.set(lerp(fromL, -1.18, e), 0.56, 0.05);
+      this.synthesisCrates[1]?.position.set(lerp(fromR, 1.18, e), 0.56, 0.05);
+    }, () => { this.state = 'idle'; });
+  }
+
   /** The panel beside the chart: a live view of the place itself, what it is, what you carry, and Dive. */
   private renderPlace() {
     const id = this.picked;
@@ -1774,11 +1886,17 @@ export class Workbench {
 
   private renderConditions(id: MapId) {
     const conditions = this.hooks.conditions(id);
+    $('wb-fishing-advice').dataset.level = conditions.fishing.level;
+    $('wb-fishing-label').textContent = conditions.fishing.label;
+    $('wb-fishing-reason').textContent = conditions.fishing.reason;
     $('wb-entry-time').textContent = conditions.time;
     $('wb-entry-temp').textContent = `${conditions.temperatureC > 0 ? '+' : ''}${conditions.temperatureC.toFixed(1)}°C`;
     $('wb-entry-weather').textContent = conditions.weather;
     $('wb-entry-wind').textContent = conditions.wind;
     $('wb-entry-rain').textContent = conditions.rain;
+    // The chart shares this snapshot with the field note, so its pencil marks
+    // fade through the same live front rather than staying on the old weather.
+    this.paintMap(conditions.weatherState);
   }
 
   /**

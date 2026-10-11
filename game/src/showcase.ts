@@ -749,10 +749,11 @@ function buildFish(scene: THREE.Scene, ticks: Tick[]) {
   /** The nth fish of a species, found the way the game finds any fish: by rolling seeds. */
   const find = (rarity: Rarity, species: string, nth = 0): FishSpec => {
     const odds = RECORDED_ODDS.find((table) => table.some(([r]) => r === rarity))!;
-    for (let seed = 1; ; seed++) {
+    for (let seed = 1; seed < 20000; seed++) {
       const spec = rollFish(seed, 12, odds);
       if (spec.rarity === rarity && spec.species === species && nth-- === 0) return spec;
     }
+    throw new Error(`showcase: no ${rarity} "${species}" (#${nth}) found in 20000 seeds`);
   };
   const hue = new THREE.Color();
   const swim = (spec: FishSpec, path: (u: number) => THREE.Vector3, laps: number, wag: number, halo = 0) => {
@@ -794,7 +795,7 @@ function buildFish(scene: THREE.Scene, ticks: Tick[]) {
   swim(find('epic', 'Violet Lionfish'), lap(17.4, -8.6, -2, 1.5, 0.8, 0.35, 0.3), -1, 6, 3.6);
   swim(find('legendary', 'Golden Koi Dragon'), lap(-10.5, -8, -5.5, 9.5, 3.6, 0.6, 0.62), 1, 8, 5);
   // The one the diver is after, turning circles just past the net.
-  swim(find('mythic', 'Moonfin Leviathan'), lap(16, -12.2, 0.1, 2, 0.9, 0.3, 0.1), 1, 8, 6.5);
+  swim(find('mythic', 'Starcoil Eel'), lap(16, -12.2, 0.1, 2, 0.9, 0.3, 0.1), 1, 8, 6.5);
 }
 
 // ---- Stage --------------------------------------------------------------
