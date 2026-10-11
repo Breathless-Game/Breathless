@@ -977,8 +977,13 @@ export class World {
     if (depth < 0) {
       this.scene.background = this.horizonColor;
       fog.color.copy(this.horizonColor);
-      fog.near = this.map.haze[0] * THREE.MathUtils.lerp(1, 0.45, weather.rain);
-      fog.far = this.map.haze[1] * THREE.MathUtils.lerp(1, 0.475, weather.rain);
+      // Keep a readable depth gradient on the low-poly mountain silhouettes.
+      // The old storm range (47.5% of the map far distance) put the fjord's
+      // peaks entirely inside one fog colour, leaving only white snow
+      // triangles visible. Rain still thickens the atmosphere, but never
+      // collapses the whole backdrop into a flat card.
+      fog.near = Math.max(28, this.map.haze[0] * THREE.MathUtils.lerp(1, 0.70, weather.rain));
+      fog.far = Math.max(180, this.map.haze[1] * THREE.MathUtils.lerp(1, 0.72, weather.rain));
     } else {
       this.waterBackground.copy(waterColorAt(depth));
       this.waterBackground.lerp(this.horizonColor, 0.06 * Math.max(0, 1 - depth / 60));
