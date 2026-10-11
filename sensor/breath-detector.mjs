@@ -12,8 +12,11 @@
 // So we measure *activity*: how far the trace travels per second (path
 // length), which is high while breathing, falls once the post-inhale decay
 // settles, and jumps the instant you breathe again. Thresholds are ratios of
-// this person's own breathing activity, learned with a robust median that
-// ignores the start-up transient and the seconds leading into a hold.
+// this person's own breathing activity: a robust median of the first
+// `calibrationUs` of breathing after the start-up transient. It is learned
+// once and then frozen for the rest of the session, so the breathing a player
+// does while playing (deep breaths before a dive, gasps after one) can never
+// drag it around. A new session (a new detector) calibrates again.
 // A hold ends on the exhale (a big drop below the hold level), on a big jump
 // up (someone who held with empty lungs breathes in first), or, as a slow
 // fallback, on sustained breathing-sized activity. Only in its first moments,
@@ -37,9 +40,8 @@ export const DEFAULTS = {
   releaseHoldUs: 200_000, //   ...for this long
   sustainedRatio: 0.8, // later, only hold-window activity above this * baseline...
   sustainedUs: 4_000_000, // ...for this long counts without an exhale
-  baselineWindowUs: 30_000_000, // learn "normal breathing" over this much history
   warmupUs: 8_000_000, // ignore Presage's start-up swings
-  minBaselineUs: 6_000_000, // clean breathing needed before we call any hold
+  calibrationUs: 10_000_000, // breathing learned once, before any hold is called; then frozen
   talkingHoldUs: 500_000, // talking this long ends a hold
   useApnea: false, // Presage's apnea flag: never fired in testing, off by default
 };
@@ -52,8 +54,8 @@ export class BreathDetector {
     this.samples = []; // {ts, v}, ts in microseconds
     this.firstTs = 0;
     this.lastTs = 0;
-    this.base = []; // {ts, a}: activity while breathing, for the baseline
-    this.baseline = null; // median breathing activity (trace units per second)
+    this.base = []; // {ts, a}: activity while breathing, during calibration only
+    this.baseline = null; // median breathing activity (trace units per second), fixed once set
     this.lastBaseTs = 0;
     this.holding = false;
     this.holdStartTs = 0;
@@ -114,15 +116,19 @@ export class BreathDetector {
     return n < 4 ? null : path / (us / 1e6);
   }
 
+  // Calibration: no hold can be called before the baseline exists, so every
+  // sample here is breathing. Once enough is collected the median is frozen.
   #learn(a) {
-    const o = this.o;
+    if (this.baseline != null) return;
     if (this.lastTs - this.lastBaseTs < SAMPLE_EVERY_US) return;
     this.lastBaseTs = this.lastTs;
     this.base.push({ ts: this.lastTs, a });
-    while (this.base.length && this.base[0].ts < this.lastTs - o.baselineWindowUs) this.base.shift();
-    if (this.base.length && this.lastTs - this.base[0].ts >= o.minBaselineUs) {
+    if (this.lastTs - this.base[0].ts >= this.o.calibrationUs) {
       const sorted = this.base.map((b) => b.a).sort((x, y) => x - y);
-      this.baseline = sorted[sorted.length >> 1];
+      const median = sorted[sorted.length >> 1];
+      // A dead-flat trace (no breathing seen) would freeze a useless 0: start over.
+      if (median > 0) this.baseline = median;
+      this.base = [];
     }
   }
 
@@ -150,9 +156,6 @@ export class BreathDetector {
         this.sustainedSince = null;
         this.exhaleSince = null;
         this.level = this.samples.at(-1).v;
-        // The seconds sliding into a hold are not "normal breathing".
-        const cut = this.holdStartTs - 1_000_000;
-        while (this.base.length && this.base.at(-1).ts > cut) this.base.pop();
       }
       return;
     }
