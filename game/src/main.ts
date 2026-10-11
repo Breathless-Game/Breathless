@@ -1298,37 +1298,60 @@ function startFish() {
   else if (workbench.visible) {
     if (workbench.atRest) workbench.escape(); // pans back up to the title
   } else if (settingsDesk.visible) {
-    deskFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
+    tableFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
     settingsDesk.escape();
   } else if (healthDesk.visible) {
-    if (healthDesk.atRest) healthDesk.escape();
+    if (!healthDesk.atRest) return;
+    tableFromBench = false;
+    healthDesk.escape();
   } else openWorkbench();
 }
 
-/** Only from the title itself: no other table up, no aquarium. */
-function onTitleOnly() {
-  return !workbench.visible && !settingsDesk.visible && !healthDesk.visible && !aquarium.open && !loginGate.visible;
+// Switching tables. AQUARIUM, HEALTH and SETTINGS work from any table: the one up sinks
+// while the next rises. A table opened over the workbench (on the title's or aboard
+// mid-dive) brings the workbench back when it's left, so Esc then still dives on.
+let tableFromBench = false;
+let skipReturn = false; // the table sinking now is being swapped for another, not left
+
+/** Sinks whatever table is up (false: one is busy moving, or held). True if there was none, too. */
+function swapFrom(): boolean {
+  if (loginGate.visible) return false;
+  if (workbench.visible) {
+    if (!workbench.atRest) return false;
+    tableFromBench = true;
+    workbench.leave();
+  } else if (healthDesk.visible) {
+    if (!healthDesk.atRest) return false;
+    skipReturn = true;
+    healthDesk.leave();
+  } else if (settingsDesk.visible) {
+    skipReturn = true;
+    settingsDesk.escape();
+  }
+  return true;
+}
+
+/** A table opened over the workbench is left: the workbench comes back up as it sinks. */
+function backToBench() {
+  if (skipReturn) {
+    skipReturn = false;
+    return;
+  }
+  if (!tableFromBench) return;
+  tableFromBench = false;
+  workbench.show(false, true);
 }
 
 /** HEALTH: a table comes up with the latest trip report on it, and the jar of earlier ones. */
 function openHealthDesk() {
-  if (onTitleOnly()) healthDesk.show();
+  if (healthDesk.visible || aquarium.open) return;
+  if (swapFrom()) healthDesk.show();
 }
 
-/** AQUARIUM: a table comes up and the tank drops onto it (from the health desk too: that table sinks meanwhile). */
+/** AQUARIUM: a table comes up and the tank drops onto it. */
 function openAquarium() {
-  if (leaveHealthDesk() || onTitleOnly()) aquarium.show();
-}
-
-/**
- * Another fish clicked while on the health desk: it sinks while the next table
- * rises (as the workbench does for SETTINGS). False if not there, or busy (the
- * report held up, or the table still moving).
- */
-function leaveHealthDesk() {
-  if (!healthDesk.visible || !healthDesk.atRest || aboard) return false;
-  healthDesk.leave();
-  return true;
+  if (aquarium.open) return;
+  if (swapFrom()) aquarium.show();
 }
 
 /**
@@ -1523,7 +1546,6 @@ let benchPan = 0;
 type TableId = 'bench' | 'desk' | 'health' | 'aquarium';
 const tablePan: Record<TableId, number> = { bench: 0, desk: 0, health: 0, aquarium: 0 };
 const tableY: Record<TableId, number> = { bench: 0, desk: 0, health: 0, aquarium: 0 };
-let deskFromBench = false; // the settings desk was opened from the workbench, and goes back to it
 
 function tableUp(which: TableId) {
   return which === 'bench' ? workbench.visible : which === 'desk' ? settingsDesk.visible : which === 'health' ? healthDesk.visible : aquariumTable.visible;
@@ -1651,7 +1673,8 @@ function showTitle(intro: boolean) {
   workbench.hide();
   settingsDesk.hide();
   healthDesk.hide();
-  deskFromBench = false;
+  tableFromBench = false;
+  skipReturn = false;
   benchPan = 0;
   titleScreen.setPan(0);
   labelStartFish(0);
@@ -1686,27 +1709,19 @@ const settingsDesk = new SettingsDesk({
     deskView.pitch = pitch;
   },
   openControls,
-  leaving() {
-    // Opened from the workbench: that table comes back up as this one sinks.
-    if (!deskFromBench) return;
-    deskFromBench = false;
-    workbench.show(false, true);
-  },
+  // Opened from the workbench: that table comes back up as this one sinks.
+  leaving: () => backToBench(),
 });
 // The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
 titleScreen.blocked = backRope.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
 /** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
-  if (settingsDesk.visible || loginGate.visible) return;
-  if (healthDesk.visible && !leaveHealthDesk()) return; // the health desk sinks while this one rises
-  if (workbench.visible) {
-    if (!workbench.atRest) return;
-    deskFromBench = true;
-    workbench.leave(); // the workbench sinks while the settings desk rises
-  }
-  settingsDesk.show();
+  if (settingsDesk.visible || aquarium.open) return;
+  if (swapFrom()) settingsDesk.show(); // the table up sinks while this one rises
 }
+
+healthDesk.onLeave = aquariumTable.onLeave = () => backToBench();
 
 function openWorkbench() {
   if (workbench.visible || settingsDesk.visible || loginGate.visible) return;

@@ -111,6 +111,7 @@ export class TableScene {
   leave(done?: () => void) {
     if (this.state === 'closed' || this.state === 'leaving') return;
     this.state = 'leaving';
+    this.onLeave?.();
     document.body.style.cursor = '';
     this.tween = {
       from: this.panU,
@@ -141,6 +142,9 @@ export class TableScene {
   protected setRay(e: PointerEvent) {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, 1 - (e.clientY / window.innerHeight) * 2), this.camera);
   }
+
+  /** Called as it starts to sink away (main.ts: bring back the table it was opened over). */
+  onLeave?: () => void;
 
   /** Something heavy landed: the table jolts (the camera shakes, easing off). */
   jolt(amount: number) {
