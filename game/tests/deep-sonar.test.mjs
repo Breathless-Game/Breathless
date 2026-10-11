@@ -85,3 +85,25 @@ test('sonar mesh tiers match the Pearl tiers sold in the gear panel', () => {
     assert.ok(sold.effect.startsWith(`${tier.length} m cable · ${tier.nodes} `), sold.effect);
   });
 });
+
+test('pulse nodes share geometry that is disposed once, and only on rebuild', () => {
+  const sonar = new DeepSonar({ lengthLevel: 2, detail: 2 });
+  const nodeGroup = sonar.group.children[2];
+  const shared = new Set(nodeGroup.children.map((mesh) => mesh.geometry));
+  assert.equal(shared.size, 2, 'one node shape and one glow shape');
+  const disposed = new Map();
+  const all = new Set();
+  sonar.group.traverse((object) => object.isMesh && all.add(object.geometry));
+  for (const geometry of all) geometry.addEventListener('dispose', () => disposed.set(geometry, (disposed.get(geometry) ?? 0) + 1));
+  sonar.setColor('#42e8d2'); // unchanged: no rebuild
+  sonar.setLengthLevel(2);
+  sonar.setDetail(2);
+  assert.equal(disposed.size, 0, 'nothing is torn down while still on screen');
+  assert.equal(sonar.group.children[2], nodeGroup);
+  sonar.setColor('#ff6a45');
+  for (const geometry of all) assert.equal(disposed.get(geometry), 1, 'every old geometry, shared ones included, disposed exactly once');
+  for (const mesh of sonar.group.children[2].children) assert.ok(!shared.has(mesh.geometry), 'the rebuilt nodes use fresh geometry');
+  sonar.setDetail(1);
+  assert.equal(sonar.nodeCount, DEEP_SONAR_LENGTH_TIERS[1].nodes - 1, 'low quality drops one node');
+  sonar.dispose();
+});
