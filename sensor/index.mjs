@@ -445,6 +445,8 @@ class Session {
       pulse: this.pulse,
       frames: this.frames,
       ...this.detector.snapshot(),
+      // Only a live baseline is worth seeding a later connection with: the simulator's trace has its own scale.
+      ...(this.sim ? { baseline: null } : {}),
     });
   }
 

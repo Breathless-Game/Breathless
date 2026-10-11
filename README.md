@@ -270,7 +270,7 @@ Every dive key can be rebound in **Settings → Controls** (on the Settings desk
   | 12… | u8[] | Raw: RGBA, width × height × 4. JPEG: one JPEG image of width × height |
   - Format 0 leaves the width field as it always was, so raw frames are byte-for-byte the original protocol. The sensor decodes JPEG to RGBA and hands Presage exactly what raw frames gave it. Decoding runs one frame at a time with one newer frame waiting; a frame that arrives while one waits replaces it, so a slow server drops frames instead of queueing them.
   - Backpressure: the browser skips frames while `ws.bufferedAmount` is over 100 kB (JPEG) or 4 frames (raw), and encodes one JPEG at a time.
-- **JSON commands**: `{ "t": "sim", "on": true }` turns simulation on or off; `{ "t": "simHold", "holding": true }` sets the simulated hold; `{ "t": "seed", "baseline": 0.8 }` (`"type": "seed"` also works) hands back a live baseline from an earlier connection's `state`. It is used only if this connection has no baseline yet and only if it is a finite number in [0.001, 1000]; anything else is ignored. It stays in memory: never logged or written to disk.
+- **JSON commands**: `{ "t": "sim", "on": true }` turns simulation on or off; `{ "t": "simHold", "holding": true }` sets the simulated hold; `{ "t": "seed", "baseline": 0.8 }` (`"type": "seed"` also works) hands back a live baseline from an earlier connection's `state` (sim sessions always report `baseline: null`). It is used only if this connection has no baseline yet and only if it is a finite number in [0.001, 1000]; anything else is ignored. It stays in memory: never logged or written to disk.
 
 **Sensor → browser** (every 80 ms)
 
