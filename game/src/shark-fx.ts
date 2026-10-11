@@ -15,8 +15,8 @@ const CALM_GLOW = new THREE.Color('#122430');
 const FRENZY_GLOW = new THREE.Color('#711f19');
 const CALM_EYE = new THREE.Color('#987647');
 const HUNT_EYE = new THREE.Color('#ff632b');
-/** Each shark keeps to its own depth of field, so two of them never swim through each other. */
-const LANES = [-1.3, 0.9];
+/** Each shark keeps to its own depth of field, so four of them never swim through each other. */
+const LANES = [-1.5, 1.15, -0.25, 2.0];
 
 /** Add water caustics and a grazing highlight to the existing lit shader.
  * Both use reflected light, so darkness stays dark and the headlamp reveals
