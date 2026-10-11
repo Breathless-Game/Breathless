@@ -92,7 +92,9 @@ export class HealthDesk extends TableScene {
   private paperTween: { t: number; dur: number; fn: (u: number) => void; done: () => void } | null = null;
   // Held up, the sheet is drawn on its own layer over the blurred table (like the workbench's chart).
   private heldEl: HTMLElement;
-  private heldRenderer: THREE.WebGLRenderer;
+  // Made on the first pick-up (heldGl()), not at startup: one WebGL context fewer until a report is held.
+  private heldRenderer: THREE.WebGLRenderer | null = null;
+  private heldCanvas: HTMLCanvasElement;
   private heldScene = new THREE.Scene();
   private heldQ = new THREE.Quaternion();
   private tilt = { x: 0, y: 0 };
@@ -138,9 +140,7 @@ export class HealthDesk extends TableScene {
     onLangChange(heldText);
     this.heldEl.append(heldBg, heldCanvas, heldHint);
     document.body.append(this.heldEl);
-    this.heldRenderer = new THREE.WebGLRenderer({ canvas: heldCanvas, antialias: true, alpha: true });
-    this.heldRenderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.heldRenderer.setClearColor(0x000000, 0);
+    this.heldCanvas = heldCanvas;
     this.heldScene.add(new THREE.HemisphereLight('#e6f6ff', '#4a3420', 1.35));
     const key = new THREE.DirectionalLight('#fff1dc', 2.2);
     key.position.set(-4, 10, 5);
@@ -171,6 +171,16 @@ export class HealthDesk extends TableScene {
   /** Settled, and the report lying on the table (not held up or on its way). */
   get atRest() {
     return super.atRest && this.paperState === 'table';
+  }
+
+  /** The held-up sheet's renderer, made the first time a report is picked up and kept after. */
+  private heldGl(): THREE.WebGLRenderer {
+    if (!this.heldRenderer) {
+      this.heldRenderer = new THREE.WebGLRenderer({ canvas: this.heldCanvas, antialias: true, alpha: true });
+      this.heldRenderer.outputColorSpace = THREE.SRGBColorSpace;
+      this.heldRenderer.setClearColor(0x000000, 0);
+    }
+    return this.heldRenderer;
   }
 
   /** The saved trips were deleted: if the desk is up, the old report and the jar's scrolls go too. */
@@ -239,13 +249,14 @@ export class HealthDesk extends TableScene {
     if (!this.heldEl.classList.contains('hidden')) {
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const size = this.heldRenderer.getSize(new THREE.Vector2());
+      const gl = this.heldGl();
+      const size = gl.getSize(new THREE.Vector2());
       if (size.x !== w || size.y !== h) {
-        this.heldRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        this.heldRenderer.setSize(w, h, false);
+        gl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        gl.setSize(w, h, false);
       }
       this.camera.updateMatrixWorld();
-      this.heldRenderer.render(this.heldScene, this.camera);
+      gl.render(this.heldScene, this.camera);
     }
   }
 

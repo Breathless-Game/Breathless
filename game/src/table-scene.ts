@@ -26,7 +26,18 @@ export interface TableHooks {
 export class TableScene {
   protected root: HTMLElement;
   protected canvas: HTMLCanvasElement;
-  protected renderer: THREE.WebGLRenderer;
+  // Made on the first show(), not at startup: a table that is never opened holds no WebGL context.
+  private gl: THREE.WebGLRenderer | null = null;
+  protected get renderer(): THREE.WebGLRenderer {
+    if (!this.gl) {
+      this.gl = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
+      this.gl.outputColorSpace = THREE.SRGBColorSpace;
+      this.gl.shadowMap.enabled = true;
+      this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
+      this.gl.setClearColor(0x000000, 0);
+    }
+    return this.gl;
+  }
   protected scene = new THREE.Scene();
   protected camera = new THREE.PerspectiveCamera(34, 1, 0.1, 120);
   protected ray = new THREE.Raycaster();
@@ -52,11 +63,6 @@ export class TableScene {
     this.canvas = document.createElement('canvas');
     this.root.append(this.canvas);
     document.body.append(this.root);
-    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(0x000000, 0);
     this.buildRoom();
     window.addEventListener('resize', () => this.visible && this.resize());
   }
