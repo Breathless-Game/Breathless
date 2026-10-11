@@ -35,7 +35,8 @@ export interface MapDef {
   rocks: readonly string[];
   /** What covers the bottom besides rock and kelp. */
   life: 'none' | 'logs' | 'coral';
-  kelp: { count: number; hue: readonly [number, number] };
+  /** How many tall kelp stand on the shelf; flora.ts says what else grows and in which colours. */
+  kelp: { count: number };
 }
 
 export const MAPS: Record<MapId, MapDef> = {
@@ -64,7 +65,7 @@ export const MAPS: Record<MapId, MapDef> = {
     sand: '#9aa7ad',
     rocks: ['#5b6b78', '#46535f', '#6f7f8a', '#39444f'],
     life: 'none',
-    kelp: { count: 55, hue: [0.25, 0.36] },
+    kelp: { count: 55 },
   },
   tianchi: {
     id: 'tianchi',
@@ -74,7 +75,7 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 'Normal',
     zoneCount: 2,
     zoneLabels: ['Shallows', 'Sunken Forest'],
-    unlockValue: 150,
+    unlockValue: 0,
     blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees below.',
     sky: '#d6e6dc',
     nightSky: '#0a1620',
@@ -91,7 +92,7 @@ export const MAPS: Record<MapId, MapDef> = {
     sand: '#7d7a63',
     rocks: ['#6a6657', '#55513f', '#7b7765', '#403d31'],
     life: 'logs',
-    kelp: { count: 26, hue: [0.17, 0.26] },
+    kelp: { count: 26 },
   },
   ocean: {
     id: 'ocean',
@@ -101,7 +102,7 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 'Hard',
     zoneCount: 3,
     zoneLabels: ['Shallows', 'Reef', 'Abyss'],
-    unlockValue: 1000,
+    unlockValue: 0,
     blurb: 'Open water under a storm front. Reef and abyss on the widest shelf.',
     sky: '#a8e3f5',
     nightSky: '#0b1430',
@@ -118,7 +119,7 @@ export const MAPS: Record<MapId, MapDef> = {
     sand: '#c2a874',
     rocks: ['#5d6f7a', '#4a5b68', '#6b7d85', '#3e4c59'],
     life: 'coral',
-    kelp: { count: 55, hue: [0.22, 0.32] },
+    kelp: { count: 55 },
   },
 };
 

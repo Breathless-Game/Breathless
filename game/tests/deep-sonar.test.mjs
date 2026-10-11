@@ -15,6 +15,8 @@ async function sourceUrl(file, imports = {}) {
 const three = import.meta.resolve('three');
 const sonarUrl = await sourceUrl('../src/deep-sonar.ts', { three });
 const { DeepSonar, DEEP_SONAR_LENGTH_TIERS, normalizeDeepSonarCustomization } = await import(sonarUrl);
+const walletStub = `data:text/javascript;base64,${Buffer.from("export const storageKey = (name) => 'deepbreath.test.' + name;").toString('base64')}`;
+const { EQUIPMENT_TIERS } = await import(await sourceUrl('../src/equipment.ts', { './wallet': walletStub }));
 
 test('deep sonar has bounded low-poly geometry, upgradeable reach and stable node count', () => {
   const sonar = new DeepSonar({ color: '#24d8c2', lengthLevel: 2, detail: 2 });
@@ -72,4 +74,14 @@ test('preparation customization clamps invalid values and supports lighting togg
   sonar.setLightingEnabled(true);
   assert.equal(sonar.customization.lighting, true);
   sonar.dispose();
+});
+
+test('sonar mesh tiers match the Pearl tiers sold in the gear panel', () => {
+  assert.equal(EQUIPMENT_TIERS.sonar.length, DEEP_SONAR_LENGTH_TIERS.length);
+  DEEP_SONAR_LENGTH_TIERS.forEach((tier, i) => {
+    const sold = EQUIPMENT_TIERS.sonar[i];
+    assert.equal(sold.level, tier.level);
+    assert.equal(sold.cost, tier.upgradeCost);
+    assert.ok(sold.effect.startsWith(`${tier.length} m cable · ${tier.nodes} `), sold.effect);
+  });
 });

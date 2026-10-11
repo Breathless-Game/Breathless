@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Shipyard, SHIPS } from './ships';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
@@ -12,29 +13,36 @@ import { TitleScreen } from './title';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
-import { HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
+import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
+import {
+  advanceWorldBounds,
+  cameraTargetXToBounds,
+  clampWorldXToBounds,
+  createWorldBounds,
+} from './bounds';
 import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
-import { loadEquipment, nextRodTier, nextSonarTier, planUpgrade, rodTier, saveEquipment, totalPearls, type EquipmentState } from './equipment';
+import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
+import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
+import { WorldEvents, type EventContext } from './events';
+import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 
 // ---- Tuning -------------------------------------------------------------
-const SWIM_ACCEL = 24;
 const DRAG = 2.4;
-const MAX_SPEED = 7.5;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
-const EMERGENCY_SECONDS = 3.2; // air left after you breathe underwater
 const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
-const FISH_PER_ZONE = [16, 16, 12];
+// Keep encounter density stable as the playable width doubles.
+const FISH_PER_ZONE = [32, 32, 24];
 // Every map's seabed is a shelf; under the boat a trench drops away with no
 // bottom. The map only sets how deep the shelf is (world.seabedY).
 const DEPTH_LIMIT = Infinity;
@@ -57,6 +65,9 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const mapProgress = loadMapProgress();
 if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
 const world = new World(renderQuality.settings, MAPS[mapProgress.selected]);
+// The generated terrain supports the full ±200 m safety corridor. Edges open
+// only when the diver is moving toward them, then ease back toward ±140 m.
+const worldBounds = createWorldBounds(HALF_WIDTH, MAX_HALF_WIDTH);
 const scene = world.scene;
 const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
 camera.position.set(0, 1.5, 24);
@@ -71,11 +82,58 @@ window.addEventListener('resize', resize);
 resize();
 
 const diver = new Diver(scene);
+diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
+diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 const hud = new Hud();
+
+// Random world events (avalanches, whales, a leviathan...). They play only during a
+// dive (see update()); menus show none and cost nothing.
+const events = new WorldEvents(scene, world.map, renderQuality.settings.detail);
+world.colorGrade.apply(scene);
+const eventCtx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
+let eventsLive = false;
+const shakeOffset = new THREE.Vector3();
+// Fish near the diver bolt for a moment when the ground shakes or something huge passes.
+const SCATTER: Record<string, number> = { avalanche: 5, rockfall: 1.5, leviathan: 2 }; // seconds until it hits
+const scatterAt = new THREE.Vector3();
+const scatterThreat = new THREE.Vector3();
+let scatterFrom = Infinity;
+let scatterUntil = -Infinity;
+let scatterFresh = false;
+events.onEvent = (e) => {
+  hud.message(e.label, 2600);
+  const delay = SCATTER[e.id];
+  if (delay !== undefined) {
+    scatterFrom = time + delay;
+    scatterUntil = scatterFrom + 2.5;
+    scatterFresh = true;
+  }
+};
+
+let eventDetail = renderQuality.settings.detail;
+/** Keep the events' detail level in step with the render quality. */
+function syncEventDetail() {
+  const detail = renderQuality.settings.detail;
+  if (detail === eventDetail) return;
+  eventDetail = detail;
+  events.setDetail(detail);
+  // The rebuild made new materials: give them the scene's colour grade too.
+  world.colorGrade.apply(scene);
+}
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
 const fishes: Fish[] = [];
+let fishCoverageLeft = worldBounds.left;
+let fishCoverageRight = worldBounds.right;
+const FISH_EDGE_BAND = 8;
+
+function resetWorldBounds() {
+  worldBounds.left = -worldBounds.baseHalfWidth;
+  worldBounds.right = worldBounds.baseHalfWidth;
+  fishCoverageLeft = worldBounds.left;
+  fishCoverageRight = worldBounds.right;
+}
 
 function randomSeed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0];
@@ -89,8 +147,10 @@ function rollFor(depth: number): FishSpec {
   return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
 }
 
-function addFish(band: Band, depth: number, halfWidth: number) {
-  const fish = new Fish(rollFor(depth), band, THREE.MathUtils.randFloat(-halfWidth, halfWidth), -depth, halfWidth);
+function addFish(band: Band, depth: number, halfWidth: number, minX = -halfWidth, maxX = halfWidth) {
+  const left = Math.min(minX, maxX);
+  const right = Math.max(minX, maxX);
+  const fish = new Fish(rollFor(depth), band, THREE.MathUtils.randFloat(left, right), -depth, halfWidth);
   fishes.push(fish);
   scene.add(fish.mesh.group);
   world.colorGrade.apply(fish.mesh.group);
@@ -101,10 +161,14 @@ function removeFish(fish: Fish) {
   fishes.splice(fishes.indexOf(fish), 1);
   scene.remove(fish.mesh.group);
   trenchFish.delete(fish);
+  // Each fish owns its geometry and materials: free them with the mesh.
+  disposeTree(fish.mesh.group);
 }
 
-function spawnFish(band: Band) {
-  addFish(band, THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5), HALF_WIDTH);
+function spawnFish(band: Band, minX = worldBounds.left, maxX = worldBounds.right) {
+  const depth = THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5);
+  const fish = addFish(band, depth, worldBounds.maxHalfWidth, minX, maxX);
+  fish.setWorldBounds(worldBounds.left, worldBounds.right);
 }
 
 // Trench fish live in a window around the diver's depth. New ones appear
@@ -192,13 +256,30 @@ function tendTrench(diverDepth: number) {
  * trench, where that school covers them.
  */
 function populate() {
-  for (const f of [...trenchFish]) removeFish(f);
-  for (const f of fishes) scene.remove(f.mesh.group);
+  for (const f of [...fishes]) removeFish(f);
   fishes.length = 0;
+  fishCoverageLeft = worldBounds.left;
+  fishCoverageRight = worldBounds.right;
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
   });
   for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
+}
+
+/** Keep encounter density continuous when a newly opened edge becomes reachable. */
+function extendFishCoverage() {
+  if (worldBounds.right - fishCoverageRight >= FISH_EDGE_BAND) {
+    const start = fishCoverageRight;
+    const end = worldBounds.right;
+    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    fishCoverageRight = end;
+  }
+  if (fishCoverageLeft - worldBounds.left >= FISH_EDGE_BAND) {
+    const start = worldBounds.left;
+    const end = fishCoverageLeft;
+    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    fishCoverageLeft = start;
+  }
 }
 populate();
 
@@ -210,6 +291,43 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+// The persistent inventory is filtered by the workbench for each dive. A null
+// loadout means the debug/title state where all owned upgrades are available.
+let activeLoadout: readonly UpgradeId[] | null = null;
+let activeTool: EquipmentSlot = 'net';
+let shipBonus: (typeof SHIPS)[number] = SHIPS[0];
+// The ship's bonus goes on top of the packed gear: extra net slots, a wider catch, a faster swim.
+const currentStats = () => {
+  const stats = deriveStats(equipment, activeLoadout ?? undefined);
+  return {
+    ...stats,
+    netCapacity: stats.netCapacity + shipBonus.capacity,
+    catchRadius: stats.catchRadius * (1 + shipBonus.range),
+    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed),
+  };
+};
+const activeLevel = (slot: EquipmentSlot): number => {
+  const packed = activeLoadout;
+  if (packed && !packed.includes(slot)) return 1;
+  if (slot === 'net') return equipment.netLevel;
+  if (slot === 'rod') return equipment.rodGearLevel;
+  if (slot === 'reel') return equipment.reelLevel;
+  if (slot === 'fins') return equipment.finsLevel;
+  if (slot === 'tank') return equipment.tankLevel;
+  return equipment.lampLevel;
+};
+function applyEquipmentVisuals() {
+  const stats = currentStats();
+  diver.setNetLevel(activeLevel('net'));
+  diver.setRodLevel(activeLevel('rod'));
+  diver.setRodRange(stats.rodRange);
+  diver.setFinsLevel(activeLevel('fins'));
+  diver.setTankLevel(activeLevel('tank'));
+  diver.setLampLevel(activeLevel('lamp'));
+  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
+  diver.setReelLevel(activeLevel('reel'));
+  diver.setReelRecovery(stats.reelRecovery);
+}
 const sonar = new DeepSonar({ color: loadSonarConfig().color, lengthLevel: equipment.sonarLevel, detail: renderQuality.settings.detail, startsCarried: false });
 scene.add(sonar.group);
 sonar.group.visible = false;
@@ -240,8 +358,8 @@ function saveBank() {
   } catch {}
 }
 
-const currentTier = () => rodTier(equipment);
-hud.setNet(net, currentTier().capacity);
+const currentTier = () => { const tier = rodTier(equipment); return { ...tier, capacity: tier.capacity + shipBonus.capacity, catchRadius: tier.catchRadius * (1 + shipBonus.range) }; };
+hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
@@ -255,22 +373,38 @@ const vault = new Vault(bank, nftQueue);
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
 const report = new Report(health);
-const gear = new GearPanel(() => buyNextRod(), () => buyNextSonar());
+const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => selectEquipmentPath(slot, path));
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
 diver.setNetLevel(currentTier().level);
+applyEquipmentVisuals();
+const loadoutWheel = new LoadoutWheel({
+  isAvailable: (slot) => activeLoadout == null || activeLoadout.includes(slot),
+  onSelect: (slot) => {
+    activeTool = slot;
+    hud.setActiveGear(slot, activeLoadout == null || activeLoadout.includes(slot));
+    const label = QUICK_SLOTS.find((item) => item.slot === slot)?.label ?? slot;
+    hud.message(`${label} 已装备`, 900);
+  },
+  onUnavailable: (slot) => {
+    const label = QUICK_SLOTS.find((item) => item.slot === slot)?.label ?? slot;
+    hud.message(`${label} 未装配 · 下次下潜前在工作台打包`, 1800);
+  },
+});
+hud.setActiveGear(activeTool, true);
 let nowMs = 0;
 
 function refreshEquipment() {
   const tier = currentTier();
+  const stats = currentStats();
   saveEquipment(equipment);
   const sonarConfig = saveSonarConfig({ ...loadSonarConfig(), lengthLevel: equipment.sonarLevel });
   sonar.setLengthLevel(equipment.sonarLevel);
   sonar.setColor(sonarConfig.color);
   hud.setEquipment(equipment, tier);
-  hud.setNet(net, tier.capacity);
+  hud.setNet(net, stats.netCapacity);
   gear.render(equipment);
-  diver.setNetLevel(tier.level);
+  applyEquipmentVisuals();
 }
 
 /** Re-read the on-chain PEARL balance into the cache. `earned` shows a sale's Pearls before the read lands. */
@@ -288,14 +422,18 @@ async function syncPearls(earned = 0) {
 }
 
 let buying = false;
-async function buyNextRod() {
+async function buyNextUpgrade(slot: UpgradeSlot = 'net') {
   if (buying) return;
-  const next = nextRodTier(equipment);
-  if (!next) {
-    gear.showNotice('The net is already at maximum level.');
+  if (phase === 'play') {
+    gear.showNotice('Return to the workbench before upgrading gear.');
     return;
   }
-  const plan = planUpgrade(equipment);
+  const next = nextSlotTier(equipment, slot);
+  if (!next) {
+    gear.showNotice(`${nextSlotLabel(slot)} is already at maximum level.`);
+    return;
+  }
+  const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
     gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
     hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
@@ -305,13 +443,9 @@ async function buyNextRod() {
   buying = true;
   gear.setBusy(true);
   try {
-    if (plan.fromChain > 0) {
-      await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
-      equipment.pearls = Math.max(0, equipment.pearls - plan.fromChain);
-    }
-    equipment.legacyPearls -= plan.fromLegacy;
-    equipment.rodLevel = plan.tier.level;
-    hud.message(`Rod upgraded: Level ${equipment.rodLevel}`, 1800);
+    if (plan.fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
+    Object.assign(equipment, applySlotUpgrade(equipment, plan));
+    hud.message(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, 1800);
   } catch (e) {
     console.error('upgrade failed', e);
     gear.showNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
@@ -323,52 +457,39 @@ async function buyNextRod() {
   }
 }
 
-let buyingSonar = false;
-async function buyNextSonar() {
-  if (buyingSonar) return;
-  const next = nextSonarTier(equipment);
+function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
+  if (phase === 'play') {
+    gear.showNotice('Return to the workbench before changing a module.');
+    return;
+  }
+  const next = setEquipmentPath(equipment, slot, path);
   if (!next) {
-    gear.showSonarNotice('The sonar cable is already at maximum level.');
+    gear.showNotice('Upgrade this slot to Lv2 before selecting a branch.');
     return;
   }
-  const pearls = totalPearls(equipment);
-  if (pearls < next.cost) {
-    const missing = next.cost - pearls;
-    gear.showSonarNotice(`Need ${missing} more Pearls.`);
-    hud.message(`Need ${missing} more Pearls`, 1500);
-    return;
-  }
-  buyingSonar = true;
-  gear.setBusy(true);
-  try {
-    const fromLegacy = Math.min(equipment.legacyPearls, next.cost);
-    const fromChain = next.cost - fromLegacy;
-    if (fromChain > 0) {
-      await (await nftQueue.loadPearl()).spendPearls(fromChain);
-      equipment.pearls = Math.max(0, equipment.pearls - fromChain);
-    }
-    equipment.legacyPearls -= fromLegacy;
-    equipment.sonarLevel = next.level;
-    saveSonarConfig({ ...loadSonarConfig(), lengthLevel: next.level });
-    hud.message(`Deep sonar upgraded: Level ${equipment.sonarLevel}`, 1800);
-  } catch (e) {
-    console.error('sonar upgrade failed', e);
-    gear.showSonarNotice(`Upgrade failed: ${(e as Error).message ?? e}`);
-  } finally {
-    buyingSonar = false;
-    gear.setBusy(false);
-    refreshEquipment();
-    if (next.cost > Math.min(equipment.legacyPearls, next.cost)) void syncPearls();
-  }
+  Object.assign(equipment, next);
+  refreshEquipment();
+  hud.message(`${nextSlotLabel(slot)} module changed`, 1200);
+}
+
+function nextSlotLabel(slot: UpgradeSlot) {
+  return ({ net: 'Net', rod: 'Rod shaft', reel: 'Recovery reel', fins: 'Fins', tank: 'Emergency tank', lamp: 'Headlamp', sonar: 'Deep sonar' } as const)[slot];
 }
 
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (loadoutWheel.open) {
+      loadoutWheel.closeWheel(false);
+      return;
+    }
     onEscape();
     return;
   }
+  // Tab is a hold-to-open radial wheel. Number keys and Q/E are instant
+  // quick-slot shortcuts; consume them before movement/catch handling.
+  if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
   if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !loginGate.visible && !pauseMenu.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
@@ -378,6 +499,12 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.key.toLowerCase());
   // Not on the workbench: the report would pop up over the table and the chart.
   if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
+  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
+    e.preventDefault();
+    gear.toggle();
+    if (gear.open) void syncPearls();
+    return;
+  }
   if (phase !== 'play') return;
   if (e.code === 'Space') {
     e.preventDefault();
@@ -434,6 +561,9 @@ function carrySonarForDive() {
   sonarGuiding = false;
 }
 
+/** How far the transducer weight hangs below the cable's rated length. */
+const SONAR_ANCHOR_DROP = 0.9;
+
 function deploySonar() {
   if (phase !== 'play' || !sonarCarried || sonar.mode !== 'carried') return;
   const top = new THREE.Vector3();
@@ -446,6 +576,11 @@ function deploySonar() {
   top.z = 0;
   target.y -= 1;
   target.z = 0;
+  // Same floor rule as update(): the trench under the boat has no floor, the
+  // shelf does. Over the shelf, stop the weighted end on the seabed instead of
+  // lowering it through the ground (it still stays under the surface).
+  const floorY = Math.abs(target.x) <= TRENCH_X ? -Infinity : world.seabedY;
+  target.y = Math.min(-0.6, Math.max(target.y, floorY + sonar.length + SONAR_ANCHOR_DROP));
   sonar.group.position.copy(top);
   sonar.deploy(target);
   sonarCarried = false;
@@ -462,7 +597,10 @@ function resetSonar() {
   sonarCarried = false;
   sonarGuiding = false;
 }
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  if (loadoutWheel.handleKeyUp(e)) return;
+  keys.delete(e.key.toLowerCase());
+});
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 document.getElementById('gear-open')!.addEventListener('click', () => {
   gear.toggle(true);
@@ -476,16 +614,19 @@ function axis(neg: string[], pos: string[]) {
 
 // ---- Catching -----------------------------------------------------------
 function tryCatch() {
+  // The net must finish its visible recovery before another throw. The reel
+  // upgrade shortens that recovery without changing breath input or rarity.
+  if (diver.swinging) return;
   diver.swing();
   if (diver.pos.y > -SURFACE_DEPTH) return;
-  const tier = currentTier();
-  if (net.length >= tier.capacity) {
+  const stats = currentStats();
+  if (net.length >= stats.netCapacity) {
     hud.message('Net full! Surface to bank it.');
     return;
   }
   const p = diver.netPoint();
   let best: Fish | null = null;
-  let bestD = tier.catchRadius;
+  let bestD = stats.catchRadius;
   for (const f of fishes) {
     const d = Math.hypot(f.pos.x - p.x, f.pos.y - p.y);
     if (d < bestD) {
@@ -499,7 +640,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
-  hud.setNet(net, tier.capacity);
+  hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
   if (!inTrench) {
@@ -520,7 +661,7 @@ function bankNet() {
   hud.toast(rarest, 'BANKED');
   noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  hud.setNet(net, currentStats().netCapacity);
   hud.setBank(bank);
   nftQueue.kick();
 }
@@ -551,13 +692,18 @@ function showMapOnHud() {
 /** Put the world on a map: scenery, its fish and trench school, and the HUD's zones and shelf. */
 function applyMap(id: MapId) {
   if (id === world.map.id) return;
+  resetWorldBounds();
   world.setMap(MAPS[id]);
+  // The event pool follows the map, whether the picker or a restored wallet chose it.
+  events.setMap(world.map);
+  world.colorGrade.apply(scene);
   populate(); // also swaps the old trench school for one under the new shelf
   showMapOnHud();
 }
 
-function selectMap(id: MapId) {
-  if (phase !== 'menu' || id === world.map.id || !isUnlocked(MAPS[id], mapProgress)) return;
+/** anyMap: the workbench's chart lets you pick any place, locked or not. */
+function selectMap(id: MapId, anyMap = false) {
+  if (phase !== 'menu' || id === world.map.id || (!anyMap && !isUnlocked(MAPS[id], mapProgress))) return;
   mapProgress.selected = id;
   saveMapProgress(mapProgress);
   applyMap(id);
@@ -581,7 +727,7 @@ function blackout() {
   const lost = net.length;
   health.end(nowMs, 'blackout', lost);
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  hud.setNet(net, currentStats().netCapacity);
   hud.message(lost ? `BLACKOUT · ${lost} fish lost` : 'BLACKOUT', 2200);
   hud.setEmergency(null);
   setTimeout(() => {
@@ -608,7 +754,9 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   phase = 'play';
+  resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
   workbench.hide();
@@ -698,6 +846,7 @@ function pause() {
   if (phase !== 'play' || paused) return;
   paused = true;
   keys.clear();
+  loadoutWheel.closeWheel(false);
   vault.toggle(false);
   gear.toggle(false);
   report.toggle(false);
@@ -705,7 +854,8 @@ function pause() {
 }
 
 function onEscape() {
-  if (pauseMenu.open) pauseMenu.back();
+  if (shipyard.open) shipyard.close();
+  else if (pauseMenu.open) pauseMenu.back();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
@@ -721,7 +871,13 @@ function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   net = [];
-  hud.setNet(net, currentTier().capacity);
+  activeLoadout = null;
+  loadout = [];
+  activeTool = 'net';
+  loadoutWheel.setActive(activeTool);
+  hud.setActiveGear(activeTool, true);
+  applyEquipmentVisuals();
+  hud.setNet(net, currentStats().netCapacity);
   hud.setEmergency(null);
   outOfAir = false;
   breathSince = null;
@@ -729,6 +885,7 @@ function goToMenu() {
   diver.pos.set(0, -0.4, 0);
   diver.vel.set(0, 0, 0);
   resetSonar();
+  resetWorldBounds();
   paused = false;
   phase = 'menu';
   pauseMenu.close();
@@ -748,9 +905,12 @@ function goToMenu() {
 
 function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
+  diver.setQuality(renderQuality.settings);
   world.setLightingEffects(s.lightingEffects);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
+  sonar.setDetail(renderQuality.settings.detail);
+  syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
   document.getElementById('help')!.classList.toggle('hidden', !s.showHelp);
@@ -775,6 +935,27 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
+const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) => {
+  paused = open;
+  keys.clear();
+  if (!open) breathSince = null;
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); }, scene, root => world.colorGrade.apply(root));
+const boatRay = new THREE.Raycaster();
+document.addEventListener('click', (e) => {
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat, true).length) { e.preventDefault(); e.stopPropagation(); shipyard.show(); }
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const target = e.target as HTMLCanvasElement;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open) { target.style.cursor = ''; return; }
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
+});
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
@@ -782,7 +963,8 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
   { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
 ]);
 
-// Gear set in the workbench's READY tray for this dive. Not used by the dive yet: upgrades aren't wired in.
+// Gear set in the workbench's READY tray for this dive. The selected slots are
+// applied when the dive starts, so an omitted accessory falls back to tier 1.
 let loadout: UpgradeId[] = [];
 
 // How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
@@ -791,14 +973,24 @@ let benchPan = 0;
 
 const workbench = new Workbench({
   progress: () => mapProgress,
-  setUnlockAll: setDemoUnlock,
   pan(u, tableY) {
     benchPan = u;
     titleScreen.setPan(u, tableY);
   },
+  preview: mapPreview,
   dive(id, gear) {
     loadout = gear;
-    selectMap(id);
+    activeLoadout = [...gear];
+    const firstPacked = QUICK_SLOTS.find((item) => gear.includes(item.slot));
+    activeTool = firstPacked?.slot ?? 'net';
+    loadoutWheel.setActive(activeTool);
+    hud.setActiveGear(activeTool, activeLoadout.includes(activeTool));
+    applyEquipmentVisuals();
+    hud.setNet(net, currentStats().netCapacity);
+    selectMap(id, true);
+    // The preview frame expanding over the screen was taken from exactly here.
+    benchPan = 0;
+    snapToDiveCamera();
     openStartCard();
   },
   sonarColor(color) {
@@ -847,6 +1039,7 @@ function loadWalletProgress() {
   refreshEquipment();
   mapPicker.render();
   noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
+  shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
 }
@@ -939,20 +1132,22 @@ function update(dt: number, time: number) {
       if (Math.random() < 0.02) hud.message('Hold your breath to dive', 900);
     }
     if (outOfAir && ay < 0) ay = 0;
-    diver.vel.x += ax * SWIM_ACCEL * dt;
-    diver.vel.y += ay * SWIM_ACCEL * dt;
+    const stats = currentStats();
+    diver.vel.x += ax * stats.swimAcceleration * dt;
+    diver.vel.y += ay * stats.swimAcceleration * dt;
   }
 
   if (outOfAir) {
     diver.vel.y += EMERGENCY_LIFT * dt;
-    emergency -= dt / EMERGENCY_SECONDS;
+    emergency -= dt / currentStats().emergencySeconds;
     if (Math.random() < dt * 8) diver.exhale(1);
     if (emergency <= 0 && phase === 'play') blackout();
   }
 
   // Water drag, speed cap, and gentle buoyancy at the surface.
   diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  const cap = outOfAir ? 10 : MAX_SPEED;
+  // Fins (and the ship's bonus) improve ordinary swimming only. Emergency ascent keeps its own cap.
+  const cap = outOfAir ? 10 : currentStats().swimSpeed;
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   // Below the shelf you're inside the trench; above it, the shelf is the floor
@@ -962,7 +1157,12 @@ function update(dt: number, time: number) {
   // pressing down on the shelf would pull the diver sideways into the trench.
   const wall = diver.pos.y < shelfY ? TRENCH_X : HALF_WIDTH;
   diver.pos.addScaledVector(diver.vel, dt);
-  diver.pos.x = THREE.MathUtils.clamp(diver.pos.x, -wall, wall);
+  advanceWorldBounds(worldBounds, diver.pos.x, diver.vel.x, dt);
+  extendFishCoverage();
+  // Inside the trench its walls hold the diver; over the shelf the map edges do.
+  diver.pos.x = wall === TRENCH_X
+    ? THREE.MathUtils.clamp(diver.pos.x, -TRENCH_X, TRENCH_X)
+    : clampWorldXToBounds(diver.pos.x, worldBounds);
   const floor = Math.abs(diver.pos.x) > TRENCH_X ? shelfY : -DEPTH_LIMIT;
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
 
@@ -985,20 +1185,57 @@ function update(dt: number, time: number) {
     hud.message('Sonar guidance online · follow the pulses', 2200);
   }
   tendTrench(-diver.pos.y);
-  for (const f of fishes) f.update(dt, time, diver.pos);
+  const scattering = time >= scatterFrom && time < scatterUntil;
+  if (scattering && scatterFresh) {
+    scatterAt.copy(diver.pos);
+    scatterFresh = false;
+  }
+  for (const f of fishes) {
+    // The trench school keeps to the trench; only shelf fish follow the opening map edges.
+    if (!trenchFish.has(f)) f.setWorldBounds(worldBounds.left, worldBounds.right);
+    const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
+    // A threat just behind each nearby fish, on the diver's side: it darts away.
+    f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
+  }
+  world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
 
-  // Camera: side-on 2.5D follow with a little lead. Underwater it stays below
-  // the surface so we never look at the diver through the translucent waves.
-  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
-  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
-  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
-  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
   // On the menu the camera sinks a little as the workbench pans in.
-  const benchDrop = phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0;
-  camTarget.set(diver.pos.x + diver.vel.x * 0.35, Math.max(camY, camFloor) - benchDrop, 22);
+  cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
+  camera.position.sub(shakeOffset);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+
+  // World events, after World.update (the lightning flash tints what it wrote).
+  // Only during a dive: leaving or starting one clears them and restarts the clock.
+  const diving = phase === 'play' || phase === 'blackout';
+  if (diving !== eventsLive) {
+    eventsLive = diving;
+    events.stop();
+    scatterFrom = Infinity;
+    scatterUntil = -Infinity;
+  }
+  if (diving) {
+    const weather = world.weather.state;
+    eventCtx.cameraY = camera.position.y;
+    eventCtx.cameraX = camera.position.x;
+    eventCtx.aspect = camera.aspect;
+    eventCtx.depth = -diver.pos.y;
+    eventCtx.night = world.night;
+    eventCtx.shelfDepth = mapDepth(world.map); // below it is the trench
+    const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY; // as in cameraTarget()
+    eventCtx.floorY = inTrench ? -Infinity : world.seabedY; // the trench has no floor
+    eventCtx.lightingEffects = world.lightingEffectsEnabled;
+    eventCtx.storm = weather.storm;
+    eventCtx.cloud = weather.cloud;
+    events.update(time, dt, eventCtx);
+  }
+  // The storm's own sheet lightning holds off while an event bolt strikes.
+  world.quietWeatherLightning = events.activeId === 'lightning';
+  // A subtle shake (a few cm) on top of the follow, taken off again next frame.
+  const shake = events.shake;
+  shakeOffset.set(shake * Math.sin(time * 47.3) * Math.cos(time * 13.1), shake * Math.sin(time * 53.7 + 1.3) * Math.cos(time * 9.7), 0);
+  camera.position.add(shakeOffset);
 
   hud.setBreath(s, outOfAir);
   hud.setDepth(-diver.pos.y);
@@ -1007,16 +1244,68 @@ function update(dt: number, time: number) {
   if (phase === 'calibrating') updateCalibration();
 }
 
+/**
+ * Camera: side-on 2.5D follow with a little lead. Underwater it stays below the
+ * surface so we never look at the diver through the translucent waves. `drop`
+ * sinks it (the workbench pan).
+ */
+function cameraTarget(out: THREE.Vector3, drop: number) {
+  const camY = diver.pos.y > -2.5 ? 2.2 : Math.min(diver.pos.y + 1.2, -1.2);
+  // Over the shelf the camera stays above the seabed; in the trench it follows you down.
+  const shelfY = world.seabedY + 1.2; // as in update(): lowest the diver can go outside the trench
+  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
+  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
+  return out.set(cameraTargetXToBounds(diver.pos.x, diver.vel.x, worldBounds), Math.max(camY, camFloor) - drop, 22);
+}
+
+/** Puts the camera exactly where a dive starts (no workbench drop, no easing). */
+function snapToDiveCamera() {
+  cameraTarget(camera.position, 0);
+  camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+}
+
+// The workbench's live place preview: while it is on, every frame also renders the
+// scene from where the dive starts and copies it here. Diving grows this canvas to
+// the full screen over the live scene, which is then in exactly that view.
+const previewCanvas = document.createElement('canvas');
+const previewCamera = new THREE.PerspectiveCamera();
+let previewOn = false;
+
+/** Switches the world to that place and starts the live preview of it (null: stops it). */
+function mapPreview(id: MapId | null): HTMLCanvasElement | null {
+  previewOn = id != null;
+  if (!id) return null;
+  selectMap(id, true);
+  renderPreview(); // a first frame right away, so it never shows empty
+  return previewCanvas;
+}
+
+function renderPreview() {
+  previewCamera.copy(camera); // same lens and aspect
+  cameraTarget(previewCamera.position, 0);
+  previewCamera.lookAt(previewCamera.position.x, previewCamera.position.y - 1.6, 0);
+  renderer.render(scene, previewCamera);
+  if (previewCanvas.width !== canvas.width || previewCanvas.height !== canvas.height) {
+    previewCanvas.width = canvas.width;
+    previewCanvas.height = canvas.height;
+  }
+  // Copied in the same task as the render, so the drawing buffer is still there.
+  previewCanvas.getContext('2d')!.drawImage(canvas, 0, 0);
+}
+
 let time = 0;
 function frame() {
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+    diver.setQuality(renderQuality.settings);
     world.setQuality(renderQuality.settings);
+    sonar.setDetail(renderQuality.settings.detail);
+    syncEventDetail();
     resize();
   }
   const dt = Math.min(elapsed, 0.05);
   // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
-  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, (!paused || shipyard.open) && !document.hidden);
   resetDayClock = false;
   if (!paused) {
     time += dt;
@@ -1025,6 +1314,7 @@ function frame() {
     world.updateLighting(time, camera.position.y, camera.position.x);
   }
   updateTimeLabel();
+  if (previewOn) renderPreview(); // before the main view, which is what the canvas then shows
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -1034,16 +1324,25 @@ frame();
 Object.assign(window, {
   workbench,
   loadout: () => loadout,
+  /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
+  diveCameraOffset: () => camera.position.distanceTo(cameraTarget(new THREE.Vector3(), 0)),
   breath,
   breathTest,
   titleScreen,
   world,
+  events,
+  renderer,
+  /** Fire a world event now, e.g. trigger('whale'). Only during a dive, like the schedule. */
+  trigger: (id: string) => eventsLive && events.trigger(id),
   selectMap,
   diver,
   fishes,
   keys,
   renderQuality,
   nftQueue,
+  /** The deep sonar mesh; deploySonar() is what V does during a dive with the sonar packed. */
+  sonar,
+  deploySonar,
   setTimeOfDay,
   walletState,
   debugStep(seconds: number) {

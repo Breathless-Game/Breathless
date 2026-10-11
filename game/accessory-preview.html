@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breathless · 水下装备与配件 3D 建模工坊</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #09131a;
+        color: #ecf3f5;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        height: 100vh;
+        overflow: hidden;
+      }
+      @media (max-width: 900px) {
+        .app { grid-template-columns: 1fr; height: auto; }
+      }
+      sidebar {
+        background: #0d1a24;
+        border-right: 1px solid #1e3340;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+      }
+      .sidebar-head {
+        padding: 24px 20px 16px;
+        border-bottom: 1px solid #1e3340;
+      }
+      .eyebrow {
+        color: #27c4b8;
+        font-size: 11px;
+        letter-spacing: .16em;
+        text-transform: uppercase;
+        font-weight: 600;
+      }
+      h1 {
+        margin: 8px 0 4px;
+        font-size: 20px;
+        font-weight: 600;
+        color: #f0f7f9;
+      }
+      .subtitle {
+        color: #7997a6;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .filter-tabs {
+        display: flex;
+        padding: 10px 16px;
+        gap: 6px;
+        border-bottom: 1px solid #172733;
+        background: #0b151e;
+      }
+      .filter-btn {
+        flex: 1;
+        padding: 6px 8px;
+        font-size: 11px;
+        border-radius: 6px;
+        border: 1px solid #233b49;
+        background: #11202b;
+        color: #8da6b5;
+        cursor: pointer;
+      }
+      .filter-btn.active {
+        background: #1a424e;
+        border-color: #27c4b8;
+        color: #e5fbfa;
+      }
+      .accessory-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 12px;
+      }
+      .item-card {
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid #1a2f3c;
+        background: #10212c;
+        margin-bottom: 8px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .item-card:hover {
+        background: #142a38;
+        border-color: #2d4f61;
+      }
+      .item-card.active {
+        background: #183d47;
+        border-color: #27c4b8;
+        box-shadow: 0 0 16px rgba(39, 196, 184, 0.12);
+      }
+      .item-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+      .slot-tag {
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: #1c3644;
+        color: #84b7c8;
+      }
+      .stage-tag {
+        font-size: 9px;
+        padding: 2px 5px;
+        border-radius: 3px;
+        background: #242a33;
+        color: #b58d3c;
+      }
+      .item-card.active .stage-tag { background: #35473e; color: #7de8be; }
+      .item-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: #ecf3f5;
+      }
+      .item-en {
+        font-size: 11px;
+        color: #728c9a;
+        margin-top: 2px;
+      }
+      .stage-main {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+      }
+      .stage-header {
+        padding: 18px 28px;
+        border-bottom: 1px solid #1e3340;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        background: #0b151e;
+      }
+      .info-title {
+        font-size: 24px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .info-effect {
+        color: #27c4b8;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .info-desc {
+        color: #86a2af;
+        font-size: 12px;
+        margin-top: 4px;
+        max-width: 720px;
+        line-height: 1.5;
+      }
+      #viewport {
+        flex: 1;
+        position: relative;
+        background: radial-gradient(circle at 50% 45%, #132b3a 0%, #081219 75%);
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .stage-toolbar {
+        padding: 14px 28px;
+        border-top: 1px solid #1e3340;
+        background: #0d1a24;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .btn-group {
+        display: inline-flex;
+        border: 1px solid #233b49;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .tool-btn {
+        padding: 8px 14px;
+        background: #11202b;
+        color: #d8e6eb;
+        border: none;
+        border-right: 1px solid #233b49;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .tool-btn:last-child { border-right: none; }
+      .tool-btn:hover { background: #1a3242; }
+      .tool-btn.active {
+        background: #1b4b57;
+        color: #72f3e5;
+        font-weight: 600;
+      }
+      .action-btn {
+        padding: 8px 16px;
+        background: #162a36;
+        border: 1px solid #284757;
+        color: #d8e6eb;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .action-btn:hover {
+        background: #1e3e4f;
+        border-color: #27c4b8;
+      }
+      .export-group {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+      }
+      .meta-overlay {
+        position: absolute;
+        bottom: 16px;
+        left: 20px;
+        padding: 8px 12px;
+        background: rgba(10, 20, 28, 0.75);
+        border: 1px solid rgba(40, 70, 85, 0.6);
+        border-radius: 8px;
+        backdrop-filter: blur(6px);
+        font-size: 11px;
+        color: #92afbe;
+        display: flex;
+        gap: 16px;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <sidebar>
+        <div class="sidebar-head">
+          <div class="eyebrow">HackRU26 · Breathless Gear Lab</div>
+          <h1>水下装备与配件建模</h1>
+          <div class="subtitle">13 款低多边形分面 PBR 3D 配件模型</div>
+        </div>
+        <div class="filter-tabs">
+          <button class="filter-btn active" data-filter="all">全部 (13)</button>
+          <button class="filter-btn" data-filter="stage1">第一阶段 (8)</button>
+          <button class="filter-btn" data-filter="stage2">第二阶段 (5)</button>
+        </div>
+        <div class="accessory-list" id="accessory-list"></div>
+      </sidebar>
+
+      <div class="stage-main">
+        <div class="stage-header">
+          <div>
+            <div id="active-slot-tag" class="slot-tag" style="display:inline-block; margin-bottom:6px;">脚蹼</div>
+            <h2 id="active-title" class="info-title">流线脚蹼 / 竞速脚蹼</h2>
+            <div id="active-effect" class="info-effect">最高游速和游泳加速度</div>
+            <div id="active-desc" class="info-desc">专为竞速下潜设计的长刀锋流线脚蹼，配备碳纤导流片、双侧水流导轨与翼梢小翼。</div>
+          </div>
+          <div id="active-status-badge" class="stage-tag" style="font-size:11px; padding:4px 8px;">有模型，效果待接入</div>
+        </div>
+
+        <div id="viewport">
+          <div class="meta-overlay">
+            <span>几何面数: <b id="stat-triangles" style="color:#27c4b8;">-</b></span>
+            <span>顶点数: <b id="stat-vertices" style="color:#ecf3f5;">-</b></span>
+            <span>尺寸 (长×宽×高): <b id="stat-dimensions" style="color:#f5c531;">-</b></span>
+          </div>
+        </div>
+
+        <div class="stage-toolbar">
+          <div class="btn-group">
+            <button class="tool-btn active" data-level="1">Lv1 基础</button>
+            <button class="tool-btn" data-level="2">Lv2 强化</button>
+            <button class="tool-btn" data-level="3">Lv3 深渊</button>
+          </div>
+
+          <button id="btn-wireframe" class="action-btn">线框模式 [W]</button>
+          <button id="btn-autorotate" class="action-btn active">自动旋转 [R]</button>
+          <button id="btn-reset" class="action-btn">重置视角</button>
+
+          <div class="export-group">
+            <button id="btn-export-png" class="action-btn">📷 导出透明 PNG</button>
+            <button id="btn-export-glb" class="action-btn">📦 导出 GLB 模型</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/accessory-preview.ts"></script>
+  </body>
+</html>
