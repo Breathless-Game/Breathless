@@ -272,6 +272,8 @@ export function createServerMode({ u, rpc, dir, log }) {
       programId: null,
       oracle: null,
       funded,
+      // POST /quote-batch and /sell-batch exist: a client sells many fish with one transfer and two requests.
+      batch: true,
     };
   }
 

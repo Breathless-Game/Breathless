@@ -1939,7 +1939,8 @@ button:disabled {
 }
 
 #collection-grid .sell-confirm,
-#collection-grid .sell-queued {
+#collection-grid .sell-queued,
+#market-bar .sell-confirm {
   display: flex;
   align-items: center;
   flex-wrap: wrap;

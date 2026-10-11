@@ -3,7 +3,6 @@ import {
   isFundsError,
   nextRetryAt,
   nextToMint,
-  nextToSell,
   nftStep,
   sellQuote,
   type BankedFish,
@@ -15,7 +14,9 @@ import type { SellResult, SellStep } from './pearl';
 import { walletState } from './wallet';
 
 // Background chain work for the bank, one job at a time per lane: mint queued fish, then sell the
-// ones the player asked to sell. The rules live in market.ts; this class only runs them. Solana code
+// ones the player asked to sell, all together: every fish queued for sale goes in one batch, so
+// the player's wallet asks once (pearl.ts packs the transfers and signs them in one prompt). Fish
+// that must be minted first are all minted before that batch starts. The rules live in market.ts; this class only runs them. Solana code
 // is imported lazily on the first job, so it never delays or breaks a dive.
 // Mints are paid by the game (session) wallet, so only they wait for its SOL. Sales are signed and
 // paid by the owner's own wallet, which says so itself if it is short.
@@ -37,12 +38,14 @@ const POLL_MS = 60_000;
 const SERIAL_RETRY_MS = 15_000; // the number server is ours: it should be back soon
 const MAX_REPAIR_TRIES = 3; // failed attempts to number an already-minted NFT before giving up on it
 const START_DELAY_MS = 4000;
+/** Most fish per sale batch: two full transfer transactions, still one wallet prompt. */
+const MAX_SELL_BATCH = 40;
 
 export interface NftQueueHooks {
   /** Any status changed: redraw whatever shows it. */
   changed(): void;
-  /** A fish was sold and has left the bank. */
-  sold(fish: BankedFish, result: SellResult): void;
+  /** Fish were sold (one batch) and have left the bank. */
+  sold(sales: { fish: BankedFish; result: SellResult }[]): void;
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -63,7 +66,12 @@ export class NftQueue {
   readonly selling = new Map<BankedFish, SellStep | null>();
   /** Why the last sale of a fish failed. */
   readonly sellErrors = new Map<BankedFish, string>();
-  lastSale: { name: string; result: SellResult } | null = null;
+  /** The last batch: how many sold and for how much (the first fish's name and result, for one), and how many did not. */
+  lastSale: { name: string; result: SellResult; count: number; total: number; failed: number } | null = null;
+  /** The batch being sold now: how many fish and its step ('sign' is the one wallet prompt). */
+  batch: { step: SellStep | null; fish: number; txs?: number } | null = null;
+  /** The player declined the last batch's wallet prompt: shown once, not on every card. */
+  declined: number = 0;
 
   private mintBusy = false;
   private sellBusy = false;
@@ -131,9 +139,20 @@ export class NftQueue {
 
   /** Sell a fish: minted ones go to the market now, unminted ones are minted first. */
   sell(f: BankedFish) {
-    if (!sellQuote(f, fishValue).ok || this.selling.has(f)) return;
-    this.sellErrors.delete(f);
-    this.apply(f, { type: 'sell' });
+    this.sellMany([f]);
+  }
+
+  /** Sell several fish in one batch (one wallet approval). Unminted ones are minted first, then all go together. */
+  sellMany(list: readonly BankedFish[]) {
+    let any = false;
+    for (const f of list) {
+      if (!sellQuote(f, fishValue).ok || this.selling.has(f)) continue;
+      this.sellErrors.delete(f);
+      this.apply(f, { type: 'sell' });
+      any = true;
+    }
+    if (!any) return;
+    this.declined = 0;
     this.kick();
   }
 
@@ -272,11 +291,12 @@ export class NftQueue {
           this.minting = null;
           this.hooks.changed();
         }
-        if (f.sellQueued && f.nft === 'minted') void this.runSells();
       }
       this.scheduleWake();
     } finally {
       this.mintBusy = false;
+      // Fish minted for a sale go to the market together, in one batch, once the minting stops.
+      void this.runSells();
       void this.runRepairs();
     }
   }
@@ -338,38 +358,86 @@ export class NftQueue {
     }
   }
 
+  /** Fish queued for sale that still need their NFT first. */
+  private waitingForMint() {
+    return this.bank.some((f) => f.sellQueued && !f.legacy && f.nft !== 'minted');
+  }
+
   private async runSells() {
     if (this.sellBusy) return;
     this.sellBusy = true;
     try {
-      // One at a time: each sale is its own approval in the player's wallet.
-      for (let f = nextToSell(this.bank); f && !this.stopped; f = nextToSell(this.bank)) await this.sellOne(f);
+      // Let a click that queues many fish finish queueing them, so they share one batch.
+      await Promise.resolve();
+      while (!this.stopped) {
+        // While the mint queue is still minting fish for a sale, wait: runMints calls back when it stops,
+        // so all of them go in one approval. If minting is paused (no SOL, no number), sell what is minted.
+        if (this.mintBusy && this.waitingForMint()) return;
+        const batch = this.bank.filter((f) => f.sellQueued && f.nft === 'minted' && !f.legacy && f.assetId).slice(0, MAX_SELL_BATCH);
+        if (!batch.length) return;
+        if (!(await this.sellBatch(batch))) return;
+      }
     } finally {
       this.sellBusy = false;
     }
   }
 
-  private async sellOne(f: BankedFish) {
-    this.selling.set(f, null);
+  /** Sell one batch. False if the player declined the prompt (so nothing is retried on its own). */
+  private async sellBatch(batch: BankedFish[]): Promise<boolean> {
+    for (const f of batch) {
+      this.selling.set(f, null);
+      this.sellErrors.delete(f);
+    }
+    this.batch = { step: null, fish: batch.length };
     this.hooks.changed();
+    let declined = 0;
     try {
       const pearl = await this.loadPearl();
-      const result = await pearl.sellToMarket(f.assetId!, (step) => {
-        this.selling.set(f, step);
-        this.hooks.changed();
+      const outcomes = await pearl.sellManyToMarket(
+        batch.map((f) => f.assetId!),
+        (p) => {
+          this.batch = { ...p, fish: batch.length };
+          for (const f of batch) this.selling.set(f, p.step);
+          this.hooks.changed();
+        },
+      );
+      const sold: { fish: BankedFish; result: SellResult }[] = [];
+      outcomes.forEach((o, i) => {
+        const f = batch[i];
+        if (o.result) {
+          const at = this.bank.indexOf(f);
+          if (at >= 0) this.bank.splice(at, 1);
+          sold.push({ fish: f, result: o.result });
+          return;
+        }
+        if (o.rejected) declined++;
+        else this.sellErrors.set(f, (o.error ?? 'Sale failed').slice(0, 200));
+        this.apply(f, { type: 'cancel-sell' });
       });
-      const i = this.bank.indexOf(f);
-      if (i >= 0) this.bank.splice(i, 1);
       this.save();
-      this.lastSale = { name: nftName(f), result };
-      this.hooks.sold(f, result);
+      if (sold.length) {
+        this.lastSale = {
+          name: nftName(sold[0].fish),
+          result: sold[0].result,
+          count: sold.length,
+          total: sold.reduce((s, x) => s + x.result.pearls, 0),
+          failed: outcomes.length - sold.length - declined,
+        };
+        this.hooks.sold(sold);
+      }
     } catch (e) {
+      // Nothing reached the market (it is offline, or the chain code failed to load).
       console.error('sale failed', e);
-      this.sellErrors.set(f, errorText(e).slice(0, 200));
-      this.apply(f, { type: 'cancel-sell' });
+      for (const f of batch) {
+        this.sellErrors.set(f, errorText(e).slice(0, 200));
+        this.apply(f, { type: 'cancel-sell' });
+      }
     } finally {
-      this.selling.delete(f);
+      for (const f of batch) this.selling.delete(f);
+      this.batch = null;
+      this.declined = declined;
       this.hooks.changed();
     }
+    return declined === 0;
   }
 }

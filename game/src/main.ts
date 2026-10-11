@@ -548,10 +548,13 @@ hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
-  sold(fish, result) {
+  sold(sales) {
     hud.setBank(bank);
-    hud.toast(fish, `SOLD · +${pearls(result.pearls).toUpperCase()}`);
-    void syncPearls(result.pearls);
+    const total = sales.reduce((s, x) => s + x.result.pearls, 0);
+    // One toast and one balance read per batch: the most valuable fish stands for the rest.
+    const top = sales.reduce((a, b) => (b.result.pearls > a.result.pearls ? b : a));
+    hud.toast(top.fish, `${sales.length > 1 ? `SOLD ${sales.length} FISH` : 'SOLD'} · +${pearls(total).toUpperCase()}`);
+    void syncPearls(total);
   },
 });
 const vault = new Vault(bank, nftQueue);
