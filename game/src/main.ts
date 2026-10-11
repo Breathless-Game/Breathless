@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Shipyard, SHIPS } from './ships';
 import { BreathSource, type BreathMode } from './breath';
 import { Diver } from './diver';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
@@ -312,7 +313,8 @@ function saveBank() {
   } catch {}
 }
 
-const currentTier = () => rodTier(equipment);
+let shipBonus: (typeof SHIPS)[number] = SHIPS[0];
+const currentTier = () => { const tier = rodTier(equipment); return { ...tier, capacity: tier.capacity + shipBonus.capacity, catchRadius: tier.catchRadius * (1 + shipBonus.range) }; };
 hud.setNet(net, currentTier().capacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
@@ -593,6 +595,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity);
   phase = 'play';
   resetWorldBounds();
   overlay.classList.add('hidden');
@@ -690,7 +693,8 @@ function pause() {
 }
 
 function onEscape() {
-  if (pauseMenu.open) pauseMenu.back();
+  if (shipyard.open) shipyard.close();
+  else if (pauseMenu.open) pauseMenu.back();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
@@ -762,6 +766,27 @@ const pauseMenu = new PauseMenu(settings, {
 });
 
 // ---- Title screen -------------------------------------------------------
+const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) => {
+  paused = open;
+  keys.clear();
+  if (!open) breathSince = null;
+}, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentTier().capacity); }, scene, root => world.colorGrade.apply(root));
+const boatRay = new THREE.Raycaster();
+document.addEventListener('click', (e) => {
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat, true).length) { e.preventDefault(); e.stopPropagation(); shipyard.show(); }
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
+  const target = e.target as HTMLCanvasElement;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open) { target.style.cursor = ''; return; }
+  const rect = canvas.getBoundingClientRect();
+  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
+  if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
+});
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
@@ -834,6 +859,7 @@ function loadWalletProgress() {
   refreshEquipment();
   mapPicker.render();
   noteBankValue(false, migrateUnlockProgress(mapProgress.bestValue, bankValue(bank)));
+  shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
 }
@@ -939,7 +965,7 @@ function update(dt: number, time: number) {
 
   // Water drag, speed cap, and gentle buoyancy at the surface.
   diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  const cap = outOfAir ? 10 : MAX_SPEED;
+  const cap = outOfAir ? 10 : MAX_SPEED * (1 + shipBonus.speed);
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
   // Below the shelf you're inside the trench; above it, the shelf is the floor
@@ -1090,7 +1116,7 @@ function frame() {
   }
   const dt = Math.min(elapsed, 0.05);
   // Lighting uses elapsed time even on slow GPUs; only physics needs a capped step.
-  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, !paused && !document.hidden);
+  world.advanceTime(resetDayClock || document.hidden ? 0 : elapsed, (!paused || shipyard.open) && !document.hidden);
   resetDayClock = false;
   if (!paused) {
     time += dt;
