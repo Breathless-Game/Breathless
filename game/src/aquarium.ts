@@ -201,6 +201,7 @@ export class Aquarium {
     const e = easeInOut(u);
     this.stage.style.transform = e < 1 ? `translateY(${((1 - e) * 110).toFixed(2)}vh)` : 'none';
     this.bar.style.opacity = String(clamp((u - 0.75) / 0.25, 0, 1));
+    this.root.style.setProperty('--aq-bg', e.toFixed(3)); // the scene behind blurs as the tank comes up
     this.hooks.pan(e);
   }
 

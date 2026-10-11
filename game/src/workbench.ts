@@ -295,8 +295,11 @@ export class Workbench {
       .slice(0, SLOTS.length);
   }
 
-  /** intro: pan down from the title and drop the gear; otherwise come back to the table as it was. */
-  show(intro: boolean) {
+  /**
+   * intro: pan down from the title and drop the gear; otherwise come back to the
+   * table as it was. rise: pan the table up into view (with intro, always).
+   */
+  show(intro: boolean, rise = intro) {
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
@@ -318,7 +321,7 @@ export class Workbench {
     this.placed = true;
     this.time = 0;
     this.acc = 0;
-    if (intro) {
+    if (rise) {
       this.state = 'opening';
       this.panU = 0;
       this.tween(PAN_S, (u) => this.setPan(easeInOut(u)), () => (this.state = 'idle'));
