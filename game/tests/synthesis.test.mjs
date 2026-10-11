@@ -90,4 +90,3 @@ test('craft animation is monotonic and completion fires once', () => {
   assert.equal(synthesis.animationProgress(0.5, 1), 0.5);
   assert.equal(synthesis.animationProgress(state), 1);
 });
-
