@@ -267,3 +267,20 @@ test('slot upgrades follow the same legacy-first PEARL rule and keep the other s
   assert.equal(after.pearls, 250 - (cost - 100));
   assert.equal(equipment.planSlotUpgrade({ ...start, pearls: 0, legacyPearls: cost - 1 }, 'reel'), null, 'one short');
 });
+
+test('migrateBank keeps a valid fish number and drops a broken one', () => {
+  const base = { id: 'a1', name: 'Grey Perch', rarity: 'common', depthM: 3, nft: 'minted', assetId: 'Asset1111111111111111111111111111111111111' };
+  const { bank, changed } = migrateBank([
+    { ...base, serial: 42 },
+    { ...base, serial: 1234567 },
+    { ...base, serial: '42' },
+    { ...base, serial: 0 },
+    { ...base, serial: 4.2 },
+  ]);
+  assert.deepEqual(
+    bank.map((f) => f.serial),
+    [42, 1234567, undefined, undefined, undefined],
+  );
+  assert.equal(changed, true);
+  assert.equal(migrateBank([{ ...base, serial: 42 }]).changed, false);
+});
