@@ -4012,3 +4012,9 @@ button:disabled {
 #title-back .title-name {
   display: none;
 }
+
+/* The bottom-right BANKED panel (count, gear line, Rod upgrades, Health report) is gone:
+   the workbench and the HEALTH fish have those. Kept in the page for the code that fills it. */
+#bank {
+  display: none !important;
+}

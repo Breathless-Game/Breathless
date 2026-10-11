@@ -1205,15 +1205,15 @@ canvas.addEventListener('click',e=>{
 },true);
 let resetDayClock = false;
 
+/**
+ * Stops the dive: there's no pause menu any more, the diver goes aboard to the
+ * workbench (Esc there carries on where the dive was).
+ */
 function pause() {
   if (phase !== 'play' || paused) return;
-  paused = true;
   keys.clear();
   loadoutWheel.closeWheel(false);
-  vault.toggle(false);
-  gear.toggle(false);
-  report.toggle(false);
-  pauseMenu.show();
+  climbAboard();
 }
 
 // ---- Back aboard ---------------------------------------------------------
@@ -1996,8 +1996,8 @@ function update(dt: number, time: number) {
 
   hud.setBreath(s, outOfAir);
   hud.placeBreath(overDiversHead());
-  // While the rope hangs on screen, its GUIDE and TUTORIAL fish replace the corner buttons.
-  fieldGuide?.showLauncher(!titleScreen.visible);
+  // The corner 手册 / 新手引导 buttons are gone.
+  fieldGuide?.showLauncher(false); // never: on the title the rope's GUIDE and TUTORIAL fish, in a dive B
   hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
