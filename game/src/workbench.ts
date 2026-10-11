@@ -63,45 +63,48 @@ export interface WorkbenchConditions {
   rain: string;
 }
 
-// The six dive-loadout slots plus the deployable deep sonar, and a model of the
-// boat (for upgrading the boat; it never goes in the ready tray). The rod carries
-// the net and the reel changes its recovery; bait is a boat upgrade and is not
-// packed on this workbench.
+// The seven pieces of dive gear (the six loadout slots plus the deployable deep
+// sonar), and a model of the boat (for picking the ship; it never goes in the
+// ready tray). The rod carries the net and the reel changes its recovery; bait is
+// a boat upgrade and is not packed on this workbench.
 const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar', 'boat'];
 
-/** Where each piece lands, in table units (x right, z toward the camera). */
-// Kept off the back strip of the table: the title fish hang over it and would take the clicks.
+/**
+ * Where each piece lies when it isn't packed, in table units (x right, z toward
+ * the camera): all of them on the left of the table, three to a row, the boat last.
+ * Kept off the back strip of the table: the title fish hang over it and would take the clicks.
+ */
 const SPOTS: [number, number][] = [
-  [-3.9, -0.85],
-  [-3.9, 0.45],
-  [-3.6, 1.8],
-  [1.5, -0.65],
-  [1.55, 0.8],
-  [-0.9, 1.95],
-  [1.05, 1.95],
-  [-0.6, -1.75], // the boat, behind the chart
+  [-4.4, -0.9],
+  [-3.3, -0.9],
+  [-2.2, -0.9],
+  [-4.4, 0.35],
+  [-3.3, 0.35],
+  [-2.2, 0.35],
+  [-4.4, 1.65],
+  [-2.85, 1.65], // the boat
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
-const TRAY = { x0: 2.55, x1: 4.85, z0: -2.5, z1: 2.5 };
-// Toward the front of the tray: the SETTINGS fish hangs over its back.
+const TRAY = { x0: 2.2, x1: 4.9, z0: -2.5, z1: 2.5 };
+// One ring per piece of dive gear (GEAR's order), its silhouette cut into the felt
+// so you can see what goes where. The front strip is kept clear for the label.
 const SLOTS: [number, number][] = [
-  // Keep the front strip clear for the label. Six slots are also the hard
-  // loadout limit: a seventh dive item cannot be packed onto the boat.
-  [3.15, -0.9],
-  [4.25, -0.9],
-  [3.15, 0.05],
-  [4.25, 0.05],
-  [3.15, 1.0],
-  [4.25, 1.0],
+  [2.85, -1.5], // fins
+  [2.85, -0.5], // tank
+  [2.85, 0.5], // lamp
+  [4.25, -0.5], // rod
+  [4.25, 0.5], // net
+  [4.25, 1.5], // reel
+  [2.85, 1.5], // sonar
 ];
 // Packed until the player changes it (then whatever was in the tray last time):
-// the six loadout slots, so a first dive needs no packing. The sonar is extra.
-const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel'];
-// The diver figure stands at the back of the tray, behind the slots: it wears what's in them.
-const FIGURE_AT = new THREE.Vector3(3.7, 0.05, -1.82);
+// the starting gear, every piece, so a first dive needs no packing.
+const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar'];
+// The diver figure stands in the tray's back corner, by the rings: it wears what's in them.
+const FIGURE_AT = new THREE.Vector3(4.25, 0.05, -1.55);
 const FIGURE_H = 1.25; // standing height, table units: its head stays under the SETTINGS fish
-const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
+const MAP_AT = new THREE.Vector3(0.1, 0, 0.1);
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
@@ -286,6 +289,7 @@ export class Workbench {
     key.position.set(-4, 10, 5);
     this.chartScene.add(key);
     GEAR.forEach((id, i) => this.pieces.push(this.buildPiece(id, i)));
+    this.cutSilhouettes();
     this.buildFigure();
     const piece = (def: UpgradeDef) => this.pieces.find((p) => p.def === def)!;
     this.inspector = new GearInspector({
@@ -510,6 +514,31 @@ export class Workbench {
     return mesh;
   }
 
+  /**
+   * Each ring gets its piece's silhouette pressed dark into the felt, lying the
+   * way the piece sits there once packed: an icon of what goes in it.
+   */
+  private cutSilhouettes() {
+    const mat = new THREE.MeshBasicMaterial({ color: '#12352b' });
+    this.pieces.forEach((p, i) => {
+      const at = SLOTS[i];
+      if (!at || p.def.group !== 'dive') return;
+      const shape = p.obj.children[0].clone(); // the centred, sized model (shares its geometry)
+      shape.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.material = mat;
+          o.castShadow = o.receiveShadow = false;
+        }
+      });
+      shape.quaternion.copy(p.flat);
+      const icon = new THREE.Group();
+      icon.add(shape);
+      icon.scale.set(TRAY_SCALE * 0.92, 0.002, TRAY_SCALE * 0.92); // flattened onto the felt
+      icon.position.set(at[0], 0.053, at[1]);
+      this.scene.add(icon);
+    });
+  }
+
   /** The diver figure: the dive's own diver model, stood up on a little wooden stand. */
   private buildFigure() {
     const wood = new THREE.MeshStandardMaterial({ color: '#5a3a1e', roughness: 0.8 });
@@ -546,7 +575,15 @@ export class Workbench {
     });
     const group = new THREE.Group();
     group.add(upright);
-    const box = new THREE.Box3().setFromObject(group);
+    // Sized and centred on its body, fins included but not the net held out at its side
+    // (it would pull the figure off its stand).
+    diver.setWorn({ fins: true, tank: false, lamp: true, net: false });
+    group.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    group.traverseVisible((o) => {
+      if (o instanceof THREE.Mesh) box.expandByObject(o);
+    });
+    this.dress(diver);
     const size = box.getSize(new THREE.Vector3());
     const k = FIGURE_H / size.y;
     upright.scale.setScalar(k);
@@ -709,9 +746,9 @@ export class Workbench {
   private scatter(intro: boolean) {
     for (const ring of this.slotRings) this.lightSlot(ring, false);
     const dive = new Set(this.pieces.filter((p) => p.def.group === 'dive').map((p) => p.id));
-    const packed = (this.hooks.savedLoadout() ?? DEFAULT_LOADOUT).filter((id) => dive.has(id)).slice(0, SLOTS.length);
+    const packed = (this.hooks.savedLoadout() ?? DEFAULT_LOADOUT).filter((id) => dive.has(id));
     this.pieces.forEach((p, i) => {
-      const slot = packed.indexOf(p.id);
+      const slot = packed.includes(p.id) ? i : -1; // its own ring
       const [x, z] = slot >= 0 ? SLOTS[slot] : SPOTS[i];
       p.slot = slot;
       p.hover = 0;
@@ -731,6 +768,14 @@ export class Workbench {
         p.q.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
         p.spin.set((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 9);
         p.vel.set((Math.random() - 0.5) * 1.5, -2, (Math.random() - 0.5) * 1.5);
+        if (p.id === 'boat') {
+          // The boat is set down on its keel from not far up: dropped from the height of the
+          // rest (or tumbling), its narrow keel kicks it off across the table.
+          p.q.copy(this.restQ(p));
+          p.pos.y = this.standY(p) + 1.2;
+          p.spin.set(0, 0, 0);
+          p.vel.set(0, -1, 0);
+        }
         p.grounded = false;
       } else if (slot >= 0) {
         p.mode = 'ready';
@@ -921,6 +966,15 @@ export class Workbench {
       p.obj.scale.setScalar(p.tray * (1 + p.hover * 0.08));
     }
     this.mapHover = lerp(this.mapHover, this.hovered === 'map' ? 1 : 0, 1 - Math.exp(-dt * 12));
+    // Carrying a piece over the tray lights the ring it will drop into.
+    const aim = this.held && this.held.def.group === 'dive' && this.inTray(this.held.pos) ? GEAR.indexOf(this.held.id) : -1;
+    this.slotRings.forEach((ring, i) => {
+      if (i === aim) {
+        const m = ring.material as THREE.MeshBasicMaterial;
+        m.color.set('#ffd27a');
+        m.opacity = 0.6 + 0.25 * Math.sin(this.time * 8);
+      } else this.lightSlot(ring, this.pieces.some((p) => p.slot === i && p.mode === 'ready'));
+    });
     this.figureHover = lerp(this.figureHover, this.hovered === 'figure' ? 1 : 0, 1 - Math.exp(-dt * 14));
     this.figure.scale.setScalar(1 + this.figureHover * 0.06);
     this.mapMat.emissiveIntensity = this.mapHover * (0.12 + 0.06 * Math.sin(this.time * 6));
@@ -1151,11 +1205,10 @@ export class Workbench {
 
   // ---- Ready tray -------------------------------------------------------
 
+  /** Into its own ring (each piece of dive gear has one). */
   private makeReady(p: Piece) {
-    if (this.packed.length >= SLOTS.length) return;
-    const used = new Set(this.pieces.map((q) => q.slot));
-    const slot = SLOTS.findIndex((_, i) => !used.has(i));
-    if (slot < 0) return;
+    const slot = GEAR.indexOf(p.id);
+    if (p.def.group !== 'dive' || !SLOTS[slot]) return;
     p.slot = slot;
     p.mode = 'moving';
     const [x, z] = SLOTS[slot];
@@ -1210,16 +1263,21 @@ export class Workbench {
     if (p.id === 'net') this.hooks.tutorial?.('pack');
   }
 
-  /** Out of the tray: tossed back onto a free spot on the table. */
+  /** Out of the tray: tossed back to its spot on the left of the table. */
   private unready(p: Piece) {
     if (p.slot >= 0) this.lightSlot(this.slotRings[p.slot], false);
     p.slot = -1;
     p.mode = 'free';
     p.grounded = false;
-    const tx = lerp(TABLE.x0 + 1, TRAY.x0 - 1.2, Math.random());
-    const tz = lerp(TABLE.z0 + 0.8, TABLE.z1 - 0.8, Math.random());
-    const t = 0.65;
-    p.vel.set((tx - p.pos.x) / t, 0.5 * GRAVITY * t, (tz - p.pos.z) / t);
+    // Back to its own spot on the left of the table.
+    const [hx, hz] = SPOTS[GEAR.indexOf(p.id)];
+    const tx = hx + (Math.random() - 0.5) * 0.2;
+    const tz = hz + (Math.random() - 0.5) * 0.2;
+    // Lifted first: low in the tray, the table's walls (step) would stop it at the tray's edge.
+    const lift = 0.6;
+    p.pos.y += lift;
+    const t = 0.75;
+    p.vel.set((tx - p.pos.x) / t, (0.5 * GRAVITY * t * t - lift) / t, (tz - p.pos.z) / t);
     p.spin.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 8);
     p.yaw = (Math.random() - 0.5) * 1.6;
     this.trayChanged();
