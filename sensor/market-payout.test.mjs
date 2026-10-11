@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { HttpError, MPL_CORE_PROGRAM, SoldLedger } from './market-rules.mjs';
+import { HttpError, MPL_CORE_PROGRAM, SoldLedger, appraise } from './market-rules.mjs';
 import { createPayout, rejectedBeforeSubmit } from './market-payout.mjs';
 import { createSaleDesk } from './market-sale.mjs';
+
+// The desk's price gate without the collection check (fish-trust.test.mjs covers that): the on-chain value.
+const plainPrice = (asset) => {
+  const a = appraise(asset.attributes?.attributeList);
+  if (!a.ok) throw new HttpError(422, a.reason);
+  return a.pearls;
+};
 
 // Server mode's PEARL payout against a fake chain: sends that time out after the transaction
 // landed (or before it did), preflight refusals, a crash between recording and sending, and
@@ -93,6 +100,7 @@ function boot(chain, disk) {
   });
   const payout = createPayout({ ledger, ...chain.deps(ledger, disk) });
   const desk = createSaleDesk({
+    priceFish: plainPrice,
     ledger,
     market: MARKET,
     ensureMint: async () => 'PearlMint',

@@ -57,6 +57,12 @@ export interface MarketInfo {
   ready?: boolean;
   /** Server mode: POST /quote-batch and /sell-batch exist (older servers sell one fish per request). */
   batch?: boolean;
+  /** Server mode: the Metaplex Core collection the market buys from (null until created). */
+  fishCollection?: string | null;
+  /** Server mode: POST /cosign-mint and /cosign-migrate exist. */
+  cosign?: boolean;
+  /** Server mode: per-owner mint rate and daily PEARL payout limits. */
+  limits?: { mintsPerHour: number; migrationsPerHour: number; dailyPearls: number };
 }
 type LiveInfo = MarketInfo & { pearlMint: string };
 

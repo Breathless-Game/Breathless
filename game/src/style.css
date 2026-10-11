@@ -1,5 +1,22 @@
 @import './scrollbar.css';
 
+.wb-fishing-advice {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  color: #23734f;
+  background: rgba(35, 115, 79, 0.08);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.wb-fishing-advice b::before { content: '● '; }
+.wb-fishing-advice span { font-size: 10px; opacity: 0.85; }
+.wb-fishing-advice[data-level="caution"] { color: #8a601b; background: rgba(178, 127, 34, 0.1); }
+.wb-fishing-advice[data-level="poor"] { color: #a13f35; background: rgba(161, 63, 53, 0.08); }
+
 :root {
   --ink: #eaf8ff;
   --muted: rgba(234, 248, 255, 0.6);
@@ -1068,76 +1085,6 @@ button.link {
   background: rgba(20, 10, 2, 0.45);
   color: rgba(255, 240, 210, 0.85);
   text-align: center;
-}
-
-/* The Boat and Dive Kit NFTs (gear-chain-ui.ts): a small card bottom left, under the table and
-   above the hint, clear of the title fish hanging over the top. */
-#wb-chain {
-  position: absolute;
-  bottom: 76px;
-  left: 16px;
-  width: min(340px, calc(100vw - 32px));
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  backdrop-filter: blur(8px);
-  font-size: 13px;
-  pointer-events: auto;
-}
-
-#wb-chain[hidden] {
-  display: none;
-}
-
-#wb-chain .gc-title {
-  margin-bottom: 6px;
-  letter-spacing: 0.06em;
-}
-
-#wb-chain .gc-row {
-  display: grid;
-  grid-template-columns: 62px 1fr auto;
-  gap: 8px;
-  align-items: baseline;
-  padding: 3px 0;
-}
-
-#wb-chain .gc-name {
-  font-weight: 800;
-}
-
-#wb-chain .gc-row[data-state='synced'] .gc-state {
-  color: var(--hold);
-}
-
-#wb-chain .gc-row[data-state='needs-sol'] .gc-state,
-#wb-chain .gc-row[data-state='paused'] .gc-state,
-#wb-chain .gc-row[data-state='offline'] .gc-state {
-  color: var(--gold);
-}
-
-#wb-chain .gc-link {
-  color: var(--breathe);
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-#wb-chain .gc-note {
-  margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-/* Phones: the hint wraps to several lines, so sit higher and drop the footnote. */
-@media (max-width: 640px) {
-  #wb-chain {
-    bottom: 132px;
-  }
-
-  #wb-chain .gc-note {
-    display: none;
-  }
 }
 
 #wb-tip {

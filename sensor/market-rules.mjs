@@ -35,9 +35,11 @@ export const MPL_CORE_PROGRAM = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
 const TRANSFER_V1 = 14; // mpl-core TransferV1 discriminator; accounts: asset, collection, payer, authority, newOwner, ...
 
 export class HttpError extends Error {
-  constructor(status, message) {
+  /** `extra`: more JSON fields for the response body, e.g. { retryAfterMs } on a 429 or { assetId } on a 409. */
+  constructor(status, message, extra = undefined) {
     super(message);
     this.status = status;
+    if (extra) this.extra = extra;
   }
 }
 
@@ -355,3 +357,53 @@ export class RateLimiter {
     for (const [k, w] of this.hits) if (now - w.start >= this.windowMs) this.hits.delete(k);
   }
 }
+
+// ---- Fish authenticity and abuse limits (fish-trust.mjs, fish-collection.mjs) -----------------
+// The market only buys fish in its own Core collection, and only the market wallet (the
+// collection's update authority) can put a fish there: by co-signing a mint whose attributes it
+// re-derived from the game's generator (fish-gen.mjs), or by co-signing the migration of a fish
+// minted before this check existed. The game is still client-authoritative (a cheater can claim
+// catches that are plausible for their seed), so mints per owner and PEARL per owner are capped
+// too. The defaults sit far above what a person holding their breath can reach.
+
+/** The Core collection every sellable fish belongs to; the market wallet is its update authority. */
+export const FISH_COLLECTION_NAME = 'Breathless Fish';
+
+/**
+ * How far (metres) the depth recorded on a fish may be from the depth it was rolled at. The game
+ * rolls a fish where it spawns and records where it is caught: a shelf fish roams its zone (up to
+ * 22 m tall, and can be chased 3 m below it), a trench fish 9 m either way (+3 m when chased).
+ * Rarity and catch value are checked against every spawn depth within this distance.
+ */
+export const SPAWN_TOLERANCE_M = 30;
+
+/**
+ * Co-signed mints per owner per hour. A dive banks at most a net (a dozen fish) and takes a
+ * real held breath plus recovery, so play stays well under one fish a minute; 240 also lets a
+ * long-queued backlog (e.g. while the game wallet had no SOL) drain in one sitting. Over the
+ * limit the game pauses its mint queue until the hour rolls over, nothing is lost.
+ */
+export const MINTS_PER_HOUR = 240;
+export const MINT_WINDOW_MS = 60 * 60_000;
+
+/** Legacy fish moved into the collection per owner per hour (one-time; a wallet holds a few dozen). */
+export const MIGRATIONS_PER_HOUR = 600;
+
+/** Most fish in one POST /api/market/cosign-migrate request (they go into a few transactions). */
+export const MIGRATE_BATCH = 12;
+
+/**
+ * PEARL paid to one wallet in any 24 h. A mythic caught at the deepest multiplier is 4,800; casual
+ * play earns a few hundred to a few thousand a day, a long deep session tens of thousands at most.
+ * The cap bounds what any one wallet can take even with made-up (but generator-valid) catches.
+ * A fish over the cap is refused at quote time, so it stays the player's and sells later.
+ */
+export const DAILY_PEARL_CAP = 50_000;
+export const PAYOUT_WINDOW_MS = 24 * 60 * 60_000;
+
+/**
+ * Only fish created before the collection existed (plus this many slots, ~1 h, for game tabs
+ * still running the old build) can be migrated; anything newer must be minted through the
+ * co-signed path. Stops the migration route from being a second, unlimited way in.
+ */
+export const LEGACY_GRACE_SLOTS = 9_000;

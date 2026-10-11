@@ -33,14 +33,13 @@ import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { activePath, applyPearlSpend, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planPearlSpend, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, spendablePearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
 import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
-import { renderGearChain } from './gear-chain-ui';
 import { NftQueue } from './nft-queue';
-import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
+import { nudgePearlBalance, pearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
@@ -709,6 +708,7 @@ const aquarium = new Aquarium(bank, {
     titleScreen.setLift(u);
   },
   buyFood: buyAquariumFood,
+  pearls: () => spendablePearls(equipment),
   message(text) {
     hud.message(text, 1600);
   },
@@ -776,53 +776,67 @@ async function syncPearls(earned = 0) {
 }
 
 let foodBuying = false;
-/** Buy one selected aquarium food. Legacy Pearls are spent first; chain PEARL covers the rest. */
-async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<boolean> {
-  if (foodBuying) return false;
-  const cost = food.price;
-  const available = totalPearls(equipment);
-  if (available < cost) {
-    hud.message(t(`Need ${cost - available} more Pearls for ${food.name}`, `还差 ${cost - available} 珍珠才能买${food.nameZh}`), 1600);
-    return false;
-  }
-  const fromLegacy = Math.min(equipment.legacyPearls, cost);
-  const fromChain = cost - fromLegacy;
+/**
+ * Buy one selected aquarium food with on-chain PEARL, like gear upgrades and synthesis.
+ * Resolves with the PEARL burned, or null when nothing was spent.
+ */
+async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<number | null> {
+  if (foodBuying) return null;
   foodBuying = true;
   try {
-    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
-    equipment.legacyPearls -= fromLegacy;
-    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
-    refreshEquipment();
-    if (fromChain > 0) void syncPearls();
-    return true;
-  } catch (e) {
-    hud.message(`${t('Food purchase failed', '饲料购买失败')}: ${(e as Error).message ?? e}`, 1800);
-    return false;
+    return await spendPearlsFor(food.price, t('Food purchase failed', '饲料购买失败'), t(`for ${food.name}`, `才能买${food.nameZh}`));
   } finally {
     foodBuying = false;
   }
 }
 
-let synthesisBusy = false;
-/** Spend a synthesis station fee with the same legacy-first accounting as gear upgrades. */
-async function spendSynthesisPearls(cost: number): Promise<boolean> {
-  if (totalPearls(equipment) < cost) {
-    hud.message(t(`Need ${cost - totalPearls(equipment)} more Pearls`, `还差 ${cost - totalPearls(equipment)} 珍珠`), 1500);
-    return false;
+/**
+ * Why no Pearl purchase can go through right now, or null when the on-chain balance is known.
+ * Every purchase is paid in on-chain PEARL only, so an unread balance (still loading, market
+ * offline, RPC down) blocks it instead of letting a stale cache through.
+ */
+function pearlPurchaseBlocked(): string | null {
+  const balance = pearlBalance();
+  if (balance.status === 'ok') return null;
+  return balance.status === 'loading'
+    ? t('PEARL balance is still loading · purchases unavailable', 'PEARL 余额读取中 · 暂时无法购买')
+    : `${t('Purchases unavailable', '暂时无法购买')} · ${balance.reason}`;
+}
+
+/**
+ * Pay a flat Pearl price (food, synthesis fees): burn exactly `cost` on-chain PEARL, and only
+ * then take it off the cached balance. Null when unaffordable, the balance is unknown, or the
+ * burn failed (the purchase must not apply).
+ */
+async function spendPearlsFor(cost: number, failure: string, what = ''): Promise<number | null> {
+  const blocked = pearlPurchaseBlocked();
+  if (blocked) {
+    hud.message(blocked, 1800);
+    return null;
   }
-  const fromLegacy = Math.min(equipment.legacyPearls, cost);
-  const fromChain = cost - fromLegacy;
+  const burn = planPearlSpend(equipment, cost);
+  if (burn == null) {
+    const short = Math.max(0, cost - spendablePearls(equipment));
+    hud.message(t(`Need ${short} more PEARL${what ? ` ${what}` : ''}`, `还差 ${short} PEARL${what}`), 1600);
+    return null;
+  }
   try {
-    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
-    equipment.legacyPearls -= fromLegacy;
-    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    await (await nftQueue.loadPearl()).spendPearls(burn);
+    Object.assign(equipment, applyPearlSpend(equipment, burn));
     refreshEquipment();
-    if (fromChain > 0) void syncPearls();
-    return true;
+    void syncPearls();
+    return burn;
   } catch (e) {
-    hud.message(`${t('Synthesis payment failed', '合成付款失败')}: ${(e as Error).message ?? e}`, 1800);
-    return false;
+    hud.message(`${failure} · ${(e as Error).message ?? e}`, 1800);
+    void syncPearls();
+    return null;
   }
+}
+
+let synthesisBusy = false;
+/** Spend a synthesis station fee in on-chain PEARL, like gear upgrades. */
+async function spendSynthesisPearls(cost: number): Promise<boolean> {
+  return (await spendPearlsFor(cost, t('Synthesis payment failed', '合成付款失败'))) !== null;
 }
 
 async function synthCraft(id: RecipeDef['id']) {
@@ -858,7 +872,8 @@ async function synthUpgrade(slot: UpgradeSlot) {
   synthesisBusy = true;
   try {
     if (!await spendSynthesisPearls(cost)) return;
-    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost }, fromLegacy: 0, fromChain: 0 }));
+    // The fee was already burned (and taken off the cache) by spendSynthesisPearls.
+    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost } }, 0));
     synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
     saveSynthesis(synthesisState);
     refreshEquipment();
@@ -881,20 +896,26 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
     gear.showNotice(t(`${nextSlotLabel(slot)} is already at maximum level.`, `${nextSlotLabel(slot)} 已是最高等级。`));
     return t('Already at the top level.', '已是最高等级。');
   }
+  const blocked = pearlPurchaseBlocked();
+  if (blocked) {
+    gear.showNotice(blocked);
+    hud.message(blocked, 1800);
+    return blocked;
+  }
   const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
-    const short = next.cost - totalPearls(equipment);
-    const need = t(`Need ${pearls(short)} more`, `还差 ${short} 珍珠`);
+    const short = next.cost - spendablePearls(equipment);
+    const need = t(`Need ${short} more PEARL`, `还差 ${short} PEARL`);
     gear.showNotice(t(`${need}.`, `${need}。`));
     hud.message(need, 1500);
     return need;
   }
-  // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
+  // The full cost is burned on-chain, and the tier applies only once that lands.
   buying = true;
   gear.setBusy(true);
   let failed: string | null = null;
   try {
-    if (plan.fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(plan.fromChain);
+    await (await nftQueue.loadPearl()).spendPearls(plan.tier.cost);
     Object.assign(equipment, applySlotUpgrade(equipment, plan));
     hud.message(t(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, `${nextSlotLabel(slot)} 已升级：${plan.tier.level} 级`), 1800);
   } catch (e) {
@@ -905,7 +926,7 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
     buying = false;
     gear.setBusy(false);
     refreshEquipment();
-    if (plan.fromChain > 0) void syncPearls();
+    void syncPearls();
   }
   return failed;
 }
@@ -1037,14 +1058,22 @@ function workbenchConditions(id: MapId): WorkbenchConditions {
   const lighting = world.dayCycle.state;
   const weather = world.weather.state;
   const minute = Math.round(lighting.hour * 60) % (24 * 60);
+  const windKmh = Math.round(4 + weather.wind * 30);
+  const rainMmh = weather.rain * 18;
+  const fishing: WorkbenchConditions['fishing'] = weather.kind === 'storm' || windKmh >= 28 || rainMmh >= 12
+    ? { level: 'poor', label: t('Fishing Not Advised', '不建议捕鱼'), reason: t('Rough conditions; wait for calmer weather.', '风雨较强，建议等待天气转好') }
+    : weather.kind === 'rain' || windKmh >= 18 || rainMmh >= 4
+      ? { level: 'caution', label: t('Fish with Caution', '谨慎捕鱼'), reason: t('Wind or rain; watch the water conditions.', '有风浪或降雨，留意水面变化') }
+      : { level: 'good', label: t('Good for Fishing', '推荐捕鱼'), reason: t('Calm conditions for a fishing trip.', '风雨较弱，适合出航探索') };
   const temperatureC = map.surfaceTempC
     + (lighting.daylight - 1) * 3
     - weather.cloud * 1.2
     - weather.rain * 0.8
     - weather.wind * 0.4;
   return {
-    time: `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`,
+    time: `${Math.floor(minute / 60) % 12 || 12} ${minute < 720 ? 'a.m.' : 'p.m.'}`,
     temperatureC: Math.round(temperatureC * 10) / 10,
+    fishing,
     weather: t(...WEATHER_LABELS[weather.kind]),
     wind: `${Math.round(4 + weather.wind * 30)} km/h`,
     rain: weather.rain < 0.05 ? t('Dry', '无雨') : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
@@ -1671,7 +1700,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.17, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => aquarium.show() },
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); } },
   { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.83, label: 'SETTINGS', onClick: openSettingsDesk },
   // The field guide (B) and the tutorial hang on the rope too, instead of buttons in the corner.
   { seed: 0x5eed04, rarity: 'legendary', species: 'Ember Triggerfish', hue: 14, sat: 0.8, light: 0.55, at: 0.5, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
@@ -1724,7 +1753,7 @@ function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
 const synthPanel = new SynthesisPanel({
   state: () => synthesisState,
   equipment: () => equipment,
-  pearls: () => totalPearls(equipment),
+  pearls: () => spendablePearls(equipment),
   craft: synthCraft,
   upgrade: synthUpgrade,
   close: () => workbench.escape(),
@@ -1763,7 +1792,7 @@ const workbench = new Workbench({
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
   owned: ownedGearLevel,
   buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve(t('Not upgradable here', '这里无法升级'))),
-  pearls: () => totalPearls(equipment),
+  pearls: () => spendablePearls(equipment),
   paths: (id) =>
     isEquipmentSlot(id)
       ? EQUIPMENT_PATHS[id].map((p) => ({ id: p.id, name: p.name, nameZh: p.nameZh, summary: pathSummary(p), effects: [1, 2, 3].map((lv) => pathEffect(p, lv)) }))
@@ -1816,6 +1845,7 @@ const workbench = new Workbench({
   },
   synthesisOpen() {
     synthPanel.show();
+    void syncPearls();
   },
   synthesisClose() {
     synthPanel.hide();
@@ -1963,7 +1993,6 @@ function gearSnapshot(): GearLevels | null {
   };
 }
 
-const gearChainCard = document.getElementById('wb-chain')!;
 const gearSync = new GearSync({
   key: () => (walletState().owner ? storageKey('gear-nft') : null),
   store: localStorage,
@@ -1972,7 +2001,7 @@ const gearSync = new GearSync({
   loadChain: () => import('./chain'),
   isFundsError,
   timers: { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id) },
-  changed: () => renderGearChain(gearChainCard, GEAR_NFT_ON ? [gearSync.status('boat'), gearSync.status('kit')] : []),
+  changed: () => {}, // status is no longer shown anywhere; the sync runs in the background
   hidden: () => document.hidden,
 });
 // Every level change (bought, branch switched, ship equipped, a penalty's reset) reaches the sync.
