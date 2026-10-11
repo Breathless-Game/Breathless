@@ -1873,9 +1873,9 @@ const REQUIRE_PHANTOM = true;
 const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
-mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, 'Not connected');
+mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, { empty: () => t('Not connected', '未连接') });
 mountWalletRow(document.getElementById('pause-wallet')!, logoutHooks);
-mountWalletRow(document.getElementById('collection-wallet')!, logoutHooks, { empty: 'Not connected', explorer: true });
+mountWalletRow(document.getElementById('collection-wallet')!, logoutHooks, { empty: () => t('Not connected', '未连接'), explorer: true });
 mountWalletRow(document.getElementById('wallet-chip')!, logoutHooks, { menu: true });
 
 // SETTINGS pans down to a table like START's, with the settings as plaques on it (settings-desk.ts).
