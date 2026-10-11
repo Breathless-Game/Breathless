@@ -144,6 +144,7 @@ test('base58 matches Solana addresses and leading zero bytes', () => {
   assert.equal(W.base58(new TextEncoder().encode('Hello World!')), '2NEpo7TZRRrLZSi2U');
   assert.equal(W.base58(hex('0000287fb4cd')), '11233QC4');
   assert.equal(W.shortAddress(OWNER_A), 'GmaD…AEGB');
+  assert.equal(W.explorerAddress(OWNER_A), `https://explorer.solana.com/address/${OWNER_A}?cluster=devnet`);
 });
 
 test('declined Phantom prompts are recognised', () => {
