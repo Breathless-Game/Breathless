@@ -68,7 +68,8 @@ export function playerStateErrorName(e: unknown): PlayerStateErrorName | null {
 
 /**
  * A session-signed free action (set_path) failed: is asking the owner's wallet instead useless?
- * True when the program refused it (preflight or on chain: the owner would be refused too), when
+ * True when the program refused it (preflight or on chain: the owner would be refused too; the
+ * caller first re-reads on Unauthorized, see player-chain.ts sendSetPath), when
  * another payment is running, or when it may still land (never send a second one on top).
  */
 export function sessionFailureFinal(e: unknown): boolean {

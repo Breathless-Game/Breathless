@@ -271,7 +271,9 @@ export function settleRecord(
     if (status.commitment === 'processed') return 'kept'; // seen, not final yet
     return status.error ? 'dropped' : 'delivered';
   }
-  const expired = rec.lastValid !== undefined ? height !== undefined && height > rec.lastValid : now - rec.ts > maxAgeMs;
+  // Past its blockhash expiry, or (block height unreadable, or no expiry stored) older than
+  // maxAgeMs: a blockhash lives about a minute, so it can no longer land either way.
+  const expired = (rec.lastValid !== undefined && height !== undefined && height > rec.lastValid) || now - rec.ts > maxAgeMs;
   if (!expired) return 'kept';
   return isChainPurchase(rec.what) && !rec.what.bite && purchaseVisible(rec.what, player, aquarium) ? 'delivered' : 'dropped';
 }

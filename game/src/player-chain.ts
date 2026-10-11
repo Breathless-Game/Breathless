@@ -53,7 +53,7 @@ import {
   type PlayerStateConfig,
 } from './player-state';
 import { biteSettled, chainLevels, isChainPurchase, purchaseVisible, settleRecord, type ChainPurchase } from './player-sync';
-import { sessionFailureFinal } from './player-state-errors';
+import { playerStateErrorName, sessionFailureFinal } from './player-state-errors';
 import type { UpgradeSlot } from './equipment';
 
 export interface PlayerChainSnapshot {
@@ -172,11 +172,17 @@ const BITE_KEY = 'player-state.bite.pending';
 
 /**
  * null: nothing owed. 'owed': a bite happened in a dive and no shark_bite is in flight.
- * { sig, lastValid }: a session-signed shark_bite was sent and its outcome is not known yet.
- * While one is in flight no other shark_bite is sent and no purchase goes out: landing late,
- * after a purchase, it would take that purchase's level back.
+ * { sig, lastValid, at }: a transaction carrying shark_bite (session-signed, or batched into a
+ * purchase) was signed and its outcome is not known yet. While one is in flight no other
+ * shark_bite is sent and no purchase goes out: landing late, after a purchase, it would take that
+ * purchase's level back. `owedAfter`: another bite happened meanwhile, so once the one in flight
+ * landed a bite is owed again (it is not covered: the gear may have been bought back with it).
  */
-type BiteFlag = null | 'owed' | { sig: string; lastValid: number };
+type InFlightBite = { sig: string; lastValid: number; at: number; owedAfter?: boolean };
+type BiteFlag = null | 'owed' | InFlightBite;
+
+/** Without a readable block height, an in-flight bite this old can no longer land (as PENDING_MAX_AGE_MS). */
+const inFlightBite = (sig: string, lastValid: number): InFlightBite => ({ sig, lastValid, at: Date.now() });
 
 function biteFlag(): BiteFlag {
   let raw: string | null;
@@ -188,8 +194,9 @@ function biteFlag(): BiteFlag {
   if (raw == null) return null;
   if (raw === '1') return 'owed';
   try {
-    const v = JSON.parse(raw) as { sig?: unknown; lastValid?: unknown };
-    return typeof v?.sig === 'string' && typeof v.lastValid === 'number' ? { sig: v.sig, lastValid: v.lastValid } : 'owed';
+    const v = JSON.parse(raw) as { sig?: unknown; lastValid?: unknown; at?: unknown; owedAfter?: unknown };
+    if (typeof v?.sig !== 'string' || typeof v.lastValid !== 'number') return 'owed';
+    return { sig: v.sig, lastValid: v.lastValid, at: typeof v.at === 'number' ? v.at : 0, ...(v.owedAfter === true ? { owedAfter: true } : {}) };
   } catch {
     return 'owed';
   }
@@ -221,15 +228,22 @@ export function settleBiteFromState(snap: PlayerChainSnapshot | null = playerCha
   return true;
 }
 
-/** Look an in-flight session bite up: landed -> cleared, failed or expired -> owed again, unknown -> kept. */
+/** The in-flight bite landed: settled, unless another bite happened meanwhile (then owed again). */
+function biteLanded() {
+  const flag = biteFlag();
+  setBiteFlag(flag && flag !== 'owed' && flag.owedAfter ? 'owed' : null);
+}
+
+/** Look an in-flight bite up: landed -> settled (biteLanded), failed or expired -> owed again, unknown -> kept. */
 async function resolveBiteInFlight(u: Umi): Promise<BiteFlag> {
   const flag = biteFlag();
   if (!flag || flag === 'owed') return flag;
   const deps = statusDeps(u);
   const [st] = await deps.statuses([flag.sig]);
   const height = st ? undefined : await deps.blockHeight().catch(() => undefined);
-  const verdict = verdictOf(st, height, flag.lastValid);
-  if (verdict === 'ok') setBiteFlag(null);
+  let verdict = verdictOf(st, height, flag.lastValid);
+  if (verdict === 'unknown' && !st && Date.now() - flag.at > PENDING_MAX_AGE_MS) verdict = 'failed';
+  if (verdict === 'ok') biteLanded();
   else if (verdict === 'failed') setBiteFlag('owed');
   return biteFlag();
 }
@@ -247,8 +261,11 @@ function sessionRegistered(snap: PlayerChainSnapshot | null): boolean {
  */
 export async function recordSharkBite(): Promise<'sent' | 'deferred' | 'nothing'> {
   if (!walletState().owner) return 'nothing';
-  // One already in flight covers this one: no purchase can raise a level until it settles.
-  if (biteFlag() === null) setBiteFlag('owed');
+  const flag = biteFlag();
+  if (flag === null) setBiteFlag('owed');
+  // One in flight does not cover this one (it may be a purchase's, raising a level after its
+  // bite): it is owed again once that one landed.
+  else if (flag !== 'owed') setBiteFlag({ ...flag, owedAfter: true });
   return sendBiteWithSession();
 }
 
@@ -271,13 +288,13 @@ async function sendBiteWithSession(): Promise<'sent' | 'deferred' | 'nothing'> {
       const session = sessionSigner(u);
       try {
         await sendTracked(u, session, sharkBite(u, { authority: session, owner: publicKey(snap.owner) }), null, 0, 'Shark bite', (sig, lastValid) =>
-          setBiteFlag({ sig, lastValid }),
+          setBiteFlag(inFlightBite(sig, lastValid)),
         );
       } catch (e) {
         if (!(e instanceof PaymentPendingError)) setBiteFlag('owed'); // never landed: still owed
         throw e;
       }
-      setBiteFlag(null);
+      biteLanded();
       void refreshPlayerChain().catch(() => {});
       return 'sent';
     });
@@ -457,12 +474,12 @@ async function sendCarryingBite(u: Umi, owner: Signer, builder: TransactionBuild
   if (!what.bite) return sendTracked(u, owner, builder, what, cost, label);
   let signature: string;
   try {
-    signature = await sendTracked(u, owner, builder, what, cost, label, (sig, lastValid) => setBiteFlag({ sig, lastValid }));
+    signature = await sendTracked(u, owner, builder, what, cost, label, (sig, lastValid) => setBiteFlag(inFlightBite(sig, lastValid)));
   } catch (e) {
     if (!(e instanceof PaymentPendingError)) setBiteFlag('owed');
     throw e;
   }
-  setBiteFlag(null);
+  biteLanded();
   return signature;
 }
 
@@ -503,10 +520,20 @@ export async function sendSetPath(
       await rereadUntilVisible(what);
       return;
     } catch (e) {
-      // The program refused it, in preflight or on chain (the owner would be refused too), another
-      // payment is running, or it may still land: never ask the wallet for a second one on top.
-      if (sessionFailureFinal(e)) throw e;
-      console.warn('session-signed set_path did not go through; asking the wallet instead', e);
+      // Unauthorized: another device may have registered its own session key since this snapshot.
+      // Read again; if this device's key is no longer the registered one, the owner signs (and the
+      // purchase path registers this device's key in the same transaction).
+      if (playerStateErrorName(e) === 'Unauthorized') {
+        const fresh = await refreshPlayerChain();
+        if (sessionRegistered(fresh)) throw e;
+        console.info('set_path: this device\'s session key is no longer registered; asking the wallet instead');
+      } else if (sessionFailureFinal(e)) {
+        // The program refused it otherwise (the owner would be refused too), another payment is
+        // running, or it may still land: never ask the wallet for a second one on top.
+        throw e;
+      } else {
+        console.warn('session-signed set_path did not go through; asking the wallet instead', e);
+      }
     }
   }
   await sendPlayerPurchase(({ u, owner }) => ({ builder: build(owner, owner.publicKey, u), what, cost: 0 }), 'Path switch');
@@ -547,7 +574,10 @@ async function settlePending(u: Umi): Promise<ReconcileReport> {
     }
     if (!what.bite) continue;
     const flag = biteFlag();
-    if (flag && flag !== 'owed' && flag.sig === rec.signature) setBiteFlag(verdict === 'delivered' ? null : 'owed');
+    if (flag && flag !== 'owed' && flag.sig === rec.signature) {
+      if (verdict === 'delivered') biteLanded();
+      else setBiteFlag('owed');
+    }
     else if (verdict === 'dropped' && flag === null) setBiteFlag('owed'); // the bite it carried never landed
   }
   if (report.delivered.length || report.dropped.length) await refreshPlayerChain().catch(() => {});

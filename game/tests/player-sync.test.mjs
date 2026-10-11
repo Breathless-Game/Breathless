@@ -177,6 +177,10 @@ test('M1: a journaled payment settles by its signature first; the state only aft
   // Not found yet, blockhash still valid: kept (purchases stay locked) even though the state "shows" it.
   assert.equal(S(up, null, 480, 2_000, reached, null, MAX), 'kept');
   assert.equal(S(up, null, undefined, 2_000, reached, null, MAX), 'kept', 'unknown height is not expiry');
+  // N2: block height unreadable for good: past maxAge it can no longer land either.
+  assert.equal(S(up, null, undefined, 1_000 + MAX, player(), null, MAX), 'kept');
+  assert.equal(S(up, null, undefined, 1_001 + MAX, player(), null, MAX), 'dropped');
+  assert.equal(S(up, null, undefined, 1_001 + MAX, reached, null, MAX), 'delivered');
   // Confirmed status decides, whatever the state shows.
   assert.equal(S(up, { error: null, commitment: 'confirmed' }, 480, 2_000, player(), null, MAX), 'delivered');
   assert.equal(S(up, { error: { InstructionError: [0, { Custom: 6009 }] }, commitment: 'confirmed' }, 480, 2_000, reached, null, MAX), 'dropped');
