@@ -52,6 +52,8 @@ export interface AquariumHooks {
   /** Spendable Pearls (the cached on-chain PEARL balance), for the feed button's affordability state. */
   pearls(): number;
   message(text: string): void;
+  /** Open the Collection (the C panel) on top of the aquarium, to sell, burn or list fish. */
+  openCollection(): void;
 }
 
 // Tank box: where its front glass sits on the canvas (in fractions) when it faces you,
@@ -205,6 +207,7 @@ export class Aquarium {
     // While a payment is in flight renderFeederButton() keeps it locked, so no extra guard is needed.
     onPearlBalance(() => this.renderFeederButton());
     $('aq-close').addEventListener('click', () => this.close());
+    $('aq-manage').addEventListener('click', () => this.manageFish());
     $('aq-prev').addEventListener('click', () => this.step(-1));
     $('aq-next').addEventListener('click', () => this.step(1));
     this.lightInput.addEventListener('input', () => {
@@ -239,13 +242,50 @@ export class Aquarium {
       this.yawTarget = -clamp((e.clientX / window.innerWidth) * 2 - 1, -1, 1) * MAX_YAW;
     });
     window.addEventListener('keydown', (e) => {
-      if (!this.open) return;
-      if (e.key === 'ArrowLeft') this.step(-1);
+      if (!this.open || this.collectionOpen()) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && !this.foodPickerOpen() && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+        e.preventDefault();
+        this.manageFish();
+      } else if (e.key === 'ArrowLeft') this.step(-1);
       else if (e.key === 'ArrowRight') this.step(1);
     });
     new ResizeObserver(() => this.resize()).observe(this.canvas);
     // Text only: the 3D food preview (a WebGL context) is built on the first show().
     this.renderFeederText();
+  }
+
+  private collectionOpen() {
+    return !document.getElementById('collection')!.classList.contains('hidden');
+  }
+
+  /** Open the Collection over the tank; the tank sleeps (inert) until it closes, then re-reads the bank. */
+  private manageFish() {
+    if (this.state !== 'open' || this.collectionOpen()) return;
+    this.setFoodPickerOpen(false);
+    const panel = document.getElementById('collection')!;
+    panel.classList.add('over-aquarium');
+    this.root.inert = true;
+    this.hooks.openCollection();
+    if (!this.collectionOpen()) {
+      panel.classList.remove('over-aquarium');
+      this.root.inert = false;
+      return;
+    }
+    const watch = new MutationObserver(() => {
+      if (this.collectionOpen()) return;
+      watch.disconnect();
+      panel.classList.remove('over-aquarium');
+      this.root.inert = false;
+      this.refreshFromBank();
+    });
+    watch.observe(panel, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  /** Sold, burned or newly listed fish left or joined the bank: re-lay the tanks, count and label. */
+  private refreshFromBank() {
+    const order = this.order();
+    this.setTank(order.includes(this.tank) ? this.tank : order[order.length - 2] ?? 'fav');
   }
 
   private parseRgb(hex: string) {

@@ -730,6 +730,11 @@ const aquarium = new Aquarium(bank, {
   message(text) {
     hud.message(text, 1600);
   },
+  openCollection() {
+    vault.toggle(true);
+    fieldGuide?.mark('collection');
+    void syncPearls();
+  },
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
@@ -1765,9 +1770,9 @@ function onEscape() {
   else if (!sharkBitten.classList.contains('hidden')) sharkBitten.classList.add('hidden');
   else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
+  else if (vault.open) vault.toggle(false); // the Collection can sit on top of the aquarium
   else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
-  else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
   else if (loginGate.visible) showTitle(false);

@@ -1688,6 +1688,7 @@ button.danger {
 }
 
 /* ---- collection ---- */
+#collection.over-aquarium { z-index: 33; } /* opened from the aquarium (z 31) */
 #collection {
   position: fixed;
   inset: 24px;
@@ -3049,6 +3050,17 @@ button:disabled {
 #aq-tabs button {
   min-width: 32px;
   flex: none;
+}
+
+#aq-manage {
+  flex: none;
+  white-space: nowrap;
+}
+
+#aq-manage kbd {
+  margin-left: 4px;
+  font-size: 10px;
+  padding: 0 4px;
 }
 
 #aq-close {
