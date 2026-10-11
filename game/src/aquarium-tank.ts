@@ -160,12 +160,18 @@ export class TankTable extends TableScene {
       const hue = favourites ? rng.range(320, 350) : rng.range(95, 160);
       const h = rng.range(0.6, 1.5);
       for (let b = rng.int(2, 4); b > 0; b--) {
+        // Built standing on its base (y = 0), so the sway can bend it without moving the root.
+        const bh = h * rng.range(0.7, 1);
+        const geo = new THREE.ConeGeometry(0.07, bh, 4, 6);
+        geo.translate(0, bh / 2, 0);
         const blade = new THREE.Mesh(
-          new THREE.ConeGeometry(0.07, h * rng.range(0.7, 1), 4),
+          geo,
           new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(hue / 360, 0.45, rng.range(0.25, 0.38)), flatShading: true }),
         );
-        blade.position.set(rng.range(-0.1, 0.1), (h * 0.5) / 1, rng.range(-0.08, 0.08));
+        blade.position.set(rng.range(-0.1, 0.1), 0, rng.range(-0.08, 0.08));
         blade.userData.phase = rng.range(0, Math.PI * 2);
+        blade.userData.rest = Float32Array.from(geo.getAttribute('position').array as ArrayLike<number>);
+        blade.userData.h = bh;
         clump.add(blade);
       }
       clump.position.set(rng.range(SWIM.x0 - 0.3, SWIM.x1 + 0.3), floor, rng.range(-TANK.d / 2 + 0.25, TANK.d / 2 - 0.5));
@@ -200,9 +206,24 @@ export class TankTable extends TableScene {
       }
     }
     // Plants sway; the water surface ripples (more while it sloshes after the landing).
+    // A blade bends rather than swings: its root stays put in the sand, and each point
+    // leans with the current by the square of its height up the blade.
     for (const clump of this.plants.children) {
       for (const blade of clump.children) {
-        if (blade.userData.phase != null) blade.rotation.z = Math.sin(this.time * 1.1 + blade.userData.phase) * 0.14;
+        const rest = blade.userData.rest as Float32Array | undefined;
+        if (!rest || !(blade instanceof THREE.Mesh)) continue;
+        const ph = blade.userData.phase as number;
+        const h = blade.userData.h as number;
+        const sway = Math.sin(this.time * 1.1 + ph) * 0.12 * h;
+        const drift = Math.sin(this.time * 0.7 + ph * 1.7) * 0.05 * h;
+        const pos = blade.geometry.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < pos.count; i++) {
+          const y = rest[i * 3 + 1];
+          const k = (y / h) ** 2;
+          pos.setX(i, rest[i * 3] + sway * k);
+          pos.setZ(i, rest[i * 3 + 2] + drift * k);
+        }
+        pos.needsUpdate = true;
       }
     }
     this.slosh = Math.max(0, this.slosh - dt * 0.5);
