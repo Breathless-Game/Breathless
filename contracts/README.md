@@ -126,6 +126,23 @@ npm run copy-idl                 # target/idl -> game/src/idl
 `target/deploy/fish_market-keypair.json` is backed up as
 `.keys/fish_market-program.json`; keep it, or you cannot upgrade at the same id.
 
+player_state has its own program and deployer keys (`.keys/player_state-program.json`,
+`.keys/player_state-deployer.json`; Anchor.toml's provider wallet is not used for it):
+
+```sh
+anchor build -p player_state
+npm run test:player-state        # local validator, loads the .so as upgradeable
+solana program deploy target/deploy/player_state.so \
+  --program-id .keys/player_state-program.json \
+  --keypair .keys/player_state-deployer.json --upgrade-authority .keys/player_state-deployer.json \
+  --url devnet --with-compute-unit-price 20000
+# initialize_config(oracle, game price table); upgrade authority only, idempotent
+PLAYER_STATE_ADMIN_KEYPAIR=.keys/player_state-deployer.json npm run init:player-state
+```
+
+`anchor build` drops a fresh random `target/deploy/player_state-keypair.json`
+when none exists; it is not the program key, never pass it to `--program-id`.
+
 ## Notes
 
 - `max_value` is 30000. Today's biggest catch is mythic 800 × 2.5 (The Abyss) =
