@@ -5,7 +5,7 @@ import type { NftQueue } from './nft-queue';
 import { formatSerial, nftName } from './nft-uri';
 import { fishCard } from './portrait';
 import { sessionBalance, topUpSession, walletState } from './wallet';
-import { explorerAddress, isUserRejection } from './wallet-storage';
+import { explorerAddress, explorerTx, isUserRejection } from './wallet-storage';
 
 // The collection panel: banked fish as NFT cards, the devnet wallets, and selling.
 // The player's wallet owns the fish and signs sales; the game wallet pays mint fees without
@@ -116,7 +116,6 @@ export class Vault {
     }
     this.walletEl.replaceChildren(el('span', 'wallet-card-empty', 'Connecting to Solana devnet…'));
     try {
-      const c = await this.queue.loadChain();
       let sol: number | null = null;
       try {
         sol = await sessionBalance();
@@ -125,7 +124,7 @@ export class Vault {
 
       const info = el('div', 'game-wallet-info');
       const addr = el('a', 'wallet-addr', short(session));
-      addr.href = c.explorer('address', session);
+      addr.href = explorerAddress(session);
       addr.target = '_blank';
       addr.rel = 'noopener';
       addr.title = `${session}\nView on Solana Explorer (devnet)`;
@@ -275,7 +274,7 @@ export class Vault {
         const a = el('a', '', 'tx ↗');
         a.target = '_blank';
         a.rel = 'noopener';
-        void q.loadChain().then((c) => (a.href = c.explorer('tx', result.tx)));
+        a.href = explorerTx(result.tx);
         sale.append(' · ', a);
       }
       parts.push(sale);
@@ -353,7 +352,7 @@ export class Vault {
       const a = el('a', 'onchain pill pill-ok', `${num}On-chain ✓`);
       a.target = '_blank';
       a.rel = 'noopener';
-      void q.loadChain().then((c) => (a.href = c.explorer('address', f.assetId!)));
+      a.href = explorerAddress(f.assetId);
       return a;
     }
     if (f.nft === 'minting') {
