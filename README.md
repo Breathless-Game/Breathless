@@ -57,7 +57,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Difficulty | Casual | Normal | Hard |
 | Zones on the shelf | 0–18 m, Shallows only | 0–38 m, Shallows + Sunken Forest | 0–60 m, Shallows + Coral Reef + The Abyss |
 | Shelf (seabed) | 20 m, then the bottomless trench | 40 m, then the bottomless trench | 62 m, then the bottomless trench |
-| Above the water | Snow peaks, a pine shore, two fishing cabins and a pier, ice floes; aurora and lit windows at night | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
+| Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, two fishing cabins and a pier, ice floes; lit windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
 | Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
@@ -404,6 +404,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
         ├── maps.ts         the three map definitions (open zones and shelf depth, unlock value, palette) and the saved map progress
         ├── scenery.ts      the above-water scenery for each map
+        ├── aurora.ts       the fjord's northern lights: ray curtains, when they show, and the glow the water mirrors
         ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
         ├── mappicker.ts    the map cards on the start card
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
