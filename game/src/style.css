@@ -931,6 +931,10 @@ button.link {
   margin: 10px 0 0 0.6em;
 }
 
+/* Before the bundle runs: just the name on the dark sea (title.show() drops .boot). */
+#title-screen.boot .title-hint {
+  display: none;
+}
 .title-hint {
   margin-top: 22px;
   font-size: 13px;
