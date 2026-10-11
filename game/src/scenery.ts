@@ -775,10 +775,11 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   const snow = shades(['#f4fbff', '#dcecf5']);
   const mountain = mountainMat();
   // Ranges like sheets of cut paper, one behind the other, each a row of mountains of
-  // uneven size: mostly middling, with the odd giant and the odd foothill, and now and then
-  // a pass between two of them. Every mountain keeps to its own ground: within a range none
-  // touches the next, and a range is no deeper than its slab, so no face can poke through
-  // another. The ranges overlap freely as the camera sees them, which is what hides the rows.
+  // uneven size: mostly middling, with the odd giant and the odd foothill, and often a pass
+  // between two of them. Every mountain keeps to its own ground: within a range none touches
+  // the next, and a range is no deeper than its slab, so no face can poke through another.
+  // The nearer ranges stand back from the middle, so the fjord runs on between them to the
+  // far range and the sky: the view has somewhere to go.
   const range = stream(0xf10d, 7);
   interface Peak extends Massif {
     x: number;
@@ -790,21 +791,30 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   };
   /** The foot reaches up to 1.28 radii: pressed this thin, it stays within 12.5 m of its range's line. */
   const thin = (r: number, depth: number) => Math.min(depth, 12.5 / (r * 1.3));
-  const rangeAcross = (z: number, from: number, to: number, r: readonly [number, number], h: readonly [number, number], depth: number) => {
+  const rangeAcross = (
+    z: number,
+    from: number,
+    to: number,
+    r: readonly [number, number],
+    h: readonly [number, number],
+    depth: number,
+    /** A stretch this range leaves empty. */
+    open?: readonly [number, number],
+  ) => {
     for (let x = from; x < to; ) {
       const roll = range.next();
       const [wide, tall] = roll < 0.22 ? [1.25, 1.25] : roll < 0.5 ? [0.7, 0.55] : [1, 1];
       const pr = range.range(r[0], r[1]) * wide;
       const m = massif(range, pr, range.range(h[0], h[1]) * tall, thin(pr, depth));
-      // Its foot starts where the last one ended; the next starts a little way on from where this one ends.
+      // Its foot starts where the last one ended, or past the open stretch if it would stand in it.
+      if (open && x < open[1] && x + m.right - m.left > open[0]) x = open[1];
       const peak = stand(m, x - m.left, z + range.range(-1, 1));
-      x = peak.x + m.right + (range.next() < 0.18 ? range.range(14, 26) : range.range(0.5, 7));
+      x = peak.x + m.right + (range.next() < 0.3 ? range.range(16, 38) : range.range(2, 12));
     }
   };
-  rangeAcross(-198, -330, 330, [34, 44], [64, 92], 0.24);
-  rangeAcross(-168, -300, 300, [30, 38], [52, 76], 0.27);
-  rangeAcross(-138, -270, 270, [26, 33], [42, 62], 0.3);
-  rangeAcross(-110, -250, 250, [22, 28], [30, 48], 0.3);
+  rangeAcross(-196, -330, 330, [34, 44], [60, 86], 0.24);
+  rangeAcross(-156, -300, 300, [28, 36], [46, 68], 0.27, [-30, 26]);
+  rangeAcross(-118, -260, 260, [22, 29], [30, 50], 0.3, [-64, 58]);
   // The near range leaves the middle open like a channel, and stands clear of the waterfall's bluff (x = 47).
   const near = [-185, -105, 105, 185].map((x0) => {
     const pr = range.range(19, 23);
