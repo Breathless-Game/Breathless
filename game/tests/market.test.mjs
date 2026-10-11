@@ -32,6 +32,7 @@ const {
   nftStep,
   pearls,
   retryDelayMs,
+  sellBatches,
   sellQuote,
 } = await load('../src/market.ts');
 const equipment = await load('../src/equipment.ts');
@@ -327,4 +328,30 @@ test('Pearl amounts are pluralised', () => {
   assert.equal(pearls(1), '1 Pearl');
   assert.equal(pearls(0), '0 Pearls');
   assert.equal(pearls(12), '12 Pearls');
+});
+
+test('sellBatches: at most 24 fish and 2 transfers per /sell-batch request, every sale kept once', () => {
+  const sale = (n, tx) => ({ assetId: `fish${n}`, transferTx: tx });
+  const check = (sales, expectedRequests) => {
+    const out = sellBatches(sales, 24, 2);
+    for (const b of out) {
+      assert.ok(b.length >= 1 && b.length <= 24, `${b.length} fish`);
+      assert.ok(new Set(b.map((s) => s.transferTx)).size <= 2);
+    }
+    assert.deepEqual(out.flat().map((s) => s.assetId).sort(), sales.map((s) => s.assetId).sort());
+    assert.equal(out.length, expectedRequests);
+    return out;
+  };
+  // A fresh sale packs 20 fish per transfer, so 24 fish over 2 transfers is still one request.
+  const fresh = Array.from({ length: 24 }, (_, i) => sale(i, i < 20 ? 'T1' : 'T2'));
+  assert.deepEqual(check(fresh, 1)[0], fresh);
+  // 47 fish over 3 transfers (20/20/7).
+  check(Array.from({ length: 47 }, (_, i) => sale(i, `T${Math.floor(i / 20)}`)), 2);
+  // A resume that mixes a fresh 10-fish transfer with 5 older single-fish ones, interleaved.
+  const older = Array.from({ length: 5 }, (_, i) => sale(100 + i, `OLD${i}`));
+  const mixed = Array.from({ length: 10 }, (_, i) => sale(i, 'NEW')).flatMap((s, i) => (older[i] ? [s, older[i]] : [s]));
+  check(mixed, 3);
+  // Every fish its own transfer (handed over earlier, found by getSignaturesForAddress).
+  check(Array.from({ length: 7 }, (_, i) => sale(i, `S${i}`)), 4);
+  assert.deepEqual(sellBatches([], 24, 2), []);
 });

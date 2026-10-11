@@ -142,6 +142,7 @@ const local = { './chain': dataUrl('export const getUmi = () => globalThis.__e2e
 const pearlSrc = transpile('pearl.ts')
   .replace("const API = '/api/market';", `const API = '${BASE}/api/market';`)
   .replace(/from (['"])\.\/wallet\1/g, `from '${walletStub}'`)
+  .replace(/from (['"])\.\/market\1/g, `from '${dataUrl(transpile('market.ts'))}'`)
   .replace(/import\((['"])([^'"]+)\1\)/g, (_, q, spec) => `import('${local[spec] ?? import.meta.resolve(spec)}')`);
 const pearl = await import(dataUrl(pearlSrc));
 
