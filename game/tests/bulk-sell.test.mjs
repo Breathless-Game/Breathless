@@ -95,7 +95,10 @@ test('collection layout is fixed: panel, grid, cards, rows and wallet cards', as
   assert.match(rule('#collection'), /overflow: hidden/);
   assert.match(rule('#collection-grid'), /scrollbar-gutter: stable/);
   assert.match(rule('#collection-grid'), /overflow-y: auto/);
-  assert.match(rule('#collection-grid figure'), /height: \d+px/);
+  // card height comes from fixed-height slots (art by aspect-ratio, note, actions), not a pinned px height
+  assert.match(rule('#collection-grid img'), /aspect-ratio: \d+ \/ \d+/);
+  assert.match(rule('#collection-grid'), /grid-auto-rows: max-content/);
+  assert.match(rule('#collection-grid figure'), /outline: 2px solid transparent/);
   assert.match(rule('.card-actions'), /height: \d+px/);
   assert.match(rule('.card-note'), /height: \d+px/);
   assert.match(rule('.wallet-card'), /height: \d+px/);
