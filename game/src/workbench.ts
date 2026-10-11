@@ -22,6 +22,7 @@ import { chartWeatherShows, type WeatherState } from './weather';
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
+import { SYNTHESIS_ENABLED } from './synthesis';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -633,6 +634,7 @@ export class Workbench {
     this.synthesisHit.position.set(0, 0.56, 0.05);
     this.synthesisRig.add(this.synthesisHit);
     this.synthesisRig.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
+    this.synthesisRig.visible = SYNTHESIS_ENABLED;
     s.add(this.synthesisRig);
   }
 
@@ -1851,7 +1853,7 @@ export class Workbench {
   }
 
   private openSynthesis() {
-    if (this.state !== 'idle') return;
+    if (!SYNTHESIS_ENABLED || this.state !== 'idle') return;
     this.state = 'synth';
     this.tip.classList.add('hidden');
     document.body.style.cursor = '';

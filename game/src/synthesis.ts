@@ -1,6 +1,9 @@
 import { storageKey } from './wallet';
 import type { UpgradeSlot } from './equipment';
 
+/** The synthesis station is hidden from players for now; flip to true to bring the workbench rig, hint, and manual chapter back. */
+export const SYNTHESIS_ENABLED = false;
+
 export type MaterialId = 'scale' | 'fiber' | 'scrap' | 'crystal';
 
 export interface SynthesisState {
