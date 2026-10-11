@@ -85,25 +85,40 @@ function setRainMist(env?: SceneryEnv) {
  * Vertex-coloured rock for peaks, pillars and sea stacks. In rain it loses its
  * facets and snow and becomes one flat tone of the haze, darker the nearer the
  * ridge stands: layered silhouettes instead of grey shapes dissolving in fog.
+ *
+ * `lowMist` is for a lake whose mist lies on the water: [from, to, share] thins
+ * the haze with height, down to `share` of it at `to` metres and above, so
+ * summits stand clear over feet that fade.
  */
-function mountainMat() {
+function mountainMat(lowMist?: readonly [number, number, number]) {
   const mat = flatMat('#ffffff', { vertexColors: true });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uMist = rainMist;
+    if (lowMist) {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+          varying float vRise;
+        `)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          vRise = (modelMatrix * vec4(transformed, 1.0)).y;
+        `);
+    }
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform float uMist;
+        ${lowMist ? 'varying float vRise;' : ''}
       `)
       .replace('#include <fog_fragment>', `
         #ifdef USE_FOG
           float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+          ${lowMist ? `fogFactor *= mix(1.0, ${lowMist[2].toFixed(3)}, smoothstep(${lowMist[0].toFixed(1)}, ${lowMist[1].toFixed(1)}, vRise));` : ''}
           vec3 hazed = mix(gl_FragColor.rgb, fogColor, fogFactor);
           vec3 silhouette = fogColor * mix(0.66, 0.9, smoothstep(70.0, 190.0, vFogDepth));
           gl_FragColor.rgb = mix(hazed, silhouette, uMist);
         #endif
       `);
   };
-  mat.customProgramCacheKey = () => 'scenery-mountain-mist-v1';
+  mat.customProgramCacheKey = () => `scenery-mountain-mist-v2:${lowMist?.join(',') ?? ''}`;
   return mat;
 }
 
@@ -941,73 +956,256 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   const painted = flatMat('#ffffff', { vertexColors: true });
   const put = (geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x: number, y: number, z: number, o?: Placement) =>
     batch.add(solid(geo, color), painted, x, y, z, o);
-  const mountain = mountainMat();
-  const stone = shades(['#8a8672', '#77735f', '#9a957f', '#6c6855']);
-  const moss = shades(['#3f6b3a', '#2f5a35']);
+  // The lake's mist lies low: rock is hazed in full at the water and less with height.
+  const mountain = mountainMat([3, 46, 0.55]);
+  const stone = ['#8a8672', '#77735f', '#9a957f', '#6c6855'];
   const bush = ['#3f6b3a', '#2f5a35'];
+  // Everything that grows on the rock is painted with the mountain's material, so in rain it
+  // sinks into the same silhouette.
+  const plant = (geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x: number, y: number, z: number, o?: Placement) =>
+    batch.add(solid(geo, color), mountain, x, y, z, o);
+  /** How much grows on the rock, by detail. */
+  const lush = perDetail(detail, [0.5, 0.8, 1] as const);
 
-  // Sandstone pillars: tall, slightly tapered, green on top.
-  const pillars: { x: number; z: number; top: number; bottom: number; crown: number }[] = [];
-  const pillar = (x: number, z: number, top: number, h: number) => {
-    const bottom = top * rng.range(1.5, 1.9);
-    const geo = jitter(new THREE.CylinderGeometry(top, bottom, h, 7, 5), rng, top * 0.22);
-    paintFaces(geo, (t) => (t > 0.9 || (t > 0.3 && rng.next() < 0.07) ? rng.pick(moss) : rng.pick(stone)));
-    batch.add(geo, mountain, x, h / 2 - 3, z, { ry: rng.range(0, 6) });
-    const crown = h - 3;
-    put(jitter(new THREE.IcosahedronGeometry(top * 1.2, 0), rng, top * 0.2), rng.pick(bush), x, crown, z, { sy: 0.5 });
-    for (let t = 0; t < rng.int(1, 3); t++) {
-      const th = rng.range(3, 5.5);
-      put(new THREE.ConeGeometry(th * 0.3, th, 6), rng.pick(bush), x + rng.range(-0.5, 0.5) * top, crown + th / 2, z + rng.range(-0.5, 0.5) * top);
-    }
-    pillars.push({ x, z, top, bottom, crown });
-  };
-  // No pillar stands inside another: one that would is moved back or forward until it is clear.
-  // The foot is up to 1.9 times the top, plus the jitter.
-  const apart = (x: number, z: number, top: number, zMin: number, zMax: number) => {
-    const foot = (t: number) => t * 2.15;
-    const clear = (at: number) => pillars.every((p) => Math.hypot(p.x - x, p.z - at) > foot(p.top) + foot(top) + 1);
-    for (let tries = 0; tries < 8 && !clear(z); tries++) z = z - 13 < zMin ? z - 13 + (zMax - zMin) : z - 13;
-    return z;
-  };
-  for (let i = 0; i < 16; i++) {
-    const [x, z, top, h] = [-200 + i * 26.5 + rng.range(-9, 9), rng.range(-125, -75), rng.range(3, 6.5), rng.range(34, 78)];
-    pillar(x, apart(x, z, top, -125, -75), top, h);
-  }
-  // A few close ones on each side frame the lake.
-  for (const side of [-1, 1]) {
-    for (let i = 0; i < 3; i++) {
-      const [x, z, top, h] = [side * rng.range(78, 125), rng.range(-62, -42), rng.range(3.5, 5.5), rng.range(42, 64)];
-      pillar(x, apart(x, z, top, -62, -42), top, h);
-    }
-  }
-
-  // The crater rim behind everything, with a dusting of snow. It is one continuous ridge, a
-  // zigzag crest above a straight foot, standing just behind the last pillar: its hills
-  // cannot run into each other or into a pillar.
-  const rim = ['#55655e', '#4a5952', '#60706a'];
-  const frost = '#e4efec';
-  const ridge = stream(0x71a2c1, 7);
-  const span = 20;
-  const crest: number[][] = [], waist: number[][] = [], foot: number[][] = [];
-  for (let x = -360; x <= 360; x += span) {
-    // Broad hills up to 30 m with lower saddles between them, never down to the water.
-    const height = Math.max(8, 13 + 9 * Math.sin(x * 0.026 + 1.1) + 5 * Math.sin(x * 0.061 + 4) + ridge.range(-2.5, 2.5));
-    crest.push([x + ridge.range(-5, 5), height, -147 + ridge.range(-3, 3)]);
-    waist.push([x + span / 2 + ridge.range(-4, 4), height * ridge.range(0.4, 0.6), -143.5 + ridge.range(-1, 1)]);
-    foot.push([x, -2, -140]);
-  }
+  // Pillars and rim are loose triangles gathered by colour and baked into one mesh.
   const faces = new Map<string, number[]>();
   const face = (color: string, ...corners: number[][]) => {
     if (!faces.has(color)) faces.set(color, []);
     faces.get(color)!.push(...corners.flat());
   };
-  for (let i = 0; i < crest.length - 1; i++) {
-    const snowy = (crest[i][1] + crest[i + 1][1]) / 2 > 19;
-    face(ridge.pick(rim), foot[i], foot[i + 1], waist[i]);
-    face(ridge.pick(rim), waist[i], foot[i + 1], waist[i + 1]);
-    face(snowy && ridge.next() < 0.6 ? frost : ridge.pick(rim), waist[i], crest[i + 1], crest[i]);
-    face(snowy && ridge.next() < 0.6 ? frost : ridge.pick(rim), waist[i], waist[i + 1], crest[i + 1]);
+
+  // The stone forest: sandstone pillars in the manner of Zhangjiajie. Each is one skin from
+  // foot to summit, a column of rings on the same uneven plan, so its corners run up it as
+  // clean edges and its ledges are steps in that skin: nothing pokes through anything.
+  const forest = stream(0x71a2c1, 8);
+  interface Spire {
+    x: number;
+    z: number;
+    /** Height of the summit's rim, and the radius of the ground the pillar stands on. */
+    crown: number;
+    foot: number;
+    /** The point on the rock face at height `y`, looking out from the axis along (ox, oz), and how far out it is. */
+    face(y: number, ox: number, oz: number): { x: number; z: number; r: number };
   }
+  const spires: Spire[] = [];
+  /** A mountain pine: a bare trunk under flat layered pads, as they grow on these summits. */
+  const pine = (x: number, y: number, z: number, h: number) => {
+    const lean = forest.range(-0.2, 0.2);
+    plant(new THREE.CylinderGeometry(0.035 * h, 0.07 * h, h, 4), '#5a4632', x + (lean * h) / 2, y + h / 2, z, { rz: -lean });
+    for (let tier = 0; tier < 3; tier++) {
+      const r = h * (0.44 - tier * 0.11);
+      const at = 0.6 + tier * 0.2;
+      plant(
+        jitter(new THREE.CylinderGeometry(r * 0.72, r, h * 0.09, 6), forest, h * 0.03),
+        forest.pick(bush),
+        x + lean * h * at + forest.range(-0.12, 0.12) * h,
+        y + h * at,
+        z + forest.range(-0.12, 0.12) * h,
+      );
+    }
+  };
+  const spire = (x: number, z: number, h: number, r: number, flare: number): Spire => {
+    // The plan: an uneven polygon, thinner front to back than across, as the camera sees it.
+    const sides = forest.int(6, 7);
+    const turn = forest.range(0, Math.PI * 2);
+    const thin = forest.range(0.7, 0.95);
+    const plan = Array.from({ length: sides }, (_, k) => {
+      const a = turn + ((k + forest.range(-0.25, 0.25)) / sides) * Math.PI * 2;
+      const reach = forest.range(0.84, 1.1);
+      return [Math.cos(a) * reach, Math.sin(a) * reach * thin] as const;
+    });
+    /** Distance from the axis to the plan's edge along the unit direction (ox, oz). */
+    const reach = (ox: number, oz: number) => {
+      for (let k = 0; k < sides; k++) {
+        const [px, pz] = plan[k];
+        const [qx, qz] = plan[(k + 1) % sides];
+        const [ex, ez] = [qx - px, qz - pz];
+        const det = ox * ez - oz * ex;
+        if (Math.abs(det) < 1e-9) continue;
+        const along = (px * oz - pz * ox) / det;
+        const out = (px * ez - pz * ex) / det;
+        if (along >= 0 && along <= 1 && out > 0) return out;
+      }
+      return 1;
+    };
+
+    // The profile: a flared foot in the water, then beds of rock one on another. Where a
+    // softer layer has worn back the bed above stands in from the one below, keeping one
+    // face flush with it; on a taller pillar one such step is a broad shoulder.
+    interface Level { y: number; f: number; cx: number; cz: number; ledge: boolean }
+    const levels: Level[] = [{ y: -3, f: flare, cx: 0, cz: 0, ledge: false }];
+    let f = forest.range(1.12, 1.22);
+    let [cx, cz] = [0, 0];
+    const waist = forest.range(2.5, 4.5);
+    levels.push({ y: waist, f, cx, cz, ledge: false });
+    const beds = Math.max(2, Math.round(h / forest.range(8, 13)));
+    const shoulder = h > 20 && forest.next() < 0.65 ? forest.int(Math.ceil(beds / 2), beds - 1) : -1;
+    let terrace: { x: number; y: number; z: number } | null = null;
+    for (let bed = 1; bed < beds; bed++) {
+      // Lower beds are the thicker ones.
+      const y = waist + (h - waist) * Math.pow((bed + forest.range(-0.25, 0.25)) / beds, 0.85);
+      f *= forest.range(0.94, 0.99);
+      levels.push({ y, f, cx, cz, ledge: false });
+      const broad = bed === shoulder;
+      const step = broad ? forest.range(0.6, 0.72) : forest.range(0.86, 0.94);
+      // A shoulder shows best to one side of the pillar, so it leans along x.
+      const toward = broad ? (forest.next() < 0.5 ? 0 : Math.PI) + forest.range(-0.5, 0.5) : forest.range(0, Math.PI * 2);
+      const shift = f * (1 - step) * r * (broad ? 0.85 : forest.range(0, 0.6));
+      if (broad) terrace = { x: x + cx - Math.cos(toward) * f * r * 0.62, y, z: z + cz - Math.sin(toward) * f * r * 0.62 * thin };
+      cx += Math.cos(toward) * shift;
+      cz += Math.sin(toward) * shift * thin;
+      f *= step;
+      levels.push({ y: y + forest.range(0.35, 0.8), f, cx, cz, ledge: true });
+    }
+    // Some heads bulge a little over the last bed.
+    f *= forest.range(0.92, 1.05);
+    levels.push({ y: h, f, cx, cz, ledge: false });
+
+    const rings = levels.map((level, i) =>
+      plan.map(([px, pz]) => {
+        const wobble = i === 0 ? 1 : 1 + forest.range(-0.035, 0.035);
+        const lift = i === 0 || level.ledge ? 0 : forest.range(-0.3, 0.3);
+        return [x + level.cx + px * r * level.f * wobble, level.y + lift, z + level.cz + pz * r * level.f * wobble];
+      }),
+    );
+    for (let i = 0; i < rings.length - 1; i++) {
+      const ledge = levels[i + 1].ledge;
+      // Each bed keeps to two neighbouring tones; the foot is the darkest, stained by the lake.
+      const tone = i === 0 ? 3 : forest.int(0, 2);
+      for (let k = 0; k < sides; k++) {
+        const [a, b, c, d] = [rings[i][k], rings[i][(k + 1) % sides], rings[i + 1][(k + 1) % sides], rings[i + 1][k]];
+        const color = ledge
+          ? forest.next() < 0.75 ? forest.pick(bush) : stone[2]
+          : i > 1 && forest.next() < 0.05 ? forest.pick(bush) : stone[forest.next() < 0.7 ? tone : (tone + 1) % 3];
+        face(color, a, c, b);
+        face(color, a, d, c);
+      }
+    }
+    // The summit: a low green cap, its top a little off centre.
+    const rim = rings[rings.length - 1];
+    const top = r * f;
+    const tip = [x + cx + forest.range(-0.3, 0.3) * top, h + top * forest.range(0.25, 0.5), z + cz + forest.range(-0.3, 0.3) * top];
+    for (let k = 0; k < sides; k++) face(forest.pick(bush), rim[k], tip, rim[(k + 1) % sides]);
+
+    const made: Spire = {
+      x, z, crown: h, foot: r * flare * 1.1,
+      face(y, ox, oz) {
+        let i = 1;
+        while (i < levels.length - 1 && y > levels[i].y) i++;
+        const [lo, hi] = [levels[i - 1], levels[i]];
+        const u = THREE.MathUtils.clamp((y - lo.y) / Math.max(1e-6, hi.y - lo.y), 0, 1);
+        const out = r * (lo.f + (hi.f - lo.f) * u) * reach(ox, oz);
+        return { x: x + lo.cx + (hi.cx - lo.cx) * u + ox * out, z: z + lo.cz + (hi.cz - lo.cz) * u + oz * out, r: out };
+      },
+    };
+
+    // Shrubs root on the ledges, mostly on the side the camera sees.
+    for (let i = 1; i < levels.length; i++) {
+      if (!levels[i].ledge || forest.next() > 0.7 * lush) continue;
+      const a = forest.range(-1.3, 1.3);
+      const at = made.face(levels[i].y, Math.sin(a), Math.cos(a));
+      const size = forest.range(0.3, 0.48) * Math.sqrt(r) + 0.2;
+      plant(jitter(new THREE.IcosahedronGeometry(size, 0), forest, size * 0.2), forest.pick(bush), at.x, levels[i].y + size * 0.2, at.z, { sy: 0.65 });
+    }
+    // A pine on the shoulder, and pines on the summit: the tallest in the middle.
+    if (terrace && forest.next() < 0.5 + 0.4 * lush) pine(terrace.x, terrace.y + 0.3, terrace.z, forest.range(2.6, 3.8));
+    const trees = Math.max(1, Math.round(forest.range(1, 2.4) * Math.sqrt(top) * lush));
+    for (let t = 0; t < trees; t++) {
+      const a = forest.range(0, Math.PI * 2);
+      const out = t === 0 ? 0 : forest.range(0.3, 0.7) * top;
+      const height = forest.range(2.8, 4.6) * (t === 0 ? 1.15 : 0.85);
+      pine(x + cx + Math.cos(a) * out, h + top * 0.12, z + cz + Math.sin(a) * out * thin, height);
+    }
+    return made;
+  };
+
+  /** How high the surface camera sees at depth z: a summit below this stays in the picture. */
+  const ceiling = (z: number) => 2.2 + (22 - z) * 0.36;
+  // No pillar stands inside another: one that would is moved back or forward until its foot is
+  // clear, or left out where the forest is already full.
+  const place = (x: number, z: number, h: number, r: number, flare: number, zMin: number, zMax: number) => {
+    const foot = r * flare * 1.1;
+    const clear = (at: number) => spires.every((p) => Math.hypot(p.x - x, p.z - at) > p.foot + foot + 0.6);
+    z = THREE.MathUtils.clamp(z, zMin, zMax);
+    for (let tries = 0; tries < 6 && !clear(z); tries++) z = z - 9 < zMin ? z - 9 + (zMax - zMin) : z - 9;
+    if (!clear(z)) return null;
+    const made = spire(x, z, h, r, flare);
+    spires.push(made);
+    return made;
+  };
+  // They stand in groups, as the real ones do: a host with lower, thinner guests beside it or
+  // half hidden behind it, stepping down away from it, and open water between the groups.
+  // Now and then the host is a massif, broad and not so tall.
+  const stand = (x: number, z: number, zMin: number, zMax: number, tall: number, guests: number) => {
+    const massif = forest.next() < 0.2;
+    const r = massif ? forest.range(5.2, 7.4) : forest.range(2.5, 4.3);
+    const height = ceiling(z) * (massif ? tall * 0.72 : tall);
+    const host = place(x, z, height, r, forest.range(1.3, 1.5), zMin, zMax);
+    if (!host) return;
+    for (let g = 0; g < guests; g++) {
+      const gr = (massif ? 3.2 : r) * forest.range(0.5, 0.8);
+      const flare = forest.range(1.2, 1.35);
+      const gap = host.foot + gr * flare * 1.1 + forest.range(0.8, 3) + (g > 1 ? gr * 2.6 : 0);
+      const beside = forest.next() < 0.65;
+      const side = g % 2 ? -1 : 1;
+      const gx = host.x + (beside ? side * gap : forest.range(-1.4, 1.4) * r);
+      const gz = host.z + (beside ? forest.range(-5, 5) : side * gap);
+      place(gx, gz, height * forest.range(0.5, 0.85) * (g > 1 ? 0.75 : 1), gr, flare, zMin - 4, zMax + 6);
+    }
+  };
+  // Three depths. The far forest fades into the haze; the middle one carries the picture; a
+  // few near pillars on each side frame the lake and leave its middle open.
+  for (let x = -330; x <= 330; x += 46) {
+    stand(x + forest.range(-16, 16), forest.range(-126, -110), -128, -106, forest.range(0.55, 0.97), forest.int(1, 3));
+  }
+  for (let x = -290; x <= 290; x += 58) {
+    stand(x + forest.range(-18, 18), forest.range(-96, -76), -98, -72, forest.range(0.6, 1), forest.int(2, 4));
+  }
+  for (const side of [-1, 1]) {
+    for (let x = 76; x <= 250; x += 58) {
+      stand(side * (x + forest.range(0, 22)), forest.range(-60, -48), -62, -46, forest.range(0.6, 1.1), forest.int(0, 2));
+    }
+  }
+
+  // The crater rim behind everything, in two ranges like sheets of cut paper: each is one
+  // continuous skin from a straight foot up to a jagged crest, the further one taller and
+  // paler. They stand behind the last pillar and clear of each other, so no peak can run
+  // into another or into a pillar. Snow lies on the high faces.
+  const rimRock = ['#4f6068', '#445560', '#5a6b73'];
+  const frost = '#e4efec';
+  const ridge = stream(0x71a2c1, 7);
+  const span = 13;
+  /** `height(x)` gives the crest; the rows between it and the foot lean back by `lean` m in all. */
+  const range = (zFoot: number, lean: number, snowline: number, height: (x: number) => number) => {
+    const rows: number[][][] = [[], [], [], []];
+    for (let x = -440; x <= 440; x += span) {
+      const top = height(x) + ridge.range(-2.5, 2.5);
+      // Each row stands a little further back and half a step along from the one below.
+      rows[0].push([x, -2, zFoot]);
+      rows[1].push([x + span / 2 + ridge.range(-3, 3), top * ridge.range(0.24, 0.36), zFoot - lean * 0.3 + ridge.range(-1, 1)]);
+      rows[2].push([x + ridge.range(-3, 3), top * ridge.range(0.56, 0.72), zFoot - lean * 0.65 + ridge.range(-1, 1)]);
+      rows[3].push([x + span / 2 + ridge.range(-4, 4), top, zFoot - lean + ridge.range(-1, 1)]);
+    }
+    for (let row = 0; row < 3; row++) {
+      const [low, high] = [rows[row], rows[row + 1]];
+      for (let i = 0; i < low.length - 1; i++) {
+        // The upper row is half a step along from the lower on even rows, half a step back on odd ones.
+        const pair = row % 2
+          ? [[low[i], low[i + 1], high[i + 1]], [high[i], low[i], high[i + 1]]]
+          : [[low[i], low[i + 1], high[i]], [high[i], low[i + 1], high[i + 1]]];
+        for (const corners of pair) {
+          const top = Math.max(corners[0][1], corners[1][1], corners[2][1]);
+          const snowy = row > 0 && top > snowline + (row === 2 ? 0 : 6) && ridge.next() < (row === 2 ? 0.92 : 0.45);
+          face(snowy ? frost : row === 0 ? rimRock[1] : ridge.pick(rimRock), ...corners);
+        }
+      }
+    }
+  };
+  // Pointed peaks with broad saddles between them.
+  const peaks = (x: number, a: number, b: number, c: number) =>
+    Math.pow(THREE.MathUtils.clamp(0.5 + 0.26 * Math.sin(x * 0.019 + a) + 0.17 * Math.sin(x * 0.043 + b) + 0.1 * Math.sin(x * 0.097 + c), 0, 1), 1.6);
+  range(-141, 9, 24, (x) => 12 + 34 * peaks(x, 0.6, 2.1, 4));
+  range(-156, 10, 34, (x) => 20 + 40 * peaks(x, 3.4, 0.4, 1.3));
   batch.add(triangles([...faces].map(([color, verts]) => [verts, color])), mountain, 0, 0, 0);
 
   // A lakeside pavilion on a rock.
@@ -1028,26 +1226,27 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   // side facing the boat, low enough to be seen from the surface.
   const pines = stream(0x71a2c1, 1);
   const up = new THREE.Vector3(0, 1, 0);
-  for (const p of pillars) {
+  for (const p of spires) {
     const grow = pines.next() < 0.55;
-    const k = THREE.MathUtils.clamp(p.top / 4.5, 0.8, 1.3);
     const y = pines.range(9, Math.max(10, Math.min(p.crown - 8, 28)));
     const around = pines.range(-0.7, 0.7);
+    const [ox, oz] = [Math.sin(around), Math.cos(around)];
+    // Where the rock face is at this height, on the side the pine grows from.
+    const root = p.face(y, ox, oz);
+    const k = THREE.MathUtils.clamp(root.r / 3.2, 0.75, 1.2);
     const lean = pines.range(0.55, 0.95);
     const pads = [0, 1, 2].map(() => [pines.range(1.1, 1.6) * k, pines.range(-0.5, 0.5) * k, pines.next()] as const);
-    if (!grow) continue;
-    // The wall's radius at this height: the pillar tapers from `bottom` at y = -3 to `top` at the crown.
-    const r = p.bottom + (p.top - p.bottom) * ((y + 3) / (p.crown + 3)) - 0.4;
-    const [ox, oz] = [Math.sin(around), Math.cos(around)];
+    // Only a pillar tall enough to carry one below its summit.
+    if (!grow || p.crown < 17) continue;
     const dir = new THREE.Vector3(ox * Math.sin(lean), Math.cos(lean), oz * Math.sin(lean));
     const tilt = new THREE.Euler().setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(up, dir));
     const len = 2.6 * k;
-    const [bx, bz] = [p.x + ox * r, p.z + oz * r];
-    put(new THREE.CylinderGeometry(0.14 * k, 0.26 * k, len, 5), '#5a4632', bx + (dir.x * len) / 2, y + (dir.y * len) / 2, bz + (dir.z * len) / 2, { rx: tilt.x, ry: tilt.y, rz: tilt.z });
+    const [bx, bz] = [root.x - ox * 0.3, root.z - oz * 0.3];
+    plant(new THREE.CylinderGeometry(0.14 * k, 0.26 * k, len, 5), '#5a4632', bx + (dir.x * len) / 2, y + (dir.y * len) / 2, bz + (dir.z * len) / 2, { rx: tilt.x, ry: tilt.y, rz: tilt.z });
     // Flat layered canopy pads, stepping down and out from the tip.
     pads.forEach(([pr, side, shade], j) => {
       const out = len * (0.75 + j * 0.25);
-      put(
+      plant(
         jitter(new THREE.CylinderGeometry(pr, pr * 1.15, 0.45 * k, 7), pines, 0.1 * k),
         shade < 0.5 ? bush[0] : bush[1],
         bx + ox * out - oz * side,
@@ -1145,7 +1344,8 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
 
   // Red-crowned cranes wheeling around a pillar in view (medium and up).
   const craneRng = stream(0x71a2c1, 6);
-  const home = pillars.slice(0, 16).reduce((a, b) => (Math.abs(b.x + 28) < Math.abs(a.x + 28) ? b : a));
+  const tall = spires.filter((p) => p.z < -70 && p.z > -100 && p.crown > 26);
+  const home = (tall.length ? tall : spires).reduce((a, b) => (Math.abs(b.x + 28) < Math.abs(a.x + 28) ? b : a));
   const craneOrbits: Orbit[] = Array.from({ length: 5 }, () => ({
     x: home.x,
     y: Math.min(home.crown - 4, 26) + craneRng.range(-3, 3),
