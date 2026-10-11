@@ -53,6 +53,36 @@ test('store: a spend shows the post-burn balance, and a failed sync after it nev
   assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
 });
 
+test('epoch: a read that started before a spend, sale or nudge is dropped; one after it is kept', async () => {
+  m.setPearlBalance(100);
+  // syncPearls as main.ts runs it: guard first, then the read, then apply only if still current.
+  const sync = async (read) => {
+    const current = m.readGuard();
+    const value = await read;
+    if (!current()) return false;
+    m.setPearlBalance(value);
+    return true;
+  };
+  let land;
+  const early = sync(new Promise((r) => (land = r))); // started before the burn
+  m.nudgePearlBalance(90); // burn of 10 confirmed: applyPearlSpend + refreshEquipment
+  const late = sync(Promise.resolve(90)); // the read the spend triggers
+  assert.equal(await late, true);
+  land(100); // the early read lands last, with the pre-burn number
+  assert.equal(await early, false);
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 90 });
+
+  // A sale credited while a read is out (syncPearls(earned) bumps before nudging).
+  const before = m.readGuard();
+  m.bumpPearlEpoch();
+  assert.equal(before(), false);
+  // Nudges that change nothing (refreshEquipment after a read) do not bump.
+  const g = m.readGuard();
+  m.nudgePearlBalance(90);
+  m.setPearlBalance(90);
+  assert.equal(g(), true);
+});
+
 test('explainPearlError names the cause', () => {
   assert.match(m.explainPearlError(new Error('HTTP 429')), /rate limiting/);
   assert.match(m.explainPearlError(new Error('Failed to fetch')), /market is offline/);
