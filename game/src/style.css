@@ -2611,7 +2611,19 @@ button:disabled {
   padding: 16px;
 }
 
+/* The scene behind blurs and darkens as the tank comes up (--aq-bg: 0..1, set by aquarium.ts). */
+#aquarium::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.45);
+  backdrop-filter: blur(8px);
+  opacity: var(--aq-bg, 0);
+  pointer-events: none;
+}
+
 .aq-stage {
+  position: relative; /* above the blurred backdrop */
   width: min(1100px, 100%, calc((100vh - 120px) * 1.75));
   display: flex;
   flex-direction: column;
@@ -2727,6 +2739,51 @@ button:disabled {
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+#aq-card > .aq-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.aq-chain {
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.aq-chain:hover,
+.aq-chain:focus-visible {
+  color: var(--ink);
+  opacity: 1;
+  text-decoration: underline;
+}
+
+@media (max-width: 560px) {
+  #aq-card > .aq-actions {
+    width: 84px;
+  }
+
+  .aq-chain {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+    font-size: 10px;
+  }
+
+  #aq-card {
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  #aq-card img {
+    width: 40px;
+    height: 40px;
+  }
 }
 
 /* ---- gear inspector (workbench) ---- */
@@ -3335,4 +3392,44 @@ button:disabled {
   .wallet-spinner {
     animation-duration: 2.4s;
   }
+}
+
+/* Inspector: Pearls on hand, and the two branches a piece can run from Lv2 (inspect.ts). */
+#wb-inspect-pearls {
+  margin-top: 8px;
+}
+
+#wb-inspect-paths {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+#wb-inspect-path-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.wb-path {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.wb-path small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.wb-path.on {
+  border-color: var(--hold);
+  background: rgba(62, 240, 168, 0.12);
+}
+
+.wb-path.on small {
+  color: var(--hold);
 }
