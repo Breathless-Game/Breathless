@@ -5,6 +5,7 @@
 // Keyboard mode (hold Shift) exists so the game is playable without a camera.
 
 import { HEADER_BYTES, JpegQuality, pickFrameFormat, writeFrameHeader, type FrameFormat } from './frame-codec';
+import { isAction } from './controls';
 
 export type BreathMode = 'presage' | 'sim' | 'keyboard';
 
@@ -83,7 +84,7 @@ export class BreathSource {
     this.canvas.width = FRAME_W;
     this.canvas.height = FRAME_H;
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Shift' && !this.keyHeld) {
+      if (isAction('hold', e) && !this.keyHeld) {
         this.keyHeld = true;
         this.keyHoldStart = performance.now();
         if (this.state.mode === 'sim') this.send({ t: 'simHold', holding: true });
@@ -91,7 +92,7 @@ export class BreathSource {
       }
     });
     window.addEventListener('keyup', (e) => {
-      if (e.key === 'Shift') {
+      if (isAction('hold', e)) {
         this.keyHeld = false;
         if (this.state.mode === 'sim') this.send({ t: 'simHold', holding: false });
         if (this.state.mode === 'presage') this.sendLabel(false);

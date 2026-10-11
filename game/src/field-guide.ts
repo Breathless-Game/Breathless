@@ -1,6 +1,7 @@
 import './field-guide.css';
 import { guideArt, type GuideArt } from './guide-art';
 import { currentLesson, LESSONS, loadTutorial, recordLesson, saveTutorial, type LessonId } from './tutorial';
+import { isAction } from './controls';
 
 type ChapterId = 'prepare' | 'assembly' | 'gear' | 'dive' | 'return' | 'sonar';
 interface Chapter {
@@ -188,7 +189,7 @@ export class FieldGuide {
     const target = event.target;
     const editing = target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
     if (!this.open && (editing || event.ctrlKey || event.metaKey || event.altKey)) return;
-    const bookKey = event.code === 'KeyB' || event.key.toLowerCase() === 'b';
+    const bookKey = isAction('fieldGuide', event); // B by default; changeable in Settings → Controls
     if (!this.open && (!bookKey || !this.hooks.canOpen())) return;
     event.stopImmediatePropagation();
     if (bookKey || event.key === 'Escape') {

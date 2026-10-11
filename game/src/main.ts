@@ -46,6 +46,7 @@ import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { FieldGuide } from './field-guide';
+import { isAction, keysFor, openControls } from './controls';
 import type { LessonId } from './tutorial';
 
 // ---- Tuning -------------------------------------------------------------
@@ -693,6 +694,8 @@ function nextSlotLabel(slot: UpgradeSlot) {
 }
 
 // ---- Input --------------------------------------------------------------
+// Keys are looked up by action (controls.ts), so they can be changed in Settings.
+// `keys` holds the physical keys (codes) held down, for swimming.
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
   if(skinPicker.open)return;
@@ -706,10 +709,10 @@ window.addEventListener('keydown', (e) => {
     onEscape();
     return;
   }
-  // Tab flips the hotbar between your gear and your bag of fish (it no longer opens the
-  // wheel). Number keys and Q/E are instant quick-slot shortcuts; the wheel consumes them
-  // before movement/catch handling.
-  if (e.key === 'Tab' && phase === 'play' && !paused) {
+  // The bag key flips the hotbar between your gear and your bag of fish (it no longer
+  // opens the wheel). Number keys and prev/next gear are instant quick-slot shortcuts;
+  // the wheel consumes them before movement/catch handling.
+  if (isAction('bag', e) && phase === 'play' && !paused) {
     e.preventDefault();
     if (!e.repeat) hud.toggleBag();
     return;
@@ -721,10 +724,10 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     openWorkbench();
   }
-  keys.add(e.key.toLowerCase());
+  keys.add(e.code);
   // Not on the workbench: the report would pop up over the table and the chart.
-  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible && !aquarium.open) report.toggle();
-  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
+  if (isAction('report', e) && phase !== 'calibrating' && !workbench.visible && !aquarium.open) report.toggle();
+  if (isAction('upgrades', e) && phase !== 'play' && phase !== 'calibrating') {
     e.preventDefault();
     gear.toggle();
     if (gear.open) void syncPearls();
@@ -732,28 +735,28 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (phase !== 'play') return;
-  if (e.code === 'Space') {
+  if (isAction('catch', e)) {
     e.preventDefault();
     tryCatch();
-  } else if (e.key.toLowerCase() === 'c') {
+  } else if (isAction('collection', e)) {
     vault.toggle();
     if (vault.open) fieldGuide?.mark('collection');
     if (vault.open) void syncPearls();
-  } else if (e.key.toLowerCase() === 'g') {
+  } else if (isAction('upgrades', e)) {
     gear.toggle();
     if (gear.open) void syncPearls();
-  } else if (e.key.toLowerCase() === 'f' && canBoard()) {
+  } else if (isAction('board', e) && canBoard()) {
     climbAboard();
-  } else if (e.key.toLowerCase() === 'n') {
+  } else if (isAction('night', e)) {
     const nightSelected = world.dayCycle.mode === 'night'
       || (world.dayCycle.mode === 'cycle' && world.night);
     setTimeOfDay(nightSelected ? 'morning' : 'night');
-  } else if (e.key.toLowerCase() === 'v') {
+  } else if (isAction('sonar', e)) {
     deploySonar();
-  } else if (e.key.toLowerCase() === 'k') {
+  } else if (isAction('breathInput', e)) {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
-  } else if (e.key.toLowerCase() === 'f' && !e.repeat) {
+  } else if (isAction('board', e) && !e.repeat) {
     // Every heave is a press of its own: holding the key down does nothing.
     heaveBoat();
   }
@@ -858,7 +861,7 @@ function resetSonar() {
 }
 window.addEventListener('keyup', (e) => {
   if (loadoutWheel.handleKeyUp(e)) return;
-  keys.delete(e.key.toLowerCase());
+  keys.delete(e.code);
 });
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 document.getElementById('gear-open')!.addEventListener('click', () => {
@@ -866,8 +869,9 @@ document.getElementById('gear-open')!.addEventListener('click', () => {
   void syncPearls();
 });
 for (const id of ['report-btn', 'open-report']) document.getElementById(id)!.addEventListener('click', () => report.toggle(true));
+document.getElementById('set-controls')!.addEventListener('click', openControls);
 
-function axis(neg: string[], pos: string[]) {
+function axis(neg: readonly string[], pos: readonly string[]) {
   return (pos.some((k) => keys.has(k)) ? 1 : 0) - (neg.some((k) => keys.has(k)) ? 1 : 0);
 }
 
@@ -1167,7 +1171,7 @@ window.addEventListener('keydown',e=>{
   if(e.repeat)return;
   clearSkinHold();startSkinProgress('keyboard');
 },true);
-window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('e');}},true);
+window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('KeyE');}},true);
 window.addEventListener('pointermove',e=>{if(e.pointerId===skinPointer&&Math.hypot(e.clientX-skinX,e.clientY-skinY)>14)clearSkinHold();},true);
 window.addEventListener('pointerup',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
 window.addEventListener('pointercancel',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
@@ -1581,6 +1585,7 @@ const settingsDesk = new SettingsDesk({
     deskView.yaw = yaw;
     deskView.pitch = pitch;
   },
+  openControls,
   leaving() {
     // Opened from the workbench: that table comes back up as this one sinks.
     if (!deskFromBench) return;
@@ -1755,8 +1760,8 @@ function update(dt: number, time: number) {
     if (s.holding && !lastHolding && !underwater) hud.message('Diving…', 800);
     lastHolding = s.holding;
 
-    let ax = axis(['arrowleft', 'a'], ['arrowright', 'd']);
-    let ay = axis(['arrowdown', 's'], ['arrowup', 'w']);
+    let ax = axis(keysFor('left'), keysFor('right'));
+    let ay = axis(keysFor('down'), keysFor('up'));
     if (!underwater && !s.holding && ay < 0) {
       ay = 0;
       if (Math.random() < 0.02) hud.message('Hold your breath to dive', 900);

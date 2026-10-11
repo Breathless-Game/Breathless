@@ -330,7 +330,9 @@
             </select>
           </label>
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
-          <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <!-- The on-screen key hint is gone (the keys are in Controls); pause.ts still wires the box. -->
+          <label class="setting hidden"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <div class="setting"><span>Controls · 操作</span><button type="button" id="set-controls" class="mini">View / change keys</button></div>
           <label class="setting">
             <span>Sharks (Open Ocean)</span>
             <select id="set-sharks">

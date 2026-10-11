@@ -1,3 +1,4 @@
+import { isAction } from './controls';
 import type { EquipmentSlot } from './equipment';
 
 /**
@@ -140,9 +141,11 @@ export class LoadoutWheel {
       this.select(index);
       return true;
     }
-    if (key === 'q' || key === 'e') {
+    // Previous / next gear (Q / E by default; changeable in Settings → Controls).
+    const next = isAction('nextGear', event);
+    if (next || isAction('prevGear', event)) {
       event.preventDefault();
-      this.select(this.activeIndex + (key === 'e' ? 1 : -1));
+      this.select(this.activeIndex + (next ? 1 : -1));
       return true;
     }
     return false;
