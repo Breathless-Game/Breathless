@@ -377,25 +377,29 @@
       <div id="collection-grid"></div>
     </div>
 
-    <div id="gear-panel" class="hidden">
+    <div id="gear-panel" class="hidden" aria-hidden="true">
       <div class="gear-head">
         <div>
-          <div class="small muted">DIVER LOADOUT</div>
-          <h2>改装工作台</h2>
+          <div id="gear-kicker" class="small muted">DIVER LOADOUT</div>
+          <h2 id="gear-title">改装工作台</h2>
           <div id="gear-level"></div>
         </div>
-        <button id="gear-close">Close (G)</button>
+        <div class="gear-head-actions">
+          <button id="gear-language" class="mini" type="button" aria-label="Switch to English">EN</button>
+          <button id="gear-close" type="button">关闭 (G)</button>
+        </div>
       </div>
       <div id="gear-tabs" class="gear-tabs" role="tablist" aria-label="Equipment workshop">
         <button id="gear-tab-upgrades" class="gear-tab selected" type="button" role="tab" aria-selected="true">合成箱 · Upgrades</button>
         <button id="gear-tab-assembly" class="gear-tab" type="button" role="tab" aria-selected="false">装配箱 · Assembly</button>
       </div>
-      <div id="gear-upgrade-view" role="tabpanel">
+      <div id="gear-pages" class="gear-pages">
+      <div id="gear-upgrade-view" class="gear-page active" role="tabpanel" aria-hidden="false">
       <div id="gear-slots" class="gear-slots"></div>
       <div class="gear-card">
         <div id="gear-icon" class="gear-icon">◌</div>
         <div>
-          <div class="small muted">SELECTED MODULE</div>
+          <div id="gear-selected-label" class="small muted">SELECTED MODULE</div>
           <div id="gear-effect" class="gear-effect"></div>
           <div id="gear-pearls" class="gear-pearls"></div>
         </div>
@@ -403,7 +407,7 @@
       <div class="gear-upgrade-card">
         <div class="row">
           <div>
-            <div class="small muted">NEXT UPGRADE</div>
+            <div id="gear-next-label" class="small muted">NEXT UPGRADE</div>
             <div id="gear-next" class="gear-next"></div>
           </div>
           <div id="gear-progress-label" class="small"></div>
@@ -413,19 +417,20 @@
         <button id="gear-upgrade" class="primary">Upgrade</button>
         <div id="gear-notice" class="gear-notice hidden"></div>
       </div>
-      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. 每次下潜前可自由组合配件；升级只改变装备属性，绝不延长真实憋气时间。气瓶只在水下换气后提供紧急返航窗口。</p>
+      <p id="gear-footnote" class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. 每次下潜前可自由组合配件；升级只改变装备属性，绝不延长真实憋气时间。气瓶只在水下换气后提供紧急返航窗口。</p>
       </div>
-      <div id="gear-assembly-view" class="hidden" role="tabpanel" aria-label="Assembly box">
+      <div id="gear-assembly-view" class="gear-page" role="tabpanel" aria-hidden="true" aria-label="Assembly box">
         <div class="assembly-intro">
           <div>
-            <div class="small muted">ACCESSORY FITTING · 配件装配</div>
-            <h3>把配件装到装备上</h3>
+            <div id="gear-assembly-kicker" class="small muted">ACCESSORY FITTING · 配件装配</div>
+            <h3 id="gear-assembly-title">把配件装到装备上</h3>
           </div>
           <button id="gear-assembly-clear" class="mini" type="button">清空装配</button>
         </div>
-        <p class="small muted">点击配件即可装配到对应卡槽；每个卡槽保留一个配件。装配预览独立于合成箱，不会改变现有等级、价格或下潜属性。</p>
+        <p id="gear-assembly-help" class="small muted">点击配件即可装配到对应卡槽；每个卡槽保留一个配件。装配预览独立于合成箱，不会改变现有等级、价格或下潜属性。</p>
         <div id="gear-assembly-summary" class="assembly-summary" role="status"></div>
         <div id="gear-assembly-grid" class="assembly-grid"></div>
+      </div>
       </div>
     </div>
 
