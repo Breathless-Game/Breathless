@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Shipyard, SHIPS } from './ships';
+import { Shipyard, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
@@ -1354,7 +1354,26 @@ const workbench = new Workbench({
   activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
   selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),
   ship: () => ({ key: shipyard.shipIndex, model: shipyard.shipModel() }),
-  openShipyard: () => shipyard.show(),
+  // The boat opens the ships in the inspector (the same as gear): the shipyard's ships, unlocks and equip.
+  ships: {
+    list: () =>
+      SHIPS.map((s, i) => ({
+        name: s.en,
+        nameZh: s.cn,
+        intro: SHIP_INTROS_EN[i],
+        introZh: s.intro,
+        threshold: s.threshold,
+        bonuses: [
+          s.speed ? `+${Math.round(s.speed * 100)}% swim speed` : '',
+          s.range ? `+${Math.round(s.range * 100)}% catch radius` : '',
+          s.capacity ? `+${s.capacity} net slot${s.capacity > 1 ? 's' : ''}` : '',
+        ].filter(Boolean),
+      })),
+    current: () => shipyard.shipIndex,
+    progress: () => mapProgress.bestValue,
+    model: (i) => shipyard.modelAt(i),
+    equip: (i) => shipyard.equip(i),
+  },
   sonarColor(color) {
     sonar.setColor(color);
   },
