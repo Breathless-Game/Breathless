@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { EventSchedule, type EventDef } from './event-schedule';
+import { AuroraCurtain, auroraGlow } from './aurora';
 import { Particles, Rings, bubbleTexture, clamp01, disposeAll, fogAmount, pulse, smoothstep, softTexture } from './fx';
 import { flatMat, jitter } from './lowpoly';
 import { mapDepth, type MapDef, type MapId } from './maps';
@@ -781,55 +782,29 @@ class Calving extends Effect {
 
 // ---- Fjord: aurora surge (night) ----------------------------------------
 
-interface Ribbon {
-  mesh: THREE.Mesh;
-  base: Float32Array;
-  colors: Float32Array;
-  tint: THREE.Color;
-  phase: number;
-}
-
+/** The same ray curtains as the scenery's aurora, flaring taller, brighter and quicker for a few seconds. */
 class AuroraSurge extends Effect {
-  private ribbons: Ribbon[] = [];
+  private curtains: AuroraCurtain[] = [];
 
   build() {
-    const segs = this.k.n(20, 36, 56);
-    const tints = ['#5dffb3', '#5ce8ff', '#c77dff'];
+    const columns = this.k.n(28, 48, 72);
+    const looks = [{}, { low: '#59f0c8', mid: '#3fd6b0' }, { low: '#d6a8ff', mid: '#c77dff', high: '#ff7de0' }];
     for (let i = 0; i < this.k.n(1, 2, 3); i++) {
-      const geo = new THREE.PlaneGeometry(240, 30, segs, 1);
-      geo.deleteAttribute('uv');
-      const colors = new Float32Array(geo.attributes.position.count * 3);
-      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
-      (geo.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
-      const mesh = this.k.add(
-        new THREE.Mesh(
-          geo,
-          new THREE.MeshBasicMaterial({
-            vertexColors: true,
-            transparent: true,
-            opacity: 0,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-            fog: false,
-            side: THREE.DoubleSide,
-            forceSinglePass: true,
-          }),
-        ),
-      );
-      mesh.frustumCulled = false;
-      this.ribbons.push({ mesh, base: (geo.attributes.position.array as Float32Array).slice(), colors, tint: new THREE.Color(tints[i]), phase: 0 });
+      const curtain = new AuroraCurtain({ width: 260, height: 44, columns, ...looks[i] });
+      this.k.add(curtain.mesh);
+      this.curtains.push(curtain);
     }
     this.duration = 18;
   }
 
   start() {
     const k = this.k;
-    for (let i = 0; i < this.ribbons.length; i++) {
-      const r = this.ribbons[i];
-      r.mesh.position.set(k.cam.x + k.range(-25, 25), 30 + i * 6.5, -126 - i * 7);
-      r.mesh.rotation.y = k.range(-0.12, 0.12);
-      r.phase = k.range(0, 6);
-      r.mesh.visible = true;
+    for (let i = 0; i < this.curtains.length; i++) {
+      const c = this.curtains[i];
+      // Behind the far range, so the rays rise out of the mountains.
+      c.mesh.position.set(k.cam.x + k.range(-25, 25), 22 + i * 7, -176 - i * 10);
+      c.mesh.rotation.y = k.range(-0.12, 0.12);
+      c.phase = k.range(0, 6);
     }
   }
 
@@ -837,30 +812,13 @@ class AuroraSurge extends Effect {
     const t = this.t;
     // Cloud dims it like the scenery's own aurora.
     const env = smoothstep(0, 3, t) * (1 - smoothstep(this.duration - 5, this.duration, t)) * (1 - this.k.cloud);
-    for (let i = 0; i < this.ribbons.length; i++) {
-      const r = this.ribbons[i];
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = env * (0.8 + 0.2 * Math.sin(t * 3.1 + r.phase));
-      const pos = r.mesh.geometry.attributes.position;
-      for (let v = 0; v < pos.count; v++) {
-        const x = r.base[v * 3];
-        const low = r.base[v * 3 + 1] < 0;
-        pos.setY(v, r.base[v * 3 + 1] + Math.sin(x * 0.03 + t * 0.5 + r.phase) * 4 + (low ? Math.sin(x * 0.21 + t * 2.3) * 1.4 : 0));
-        pos.setZ(v, Math.sin(x * 0.016 + t * 0.45 + r.phase) * 14);
-        // Bright curtains travel along the lower edge; the top fades to nothing.
-        // The ends fade out so the ribbon has no visible edge.
-        const ends = 1 - smoothstep(70, 118, Math.abs(x));
-        const b = low ? ends * (0.4 + 0.6 * Math.pow(0.5 + 0.5 * Math.sin(x * 0.07 - t * 2.2 + r.phase), 2)) : 0;
-        r.colors[v * 3] = r.tint.r * b;
-        r.colors[v * 3 + 1] = r.tint.g * b;
-        r.colors[v * 3 + 2] = r.tint.b * b;
-      }
-      pos.needsUpdate = true;
-      r.mesh.geometry.attributes.color.needsUpdate = true;
-    }
+    auroraGlow.surge = env;
+    for (let i = 0; i < this.curtains.length; i++) this.curtains[i].update(t, env * (1 - 0.15 * i), 1);
   }
 
   stop() {
-    for (let i = 0; i < this.ribbons.length; i++) this.ribbons[i].mesh.visible = false;
+    auroraGlow.surge = 0;
+    for (let i = 0; i < this.curtains.length; i++) this.curtains[i].mesh.visible = false;
   }
 }
 
