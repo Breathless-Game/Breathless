@@ -397,6 +397,18 @@ test('the headlamp remains attached to the rotating head in deep water', () => {
   assert.ok(diver.headlamp.intensity > 0);
 });
 
+test('the underwater headlamp volume fades at its edge and far end', () => {
+  const { diver } = createDiver(RENDER_QUALITY.high, -40);
+  const volume = diver.headlamp.getObjectByName('diver-headlamp-volume');
+  assert.ok(volume, 'the headlamp has a visible volume');
+  assert.equal(volume.geometry.parameters.radialSegments, 24);
+  assert.equal(volume.geometry.parameters.heightSegments, 12);
+  assert.equal(volume.material.type, 'ShaderMaterial');
+  assert.match(volume.material.fragmentShader, /farFade/);
+  simulate(diver, 0.2);
+  assert.ok(volume.material.uniforms.uIntensity.value > 0, 'the deep-water volume is lit');
+});
+
 function createFish(seed = 42, zone = ZONES[1]) {
   const y = -(zone.top + zone.bottom) / 2;
   const fish = new Fish(rollFish(seed, -y), zone, 0, y, 140);
