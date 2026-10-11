@@ -13,6 +13,25 @@ import { FishStage, type FishPose } from './title3d';
 // them with it so retuning the in-game odds (depth-odds.ts) doesn't reshape them.
 export const TITLE_ODDS: [Rarity, number][] = [['uncommon', 10], ['rare', 30], ['epic', 35], ['legendary', 19], ['mythic', 6]];
 
+/** A rope other than the main one (the second, further back): where it hangs and how. */
+export interface RopeOptions {
+  /** Anchor height, fraction of the screen. */
+  ropeY?: number;
+  /** Rope length over its span: closer to 1 is tighter. */
+  slack?: number;
+  /** Pulled nearly straight all the time (like the main rope over a table). */
+  taut?: boolean;
+  /** Fishing line length, and fish size, as fractions of the main rope's. */
+  lineScale?: number;
+  sizeScale?: number;
+  /**
+   * Its canvas sits under another rope's, which takes the pointer: listen on the
+   * window and take only what that one let through (not defaultPrevented). The
+   * cursor is shown on `cursorOn` (that canvas).
+   */
+  underneath?: { cursorOn: HTMLElement };
+}
+
 export interface TitleFish {
   seed: number;
   rarity: Rarity;
@@ -128,6 +147,8 @@ export class TitleScreen {
   private calm = 0; // 0..1, eases toward 1 while a menu fish is picked
   private tableY: number | null = null; // screen y where the fish's shadows fall on the workbench table
   private name: HTMLElement;
+  private cursorEl: HTMLElement;
+  private cursorOurs = false;
   private stage: FishStage; // the fish as 3D models, over the rope canvas
   private hover: number[] = []; // per fish, 0..1: eased toward 1 under the pointer
 
@@ -138,10 +159,12 @@ export class TitleScreen {
   constructor(
     private canvas: HTMLCanvasElement,
     defs: TitleFish[],
+    private opts: RopeOptions = {},
   ) {
     this.ctx = canvas.getContext('2d')!;
-    this.name = canvas.parentElement!.querySelector('#title-name')!;
-    this.stage = new FishStage(canvas.parentElement!.querySelector('#title-fish3d')!);
+    this.name = canvas.parentElement!.querySelector(':scope > #title-name, :scope > .title-name')!;
+    this.stage = new FishStage(canvas.parentElement!.querySelector(':scope > #title-fish3d, :scope > .title-fish3d')!);
+    this.cursorEl = opts.underneath?.cursorOn ?? canvas;
     this.fish = defs.map((def, i) => {
       const base = rollFish(def.seed, 40, TITLE_ODDS);
       const species = def.species ?? base.species;
@@ -162,7 +185,12 @@ export class TitleScreen {
       };
       return f;
     });
-    canvas.addEventListener('pointerdown', (e) => this.onDown(e));
+    if (opts.underneath) {
+      // Whatever the rope in front let through (it runs first: it's on its canvas, we're on the window).
+      window.addEventListener('pointerdown', (e) => {
+        if (this.running && !e.defaultPrevented && e.target instanceof HTMLCanvasElement) this.onDown(e);
+      });
+    } else canvas.addEventListener('pointerdown', (e) => this.onDown(e));
     window.addEventListener('pointermove', (e) => this.onMove(e));
     window.addEventListener('pointerup', (e) => this.onUp(e));
     window.addEventListener('resize', () => this.running && this.build(false));
@@ -289,9 +317,9 @@ export class TitleScreen {
     // Both anchors sit off-screen: the rope just runs in from one edge and out the other.
     this.ax = -this.w * 0.08;
     this.bx = this.w * 1.08;
-    this.ay = this.by = Math.max(40, this.h * ROPE_Y);
+    this.ay = this.by = Math.max(this.opts.ropeY != null ? 12 : 40, this.h * (this.opts.ropeY ?? ROPE_Y));
     const span = this.bx - this.ax;
-    const seg = (span * ROPE_SLACK) / ROPE_SEGS;
+    const seg = (span * (this.opts.slack ?? ROPE_SLACK)) / ROPE_SEGS;
     this.seg = seg;
     this.ps = [];
     this.ropeLinks = [];
@@ -317,6 +345,8 @@ export class TitleScreen {
       f.len = f.sideways ? Math.max(150, Math.min(260, unit * 0.3)) : Math.max(70, Math.min(155, unit * 0.16));
       // Sideways fish are deep-bodied: hang them low enough that their fins clear the rope.
       f.lineLen = f.sideways ? Math.max(this.h * 0.12, f.len * 0.42) : this.h * (0.05 + 0.03 * ((k * 7) % 3));
+      f.len *= this.opts.sizeScale ?? 1;
+      f.lineLen *= this.opts.lineScale ?? 1;
       f.dropped = false;
       f.links = [];
       f.lines = [];
@@ -495,7 +525,7 @@ export class TitleScreen {
 
   /** Over the workbench: draws the rope toward a nearly straight line between its anchors. */
   private pullTaut() {
-    const k = BENCH_PULL * this.panU;
+    const k = BENCH_PULL * (this.opts.taut ? 1 : this.panU); // a taut rope (the back one) is always pulled straight
     if (!k || this.swinging) return;
     const a = this.ps[0];
     const b = this.ps[ROPE_SEGS];
@@ -574,8 +604,21 @@ export class TitleScreen {
     if (this.swinging) return;
     this.held = { i, inv: this.ps[i].inv };
     this.ps[i].inv = 0;
-    this.canvas.setPointerCapture(e.pointerId);
-    this.canvas.style.cursor = 'grabbing';
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {} // underneath another rope its canvas takes no pointer; the window still sees the moves
+    this.setCursor('grabbing');
+  }
+
+  /** The cursor: on our canvas, or (underneath) on the front rope's, clearing it only if we set it. */
+  private setCursor(c: string) {
+    if (!this.opts.underneath) {
+      this.canvas.style.cursor = c;
+      return;
+    }
+    if (!c && !this.cursorOurs) return;
+    this.cursorEl.style.cursor = c;
+    this.cursorOurs = !!c;
   }
 
   private onMove(e: PointerEvent) {
@@ -587,6 +630,12 @@ export class TitleScreen {
     this.trackPointer(e);
     if (this.held) {
       e.preventDefault(); // carrying a fish: no table tips underneath
+      return;
+    }
+    // Underneath: the rope in front has this one (it's over its fish or rope).
+    if (this.opts.underneath && e.defaultPrevented) {
+      this.hovered = null;
+      this.cursorOurs = false;
       return;
     }
     // A passing cursor shoves whatever it brushes past.
@@ -604,7 +653,7 @@ export class TitleScreen {
     const hit = this.fishAt(x, y);
     this.hovered = hit?.f.def.onClick ? hit.f : null;
     const rope = !hit && this.ropeAt(x, y) != null;
-    this.canvas.style.cursor = hit?.f.def.onClick ? 'pointer' : hit || rope ? 'grab' : '';
+    this.setCursor(hit?.f.def.onClick ? 'pointer' : hit || rope ? 'grab' : '');
     // Hovering a fish or the rope: the workbench table behind shouldn't show its tip too.
     if (hit || rope) e.preventDefault();
   }
@@ -623,7 +672,7 @@ export class TitleScreen {
       p.px = p.x - this.pointer.vx * STEP;
       p.py = p.y - this.pointer.vy * STEP;
       this.held = null;
-      this.canvas.style.cursor = '';
+      this.setCursor('');
     }
     const press = this.press;
     this.press = null;

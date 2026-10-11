@@ -103,6 +103,12 @@
     </div>
 
     <div id="title-screen" class="boot">
+      <!-- The second rope, further back and higher (GUIDE, TUTORIAL): drawn under the main one, which passes it the clicks it lets through. -->
+      <div id="title-back" class="hidden">
+        <canvas class="title-rope"></canvas>
+        <canvas class="title-fish3d"></canvas>
+        <div class="title-name"></div>
+      </div>
       <canvas id="title-canvas"></canvas>
       <!-- The hanging fish as 3D models, over the rope; clicks go through to the canvas below. -->
       <canvas id="title-fish3d"></canvas>

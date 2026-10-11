@@ -1461,14 +1461,48 @@ document.addEventListener('pointermove', (e) => {
 });
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.12, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.27, label: 'AQUARIUM', onClick: openAquarium },
-  { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.42, label: 'HEALTH', onClick: openHealthDesk },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.57, label: 'SETTINGS', onClick: openSettingsDesk },
-  // The field guide and the tutorial hang here too (instead of the corner buttons, while the rope is up).
-  { seed: 0x5eed05, rarity: 'uncommon', species: 'Silver Snapper', hue: 150, sat: 0.55, light: 0.55, at: 0.72, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
-  { seed: 0x5eed06, rarity: 'rare', species: 'Ghost Angelfish', hue: 42, sat: 0.35, light: 0.7, at: 0.87, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTour() },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.25, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.42, label: 'AQUARIUM', onClick: openAquarium },
+  { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.59, label: 'HEALTH', onClick: openHealthDesk },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.76, label: 'SETTINGS', onClick: openSettingsDesk },
 ]);
+// The second rope, behind the main one and higher, pulled tighter: the field guide and
+// the tutorial (instead of the corner buttons while it's up). Its fish hang in the gaps
+// between the main rope's, clear of them. It follows the main rope's show / hide, and
+// on its way to any table (or the aquarium) it rides straight up off the screen.
+const backRope = new TitleScreen(
+  document.querySelector('#title-back .title-rope') as HTMLCanvasElement,
+  [
+    { seed: 0x5eed05, rarity: 'uncommon', species: 'Silver Snapper', hue: 150, sat: 0.55, light: 0.55, at: 0.335, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
+    { seed: 0x5eed06, rarity: 'rare', species: 'Ghost Angelfish', hue: 42, sat: 0.35, light: 0.7, at: 0.675, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTour() },
+  ],
+  { ropeY: 0.01, slack: 1.004, taut: true, lineScale: 0.18, sizeScale: 0.62, underneath: { cursorOn: document.getElementById('title-canvas')! } },
+);
+{
+  const front = { show: titleScreen.show.bind(titleScreen), hide: titleScreen.hide.bind(titleScreen), setPan: titleScreen.setPan.bind(titleScreen), setLift: titleScreen.setLift.bind(titleScreen) };
+  let pan = 0;
+  let lift = 0;
+  const away = () => backRope.setLift(Math.max(pan, lift));
+  titleScreen.show = (mode) => {
+    front.show(mode);
+    backRope.show(mode);
+    away();
+  };
+  titleScreen.hide = () => {
+    front.hide();
+    backRope.hide();
+  };
+  titleScreen.setPan = (u, tableY) => {
+    front.setPan(u, tableY);
+    pan = u;
+    away();
+  };
+  titleScreen.setLift = (u) => {
+    front.setLift(u);
+    lift = u;
+    away();
+  };
+}
 // The trip report, put away, flies into the HEALTH fish (that's where the reports are kept).
 const HEALTH_FISH = 2;
 tripReport.target = () => titleScreen.fishCenter(HEALTH_FISH);
@@ -1660,7 +1694,7 @@ const settingsDesk = new SettingsDesk({
   },
 });
 // The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
-titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
+titleScreen.blocked = backRope.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
 /** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
@@ -2107,6 +2141,7 @@ frame();
 
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
+  backRope,
   healthDesk,
   aquarium,
   aquariumTable,
