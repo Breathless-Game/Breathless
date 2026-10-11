@@ -1115,6 +1115,7 @@ function update(dt: number, time: number) {
     // A threat just behind each nearby fish, on the diver's side: it darts away.
     f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
   }
+  world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
 
   // On the menu the camera sinks a little as the workbench pans in.
