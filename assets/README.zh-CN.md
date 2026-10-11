@@ -35,6 +35,8 @@ assets/
 | 鱼的模型 | `buildFishMesh(spec)` | [`game/src/fish.ts`](../game/src/fish.ts) |
 | 鱼的图片、图标和 NFT 卡牌 | `fishSprite` / `fishIcon` / `fishCard` | [`game/src/portrait.ts`](../game/src/portrait.ts) |
 | 鱼竿 | `buildFishingNetMesh()` | [`game/src/gear.ts`](../game/src/gear.ts) |
+| 13 款水下装备与配件 | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts)、[`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
+| 配件 3D 工坊预览与导出 | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html)、[`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | 预览页 | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html)、[`game/src/asset-library.ts`](../game/src/asset-library.ts) |
 
 ---
