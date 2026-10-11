@@ -17,7 +17,9 @@ function load(file) {
   cache.set(file, module);
   const source = readFileSync(file, 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });
-  const localRequire = (specifier) => specifier.startsWith('.')
+  // equipment.ts (ROD_TIERS) only needs storageKey from wallet.ts, which drags in Solana + import.meta.env; stub it.
+  const localRequire = (specifier) => specifier === './wallet' ? { storageKey: (key) => key }
+    : specifier.startsWith('.')
     ? load(path.resolve(path.dirname(file), `${specifier}.ts`))
     : specifier === 'three/addons/utils/BufferGeometryUtils.js' ? mergeUtils : require(specifier);
   new Function('require', 'module', 'exports', outputText)(localRequire, module, module.exports);
@@ -81,7 +83,7 @@ test('tank and boat upgrades show the actual structural progression', () => {
   assert.equal(count(buildUpgradeModel('boatSpeed', 1), 'three-blade-pitched-propeller'), 0);
   assert.equal(count(buildUpgradeModel('boatSpeed', 2), 'three-blade-pitched-propeller'), 1);
   assert.equal(count(buildUpgradeModel('boatSpeed', 3), 'three-blade-pitched-propeller'), 2);
-  for (const level of [1, 2, 3]) assert.equal(count(buildUpgradeModel('boatDeck', level), 'open-ended-rod-sleeve'), level);
+  for (const level of [1, 2, 3]) assert.equal(count(buildUpgradeModel('boatDeck', level), 'open-octagonal-rod-sleeve'), level);
 });
 
 test('landing nets and unlit headlamps have no self-illuminating surfaces', () => {
