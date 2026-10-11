@@ -1693,8 +1693,7 @@ button.link {
 
 /* The workbench picks the map now; the start card only launches the dive.
    Scoped to #overlay so it outranks the map picker's own display rules below. */
-#overlay #map-picker,
-#overlay #maps-demo-row {
+#overlay #map-picker {
   display: none;
 }
 
@@ -3158,14 +3157,6 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
 
 .map-card.locked .map-lock {
   color: var(--gold);
-}
-
-#maps-demo-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 14px;
-  cursor: pointer;
 }
 
 @media (max-width: 560px) {
