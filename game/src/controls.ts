@@ -253,7 +253,7 @@ function render() {
   const fixed = FIXED.map(([key, en, zh]) => {
     const row = document.createElement('div');
     row.className = 'controls-row fixed';
-    row.innerHTML = `<span>${en} <span class="muted">· ${zh}</span></span><span class="controls-keys"><span class="controls-fixed">${key}</span></span>`;
+    row.innerHTML = `<span>${t(en, zh)}</span><span class="controls-keys"><span class="controls-fixed">${key}</span></span>`;
     return row;
   });
   list.replaceChildren(...rows, ...fixed);

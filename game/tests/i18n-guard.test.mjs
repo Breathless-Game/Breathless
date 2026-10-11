@@ -82,7 +82,8 @@ function literals(file, src) {
   return out.map(({ n, text, raw }) => ({ line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, text, raw }));
 }
 // An English name and its Chinese one interpolated side by side: `${a.en} · ${a.zh}`.
-const INTERP_PAIR = /\$\{[^}]*\.(en|name)\}[^`]*·[^`]*\$\{[^}]*\.(zh|nameZh)\}/;
+// Also bare destructured names (`${en}` … `${zh}`) in one template, with or without a " · " between.
+const INTERP_PAIR = /\$\{(?:[^}]*\.)?(en|name)\}[^`]*\$\{(?:[^}]*\.)?(zh|nameZh)\}/;
 const pairHits = (file, src) =>
   literals(file, src)
     .filter(({ text, raw }) => text.split('\n').some(isPair) || (raw && INTERP_PAIR.test(raw)))
