@@ -63,6 +63,8 @@ export interface DeepSonarMesh {
   setColor(color: THREE.ColorRepresentation): void;
   /** Switch the purchased cable tier; the caller is responsible for charging the upgrade. */
   setLengthLevel(level: DeepSonarLengthLevel): void;
+  /** Follow the render-quality detail tier (facets and, on low, one fewer node). */
+  setDetail(detail: 1 | 2 | 3): void;
   setLightingEnabled(enabled: boolean): void;
   /** Advances lowering and the soft node pulse. Does not move an anchored x/z position. */
   update(time: number, dt: number): void;
@@ -175,15 +177,21 @@ function makeAnchor(length: number, accent: THREE.Color, detail: 1 | 2 | 3): THR
 }
 
 function clearChildren(root: THREE.Group) {
+  // Pulse nodes share one geometry and the anchor fins share one material:
+  // collect everything first so each GPU resource is disposed exactly once.
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
   while (root.children.length) {
     const child = root.children.pop()!;
     child.traverse((object) => {
       const mesh = object as THREE.Mesh;
       if (!mesh.geometry) return;
-      mesh.geometry.dispose();
-      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) material.dispose();
+      geometries.add(mesh.geometry);
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) materials.add(material);
     });
   }
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
 }
 
 /**
@@ -290,12 +298,23 @@ export class DeepSonar implements DeepSonarMesh {
   }
 
   setColor(color: THREE.ColorRepresentation) {
-    this._customization = { ...this._customization, color: `#${safeColor(color).getHexString()}` };
+    const next = `#${safeColor(color).getHexString()}`;
+    if (next === this._customization.color) return;
+    this._customization = { ...this._customization, color: next };
     this.rebuild();
   }
 
   setLengthLevel(level: DeepSonarLengthLevel) {
-    this._customization = { ...this._customization, lengthLevel: normalizeLevel(level) };
+    const next = normalizeLevel(level);
+    if (next === this._customization.lengthLevel) return;
+    this._customization = { ...this._customization, lengthLevel: next };
+    this.rebuild();
+  }
+
+  setDetail(detail: 1 | 2 | 3) {
+    const next = Math.min(3, Math.max(1, Math.round(detail))) as 1 | 2 | 3;
+    if (next === this._detail) return;
+    this._detail = next;
     this.rebuild();
   }
 

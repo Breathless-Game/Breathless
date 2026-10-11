@@ -225,18 +225,21 @@ function fakeStorage(data = {}) {
 }
 
 test('Pearls saved before on-chain PEARL become a separate legacy balance', () => {
+  // A rod-only save migrates to the six-slot loadout: rodLevel becomes the net tier, the rest start at Lv1.
+  const slots = (net) => ({ rodLevel: net, netLevel: net, rodGearLevel: 1, reelLevel: 1, finsLevel: 1, tankLevel: 1, lampLevel: 1, sonarLevel: 1 });
+  const paths = { ...equipment.DEFAULT_EQUIPMENT_PATHS };
   globalThis.localStorage = fakeStorage({ 'deepbreath.equipment': JSON.stringify({ rodLevel: 2, pearls: 420 }) });
   const state = equipment.loadEquipment();
-  assert.deepEqual(state, { rodLevel: 2, pearls: 0, legacyPearls: 420 });
+  assert.deepEqual(state, { ...slots(2), pearls: 0, legacyPearls: 420, paths });
   assert.equal(equipment.totalPearls(state), 420);
   // Saved back in the new shape, so the next load does not migrate again.
   assert.deepEqual(JSON.parse(localStorage.getItem('deepbreath.equipment')), state);
   state.pearls = 15; // on-chain cache
   equipment.saveEquipment(state);
-  assert.deepEqual(equipment.loadEquipment(), { rodLevel: 2, pearls: 15, legacyPearls: 420 });
+  assert.deepEqual(equipment.loadEquipment(), { ...slots(2), pearls: 15, legacyPearls: 420, paths });
 
   globalThis.localStorage = fakeStorage({ 'deepbreath.pearls': '77' });
-  assert.deepEqual(equipment.loadEquipment(), { rodLevel: 1, pearls: 0, legacyPearls: 77 });
+  assert.deepEqual(equipment.loadEquipment(), { ...slots(1), pearls: 0, legacyPearls: 77, paths });
   delete globalThis.localStorage;
 });
 
@@ -247,4 +250,38 @@ test('upgrades spend legacy Pearls first and burn only the rest on-chain', () =>
   assert.deepEqual(equipment.planUpgrade({ rodLevel: 1, pearls: 400, legacyPearls: 0 }), { tier: lv2, fromLegacy: 0, fromChain: lv2.cost });
   assert.equal(equipment.planUpgrade({ rodLevel: 1, pearls: 150, legacyPearls: 149 }), null, 'one short');
   assert.equal(equipment.planUpgrade({ rodLevel: 3, pearls: 1e6, legacyPearls: 0 }), null, 'maxed out');
+});
+
+test('slot upgrades follow the same legacy-first PEARL rule and keep the other slots', () => {
+  const start = { rodLevel: 2, pearls: 250, legacyPearls: 100, finsLevel: 3 };
+  const fins = equipment.planSlotUpgrade(start, 'fins');
+  assert.equal(fins, null, 'fins already maxed');
+  const plan = equipment.planSlotUpgrade(start, 'reel');
+  const cost = equipment.EQUIPMENT_TIERS.reel[1].cost;
+  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'reel', tier: 2, fromLegacy: 100, fromChain: cost - 100 });
+  const after = equipment.applySlotUpgrade(start, plan);
+  assert.equal(after.reelLevel, 2);
+  assert.equal(after.netLevel, 2);
+  assert.equal(after.finsLevel, 3);
+  assert.equal(after.legacyPearls, 0);
+  assert.equal(after.pearls, 250 - (cost - 100));
+  assert.equal(equipment.planSlotUpgrade({ ...start, pearls: 0, legacyPearls: cost - 1 }, 'reel'), null, 'one short');
+});
+
+test('deep sonar cable tiers are bought through the same slot plan', () => {
+  const [lv1, lv2, lv3] = equipment.EQUIPMENT_TIERS.sonar;
+  assert.deepEqual([lv1.cost, lv2.cost, lv3.cost], [0, 300, 1200]);
+  const start = { rodLevel: 2, reelLevel: 2, pearls: 400, legacyPearls: 120 };
+  assert.equal(equipment.slotTier(start, 'sonar').level, 1, 'older saves start at the 10 m cable');
+  const plan = equipment.planSlotUpgrade(start, 'sonar');
+  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'sonar', tier: 2, fromLegacy: 120, fromChain: lv2.cost - 120 });
+  const after = equipment.applySlotUpgrade(start, plan);
+  assert.equal(after.sonarLevel, 2);
+  assert.equal(after.netLevel, 2);
+  assert.equal(after.reelLevel, 2);
+  assert.equal(after.legacyPearls, 0);
+  assert.equal(after.pearls, 400 - (lv2.cost - 120));
+  assert.equal(equipment.planSlotUpgrade(after, 'sonar'), null, 'Lv3 costs more than is left');
+  assert.equal(equipment.nextSlotTier({ ...after, sonarLevel: 3 }, 'sonar'), null, 'maxed out');
+  assert.equal(equipment.deriveStats(after).netCapacity, equipment.deriveStats({ ...after, sonarLevel: 1 }).netCapacity, 'sonar leaves the other stats alone');
 });

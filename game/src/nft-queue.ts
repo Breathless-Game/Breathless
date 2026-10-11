@@ -26,7 +26,8 @@ type Pearl = typeof import('./pearl');
 /** 'needs-sol': mints paused until the game (session) wallet has devnet SOL. 'offline': the RPC did not answer. */
 export type Funds = 'unknown' | 'ok' | 'needs-sol' | 'offline';
 
-const MIN_MINT_SOL = 0.02; // Irys upload of the card and metadata plus the Core asset rent, with headroom
+const MIN_MINT_SOL = 0.02; // the Core asset rent and fees, with headroom
+const MIN_REPAIR_SOL = 0.01; // a metadata URI repair: one fee plus a little rent for the longer URI
 const POLL_MS = 60_000;
 const START_DELAY_MS = 4000;
 
@@ -56,6 +57,8 @@ export class NftQueue {
 
   private mintBusy = false;
   private sellBusy = false;
+  private repairBusy = false;
+  private repairsDone = false;
   private airdropTried = false;
   private wakeTimer = 0;
   private pollTimer = 0;
@@ -191,6 +194,7 @@ export class NftQueue {
             this.minting = { fish: f, step };
             this.hooks.changed();
           });
+          f.metaFixed = true; // minted with a URI on our host; saved by apply
           this.apply(f, { type: 'minted', assetId: res.asset, tx: res.signature });
         } catch (e) {
           const msg = errorText(e);
@@ -208,6 +212,40 @@ export class NftQueue {
       this.scheduleWake();
     } finally {
       this.mintBusy = false;
+      void this.runRepairs();
+    }
+  }
+
+  /**
+   * Once per page load, after the mints: re-point fish minted with the old Irys URIs (which stopped
+   * resolving, so wallets showed nothing) at our metadata host. Session-signed, no prompt. A fish we
+   * cannot update (another session key) is marked so it is not fetched again; errors only log.
+   */
+  private async runRepairs() {
+    if (this.repairBusy || this.repairsDone || this.mintBusy || !walletState().connected) return;
+    const todo = () => this.bank.filter((f) => f.nft === 'minted' && f.assetId && !f.metaFixed && !f.sellQueued && !this.selling.has(f));
+    if (!todo().length) return;
+    this.repairBusy = true;
+    try {
+      if (await this.balanceBelow(MIN_REPAIR_SOL)) return; // try again after the next mint or top-up
+      this.repairsDone = true;
+      const c = await this.loadChain();
+      for (const f of todo()) {
+        if (!todo().includes(f)) continue; // sold or queued for sale meanwhile
+        try {
+          const result = await c.repairFishUri(f as typeof f & { assetId: string });
+          if (result === 'updated') console.info(`NFT metadata repaired: ${f.name} (${f.assetId})`);
+          f.metaFixed = true;
+          this.save();
+        } catch (e) {
+          console.warn('NFT metadata repair failed', f.assetId, e);
+          if (isFundsError(errorText(e))) break;
+        }
+      }
+    } catch (e) {
+      console.warn('NFT metadata repair skipped', e);
+    } finally {
+      this.repairBusy = false;
     }
   }
 

@@ -337,6 +337,34 @@ body {
   left: 16px;
 }
 
+#active-gear {
+  position: absolute;
+  bottom: 110px;
+  left: 16px;
+  min-width: 176px;
+  border-color: rgba(62, 240, 168, 0.45);
+  box-shadow: 0 0 20px rgba(62, 240, 168, 0.08);
+}
+
+#active-gear strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+}
+
+#active-gear-hint {
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+#active-gear.unavailable {
+  border-color: rgba(255, 77, 94, 0.55);
+}
+
+#active-gear.unavailable strong {
+  color: var(--danger);
+}
+
 #net-slots {
   display: flex;
   gap: 8px;
@@ -395,6 +423,126 @@ body {
   transform: translateX(-50%);
   font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- Tomb Raider style hold-to-select wheel --------------------------- */
+.loadout-wheel {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+}
+
+.loadout-wheel:not(.hidden)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(5, 20, 35, 0.18), rgba(2, 8, 18, 0.62));
+  backdrop-filter: blur(2px);
+}
+
+.loadout-wheel-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 142px;
+  height: 142px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-content: center;
+  text-align: center;
+  border: 1px solid rgba(160, 230, 255, 0.38);
+  border-radius: 50%;
+  background: rgba(3, 15, 27, 0.9);
+  box-shadow: 0 0 42px rgba(46, 206, 255, 0.2), inset 0 0 34px rgba(106, 184, 255, 0.08);
+  pointer-events: auto;
+}
+
+.loadout-wheel-center strong {
+  font-size: 18px;
+  color: var(--hold);
+}
+
+.loadout-wheel-center small {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.loadout-wheel-slots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loadout-wheel-slot {
+  --angle: calc(var(--slot-index) * 60deg - 90deg);
+  --counter-angle: calc(90deg - var(--slot-index) * 60deg);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 104px;
+  min-height: 82px;
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-min(22vw, 190px)) rotate(var(--counter-angle));
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1px;
+  padding: 9px 6px;
+  color: var(--ink);
+  border: 1px solid rgba(160, 230, 255, 0.25);
+  border-radius: 14px;
+  background: rgba(4, 18, 34, 0.9);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.36);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.13s ease, border-color 0.13s ease, background 0.13s ease, opacity 0.13s ease;
+}
+
+.loadout-wheel-slot:hover,
+.loadout-wheel-slot.highlighted {
+  border-color: var(--hold);
+  background: rgba(14, 59, 65, 0.96);
+  box-shadow: 0 0 26px rgba(62, 240, 168, 0.3);
+}
+
+.loadout-wheel-slot.active {
+  outline: 1px solid rgba(106, 184, 255, 0.7);
+}
+
+.loadout-wheel-slot.unavailable {
+  opacity: 0.34;
+  filter: grayscale(0.65);
+}
+
+.loadout-wheel-key {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.loadout-wheel-icon {
+  font-size: 25px;
+  line-height: 1;
+}
+
+.loadout-wheel-name {
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.loadout-wheel-caption {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 102px);
+  transform: translateX(-50%);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
   white-space: nowrap;
 }
 
@@ -626,20 +774,6 @@ button.link {
   pointer-events: none;
 }
 
-/* While the chart is picked up and held toward the camera it is nearer than the
-   fish: the table goes on top and the fish fade out (they'd be cut by the table). */
-body.wb-lifted #workbench {
-  z-index: 31;
-}
-
-#title-screen {
-  transition: opacity 0.25s;
-}
-
-body.wb-lifted #title-screen {
-  opacity: 0;
-}
-
 #wb-ui {
   position: fixed;
   inset: 0;
@@ -695,26 +829,10 @@ body.wb-lifted #title-screen {
   margin-top: 6px;
 }
 
-#wb-toast {
-  position: absolute;
-  z-index: 2;
-  top: 6%;
-  left: 50%;
-  transform: translate(-50%, -10px);
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font-weight: 700;
-  opacity: 0;
-  transition: opacity 0.25s, transform 0.25s;
-}
-
-#wb-toast.show {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-
+/* The open chart: the 3D sheet (#wb-chart-gl) is drawn over a blurred, dimmed
+   table (#wb-chart-bg) and under the place pins and the panel (.wb-ctl).
+   .open fades the backdrop in while the sheet is carried up; .ready shows the
+   controls once it is held in place. */
 #wb-chart {
   position: absolute;
   inset: 0;
@@ -724,43 +842,90 @@ body.wb-lifted #title-screen {
   flex-wrap: wrap;
   gap: 22px;
   padding: 16px 16px 56px;
-  background: rgba(2, 8, 18, 0.5);
-  backdrop-filter: blur(6px);
-  pointer-events: auto;
-  transition: opacity 0.3s;
-}
-
-/* .pre: laid out (so the paper can be measured) but not shown yet, while the
-   3D map is carried up to exactly where the paper sits. */
-#wb-chart.pre,
-#wb-chart.closing {
-  opacity: 0;
   pointer-events: none;
 }
 
-#wb-chart.pre {
-  transition: none;
+#wb-chart.ready {
+  pointer-events: auto;
 }
 
+#wb-chart-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.5);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 0.6s;
+}
+
+#wb-chart.open #wb-chart-bg {
+  opacity: 1;
+}
+
+#wb-chart-gl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.wb-ctl {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+#wb-chart.ready .wb-ctl {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Buttons take the pointer by default (see `button`): not until the chart is in place. */
+#wb-chart:not(.ready) * {
+  pointer-events: none !important;
+}
+
+/* Reserves the sheet's place next to the panel; the sheet is measured to land on it. */
 #wb-paper {
   position: relative;
   /* Leaves room beside it for the place panel (300px + the gap). */
   width: min(calc(100vw - 354px), 940px, calc((100vh - 120px) * 1.5625));
   aspect-ratio: 1000 / 640;
-  border-radius: 6px;
-  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
 }
 
-#wb-paper.zooming {
-  transform: scale(4);
-  transition: transform 0.65s cubic-bezier(0.5, 0, 0.75, 0);
+#wb-pins {
+  position: absolute;
+  inset: 0;
 }
 
-#wb-chart-canvas {
+#wb-chart.ready #wb-pins {
+  pointer-events: none; /* only the pins themselves take clicks */
+}
+
+/* Diving: the place's preview grows over everything (#wb-reveal); the chart fades under it. */
+#wb-chart-gl {
+  transition: opacity 0.5s;
+}
+
+#wb-chart.revealing #wb-chart-gl {
+  opacity: 0;
+}
+
+#wb-reveal {
+  position: fixed;
+  z-index: 60;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+#wb-reveal canvas,
+#wb-place-preview canvas {
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: 6px;
+  object-fit: cover;
 }
 
 .wb-pin {
@@ -851,8 +1016,20 @@ body.wb-lifted #title-screen {
   backdrop-filter: blur(10px);
 }
 
-#wb-chart:not(.pre) #wb-place {
+#wb-chart.ready #wb-place {
   animation: wb-place-in 0.4s ease-out;
+}
+
+#wb-place-preview {
+  aspect-ratio: 16 / 10;
+  margin: -6px -8px 14px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b2233;
+}
+
+#wb-place-preview:empty {
+  display: none;
 }
 
 #wb-place-title {
@@ -934,17 +1111,6 @@ body.wb-lifted #title-screen {
     opacity: 0;
     transform: translateX(24px);
   }
-}
-
-#wb-demo {
-  position: absolute;
-  left: 16px;
-  bottom: 18px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: rgba(255, 240, 210, 0.8);
-  cursor: pointer;
 }
 
 #wb-chart-hint {
@@ -1222,6 +1388,17 @@ button:disabled {
   color: var(--danger);
 }
 
+#collection-grid .explorer,
+#wallet .explorer {
+  font-size: 12px;
+  text-decoration: none;
+}
+
+#collection-grid .explorer:hover,
+#wallet .explorer:hover {
+  text-decoration: underline;
+}
+
 #market-bar {
   display: flex;
   align-items: center;
@@ -1277,15 +1454,168 @@ button:disabled {
 /* ---- gear workshop ---- */
 #gear-panel {
   position: fixed;
-  inset: 12vh auto auto 50%;
+  inset: 12px auto auto 50%;
   transform: translateX(-50%);
   z-index: 35;
-  width: min(520px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - 32px));
   background: rgba(3, 12, 24, 0.97);
   border: 1px solid rgba(62, 240, 168, 0.35);
   border-radius: 20px;
   padding: 22px 24px;
   box-shadow: 0 18px 70px rgba(0, 0, 0, 0.45), 0 0 40px rgba(62, 240, 168, 0.08);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+
+.gear-slots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.gear-slot-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, box-shadow 0.16s, transform 0.16s;
+}
+
+.gear-slot-card:hover,
+.gear-slot-card:focus-visible {
+  border-color: rgba(106, 184, 255, 0.6);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.gear-slot-card.selected {
+  border-color: rgba(62, 240, 168, 0.72);
+  background: rgba(62, 240, 168, 0.08);
+  box-shadow: 0 0 22px rgba(62, 240, 168, 0.1);
+}
+
+.gear-slot-head,
+.gear-slot-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gear-slot-head {
+  justify-content: flex-start;
+}
+
+.gear-slot-icon {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: var(--hold);
+  border: 1px solid rgba(62, 240, 168, 0.45);
+  border-radius: 9px;
+  font-size: 19px;
+}
+
+.gear-slot-title {
+  font-weight: 800;
+  min-width: 0;
+}
+
+.gear-slot-level {
+  margin-left: 6px;
+  color: var(--gold);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.gear-slot-current,
+.gear-slot-next,
+.gear-slot-tradeoff {
+  line-height: 1.35;
+}
+
+.gear-slot-current {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gear-slot-tradeoff {
+  min-height: 34px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gear-paths {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.gear-path-label {
+  flex: 1 0 100%;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gear-path-button {
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: rgba(106, 184, 255, 0.08);
+}
+
+.gear-path-button.selected {
+  color: #032417;
+  background: var(--hold);
+  border-color: transparent;
+}
+
+.gear-path-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.gear-path-summary {
+  flex: 1 0 100%;
+  color: var(--hold);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.gear-slot-footer {
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.gear-slot-next {
+  color: var(--gold);
+  font-size: 11px;
+}
+
+.gear-slot-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .gear-slots {
+    grid-template-columns: 1fr;
+    max-height: 48vh;
+  }
 }
 
 .gear-head {
@@ -1347,6 +1677,14 @@ button:disabled {
 .gear-next {
   margin-top: 5px;
   font-weight: 800;
+}
+
+.gear-compare {
+  min-height: 18px;
+  margin: -2px 0 12px;
+  color: var(--hold);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 #gear-progress {

@@ -23,6 +23,8 @@ export interface BankedFish extends FishSpec {
   mintError?: string;
   /** The player asked to sell: mint first if needed, then sell. */
   sellQueued?: true;
+  /** The NFT's metadata URI points at our host (minted that way, or repaired from a dead Irys URI), or cannot be changed by us. */
+  metaFixed?: true;
 }
 
 /** Automatic attempts before a failed mint waits for the player's Retry. */
