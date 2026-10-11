@@ -146,7 +146,7 @@ function recordCatchProblem(keys: string[], ix: MessageLike['instructions'][numb
 /**
  * Sign only what we asked for: the fee payer is our session key, the signers are exactly the
  * expected ones, and every instruction is a Core call, except, for a mint (`recordCatch` given),
- * at most one player_state record_catch that is exactly the expected one. Anything else from
+ * exactly one player_state record_catch that is exactly the expected one. Anything else from
  * player_state or any other program is refused. Returns why not, or null.
  */
 export function cosignedTxProblem(
@@ -173,6 +173,7 @@ export function cosignedTxProblem(
     if (problem) return problem;
   }
   if (!core) return 'it calls a program other than Metaplex Core';
+  if (rc && catches !== 1) return 'it does not record the catch';
   return null;
 }
 

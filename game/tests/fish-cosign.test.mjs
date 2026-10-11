@@ -73,7 +73,7 @@ const MINT_EXPECT = {
 test('a co-signed mint may carry exactly one record_catch, and only the one we expect', () => {
   const p = (instructions, expect = MINT_EXPECT, accounts) => cosign.cosignedTxProblem(mintMsg(instructions, accounts), expect);
   assert.equal(p([CORE_IX, CATCH_IX]), null, 'Core create + our record_catch');
-  assert.equal(p([CORE_IX]), null, 'an older market without record_catch still mints');
+  assert.match(p([CORE_IX]), /does not record the catch/, 'a mint without record_catch is refused');
   const idl = JSON.parse(readFileSync(new URL('../src/idl/player_state.json', import.meta.url), 'utf8'));
   assert.deepEqual([...cosign.RECORD_CATCH_DISCRIMINATOR], idl.instructions.find((i) => i.name === 'record_catch').discriminator);
 
