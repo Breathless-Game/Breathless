@@ -32,12 +32,10 @@ export interface MapDef {
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
   sand: string;
-  /** Fixed facet pigments for each underwater biome. */
-  sediment: readonly string[];
   rocks: readonly string[];
   /** What covers the bottom besides rock and kelp. */
   life: 'none' | 'logs' | 'coral';
-  kelp: { count: number; hue: readonly [number, number]; palette: readonly string[] };
+  kelp: { count: number; hue: readonly [number, number] };
 }
 
 export const MAPS: Record<MapId, MapDef> = {
@@ -64,10 +62,9 @@ export const MAPS: Record<MapId, MapDef> = {
       [60, '#04162b'],
     ],
     sand: '#9aa7ad',
-    sediment: ['#78969d', '#6b8992', '#87a3a4', '#718f99'],
-    rocks: ['#456572', '#3f5d6b', '#567782', '#4a6975'],
+    rocks: ['#5b6b78', '#46535f', '#6f7f8a', '#39444f'],
     life: 'none',
-    kelp: { count: 72, hue: [0.27, 0.40], palette: ['#4f927b', '#5fa17c', '#4c8d8e', '#79aa80'] },
+    kelp: { count: 55, hue: [0.25, 0.36] },
   },
   tianchi: {
     id: 'tianchi',
@@ -92,10 +89,9 @@ export const MAPS: Record<MapId, MapDef> = {
       [60, '#021514'],
     ],
     sand: '#7d7a63',
-    sediment: ['#9d9b72', '#8d916b', '#afa77b', '#929c73'],
-    rocks: ['#626950', '#5b664f', '#747657', '#657660'],
+    rocks: ['#6a6657', '#55513f', '#7b7765', '#403d31'],
     life: 'logs',
-    kelp: { count: 38, hue: [0.18, 0.29], palette: ['#7c9952', '#718f59', '#8ea35a', '#66916c'] },
+    kelp: { count: 26, hue: [0.17, 0.26] },
   },
   ocean: {
     id: 'ocean',
@@ -120,10 +116,9 @@ export const MAPS: Record<MapId, MapDef> = {
       [60, '#020a1a'],
     ],
     sand: '#c2a874',
-    sediment: ['#a5b5a6', '#8da8a6', '#b5bca8', '#91a7ae'],
-    rocks: ['#466f80', '#3e6377', '#568393', '#4b7080'],
+    rocks: ['#5d6f7a', '#4a5b68', '#6b7d85', '#3e4c59'],
     life: 'coral',
-    kelp: { count: 72, hue: [0.30, 0.45], palette: ['#3d9f96', '#51aa91', '#4299a4', '#72b39a'] },
+    kelp: { count: 55, hue: [0.22, 0.32] },
   },
 };
 

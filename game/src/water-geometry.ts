@@ -1,56 +1,55 @@
 import * as THREE from 'three';
 import { Rng } from './rng';
 
-/** Shared wave vertices; the material derives a flat normal for each triangle. */
+/** Shared corners move together; each triangle keeps its own tint and glint. */
 export function waterGeometry(width: number, depth: number, segments: readonly [number, number]): THREE.BufferGeometry {
   const [columns, rows] = segments;
   const grid = new THREE.PlaneGeometry(width, depth, columns, rows);
   grid.rotateX(-Math.PI / 2);
   const positions = grid.attributes.position;
   const rng = new Rng(0x5ea2026);
-  // Broad changes in spacing give neighboring wave patches different-sized
-  // facets. The warp fades at the perimeter, retaining the exact plane bounds.
-  const rowZ = (row: number) => {
-    const t = row / rows;
-    const z = (t + 0.2 * t * (1 - t) - 0.5) * depth;
-    return z + Math.sin(z * 0.24 + 0.7) * 1.05 * Math.sin(Math.PI * t);
-  };
   for (let row = 0; row <= rows; row++) {
-    const z = rowZ(row);
-    const rowSpacing = row > 0 && row < rows
-      ? Math.min(z - rowZ(row - 1), rowZ(row + 1) - z)
-      : 0;
     for (let column = 0; column <= columns; column++) {
       const i = row * (columns + 1) + column;
-      const x = positions.getX(i);
-      const interior = Math.sin(Math.PI * column / columns) * Math.sin(Math.PI * row / rows);
-      const xWarp = (Math.sin(x * 0.22) * 1.35 + Math.sin(z * 0.28 + 0.5) * 0.45) * interior;
-      const zWarp = Math.sin(x * 0.17 + 1.1) * 0.4 * interior;
-      const stagger = Math.sin(row * 2.39996) * 0.22 * width / columns
-        * Math.sin(Math.PI * column / columns);
-      const xOffset = rng.range(-0.1, 0.1) * width / columns;
-      const zOffset = rng.range(-0.1, 0.1) * rowSpacing;
+      const xOffset = rng.range(-0.24, 0.24) * width / columns;
+      const zOffset = rng.range(-0.24, 0.24) * depth / rows;
       positions.setXYZ(i,
-        x + xWarp + stagger + (column > 0 && column < columns ? xOffset : 0),
+        positions.getX(i) + (column > 0 && column < columns ? xOffset : 0),
         0,
-        z + zWarp + zOffset,
+        positions.getZ(i) + (row > 0 && row < rows ? zOffset : 0),
       );
     }
   }
   const indices: number[] = [];
-  const distanceSquared = (left: number, right: number) =>
-    (positions.getX(left) - positions.getX(right)) ** 2
-    + (positions.getZ(left) - positions.getZ(right)) ** 2;
   for (let row = 0; row < rows; row++) {
     for (let column = 0; column < columns; column++) {
       const a = row * (columns + 1) + column;
       const b = a + 1, c = a + columns + 1, d = c + 1;
-      // The shorter diagonal keeps staggered patches broad instead of making
-      // long needles, and avoids a repeating checkerboard crease direction.
-      if (distanceSquared(a, d) < distanceSquared(b, c)) indices.push(a, c, d, a, d, b);
+      if ((row + column) % 2) indices.push(a, c, d, a, d, b);
       else indices.push(a, c, b, b, c, d);
     }
   }
   grid.setIndex(indices);
-  return grid;
+  const geometry = grid.toNonIndexed();
+  grid.dispose();
+  const vertices = geometry.attributes.position;
+  const facets = new Float32Array(vertices.count * 4);
+  const patches = new Float32Array(vertices.count * 4);
+  for (let i = 0; i < vertices.count; i += 3) {
+    const x = (vertices.getX(i) + vertices.getX(i + 1) + vertices.getX(i + 2)) / 3;
+    const z = (vertices.getZ(i) + vertices.getZ(i + 1) + vertices.getZ(i + 2)) / 3;
+    const tint = rng.next(), glint = rng.next();
+    const zMin = Math.min(vertices.getZ(i), vertices.getZ(i + 1), vertices.getZ(i + 2));
+    const zMax = Math.max(vertices.getZ(i), vertices.getZ(i + 1), vertices.getZ(i + 2));
+    for (let vertex = 0; vertex < 3; vertex++) {
+      facets.set([x, z, tint, glint], (i + vertex) * 4);
+      patches.set([
+        vertex === 0 ? 1 : 0, vertex === 1 ? 1 : 0, vertex === 2 ? 1 : 0,
+        (vertices.getZ(i + vertex) - zMin) / (zMax - zMin),
+      ], (i + vertex) * 4);
+    }
+  }
+  geometry.setAttribute('aWaterFacet', new THREE.BufferAttribute(facets, 4));
+  geometry.setAttribute('aWaterPatch', new THREE.BufferAttribute(patches, 4));
+  return geometry;
 }
