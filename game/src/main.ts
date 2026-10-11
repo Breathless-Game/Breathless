@@ -1640,8 +1640,13 @@ function applyMapProgress(snap: ReturnType<typeof playerChain>, announce: boolea
     workbench.progressChanged();
     return;
   }
-  const rules = gameProgressRules(snap.progressRules);
-  setMapThresholds(rules.mapThresholds);
+  // A ProgressConfig value out of range keeps the thresholds already in place; the rest of the
+  // chain listener (the lifetime value below, shipyard.reload, refreshEquipment) still runs.
+  try {
+    setMapThresholds(gameProgressRules(snap.progressRules).mapThresholds);
+  } catch (e) {
+    console.error('player_state ProgressConfig map thresholds out of range', e);
+  }
   const wasOpen = new Set(MAP_ORDER.filter((id) => isUnlocked(MAPS[id], mapProgress)));
   const hadRead = mapProgress.verified;
   mapProgress.bestValue = progressView(snap.progress).lifetime;
