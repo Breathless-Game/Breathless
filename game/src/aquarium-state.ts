@@ -8,6 +8,8 @@
  * BankedFish is never written back to the NFT bank by accident.
  */
 
+import { fishFood, parseFishFood, type FishFoodId } from './fish-food';
+
 export const AQUARIUM_STORAGE_KEY = 'deepbreath.aquarium';
 export const DEFAULT_AQUARIUM_LIGHT = '#42e8d2';
 
@@ -19,11 +21,18 @@ export const FEED_COOLDOWN_MS = 15_000;
 
 /** Fractional visual size increase per accepted feeding. */
 export const GROWTH_PER_FEED = 0.08;
+/** Growth units retain the old +40% visual cap while better food reaches it sooner. */
+export const MAX_GROWTH_UNITS = MAX_FEEDS;
+export const FOOD_EFFECT_MS = 90_000;
 
 export interface AquariumGrowth {
   feedCount: number;
   /** Epoch milliseconds of the most recent accepted feeding, or null. */
   lastFedAt: number | null;
+  /** Weighted growth units; old saves omit this and use feedCount as the fallback. */
+  growthUnits?: number;
+  /** Last food used, so cooldown and the visual buff survive a reload. */
+  food?: FishFoodId;
 }
 
 export interface AquariumLightConfig {
@@ -83,7 +92,14 @@ function normalizeGrowth(value: unknown): AquariumGrowth {
     : 0;
   const feedCount = Number.isFinite(rawCount) ? Math.min(MAX_FEEDS, Math.max(0, Math.floor(rawCount))) : 0;
   const lastFedAt = finiteTime(record.lastFedAt);
-  return { feedCount, lastFedAt };
+  const rawUnits = typeof record.growthUnits === 'number' || typeof record.growthUnits === 'string' ? Number(record.growthUnits) : NaN;
+  const growthUnits = Number.isFinite(rawUnits) ? Math.min(MAX_GROWTH_UNITS, Math.max(0, rawUnits)) : undefined;
+  const food = parseFishFood(record.food)?.id;
+  return {
+    feedCount, lastFedAt,
+    ...(growthUnits === undefined ? {} : { growthUnits }),
+    ...(food ? { food } : {}),
+  };
 }
 
 /** Normalize untrusted localStorage data and tolerate the old `fish`/`lightColor` spellings. */
@@ -117,30 +133,60 @@ export function growthScale(feedCount: number): number {
   return 1 + count * GROWTH_PER_FEED;
 }
 
+/** Visual scale from weighted food growth, with legacy saves using feedCount. */
+export function growthScaleForGrowth(growth: AquariumGrowth | undefined): number {
+  const units = growth?.growthUnits ?? growth?.feedCount ?? 0;
+  const safe = Number.isFinite(units) ? Math.min(MAX_GROWTH_UNITS, Math.max(0, units)) : 0;
+  return 1 + safe * GROWTH_PER_FEED;
+}
+
+/** Food energy and glow last 90 seconds; growth itself is permanent. */
+export function activeFoodEffects(growth: AquariumGrowth | undefined, now = Date.now()) {
+  const food = growth?.food ? fishFood(growth.food) : null;
+  const elapsed = growth?.lastFedAt === null || growth?.lastFedAt === undefined ? Infinity : now - growth.lastFedAt;
+  if (!food || elapsed < 0 || elapsed >= FOOD_EFFECT_MS) return { speed: 1, glow: 0 };
+  return { speed: food.swimSpeedMultiplier, glow: food.glowIntensity };
+}
+
 /**
  * Apply one feeding to a single growth record. The function is immutable and
  * deterministic when `now` is supplied, which keeps the game and tests in
  * agreement about cooldown boundaries.
  */
-export function feedFish(growth: AquariumGrowth | undefined, now = Date.now()): FeedResult {
+export function feedFish(growth: AquariumGrowth | undefined, foodIdOrTime: FishFoodId | number = 'plankton', now = Date.now()): FeedResult {
   const current = normalizeGrowth(growth);
-  const timestamp = Number.isFinite(now) && now >= 0 ? now : Date.now();
-  if (current.feedCount >= MAX_FEEDS) return { growth: current, fed: false, reason: 'max' };
-  if (current.lastFedAt !== null && timestamp - current.lastFedAt < FEED_COOLDOWN_MS) {
+  const legacy = typeof foodIdOrTime === 'number';
+  const food = fishFood(legacy ? 'pellet' : foodIdOrTime);
+  const timestamp = legacy
+    ? (Number.isFinite(foodIdOrTime) && foodIdOrTime >= 0 ? foodIdOrTime : Date.now())
+    : (Number.isFinite(now) && now >= 0 ? now : Date.now());
+  if ((current.growthUnits ?? current.feedCount) >= MAX_GROWTH_UNITS) return { growth: current, fed: false, reason: 'max' };
+  const previousFood = current.food ? fishFood(current.food) : fishFood('pellet');
+  if (current.lastFedAt !== null && timestamp - current.lastFedAt < FEED_COOLDOWN_MS * previousFood.feedCooldownMultiplier) {
     return { growth: current, fed: false, reason: 'cooldown' };
   }
-  const next: AquariumGrowth = { feedCount: current.feedCount + 1, lastFedAt: timestamp };
+  if (legacy) {
+    const next: AquariumGrowth = { feedCount: current.feedCount + 1, lastFedAt: timestamp };
+    return { growth: next, fed: true, reason: 'fed' };
+  }
+  const units = Math.min(MAX_GROWTH_UNITS, (current.growthUnits ?? current.feedCount) + food.growthMultiplier);
+  const next: AquariumGrowth = {
+    feedCount: current.feedCount + 1,
+    lastFedAt: timestamp,
+    growthUnits: units,
+    food: food.id,
+  };
   return { growth: next, fed: true, reason: 'fed' };
 }
 
 /** Feed a fish in a state map, returning a new state suitable for persistence. */
-export function feedAquariumFish(state: AquariumState, id: string, now = Date.now()): AquariumFeedResult {
+export function feedAquariumFish(state: AquariumState, id: string, foodIdOrTime: FishFoodId | number = 'plankton', now = Date.now()): AquariumFeedResult {
   const normalized = normalizeAquariumState(state);
   if (typeof id !== 'string' || !id.trim()) {
     const growth = { ...DEFAULT_GROWTH };
     return { state: normalized, growth, fed: false, reason: 'invalid-id' };
   }
-  const result = feedFish(normalized.growth[id], now);
+  const result = feedFish(normalized.growth[id], foodIdOrTime, now);
   if (!result.fed) return { state: normalized, ...result };
   const next: AquariumState = {
     growth: { ...normalized.growth, [id]: result.growth },

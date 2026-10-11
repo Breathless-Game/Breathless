@@ -4,19 +4,28 @@ import test from 'node:test';
 import ts from 'typescript';
 
 const source = await readFile(new URL('../src/aquarium-state.ts', import.meta.url), 'utf8');
-const { outputText } = ts.transpileModule(source, {
+const foodSource = await readFile(new URL('../src/fish-food.ts', import.meta.url), 'utf8');
+const { outputText: foodOutput } = ts.transpileModule(foodSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
+const foodUrl = `data:text/javascript;base64,${Buffer.from(foodOutput).toString('base64')}`;
+let { outputText } = ts.transpileModule(source, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
+});
+outputText = outputText.replace("from './fish-food'", `from '${foodUrl}'`);
 const aquarium = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const {
   AQUARIUM_STORAGE_KEY,
   DEFAULT_AQUARIUM_LIGHT,
   FEED_COOLDOWN_MS,
   MAX_FEEDS,
+  FOOD_EFFECT_MS,
+  activeFoodEffects,
   defaultAquariumState,
   feedAquariumFish,
   feedFish,
   growthScale,
+  growthScaleForGrowth,
   loadAquariumState,
   normalizeAquariumState,
   normalizeLightColor,
@@ -76,6 +85,17 @@ test('feeding accepts one serving, enforces cooldown, then stops at the growth c
   assert.equal(result.fed, false);
   assert.equal(result.reason, 'max');
   assert.equal(result.state.growth['fish-a'].feedCount, MAX_FEEDS);
+});
+
+test('selected food changes weighted growth and temporary effects', () => {
+  const state = defaultAquariumState();
+  const plankton = feedAquariumFish(state, 'fish-a', 'plankton', 1_000);
+  const coral = feedAquariumFish(state, 'fish-b', 'glowCoral', 1_000);
+  assert.equal(plankton.growth.growthUnits, 0.4);
+  assert.equal(coral.growth.growthUnits, 1.9);
+  assert.ok(growthScaleForGrowth(coral.growth) > growthScaleForGrowth(plankton.growth));
+  assert.deepEqual(activeFoodEffects(coral.growth, 1_000 + FOOD_EFFECT_MS - 1), { speed: 1.2, glow: 0.55 });
+  assert.deepEqual(activeFoodEffects(coral.growth, 1_000 + FOOD_EFFECT_MS), { speed: 1, glow: 0 });
 });
 
 test('invalid IDs and malformed growth are harmless', () => {
