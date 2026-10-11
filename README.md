@@ -307,7 +307,7 @@ File: `sensor/breath-detector.mjs`. The input is Presage's chest-movement trace,
 
 **What the detector does now: holds are found by "activity"**, which is the distance the trace travels per second (path length). **Releases are found by the exhale.**
 
-1. **Learn a baseline**: take the activity over the last 30 seconds of normal breathing and use the **median** as the baseline B, so an occasional spike does not affect it. Nothing is learned in the first 8 seconds after start. The first few seconds of a hold are dropped too, so they do not pull the baseline down.
+1. **Calibrate a baseline once**: nothing is learned in the first 8 seconds after start; then take the activity over the next 10 seconds of normal breathing and use the **median** as the baseline B, so an occasional spike (or a short pause) does not affect it. B is then **frozen** for the rest of the session, so the deep breaths and gasps around dives cannot drag it around. A new session (reconnect, camera or Presage restart) calibrates again.
 2. **Call a hold**: the activity over the last 2 seconds is below `0.38 × B`.
 3. **Call a release, mainly on the exhale**: the detector tracks a "hold level". It follows the slow settling after the inhale, but freezes while the trace jumps around, so a glitch can't drag it along. The hold ends when the trace drops more than `1.1 × B` below that level, and also below the highest point of the last 1.5 seconds, for 0.1 seconds. A jump up of more than `2 × B` also counts; that covers someone who held with empty lungs and breathes in first.
 4. **In the first 2 seconds of a hold**, which may just be a pause between breaths, activity alone still ends it: the activity over 0.75 seconds is above `0.5 × B` for 0.2 seconds.
@@ -339,7 +339,7 @@ Releases are about 0.6 seconds slower. In return, a diver is never wrongly told 
 | `releaseWindowUs` / `releaseRatio` / `releaseHoldUs` | 0.75 s / 0.5 / 0.2 s | What "activity" means in the line above |
 | `sustainedRatio` / `sustainedUs` | 0.8 / 4 s | Fallback: this much breathing for this long always ends a hold |
 | `warmupUs` | 8 s | Ignores the seconds when Presage swings wildly at start-up |
-| `minBaselineUs` | 6 s | How much normal breathing has to be learned before any hold is called |
+| `calibrationUs` | 10 s | How much normal breathing is learned, once, before any hold is called; the baseline is fixed after that |
 | `useApnea` | false | Whether to use Presage's apnea flag |
 
 Note: the thresholds have been checked against one person and two recordings only. **On a new person, run the breath test once to confirm them**, and check especially that "down is exhale" holds on their camera too. `analyze.mjs` prints `release reasons`; normally most should be `exhale`.
