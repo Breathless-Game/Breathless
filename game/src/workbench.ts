@@ -15,7 +15,6 @@ import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps'
 import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
-import { loadSonarConfig, saveSonarConfig, sonarLengthMeters } from './sonar-config';
 import type { LessonId } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
