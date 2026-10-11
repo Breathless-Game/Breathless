@@ -1329,10 +1329,9 @@ function showTitle(intro: boolean) {
   titleScreen.show(intro);
 }
 
-// With REQUIRE_PHANTOM, START goes through the login gate unless a wallet is connected.
-// Off for now: START goes straight to the workbench. Without a connected wallet,
-// progress isn't saved and caught fish wait to be minted.
-const REQUIRE_PHANTOM = false;
+// A wallet is required, so START goes through the login gate unless a wallet is connected,
+// matching main since #68 (per-wallet saves, and NFT minting needs an owner).
+const REQUIRE_PHANTOM = true;
 const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
