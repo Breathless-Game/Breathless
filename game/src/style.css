@@ -1295,17 +1295,37 @@ button.link {
 
 #wb-place {
   width: min(300px, 100%);
-  padding: 20px 22px;
+  padding: 0;
   border-radius: 18px;
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
   /* Never taller than the room the chart leaves (16px above, 56px below for the
-     hint): a long card scrolls inside itself and Dive stays pinned at its foot. */
+     hint). The card is a column: the body scrolls, the Dive footer never does,
+     so nothing can ever sit underneath the button. */
   max-height: calc(100vh - 80px);
   max-height: calc(100dvh - 80px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#wb-place-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding: 20px 22px 16px;
+  /* soft fade where the content runs out above the footer */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
+
+#wb-place-foot {
+  flex: 0 0 auto;
+  padding: 12px 22px 16px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
 }
 
 #wb-chart.ready #wb-place {
@@ -1418,9 +1438,30 @@ button.link {
 
 #wb-dive {
   width: 100%;
-  position: sticky;
-  bottom: -20px;
-  box-shadow: 0 -10px 12px -2px var(--panel), 0 20px 0 0 var(--panel);
+}
+
+/* Short viewports: a smaller preview and tighter rhythm so more of the card shows. */
+@media (max-height: 800px) {
+  #wb-place-preview {
+    aspect-ratio: 16 / 7;
+    margin-bottom: 10px;
+  }
+
+  #wb-place-scroll {
+    padding-top: 16px;
+  }
+
+  #wb-place-text {
+    margin: 8px 0;
+  }
+
+  #wb-place-conditions {
+    margin: 8px 0 10px;
+  }
+
+  #wb-place-foot {
+    padding: 10px 22px 12px;
+  }
 }
 
 #wb-place.empty #wb-place-text {
@@ -1457,15 +1498,23 @@ button.link {
     width: 100%;
   }
 
-  /* The overlay scrolls here, so the card does not: Dive sticks to the screen's foot. */
+  /* The overlay scrolls here, so the card is simply as tall as its content. */
   #wb-place {
     max-height: none;
     overflow: visible;
   }
 
-  #wb-dive {
+  #wb-place-scroll {
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  /* Dive stays reachable while the chart scrolls; it has its own solid background. */
+  #wb-place-foot {
+    position: sticky;
     bottom: 0;
-    box-shadow: none;
+    border-radius: 0 0 18px 18px;
   }
 
   .wb-pin-label {
