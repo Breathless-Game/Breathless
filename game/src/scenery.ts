@@ -207,7 +207,7 @@ const additive = () =>
  * Height of the water at (x, z). Mirrors the wave field in World.updateDecorations
  * (surface centred at z = -30): `t` is the world's wave clock, `waves` the map's swell times the weather's.
  */
-function waterY(x: number, z: number, t: number, waves: number) {
+export function waterY(x: number, z: number, t: number, waves: number) {
   return (Math.sin(x * 0.15 + t * 1.3) * 0.35 + Math.cos((z + 30) * 0.2 + t * 0.9) * 0.25) * waves;
 }
 

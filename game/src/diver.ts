@@ -1,10 +1,23 @@
 import * as THREE from 'three';
+import { Splash } from './fx';
 import { buildFishingNetMesh } from './gear';
 import type { RenderQuality } from './render-quality';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
   return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.7, ...extra });
 }
+
+/** Where the head sits along the body: the point that breaks the surface first. */
+const HEAD_X = 0.9;
+/**
+ * How far under the water (m) the head is when a dive splashes and when a climb
+ * does (its crown touches the surface), and where it counts as under or out
+ * with no splash at all: sunk well below, or clear of the water.
+ */
+const HEAD_DIPPED = 0.05;
+const HEAD_BREACHING = 0.3;
+const HEAD_SUNK = 1;
+const HEAD_CLEAR = -0.1;
 
 /** Low-poly freediver, modelled lying along +x (head first). */
 export class Diver {
@@ -40,7 +53,7 @@ export class Diver {
   private lampMaxIntensity = 48;
   private kickPhase = 0;
   private armPhase = 1.2;
-  private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number; size: number; phase: number }[] = [];
+  private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number; size: number; phase: number; lift: number }[] = [];
   private bubbleGeo = new THREE.IcosahedronGeometry(0.12, 1);
   private bubbleMat = new THREE.MeshStandardMaterial({
     color: '#e9fbff',
@@ -54,10 +67,16 @@ export class Diver {
   private bubbleEmitScale = 1;
   private bubbleHz = 60;
   private bubbleUpdateAccumulator = 0;
-  private waterRing: THREE.Mesh;
-  private waterRingMat: THREE.MeshStandardMaterial;
-  private lastWaterDepth = 0.4;
-  private waterPulse = 0;
+  private splash = new Splash();
+  private waterAt: (x: number, z: number) => number = () => 0;
+  /** Whether the head was under water at the last update; null before the first one. */
+  private headUnder: boolean | null = null;
+  private lastY = 0;
+  /** Seconds left of the air a dive drags under, and how hard that dive was. */
+  private wake = 0;
+  private wakeStrength = 0;
+  private wakeDebt = 0;
+  private wakePoint = new THREE.Vector3();
   private materialBinder: ((root: THREE.Object3D) => void) | null = null;
 
   constructor(private scene: THREE.Scene) {
@@ -137,22 +156,9 @@ export class Diver {
     this.body.add(this.netArm);
 
     this.group.add(this.body);
-    this.waterRingMat = new THREE.MeshStandardMaterial({
-      color: '#b9f5ff',
-      emissive: '#2d92a8',
-      emissiveIntensity: 0.35,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      roughness: 0.2,
-      side: THREE.DoubleSide,
-    });
-    this.waterRing = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.028, 6, 32), this.waterRingMat);
-    this.waterRing.name = 'diver-water-contact-ripple';
-    this.waterRing.position.y = this.lastWaterDepth + 0.03;
-    this.waterRing.renderOrder = 2;
-    this.waterRing.visible = false;
-    this.group.add(this.waterRing);
+    // White water stays where it was thrown, so it lives in the scene, not on the diver.
+    this.splash.mesh.name = 'diver-water-splash';
+    scene.add(this.splash.mesh);
     // A spotlight gives the diver a readable forward beam at depth. Its
     // target is parented to the body, so yaw/pitch animation carries the beam
     // with the diver instead of leaving a world-space light behind.
@@ -185,29 +191,165 @@ export class Diver {
     this.materialBinder = binder;
   }
 
-  /**
-   * Show the diver's contact with the waterline. It is a single shared ring:
-   * continuous ripples stay cheap near the surface and a short pulse marks
-   * each entry or exit without spawning extra meshes.
-   */
-  private updateWaterContact(dt: number, time: number, depth: number): void {
-    const safeDepth = THREE.MathUtils.clamp(Number.isFinite(depth) ? depth : 60, 0, 60);
-    const nearSurface = THREE.MathUtils.clamp(1 - safeDepth / 1.8, 0, 1);
-    if ((this.lastWaterDepth > 0.32 && safeDepth <= 0.32) || (this.lastWaterDepth <= 0.32 && safeDepth > 0.32)) {
-      this.waterPulse = 1;
-    }
-    this.lastWaterDepth = safeDepth;
-    this.waterPulse = Math.max(0, this.waterPulse - Math.max(0, dt) * 2.2);
+  /** Tell the diver where the waves are, so white water starts on the surface as drawn. */
+  setWaterSurface(heightAt: (x: number, z: number) => number): void {
+    this.waterAt = heightAt;
+    this.splash.waterAt = heightAt;
+  }
 
-    this.waterRing.position.set(0, safeDepth + 0.03, 0);
-    this.waterRing.rotation.y = time * 0.22;
-    const pulse = this.waterPulse;
-    this.waterRing.visible = nearSurface > 0.01 || pulse > 0.01;
-    if (!this.waterRing.visible) return;
-    const spread = 0.82 + (1 - nearSurface) * 0.36 + pulse * 0.82;
-    this.waterRing.scale.setScalar(spread);
-    this.waterRingMat.opacity = THREE.MathUtils.clamp(nearSurface * 0.18 + pulse * 0.38, 0, 0.56);
-    this.waterRingMat.emissiveIntensity = 0.18 + nearSurface * 0.28 + pulse * 0.72;
+  /**
+   * White water where the head breaks the surface, going in or coming out.
+   * Nothing shows while the diver floats or swims: only a crossing does, and
+   * a faster one throws more.
+   */
+  private updateWaterContact(dt: number): void {
+    const yaw = this.group.rotation.y;
+    const pitch = this.body.rotation.z;
+    const reach = HEAD_X * Math.cos(pitch);
+    const headX = this.pos.x + Math.cos(yaw) * reach;
+    const headZ = this.pos.z - Math.sin(yaw) * reach;
+    // How far under the head is, against the waves rather than y = 0.
+    const under = this.waterAt(headX, headZ) - (this.pos.y + HEAD_X * Math.sin(pitch));
+    // The diver's own climb: it has to be swimming that way and actually moving
+    // (at the surface the buoyancy still pushes up, and a respawn moves without swimming).
+    const moved = dt > 0 ? (this.pos.y - this.lastY) / dt : 0;
+    const climb = Math.sign(moved) === Math.sign(this.vel.y) ? Math.sign(moved) * Math.min(Math.abs(moved), Math.abs(this.vel.y)) : 0;
+    this.lastY = this.pos.y;
+    if (this.headUnder === null) {
+      this.headUnder = under > HEAD_DIPPED;
+    } else if (!this.headUnder) {
+      // A swell rolling over a floating diver is not a dive: the splash waits for
+      // the plunge, and is skipped once the head has sunk well under without one.
+      if (under > HEAD_DIPPED && climb < -1.2) {
+        this.headUnder = true;
+        this.splashIn(THREE.MathUtils.clamp(-climb / 4.5, 0.3, 1.2));
+      } else if (under > HEAD_SUNK) {
+        this.headUnder = true;
+      }
+    } else if (under < HEAD_BREACHING && climb > 1.8) {
+      // Faster than the buoyancy alone lifts a diver who respawned just under the surface.
+      this.headUnder = false;
+      this.wake = 0;
+      this.splashOut(headX, headZ, THREE.MathUtils.clamp(climb / 6.5, 0.3, 1.2));
+    } else if (under < HEAD_CLEAR) {
+      // Drifted up, or the swell dropped away: out of the water without a splash.
+      this.headUnder = false;
+      this.wake = 0;
+    }
+    if (this.wake > 0 && dt > 0) {
+      this.wake -= dt;
+      this.wakeDebt += dt * 44 * this.wakeStrength * this.bubbleEmitScale;
+      if (this.wakeDebt >= 1) this.trailAir();
+    }
+    this.splash.update(dt);
+  }
+
+  /** Diving in: a low crown off the length of the body, a short jet up the middle, air dragged under. */
+  private splashIn(strength: number): void {
+    const yaw = this.group.rotation.y;
+    const alongX = Math.cos(yaw);
+    const alongZ = -Math.sin(yaw);
+    const power = 0.55 + 0.45 * strength;
+    const droplets = Math.round((8 + 14 * strength) * this.bubbleEmitScale);
+    for (let i = 0; i < droplets; i++) {
+      const along = (Math.random() - 0.5) * 1.8;
+      const around = Math.random() * Math.PI * 2;
+      const lean = 0.25 + Math.random() * 0.45;
+      const speed = (2.6 + Math.random() * 2.2) * power;
+      const x = this.pos.x + alongX * along + Math.cos(around) * 0.15;
+      const z = this.pos.z + alongZ * along + Math.sin(around) * 0.15;
+      this.splash.droplet(
+        x, this.waterAt(x, z) + 0.04, z,
+        Math.cos(around) * Math.sin(lean) * speed + this.vel.x * 0.2, Math.cos(lean) * speed, Math.sin(around) * Math.sin(lean) * speed,
+        (0.06 + Math.random() * 0.08) * (0.8 + 0.3 * strength), Math.random() * 0.07,
+      );
+    }
+    // The water closes over the diver and jumps back up.
+    const top = this.waterAt(this.pos.x, this.pos.z) + 0.04;
+    for (let i = 0; i < 2 + Math.round(strength); i++) {
+      this.splash.droplet(
+        this.pos.x + (Math.random() - 0.5) * 0.2, top, this.pos.z + (Math.random() - 0.5) * 0.2,
+        (Math.random() - 0.5) * 0.8, (4.6 + Math.random() * 1.6) * power, (Math.random() - 0.5) * 0.8,
+        0.09 + Math.random() * 0.06, 0.08 + Math.random() * 0.1,
+      );
+    }
+    const chips = Math.round((4 + 4 * strength) * this.bubbleEmitScale);
+    for (let i = 0; i < chips; i++) {
+      const along = (Math.random() - 0.5) * 1.6;
+      const around = Math.random() * Math.PI * 2;
+      const out = 0.2 + Math.random() * 0.5;
+      const drift = (0.6 + Math.random() * 1.2) * strength;
+      this.splash.chip(
+        this.pos.x + alongX * along + Math.cos(around) * out, this.pos.z + alongZ * along + Math.sin(around) * out,
+        Math.cos(around) * drift, Math.sin(around) * drift,
+        0.16 + Math.random() * 0.14, 0.9 + Math.random() * 0.6,
+      );
+    }
+    this.wake = 0.45;
+    this.wakeStrength = strength;
+  }
+
+  /** Surfacing: a narrower, taller burst the head punches up, and the water running off after it. */
+  private splashOut(x: number, z: number, strength: number): void {
+    const power = 0.55 + 0.45 * strength;
+    const top = this.waterAt(x, z) + 0.04;
+    const droplets = Math.round((6 + 10 * strength) * this.bubbleEmitScale);
+    for (let i = 0; i < droplets; i++) {
+      const around = Math.random() * Math.PI * 2;
+      const lean = 0.08 + Math.random() * 0.37;
+      const speed = (2.8 + Math.random() * 2.6) * power;
+      this.splash.droplet(
+        x + Math.cos(around) * 0.4, top, z + Math.sin(around) * 0.4,
+        Math.cos(around) * Math.sin(lean) * speed + this.vel.x * 0.25, Math.cos(lean) * speed, Math.sin(around) * Math.sin(lean) * speed,
+        (0.06 + Math.random() * 0.08) * (0.8 + 0.3 * strength), Math.random() * 0.07,
+      );
+    }
+    for (let i = 0; i < 2 + Math.round(2 * strength); i++) {
+      this.splash.droplet(
+        x + (Math.random() - 0.5) * 0.5, top + 0.25, z + (Math.random() - 0.5) * 0.5,
+        (Math.random() - 0.5) * 1.2, 0.8 + Math.random(), (Math.random() - 0.5) * 1.2,
+        0.05 + Math.random() * 0.04, 0.1 + Math.random() * 0.25,
+      );
+    }
+    const chips = Math.round((3 + 3 * strength) * this.bubbleEmitScale);
+    for (let i = 0; i < chips; i++) {
+      const around = Math.random() * Math.PI * 2;
+      const out = 0.15 + Math.random() * 0.35;
+      const drift = (0.5 + Math.random() * 0.9) * strength;
+      this.splash.chip(
+        x + Math.cos(around) * out, z + Math.sin(around) * out,
+        Math.cos(around) * drift, Math.sin(around) * drift,
+        0.14 + Math.random() * 0.12, 0.8 + Math.random() * 0.5,
+      );
+    }
+  }
+
+  /** Air pulled under with a dive: small bubbles off the body that turn and rise back to the surface. */
+  private trailAir(): void {
+    this.group.position.copy(this.pos);
+    this.group.updateMatrixWorld(true);
+    for (; this.wakeDebt >= 1; this.wakeDebt--) {
+      if (this.bubbles.length >= this.bubbleLimit) continue;
+      const point = this.wakePoint.set(-1.7 + Math.random() * 2.7, Math.random() * 0.35, (Math.random() - 0.5) * 0.6);
+      point.applyMatrix4(this.body.matrixWorld);
+      if (point.y > this.waterAt(point.x, point.z) - 0.06) continue;
+      this.addBubble(
+        point,
+        this.vel.x * 0.3 + (Math.random() - 0.5), this.vel.y * 0.3 - 0.2 + Math.random() * 0.8, (Math.random() - 0.5) * 0.8,
+        0.25 + Math.random() * 0.55, 0.8 + Math.random() * 0.6, 5,
+      );
+    }
+  }
+
+  private addBubble(position: THREE.Vector3, vx: number, vy: number, vz: number, size: number, maxLife: number, lift: number): void {
+    const b = new THREE.Mesh(this.bubbleGeo, this.bubbleMat);
+    b.position.copy(position);
+    b.scale.setScalar(size);
+    this.scene.add(b);
+    // Bubbles are created after the initial scene traversal. Apply the
+    // shared day/night and underwater color-grade hook to their material.
+    this.materialBinder?.(b);
+    this.bubbles.push({ mesh: b, vel: new THREE.Vector3(vx, vy, vz), life: maxLife, maxLife, size, phase: Math.random() * Math.PI * 2, lift });
   }
 
   private makeLeg(suit: THREE.Material, accent: THREE.Material, z: number) {
@@ -329,29 +471,17 @@ export class Diver {
     // arrives just after the diver reaches the surface.
     if (this.breathOrigin.y >= -0.02) return;
     for (let i = 0; i < amount; i++) {
-      const b = new THREE.Mesh(this.bubbleGeo, this.bubbleMat);
       this.bubbleOffset.set(
         (Math.random() - 0.5) * 0.12,
         (Math.random() - 0.5) * 0.16,
         (Math.random() - 0.5) * 0.22,
+      ).add(this.breathOrigin);
+      this.bubbleOffset.y = Math.min(-0.02, this.bubbleOffset.y);
+      this.addBubble(
+        this.bubbleOffset,
+        (Math.random() - 0.5) * 0.8, 1.7 + Math.random() * 2.1, (Math.random() - 0.5) * 0.8,
+        0.5 + Math.random() * 1.4, 2.4 + Math.random() * 1.2, 0.25,
       );
-      b.position.copy(this.breathOrigin).add(this.bubbleOffset);
-      b.position.y = Math.min(-0.02, b.position.y);
-      const size = 0.5 + Math.random() * 1.4;
-      b.scale.setScalar(size);
-      this.scene.add(b);
-      // Bubbles are created after the initial scene traversal. Apply the
-      // shared day/night and underwater color-grade hook to their material.
-      this.materialBinder?.(b);
-      const maxLife = 2.4 + Math.random() * 1.2;
-      this.bubbles.push({
-        mesh: b,
-        vel: new THREE.Vector3((Math.random() - 0.5) * 0.8, 1.7 + Math.random() * 2.1, (Math.random() - 0.5) * 0.8),
-        life: maxLife,
-        maxLife,
-        size,
-        phase: Math.random() * Math.PI * 2,
-      });
     }
   }
 
@@ -386,7 +516,7 @@ export class Diver {
     }
 
     this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
-    this.updateWaterContact(dt, time, depth);
+    this.updateWaterContact(dt);
 
     this.bubbleUpdateAccumulator += dt;
     const interval = 1 / this.bubbleHz;
@@ -397,7 +527,7 @@ export class Diver {
       const b = this.bubbles[i];
       b.life -= bubbleDt;
       b.mesh.position.addScaledVector(b.vel, bubbleDt);
-      b.vel.y = Math.min(4.8, b.vel.y + bubbleDt * 0.25);
+      b.vel.y = Math.min(4.8, b.vel.y + bubbleDt * b.lift);
       const drag = Math.exp(-bubbleDt * 0.85);
       b.vel.x *= drag;
       b.vel.z *= drag;
@@ -406,7 +536,7 @@ export class Diver {
       const age = 1 - Math.max(0, b.life) / b.maxLife;
       const fade = age > 0.74 ? THREE.MathUtils.clamp((1 - age) / 0.26, 0, 1) : 1;
       b.mesh.scale.setScalar(b.size * (0.86 + age * 0.42) * fade);
-      if (b.life <= 0 || b.mesh.position.y > 0) {
+      if (b.life <= 0 || b.mesh.position.y > this.waterAt(b.mesh.position.x, b.mesh.position.z)) {
         this.scene.remove(b.mesh);
         this.bubbles.splice(i, 1);
       }
