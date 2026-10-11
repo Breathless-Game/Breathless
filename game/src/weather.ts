@@ -9,6 +9,32 @@ export interface WeatherState {
   storm: number;
 }
 
+/**
+ * The small, ink-on-paper weather key used by the sea chart. Keeping this
+ * projection separate from the renderer makes the visual language deterministic
+ * and lets the chart fade between front states without inventing new values.
+ */
+export interface WeatherArtProfile {
+  cloudInk: number;
+  rainMarks: number;
+  windMarks: number;
+  lightning: number;
+}
+
+export function weatherArtProfile(weather: WeatherState): WeatherArtProfile {
+  const clamp = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+  const cloud = clamp(weather.cloud);
+  const rain = clamp(weather.rain);
+  const wind = clamp(weather.wind);
+  const storm = clamp(weather.storm);
+  return {
+    cloudInk: cloud < 0.12 ? 0 : (cloud - 0.12) / 0.88,
+    rainMarks: Math.round(rain * 10),
+    windMarks: Math.round(Math.max(0, wind - 0.2) * 8),
+    lightning: storm < 0.35 ? 0 : (storm - 0.35) / 0.65,
+  };
+}
+
 type WeatherAmounts = Omit<WeatherState, 'kind'>;
 
 const PRESETS: Record<WeatherKind, WeatherAmounts> = {
