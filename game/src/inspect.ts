@@ -18,6 +18,9 @@ const GROW_S = 0.35;
 const SWAP_S = 0.28;
 const SWIPE_PX = 70; // a sideways drag this long flips to the next level
 const SPIN = 0.5; // radians per second on the turntable
+const ORBIT_SENSITIVITY = 0.008; // pointer pixels to radians while examining a model
+const ORBIT_TILT = 0.0045;
+const MAX_ORBIT_TILT = 0.42;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const easeOut = (u: number) => 1 - (1 - u) ** 3;
@@ -89,6 +92,8 @@ export class GearInspector {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
   private turntable = new THREE.Group();
+  /** A small, material-rich plinth makes the contact point and scale of each tool legible. */
+  private plinth = new THREE.Group();
   private models = new Map<number, THREE.Group>();
 
   private def: UpgradeDef | null = null;
@@ -99,8 +104,11 @@ export class GearInspector {
   private level = 1;
   private spin = 0;
   private swap: { t: number; dir: number; from: THREE.Group; to: THREE.Group } | null = null;
-  private swipe: { x: number; id: number } | null = null;
+  private swipe: { x: number; y: number; id: number; yaw: number; tilt: number } | null = null;
   private drag = 0; // follows a swipe in progress, in screen px
+  private dragY = 0;
+  private orbitYaw = 0;
+  private orbitTilt = 0;
   private raf = 0;
   private last = 0;
   private buying = false;
@@ -110,12 +118,19 @@ export class GearInspector {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.scene.add(new THREE.HemisphereLight('#e6f6ff', '#4a3420', 1.4));
     const key = new THREE.DirectionalLight('#fff1dc', 2.6);
     key.position.set(-3, 5, 4);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 15;
     const rim = new THREE.DirectionalLight('#9fe8ff', 1.2);
     rim.position.set(3, 1, -3);
-    this.scene.add(key, rim, this.turntable);
+    this.buildPlinth();
+    this.scene.add(key, rim, this.plinth, this.turntable);
     this.camera.position.set(0, 0.9, 5.2);
     this.camera.lookAt(0, 0, 0);
 
@@ -152,19 +167,26 @@ export class GearInspector {
     });
     this.stage.addEventListener('pointerdown', (e) => {
       if (e.target instanceof HTMLButtonElement) return; // ‹ › keep their clicks
-      this.swipe = { x: e.clientX, id: e.pointerId };
+      this.swipe = { x: e.clientX, y: e.clientY, id: e.pointerId, yaw: this.orbitYaw, tilt: this.orbitTilt };
       this.stage.setPointerCapture(e.pointerId);
     });
     this.stage.addEventListener('pointermove', (e) => {
-      if (this.swipe?.id === e.pointerId) this.drag = e.clientX - this.swipe.x;
+      if (this.swipe?.id !== e.pointerId) return;
+      this.drag = e.clientX - this.swipe.x;
+      this.dragY = e.clientY - this.swipe.y;
+      this.orbitYaw = this.swipe.yaw + this.drag * ORBIT_SENSITIVITY;
+      this.orbitTilt = THREE.MathUtils.clamp(this.swipe.tilt + this.dragY * ORBIT_TILT, -MAX_ORBIT_TILT, MAX_ORBIT_TILT);
     });
     const endSwipe = (e: PointerEvent) => {
       if (this.swipe?.id !== e.pointerId) return;
       const dx = e.clientX - this.swipe.x;
+      const dy = e.clientY - this.swipe.y;
       this.swipe = null;
       this.drag = 0;
+      this.dragY = 0;
       // Drag left for the next level, right for the one before: the model goes the way you push it.
-      if (Math.abs(dx) > SWIPE_PX) this.step(dx < 0 ? 1 : -1);
+      // A mostly horizontal drag changes level; a diagonal drag stays an orbit gesture.
+      if (Math.abs(dx) > SWIPE_PX && Math.abs(dy) < SWIPE_PX * 0.52) this.step(dx < 0 ? 1 : -1);
     };
     this.stage.addEventListener('pointerup', endSwipe);
     this.stage.addEventListener('pointercancel', endSwipe);
@@ -208,6 +230,8 @@ export class GearInspector {
 
   private open3d(from: { x: number; y: number }) {
     this.notice = '';
+    this.orbitYaw = 0;
+    this.orbitTilt = 0;
     this.models.forEach((m) => this.turntable.remove(m));
     this.models.clear();
     this.swap = null;
@@ -295,6 +319,24 @@ export class GearInspector {
       this.models.set(level, m);
     }
     return m;
+  }
+
+  /** A low, dark plinth separates the model from the backdrop and catches its silhouette. */
+  private buildPlinth() {
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.08, 1.16, 0.12, 12),
+      new THREE.MeshStandardMaterial({ color: '#162b31', metalness: 0.38, roughness: 0.56 }),
+    );
+    base.position.y = -1.08;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.94, 0.025, 5, 32),
+      new THREE.MeshStandardMaterial({ color: '#55d5c7', emissive: '#123f42', emissiveIntensity: 0.55, metalness: 0.5, roughness: 0.38 }),
+    );
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = -1.01;
+    this.plinth.add(base, rim);
   }
 
   private renderInfo() {
@@ -582,8 +624,8 @@ export class GearInspector {
       this.model(this.level).position.x = pull;
     }
     // Each model turns on its own axis, so one sliding past doesn't swing round the middle.
-    for (const m of this.turntable.children) m.rotation.y = this.spin;
-    this.turntable.rotation.x = 0.18;
+    for (const m of this.turntable.children) m.rotation.y = this.spin + this.orbitYaw;
+    this.turntable.rotation.x = 0.18 + this.orbitTilt;
     this.renderer.render(this.scene, this.camera);
   }
 }
