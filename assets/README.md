@@ -1,8 +1,8 @@
-# Asset library · fish and fishing rod
+# Asset library · fish and equipment
 
 **English** · [简体中文](README.zh-CN.md)
 
-Every fish and the fishing rod in 屏息 Breathless is built in code. The rod uses more detailed hardware and PBR materials while retaining faceted shading. This folder catalogs the assets with renders, model parameters and a reusable Lv1 fishing-net GLB. The game builds the models live; the exported files are available for reuse.
+Every fish and the fishing rod in 屏息 Breathless is built in code. The rod uses more detailed hardware and PBR materials while retaining faceted shading. This folder catalogs the assets with renders, model parameters, a reusable Lv1 fishing-net GLB, and 27 equipment upgrade display models. The game builds its models live; the exported files are available for reuse.
 
 ---
 
@@ -14,6 +14,7 @@ Every fish and the fishing rod in 屏息 Breathless is built in code. The rod us
 4. [Using the assets](#4-using-the-assets)
 5. [Rendering the pictures again](#5-rendering-the-pictures-again)
 6. [Adding or changing an asset](#6-adding-or-changing-an-asset)
+7. [Equipment upgrade models](#7-equipment-upgrade-models)
 
 ---
 
@@ -29,6 +30,12 @@ assets/
 │   ├── fishing-net-dark.png             1024 × 512 PNG, on dark water
 │   ├── fishing-net-faceted-preview.png  inspection preview
 │   └── fishing-net-faceted.glb          base Lv1 model with per-face normals
+├── upgrades/            9 equipment classes × 3 tiers: PNG and GLB
+│   ├── <id>-lv1.png / <id>-lv1.glb      base display model
+│   ├── <id>-lv2.png / <id>-lv2.glb      reinforced display model
+│   ├── <id>-lv3.png / <id>-lv3.glb      advanced display model
+│   ├── equipment-contact-sheet.png     all 27 models together
+│   └── manifest.json                   file names and tier index
 └── cards/               one example NFT card: 512 × 512 PNG
 ```
 
@@ -43,6 +50,8 @@ The pictures are renders. The game does not load them: it draws every fish and t
 | Accessory 3D Studio | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html), [`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | Preview page | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html), [`game/src/asset-library.ts`](../game/src/asset-library.ts) |
 | Rod inspection and export | `gear-preview.html` | [`game/gear-preview.html`](../game/gear-preview.html), [`game/src/gear-preview.ts`](../game/src/gear-preview.ts) |
+| Equipment upgrade display models | `buildUpgradeModel(id, level)` | [`game/src/upgrades.ts`](../game/src/upgrades.ts), [`game/src/upgrade-models/`](../game/src/upgrade-models/) |
+| Equipment inspection and export | `equipment-preview.html` | [`game/equipment-preview.html`](../game/equipment-preview.html), [`game/src/equipment-preview.ts`](../game/src/equipment-preview.ts) |
 
 ---
 
@@ -358,3 +367,31 @@ Editing a profile changes how every fish of that species is drawn, including the
 Edit `buildFishingNetMesh()` in `gear.ts`. Keep the origin at the shoulder and the rod along +x, and keep `tip` in the middle of the hoop, because catches are measured from it. Then render `gear/` again.
 
 **After any change**, run `npm --prefix game run build`, render the pictures again, and update the tables in both READMEs here.
+
+---
+
+## 7. Equipment upgrade models
+
+Nine classes have three separately built tiers each: **27 matte, broadly faceted PBR display models**, with realistic proportions and changes to the hardware as well as the colors. [`buildUpgradeModel(id, level)`](../game/src/upgrades.ts) supplies the workbench and equipment catalog. These are display assets; generating or exporting them does not connect purchase handling, boat travel, or the fins, reserve-air and light effects to gameplay. The diver's approved runtime landing net remains in [`gear.ts`](../game/src/gear.ts).
+
+<img src="upgrades/equipment-contact-sheet.png" width="1080" alt="All nine equipment classes, with Lv1, Lv2 and Lv3 side by side">
+
+[Full contact sheet](upgrades/equipment-contact-sheet.png) · [Asset index](upgrades/manifest.json)
+
+Each cell below links the corresponding PNG and GLB in `assets/upgrades/`. File names are `<id>-lv1.png` / `<id>-lv1.glb`, then `lv2` and `lv3`; IDs retain their exact spelling, including `boatSpeed`, `boatHull` and `boatDeck`. PNGs are 768 × 512 with transparency. GLBs contain the model and materials, with explicit face normals, and no studio lights, floor or camera. Display exports are centered with a longest dimension of 2 model units; this is a presentation scale rather than meters.
+
+| Class / ID | Lv1 · Basic | Lv2 · Reinforced | Lv3 · Advanced |
+| --- | --- | --- | --- |
+| Fishing rod / `rod` | Short blank, wooden grip and spinning reel<br>[PNG](upgrades/rod-lv1.png) · [GLB](upgrades/rod-lv1.glb) | Longer blank, split EVA grip and guide braces<br>[PNG](upgrades/rod-lv2.png) · [GLB](upgrades/rod-lv2.glb) | Long carbon blank and adjustable drag hardware<br>[PNG](upgrades/rod-lv3.png) · [GLB](upgrades/rod-lv3.glb) |
+| Bait / `bait` | Curved soft worm and single hook<br>[PNG](upgrades/bait-lv1.png) · [GLB](upgrades/bait-lv1.glb) | Hard fish lure with diving lip<br>[PNG](upgrades/bait-lv2.png) · [GLB](upgrades/bait-lv2.glb) | Luminous metal blade and two treble hooks<br>[PNG](upgrades/bait-lv3.png) · [GLB](upgrades/bait-lv3.glb) |
+| Boat propulsion / `boatSpeed` | Pair of shaped wooden oars<br>[PNG](upgrades/boatSpeed-lv1.png) · [GLB](upgrades/boatSpeed-lv1.glb) | Single outboard motor with tiller and propeller<br>[PNG](upgrades/boatSpeed-lv2.png) · [GLB](upgrades/boatSpeed-lv2.glb) | Twin outboards with steering link<br>[PNG](upgrades/boatSpeed-lv3.png) · [GLB](upgrades/boatSpeed-lv3.glb) |
+| Boat hull / `boatHull` | Open wooden hull, interior frames and seats<br>[PNG](upgrades/boatHull-lv1.png) · [GLB](upgrades/boatHull-lv1.glb) | Side reinforcement and reinforced transom<br>[PNG](upgrades/boatHull-lv2.png) · [GLB](upgrades/boatHull-lv2.glb) | Collision rubrail and additional gunwale hardware<br>[PNG](upgrades/boatHull-lv3.png) · [GLB](upgrades/boatHull-lv3.glb) |
+| Fishing deck / `boatDeck` | Planked deck, railing and one hollow rod holder<br>[PNG](upgrades/boatDeck-lv1.png) · [GLB](upgrades/boatDeck-lv1.glb) | Larger deck, two holders and preparation table<br>[PNG](upgrades/boatDeck-lv2.png) · [GLB](upgrades/boatDeck-lv2.glb) | Three holders, preparation table and fish locker<br>[PNG](upgrades/boatDeck-lv3.png) · [GLB](upgrades/boatDeck-lv3.glb) |
+| Landing net / `net` | Small elliptical rim and diamond nylon bag<br>[PNG](upgrades/net-lv1.png) · [GLB](upgrades/net-lv1.glb) | Larger mouth and reinforced rim rail<br>[PNG](upgrades/net-lv2.png) · [GLB](upgrades/net-lv2.glb) | Largest mouth and additional lateral braces<br>[PNG](upgrades/net-lv3.png) · [GLB](upgrades/net-lv3.glb) |
+| Fins / `fins` | Short rubber blades, hollow foot pockets and drain slots<br>[PNG](upgrades/fins-lv1.png) · [GLB](upgrades/fins-lv1.glb) | Wider channeled blades and molded ribs<br>[PNG](upgrades/fins-lv2.png) · [GLB](upgrades/fins-lv2.glb) | Long carbon blades with fine reinforcing ribs<br>[PNG](upgrades/fins-lv3.png) · [GLB](upgrades/fins-lv3.glb) |
+| Reserve air / `tank` | Empty harness and cylinder clamps; **no bottle or reserve air**<br>[PNG](upgrades/tank-lv1.png) · [GLB](upgrades/tank-lv1.glb) | Rounded single bottle, valve, hose and mouthpiece<br>[PNG](upgrades/tank-lv2.png) · [GLB](upgrades/tank-lv2.glb) | Twin bottles, manifold and pressure gauge with needle<br>[PNG](upgrades/tank-lv3.png) · [GLB](upgrades/tank-lv3.glb) |
+| Headlamp / `lamp` | Single lamp, headband and rear battery<br>[PNG](upgrades/lamp-lv1.png) · [GLB](upgrades/lamp-lv1.glb) | Wider reflector cup and impact guard<br>[PNG](upgrades/lamp-lv2.png) · [GLB](upgrades/lamp-lv2.glb) | Two optical heads and larger rear battery<br>[PNG](upgrades/lamp-lv3.png) · [GLB](upgrades/lamp-lv3.glb) |
+
+Start `npm run game`, then open <http://localhost:5173/equipment-preview.html> ([page source](../game/equipment-preview.html)). Select a class and level, drag to rotate, scroll to zoom, or reset the view. The gallery renders all 27 tiers. **Generate all assets** creates the GLB links and `manifest.json`; download each PNG/GLB and the contact sheet into `assets/upgrades/`. The manifest records ID, level, class name, reference effect text, filenames and GLB byte size. Its effect text describes upgrade definitions, not a guarantee that those effects are wired into gameplay.
+
+To change these assets, edit the relevant builder in [`upgrade-models/fishing.ts`](../game/src/upgrade-models/fishing.ts), [`marine.ts`](../game/src/upgrade-models/marine.ts) or [`diving.ts`](../game/src/upgrade-models/diving.ts), rebuild, and regenerate the affected PNG/GLB files and the index. The class list and reference effects come from `UPGRADES` in `upgrades.ts`.
