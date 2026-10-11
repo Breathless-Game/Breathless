@@ -6,6 +6,7 @@ import {
   nextToSell,
   nftStep,
   sellQuote,
+  unsettled,
   type BankedFish,
   type NftEvent,
 } from './market';
@@ -102,6 +103,26 @@ export class NftQueue {
   /** A mint or sale is under way right now. */
   get busy() {
     return this.minting !== null || this.selling.size > 0;
+  }
+
+  /** The queue has this fish in hand right now: minting it, or selling it. */
+  holds(f: BankedFish): boolean {
+    return this.minting?.fish === f || this.selling.has(f);
+  }
+
+  /**
+   * Take fish out of the bank for good (a shark bite on the Open Ocean). Only fish still unsettled
+   * (market.ts) and not in the queue's hands go; the rest stay. Returns those removed. Safe at any
+   * point of runMints(): a fish picked but still waiting on its number is re-checked against the
+   * bank before it is sent, so once it is gone from the bank (and the saved bank) it is never minted.
+   */
+  forfeit(fish: readonly BankedFish[]): BankedFish[] {
+    const gone = fish.filter((f) => unsettled(f) && !this.holds(f) && this.bank.includes(f));
+    if (!gone.length) return gone;
+    for (const f of gone) this.bank.splice(this.bank.indexOf(f), 1);
+    this.save();
+    this.hooks.changed();
+    return gone;
   }
 
   kick() {

@@ -1,6 +1,6 @@
-// Sharks on the Open Ocean, if the player opts in: one by day, two at night.
+// Sharks on the Open Ocean, always: one by day, two at night.
 // They hunt by the diver's heartbeat: the faster it beats, the sooner
-// they notice, the faster they charge and the more fish a bite costs. Pure
+// they notice and the faster they charge. A bite ends the dive (main.ts). Pure
 // rules with no rendering, so the tests can load this straight from
 // TypeScript: shark-fx.ts draws them, main.ts applies the bites.
 

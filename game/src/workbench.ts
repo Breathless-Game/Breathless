@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
-import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, mapDepth, type MapId, type MapProgress } from './maps';
 import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
@@ -1394,6 +1394,7 @@ export class Workbench {
       $('wb-place-title').textContent = 'Where to? · 去哪儿？';
       $('wb-place-sub').textContent = 'Pick a place on the chart';
       $('wb-place-text').textContent = '';
+      $('wb-place-warn').classList.add('hidden');
     } else {
       const map = MAPS[id];
       // A live view; turning it on also turns the world behind the table to that place, ready for the dive.
@@ -1401,6 +1402,14 @@ export class Workbench {
       $('wb-place-title').textContent = `${map.name} · ${map.nameZh}`;
       $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · Shelf ${mapDepth(map)} m · Trench ∞ · ${map.place}`;
       $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
+      // Shark waters say what a bite costs every time the place is picked, before Dive.
+      const warn = $('wb-place-warn');
+      warn.classList.toggle('hidden', !map.sharks);
+      if (map.sharks) {
+        const en = document.createElement('b');
+        en.textContent = SHARK_WARNING.en;
+        warn.replaceChildren(en, document.createElement('br'), SHARK_WARNING.zh);
+      }
     }
     const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
     $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';

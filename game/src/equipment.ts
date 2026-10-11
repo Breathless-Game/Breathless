@@ -644,3 +644,31 @@ export function deriveStats(state: EquipmentState, loadout?: readonly string[]):
   };
 }
 
+/**
+ * The dive-kit upgrades a shark bite on the Open Ocean takes back (main.ts
+ * resetDiveGearAfterBite): every `group: 'dive'` piece in upgrades.ts. The boat
+ * pieces (bait, boat, boatSpeed, boatHull, boatDeck) are not in EquipmentState
+ * at all (the boat is the shipyard's), so a reset never touches them.
+ */
+export const DIVE_GEAR_SLOTS: readonly UpgradeSlot[] = Object.freeze(['rod', 'reel', 'net', 'fins', 'tank', 'lamp', 'sonar'] as const);
+
+export interface DiveGearReset {
+  /** The new state: every dive slot at level 1, its module path back to the default, Pearls untouched. */
+  state: EquipmentState;
+  /** The slots that were above level 1, with the level they had. */
+  dropped: { slot: UpgradeSlot; from: EquipmentLevel }[];
+}
+
+/**
+ * Pure: every dive slot back to level 1 and its branch back to the default
+ * path, so no path bonus survives and buying Lv2 again starts from the
+ * default branch. Pearls spent are not refunded; both balances are kept.
+ */
+export function resetDiveGear(state: EquipmentState): DiveGearReset {
+  const safe = normalize(state);
+  const dropped = DIVE_GEAR_SLOTS.filter((slot) => slotLevel(safe, slot) > 1).map((slot) => ({ slot, from: slotLevel(safe, slot) }));
+  let next = safe;
+  for (const slot of DIVE_GEAR_SLOTS) next = withSlotLevel(next, slot, 1);
+  return { state: { ...next, paths: { ...DEFAULT_EQUIPMENT_PATHS } }, dropped };
+}
+

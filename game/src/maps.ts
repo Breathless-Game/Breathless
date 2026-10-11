@@ -37,7 +37,10 @@ export interface MapDef {
    * only bring wind and rain). Above 0, rogue waves can capsize the boat (see storm.ts).
    */
   stormSwell: number;
-  /** One shark hunts here by day, two at night, if the player has opted in (see shark.ts). */
+  /**
+   * Sharks always hunt here: one by day, two at night (see shark.ts). A bite costs this
+   * dive's unsettled catch and resets the dive gear upgrades (main.ts sharkBite).
+   */
   sharks: boolean;
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
@@ -179,6 +182,29 @@ export function loadMapProgress(): MapProgress {
 export function saveMapProgress(progress: MapProgress) {
   try {
     localStorage.setItem(storageKey(KEY), JSON.stringify(progress));
+  } catch {}
+}
+
+/** What shark waters say before you dive there (the chart's place card and the one-time warning). */
+export const SHARK_WARNING = {
+  en: "Sharks hunt here. A bite costs this dive's catch and resets your dive gear upgrades.",
+  zh: '鲨鱼在此出没。被咬一口，本次下潜的渔获全部损失，潜水装备升级重置为 1 级。',
+} as const;
+
+const SHARK_WARNED_KEY = 'sharkWarned';
+
+/** Has this wallet acknowledged the shark warning once? Then later dives on shark waters don't ask again. */
+export function sharkWarningSeen(): boolean {
+  try {
+    return localStorage.getItem(storageKey(SHARK_WARNED_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markSharkWarningSeen() {
+  try {
+    localStorage.setItem(storageKey(SHARK_WARNED_KEY), '1');
   } catch {}
 }
 
