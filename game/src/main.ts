@@ -445,6 +445,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
     e.preventDefault();
     gear.toggle();
+    if (gear.open) void syncPearls();
     return;
   }
   if (phase !== 'play') return;
