@@ -18,7 +18,7 @@ import { Diver } from './diver';
 import { LazyGearInspector as GearInspector } from './lazy-panels';
 import type { ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, upgradeName, upgradeEffect, type UpgradeDef, type UpgradeId } from './upgrades';
-import type { WeatherState } from './weather';
+import { chartWeatherShows, type WeatherState } from './weather';
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
@@ -253,6 +253,10 @@ export class Workbench {
   private stirFrom: { x: number; z: number; t: number } | null = null; // last pointer spot on the paper (its local x/z)
   private mapTex: THREE.CanvasTexture;
   private chartWeatherKey = '';
+  // The chart's weather drifts on its own clock, which never restarts, from a place and a
+  // shuffle picked afresh each session: no two looks at the chart find it the same.
+  private chartSecond = Math.random() * 600;
+  private chartSeed = Math.floor(Math.random() * 0x7fffffff);
   private mapHover = 0;
   private slotRings: THREE.Mesh[] = [];
   private dust: { mesh: THREE.Mesh; t: number }[] = [];
@@ -743,15 +747,18 @@ export class Workbench {
     // Every place is open from the chart: no locks painted on.
     const id = this.picked ?? this.hooks.progress().selected;
     const snapshot = weather ?? this.hooks.conditions(id).weatherState;
-    // A canvas redraw is only needed when a visible weather bucket changes;
-    // the live note can still update four times a second during a transition.
+    // A canvas redraw is only needed when a visible weather bucket changes, or,
+    // while the chart is held up and there is weather on it, four times a second
+    // as its clouds drift.
     const progress = this.hooks.progress();
+    const drift = this.state === 'chart' && chartWeatherShows(snapshot) ? Math.floor(this.chartSecond * 4) : -1;
     const key = [id, progress.selected, progress.bestValue, snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
       .map((value) => typeof value === 'number' ? Math.round(value * 20) : value)
+      .concat(drift)
       .join(':');
     if (key === this.chartWeatherKey && this.mapTex.image.width) return;
     this.chartWeatherKey = key;
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...progress, unlockAll: true }, true, snapshot);
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...progress, unlockAll: true }, true, snapshot, this.chartSecond, this.chartSeed);
     this.mapTex.needsUpdate = true;
   }
 
@@ -1090,6 +1097,7 @@ export class Workbench {
 
   private frame(dt: number) {
     this.time += dt;
+    this.chartSecond += dt;
     this.acc += dt;
     while (this.acc >= STEP) {
       this.acc -= STEP;

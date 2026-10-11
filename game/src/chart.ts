@@ -1,6 +1,6 @@
 import { MAPS, MAP_ORDER, isUnlocked, type MapId, type MapProgress } from './maps';
 import { t as tr } from './i18n';
-import { weatherArtProfile, type WeatherState } from './weather';
+import { chartWeather, type ChartCloud, type ChartWind, type WeatherState } from './weather';
 
 // The sea chart on the workbench: a hand-drawn parchment map with the three
 // places, one per chapter. The same drawing is the folded map's texture on the
@@ -157,113 +157,125 @@ function pin(c: CanvasRenderingContext2D, x: number, y: number, label: string, l
   c.restore();
 }
 
-/** A weather stamp in the same pencil language as the coastlines and route. */
-function weatherGlyphs(c: CanvasRenderingContext2D, weather: WeatherState) {
-  const art = weatherArtProfile(weather);
-  if (art.cloudInk <= 0 && art.windMarks === 0 && art.rainMarks === 0 && art.lightning === 0) return;
+const PENCIL = 'rgba(91, 58, 28, 0.78)';
 
-  // Keep the mark in open water below the cartouche. Its fixed seed makes it
-  // feel drawn on paper instead of jittering as the live front advances.
-  const x = 555;
-  const y = 124;
-  const ink = 'rgba(91, 58, 28, 0.78)';
+/**
+ * One cloud, in the same pencil as the coastlines: rain slanting under it when it rains,
+ * a bolt when it thunders. Drawn about 75 units wide at size 1.
+ */
+function cloudMark(c: CanvasRenderingContext2D, m: ChartCloud) {
+  const s = 0.5 * m.size;
   c.save();
+  c.translate(m.x * CHART_W, m.y * CHART_H);
+  c.scale(s, s);
+  c.globalAlpha = m.ink;
   c.lineCap = 'round';
   c.lineJoin = 'round';
 
-  if (art.cloudInk > 0) {
-    const opacity = 0.26 + art.cloudInk * 0.30;
-    c.fillStyle = `rgba(191, 202, 194, ${opacity})`;
-    c.strokeStyle = ink;
-    c.lineWidth = 3;
+  // A strike lights the air under the cloud for a moment.
+  if (m.flash) {
+    c.fillStyle = 'rgba(244, 207, 92, 0.3)';
     c.beginPath();
-    c.moveTo(x - 74, y + 14);
-    c.quadraticCurveTo(x - 68, y - 8, x - 46, y - 5);
-    c.quadraticCurveTo(x - 34, y - 29, x - 9, y - 12);
-    c.quadraticCurveTo(x + 13, y - 43, x + 36, y - 12);
-    c.quadraticCurveTo(x + 65, y - 16, x + 72, y + 12);
-    c.quadraticCurveTo(x + 59, y + 31, x + 33, y + 25);
-    c.quadraticCurveTo(x + 7, y + 39, x - 15, y + 25);
-    c.quadraticCurveTo(x - 39, y + 36, x - 56, y + 23);
-    c.quadraticCurveTo(x - 72, y + 29, x - 74, y + 14);
+    c.ellipse(6, 52, 46, 34, 0, 0, Math.PI * 2);
     c.fill();
-    c.stroke();
-    // A second, lighter pass gives the outline the uneven pressure of pencil.
-    c.globalAlpha = 0.34 * art.cloudInk;
-    c.lineWidth = 1.2;
-    c.beginPath();
-    c.moveTo(x - 69, y + 17);
-    c.quadraticCurveTo(x - 45, y + 8, x - 30, y + 15);
-    c.quadraticCurveTo(x - 3, y + 24, x + 23, y + 13);
-    c.quadraticCurveTo(x + 50, y + 23, x + 67, y + 14);
-    c.stroke();
-    c.globalAlpha = 1;
   }
-
-  if (art.rainMarks > 0) {
-    c.strokeStyle = 'rgba(83, 119, 133, 0.78)';
-    c.lineWidth = 2;
-    const count = Math.max(4, art.rainMarks);
-    for (let i = 0; i < count; i++) {
-      const dx = -58 + i * (116 / Math.max(1, count - 1));
-      const length = 15 + (i % 3) * 4;
+  if (m.rain > 0) {
+    // Five strokes, every other one a step further down each quarter second: falling rain.
+    c.strokeStyle = `rgba(83, 119, 133, ${0.4 + 0.45 * m.rain})`;
+    c.lineWidth = 2.4 / s;
+    for (let i = 0; i < 5; i++) {
+      const dx = -50 + i * 25;
+      const fall = ((i + m.step) % 2) * 9;
+      const length = 13 + ((i + m.step) % 3) * 4;
       c.beginPath();
-      c.moveTo(x + dx, y + 31);
-      c.lineTo(x + dx - 7, y + 31 + length);
+      c.moveTo(dx, 31 + fall);
+      c.lineTo(dx - 7, 31 + fall + length);
       c.stroke();
     }
   }
-
-  if (art.windMarks > 0) {
-    c.strokeStyle = 'rgba(91, 58, 28, 0.64)';
-    c.lineWidth = 2;
-    const count = Math.max(2, art.windMarks);
-    for (let i = 0; i < count; i++) {
-      const yy = y - 36 + i * 15;
-      const start = x + 88 + (i % 2) * 8;
-      c.beginPath();
-      c.moveTo(start, yy);
-      c.quadraticCurveTo(start + 19, yy - 8, start + 39, yy);
-      c.quadraticCurveTo(start + 49, yy + 4, start + 58, yy - 4);
-      c.stroke();
-      c.beginPath();
-      c.moveTo(start + 51, yy - 8);
-      c.lineTo(start + 59, yy - 4);
-      c.lineTo(start + 51, yy + 1);
-      c.stroke();
-    }
-  }
-
-  if (art.lightning > 0) {
-    c.fillStyle = 'rgba(244, 207, 92, 0.85)';
-    c.strokeStyle = ink;
-    c.lineWidth = 2.5;
+  if (m.bolt > 0) {
+    c.globalAlpha = m.ink * m.bolt;
+    c.fillStyle = m.flash ? 'rgba(255, 226, 120, 0.98)' : 'rgba(244, 207, 92, 0.9)';
+    c.strokeStyle = PENCIL;
+    c.lineWidth = 1.6 / s;
     c.beginPath();
-    c.moveTo(x + 9, y + 35);
-    c.lineTo(x - 4, y + 59);
-    c.lineTo(x + 8, y + 56);
-    c.lineTo(x - 3, y + 83);
-    c.lineTo(x + 27, y + 49);
-    c.lineTo(x + 14, y + 51);
+    c.moveTo(9, 33);
+    c.lineTo(-6, 59);
+    c.lineTo(7, 56);
+    c.lineTo(-4, 86);
+    c.lineTo(28, 48);
+    c.lineTo(14, 51);
     c.closePath();
     c.fill();
     c.stroke();
+    c.globalAlpha = m.ink;
   }
 
-  c.fillStyle = ink;
-  c.globalAlpha = 0.82;
-  c.font = '700 13px Georgia, serif';
-  c.textAlign = 'center';
-  const label = weather.kind === 'storm' ? tr('STORM FRONT', '暴风前线') : weather.kind === 'rain' ? tr('RAIN', '雨幕') : tr('CLOUD BANK', '云层');
-  c.fillText(label, x, y + 105);
+  const outline = () => {
+    c.beginPath();
+    c.moveTo(-74, 14);
+    c.quadraticCurveTo(-68, -8, -46, -5);
+    c.quadraticCurveTo(-34, -29, -9, -12);
+    c.quadraticCurveTo(13, -43, 36, -12);
+    c.quadraticCurveTo(65, -16, 72, 12);
+    c.quadraticCurveTo(59, 31, 33, 25);
+    c.quadraticCurveTo(7, 39, -15, 25);
+    c.quadraticCurveTo(-39, 36, -56, 23);
+    c.quadraticCurveTo(-72, 29, -74, 14);
+  };
+  outline();
+  c.fillStyle = 'rgba(203, 211, 200, 0.92)';
+  c.fill();
+  // The heavier the cloud, the more of the chart's own ink is washed into it.
+  c.fillStyle = `rgba(91, 58, 28, ${0.12 * m.rain + 0.2 * m.bolt})`;
+  c.fill();
+  c.strokeStyle = PENCIL;
+  c.lineWidth = 1.7 / s;
+  c.stroke();
+  // A second, lighter pass gives the outline the uneven pressure of pencil.
+  c.globalAlpha = m.ink * 0.4;
+  c.lineWidth = 0.9 / s;
+  c.beginPath();
+  c.moveTo(-69, 17);
+  c.quadraticCurveTo(-45, 8, -30, 15);
+  c.quadraticCurveTo(-3, 24, 23, 13);
+  c.quadraticCurveTo(50, 23, 67, 14);
+  c.stroke();
   c.restore();
 }
 
-/**
- * Draws the chart into `cv` at `scale` × (CHART_W × CHART_H) pixels.
- * pins: paint the three place markers (the texture); the open chart uses buttons instead.
- */
-export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapProgress, pins: boolean, weather?: WeatherState) {
+/** A gust: two or three streaks with a hooked end, pointing the way the weather drifts. */
+function windMark(c: CanvasRenderingContext2D, m: ChartWind) {
+  const s = 0.9 * m.size;
+  c.save();
+  c.translate(m.x * CHART_W, m.y * CHART_H);
+  c.scale(s, s);
+  c.globalAlpha = m.ink;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  c.strokeStyle = PENCIL;
+  c.lineWidth = 2.1 / s;
+  for (let i = 0; i < m.lines; i++) {
+    const y = (i - (m.lines - 1) / 2) * 14;
+    const x = -30 + (i % 2) * 9;
+    c.beginPath();
+    c.moveTo(x, y);
+    c.quadraticCurveTo(x + 19, y - 8, x + 39, y);
+    c.quadraticCurveTo(x + 49, y + 4, x + 58, y - 4);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(x + 51, y - 8);
+    c.lineTo(x + 59, y - 4);
+    c.lineTo(x + 51, y + 1);
+    c.stroke();
+  }
+  c.restore();
+}
+
+/** Everything under the weather: paper, land, sea and route. It is the slow part, so it is kept. */
+let ground: { key: string; canvas: HTMLCanvasElement } | null = null;
+
+function paintGround(cv: HTMLCanvasElement, scale: number) {
   cv.width = Math.round(CHART_W * scale);
   cv.height = Math.round(CHART_H * scale);
   const c = cv.getContext('2d')!;
@@ -349,10 +361,37 @@ export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapPro
   c.stroke();
   c.restore();
 
+}
+
+/**
+ * Draws the chart into `cv` at `scale` × (CHART_W × CHART_H) pixels.
+ * pins: paint the three place markers (the texture); the open chart uses buttons instead.
+ * The weather is where its clouds and gusts have drifted to at `second`; `seed` scatters them.
+ */
+export function drawChart(cv: HTMLCanvasElement, scale: number, progress: MapProgress, pins: boolean, weather?: WeatherState, second = 0, seed = 0) {
+  const key = `${scale}`;
+  if (ground?.key !== key) {
+    ground = { key, canvas: ground?.canvas ?? document.createElement('canvas') };
+    paintGround(ground.canvas, scale);
+  }
+  if (cv.width !== ground.canvas.width || cv.height !== ground.canvas.height) {
+    cv.width = ground.canvas.width;
+    cv.height = ground.canvas.height;
+  }
+  const c = cv.getContext('2d')!;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.drawImage(ground.canvas, 0, 0);
+  c.setTransform(scale, 0, 0, scale, 0, 0);
+  const at = (id: MapId) => [PLACES[id].fx * CHART_W, PLACES[id].fy * CHART_H] as const;
+
   // Weather is a live field note layered over the fixed geography. It is
   // intentionally drawn before the title, pins and frame so important map
-  // controls stay crisp and the stamp reads as ink on the chart.
-  if (weather) weatherGlyphs(c, weather);
+  // controls stay crisp and the clouds read as ink on the chart.
+  if (weather) {
+    const marks = chartWeather(weather, second, seed);
+    for (const wind of marks.winds) windMark(c, wind);
+    for (const cloud of marks.clouds) cloudMark(c, cloud);
+  }
 
   compass(c, 96, CHART_H - 96, 54);
 
