@@ -7,7 +7,7 @@ const source = await readFile(new URL('../src/weather.ts', import.meta.url), 'ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
-const { WeatherCycle } = await import(
+const { WeatherCycle, weatherArtProfile } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 const amounts = ['cloud', 'rain', 'wind', 'storm'];
@@ -133,4 +133,21 @@ test('invalid input and external state mutation cannot corrupt the front', () =>
   external.rain = 99;
   assert.deepEqual(cycle.state, before);
   assert.equal(cycle.advance(5, false).kind, 'rain');
+});
+
+test('the chart weather key follows the front without inventing marks in clear air', () => {
+  const clear = weatherArtProfile({ kind: 'clear', cloud: 0.04, rain: 0, wind: 0.12, storm: 0 });
+  const cloudy = weatherArtProfile({ kind: 'cloudy', cloud: 0.70, rain: 0, wind: 0.32, storm: 0 });
+  const rain = weatherArtProfile({ kind: 'rain', cloud: 0.90, rain: 0.68, wind: 0.56, storm: 0 });
+  const storm = weatherArtProfile({ kind: 'storm', cloud: 1, rain: 1, wind: 1, storm: 1 });
+  assert.deepEqual(clear, { cloudInk: 0, rainMarks: 0, windMarks: 0, lightning: 0 });
+  assert.ok(cloudy.cloudInk > clear.cloudInk);
+  assert.ok(cloudy.windMarks > clear.windMarks);
+  assert.ok(rain.rainMarks > cloudy.rainMarks);
+  assert.ok(storm.windMarks > rain.windMarks);
+  assert.ok(storm.lightning > rain.lightning);
+  for (const profile of [clear, cloudy, rain, storm]) {
+    assert.ok(profile.cloudInk >= 0 && profile.cloudInk <= 1);
+    assert.ok(profile.lightning >= 0 && profile.lightning <= 1);
+  }
 });

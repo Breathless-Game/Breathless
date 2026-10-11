@@ -50,6 +50,8 @@ import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { SynthesisPanel } from './synthesis-panel';
+import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
 import type { LessonId } from './tutorial';
 
@@ -335,6 +337,7 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+let synthesisState: SynthesisState = loadSynthesis();
 // The persistent inventory is filtered by the workbench for each dive. A null
 // loadout means the debug/title state where all owned upgrades are available.
 let activeLoadout: readonly UpgradeId[] | null = null;
@@ -369,7 +372,15 @@ function applyEquipmentVisuals() {
   diver.setFinsLevel(activeLevel('fins'));
   diver.setTankLevel(activeLevel('tank'));
   diver.setLampLevel(activeLevel('lamp'));
-  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
+  diver.setLampStats(
+    stats.lampDistance,
+    stats.lampIntensity,
+    stats.lampAngle,
+    stats.lampScatter,
+    stats.lampDecay,
+    stats.lampPenumbra,
+    stats.lampExtinction,
+  );
   diver.setReelLevel(activeLevel('reel'));
   diver.setReelRecovery(stats.reelRecovery);
 }
@@ -767,6 +778,70 @@ async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<
   }
 }
 
+let synthesisBusy = false;
+/** Spend a synthesis station fee with the same legacy-first accounting as gear upgrades. */
+async function spendSynthesisPearls(cost: number): Promise<boolean> {
+  if (totalPearls(equipment) < cost) {
+    hud.message(`Need ${cost - totalPearls(equipment)} more Pearls`, 1500);
+    return false;
+  }
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
+  try {
+    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
+    equipment.legacyPearls -= fromLegacy;
+    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    refreshEquipment();
+    if (fromChain > 0) void syncPearls();
+    return true;
+  } catch (e) {
+    hud.message(`Synthesis payment failed · ${(e as Error).message ?? e}`, 1800);
+    return false;
+  }
+}
+
+async function synthCraft(id: RecipeDef['id']) {
+  if (synthesisBusy) return;
+  if (!canCraft(synthesisState, id)) {
+    hud.message('Materials missing · 材料不足', 1400);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id])) return;
+    const next = craftRecipe(synthesisState, id);
+    if (!next) return;
+    synthesisState = next;
+    saveSynthesis(synthesisState);
+    hud.message(id === 'bait' ? 'Tide bait crafted · 鱼饵已合成' : 'Composite plate crafted · 护板已合成', 1600);
+  } finally {
+    synthesisBusy = false;
+  }
+}
+
+async function synthUpgrade(slot: UpgradeSlot) {
+  if (synthesisBusy) return;
+  const level = slot === 'rod' ? equipment.rodGearLevel : equipment[`${slot}Level` as keyof EquipmentState] as number;
+  if (level >= 3) return;
+  const cost = SYNTHESIS_UPGRADE_COSTS[slot][level - 1];
+  const tier = nextSlotTier(equipment, slot);
+  if (!tier) return;
+  if (synthesisState.crafted.composite < 1) {
+    hud.message('Craft one composite plate first · 先合成复合护板', 1800);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(cost)) return;
+    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost }, fromLegacy: 0, fromChain: 0 }));
+    synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
+    saveSynthesis(synthesisState);
+    refreshEquipment();
+    hud.message(`${nextSlotLabel(slot)} upgraded in synthesis station`, 1800);
+  } finally {
+    synthesisBusy = false;
+  }
+ }
 let buying = false;
 /** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
 async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
@@ -927,6 +1002,7 @@ function workbenchConditions(id: MapId): WorkbenchConditions {
     weather: WEATHER_LABELS[weather.kind],
     wind: `${Math.round(4 + weather.wind * 30)} km/h`,
     rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+    weatherState: weather,
   };
 }
 
@@ -1595,6 +1671,15 @@ function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
   labelStartFish(benchPan);
 }
 
+const synthPanel = new SynthesisPanel({
+  state: () => synthesisState,
+  equipment: () => equipment,
+  pearls: () => totalPearls(equipment),
+  craft: synthCraft,
+  upgrade: synthUpgrade,
+  close: () => workbench.escape(),
+});
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
@@ -1678,6 +1763,12 @@ const workbench = new Workbench({
   },
   tutorial(id: LessonId) {
     fieldGuide?.mark(id);
+  },
+  synthesisOpen() {
+    synthPanel.show();
+  },
+  synthesisClose() {
+    synthPanel.hide();
   },
 });
 
@@ -1866,6 +1957,7 @@ async function logOut() {
 function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());
   Object.assign(equipment, loadEquipment());
+  synthesisState = loadSynthesis();
   Object.assign(mapProgress, loadMapProgress());
   if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
@@ -2024,6 +2116,7 @@ function update(dt: number, time: number) {
 
   // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
   // depth, air and banking still count from the mean waterline).
+  diver.setLampEnvironment(world.dayCycle.state.nightMix, world.lightingEffectsEnabled);
   diver.update(dt, time, -diver.pos.y, world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6)));
   sonar.update(time, dt);
   if (!sonarCarried && sonar.mode === 'anchored' && !sonarGuiding && sonar.group.visible) {
