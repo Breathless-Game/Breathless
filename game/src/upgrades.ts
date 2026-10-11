@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { EQUIPMENT_TIERS, ROD_TIERS, type UpgradeSlot } from './equipment';
 import { buildDeepSonar } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
@@ -110,7 +111,7 @@ function buildBoat(level: UpgradeLevel): THREE.Group {
 
 /** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
 function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
-  const group = buildDeepSonar({ lengthLevel: level, detail: 2, startsCarried: false }).group;
+  const group = buildDeepSonar({ color: loadSonarConfig().color, lengthLevel: level, detail: 2, startsCarried: false }).group;
   const halos: THREE.Mesh[] = [];
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshBasicMaterial) halos.push(object);

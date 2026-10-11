@@ -15,6 +15,7 @@ import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps'
 import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { setDeepSonarColor } from './deep-sonar';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -278,6 +279,7 @@ export class Workbench {
         else if (!ready && p.mode === 'ready') this.unready(p);
       },
       sonarColor: (color) => {
+        this.setSonarColor(color);
         this.hooks.sonarColor?.(color);
       },
       buy: async (def) => {
@@ -494,6 +496,12 @@ export class Workbench {
     }
     const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
     return { model: buildUpgradeModel(id, level), key: level };
+  }
+
+  /** Apply the persisted beacon accent to the table piece and open inspector. */
+  private setSonarColor(color: string) {
+    const piece = this.pieces.find((item) => item.id === 'sonar');
+    if (piece) setDeepSonarColor(piece.obj, color);
   }
 
   private buildPiece(id: UpgradeId, i: number): Piece {
