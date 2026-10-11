@@ -233,3 +233,95 @@ test('decodes real program accounts', () => {
   assert.deepEqual(aq.entries.map((e) => e.keyHex), Object.keys(real.aquarium.growth).sort());
   for (const e of aq.entries) assert.ok(e.lastFed > 1_700_000_000 && e.feedCount === 1);
 });
+
+// ---- v2: Progress ----------------------------------------------------------------
+
+test('v2 account sizes, field order and builders agree with the IDL', () => {
+  const types = new Map(idl.types.map((t) => [t.name, t]));
+  const PRIM = { u8: 1, u16: 2, u32: 4, u64: 8, pubkey: 32 };
+  const size = (t) => (typeof t === 'string' ? PRIM[t] : t.array ? size(t.array[0]) * t.array[1]
+    : types.get(t.defined.name).type.fields.reduce((n, f) => n + size(f.type), 0));
+  assert.equal(8 + size({ defined: { name: 'Progress' } }), ps.PROGRESS_HEADER_SIZE);
+  assert.equal(8 + size({ defined: { name: 'ProgressConfig' } }), ps.PROGRESS_CONFIG_SIZE);
+  assert.deepEqual(types.get('Progress').type.fields.map((f) => f.name),
+    ['version', 'bump', 'owner', 'lifetime_value', 'best_value', 'catches', 'boat_levels', 'ship', 'reserved']);
+  assert.deepEqual(types.get('ProgressRules').type.fields.map((f) => f.name), ['boat_prices', 'ship_thresholds', 'map_thresholds']);
+
+  const signer = (pk) => ({ publicKey: publicKey(pk), signMessage: async () => new Uint8Array(), signTransaction: async (x) => x, signAllTransactions: async (x) => x });
+  const MARKET = '12b3GY2Pbh4HnNaLqL7GszmeFrcrfiULwfLz5HcF7gRd';
+  const SESSION = 'EA77L4HGz15Urk1Ycohju77Ufb1hJCa4g5z4Xfdwz9To';
+  const idlIx = (name) => idl.instructions.find((i) => i.name === name);
+  const progress = ps.findProgressPda(ctx, OWNER)[0];
+
+  const [rec] = ps.recordCatch(ctx, { oracle: signer(MARKET), payer: signer(SESSION), owner: OWNER, fish: ps.fishSeedKey('0badf00d'), value: 60 }).getInstructions();
+  assert.deepEqual([...rec.data], [...ps.INSTRUCTION_DISCRIMINATORS.record_catch, 0x0d, 0xf0, 0xad, 0x0b, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(rec.keys.map((k) => [k.pubkey, k.isSigner, k.isWritable]), [
+    [MARKET, true, false],
+    [SESSION, true, true],
+    ['3xrnDesVHmrpYZi6R52ux7FmoxaWL5ege53iFN44DtMj', false, false],
+    [OWNER, false, false],
+    [progress, false, true],
+    ['11111111111111111111111111111111', false, false],
+  ]);
+  assert.deepEqual(idlIx('record_catch').accounts.map((a) => a.name), ['oracle', 'payer', 'config', 'owner', 'progress', 'system_program']);
+
+  const pearl = { pearlMint: publicKey('3aX1muNxajg9VuxfigrVk2f7dGdCedJ67kUsAqCc9drp'), tokenProgram: publicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') };
+  const [boat] = ps.buyBoat(ctx, { owner: signer(OWNER), boat: 'boatHull', level: 2, ...pearl }).getInstructions();
+  assert.deepEqual([...boat.data], [...ps.INSTRUCTION_DISCRIMINATORS.buy_boat, 3, 2]);
+  assert.deepEqual(boat.keys.map((k) => k.pubkey), [OWNER, '3xrnDesVHmrpYZi6R52ux7FmoxaWL5ege53iFN44DtMj', ps.findProgressConfigPda(ctx)[0], progress,
+    pearl.pearlMint, ps.findPearlAta(ctx, OWNER, pearl.pearlMint, pearl.tokenProgram)[0], pearl.tokenProgram, '11111111111111111111111111111111']);
+  assert.deepEqual(idlIx('buy_boat').accounts.map((a) => a.name),
+    ['owner', 'config', 'progress_config', 'progress', 'pearl_mint', 'owner_pearl', 'token_program', 'system_program']);
+  assert.deepEqual(idlIx('set_ship').accounts.map((a) => a.name), ['owner', 'progress_config', 'progress']);
+  assert.deepEqual(idlIx('init_progress_config').accounts.map((a) => a.name), ['admin', 'config', 'progress_config', 'system_program']);
+  assert.deepEqual(idlIx('set_progress_config').accounts.map((a) => a.name), ['admin', 'config', 'progress_config']);
+});
+
+test('decodes Progress, its catch log and ProgressConfig; unlocks follow the thresholds', () => {
+  const b = Buffer.alloc(ps.PROGRESS_HEADER_SIZE + 2 * 8);
+  let o = 0;
+  b.set(ps.ACCOUNT_DISCRIMINATORS.Progress, o); o += 8;
+  b[o++] = 1; b[o++] = 254;
+  b.set(publicKeyBytes(OWNER), o); o += 32;
+  b.writeBigUInt64LE(160n, o); o += 8;
+  b.writeBigUInt64LE(100n, o); o += 8;
+  b.writeUInt32LE(2, o); o += 4;
+  b.set([2, 1, 3, 1, 1], o); o += 5;
+  b[o++] = 2;
+  b.writeBigUInt64LE(7n, ps.PROGRESS_HEADER_SIZE);
+  b.writeBigUInt64LE(0x0badf00dn, ps.PROGRESS_HEADER_SIZE + 8);
+  const p = ps.decodeProgress(b);
+  assert.equal(p.owner, OWNER);
+  assert.equal(p.lifetimeValue, 160n);
+  assert.equal(p.bestValue, 100n);
+  assert.equal(p.catches, 2);
+  assert.deepEqual(p.boatLevels, { bait: 2, boat: 1, boatSpeed: 3, boatHull: 1, boatDeck: 1 });
+  assert.equal(p.ship, 2);
+  assert.deepEqual(ps.decodeCatchLog(b), [7n, 0x0badf00dn]);
+  assert.throws(() => ps.decodeProgress(Buffer.alloc(100)), /Not a Progress/);
+
+  const rules = ps.encodeProgressRules(ps.GAME_PROGRESS_RULES);
+  const c = Buffer.alloc(ps.PROGRESS_CONFIG_SIZE);
+  c.set(ps.ACCOUNT_DISCRIMINATORS.ProgressConfig, 0); c[8] = 1; c[9] = 255; c.set(rules, 10);
+  assert.deepEqual(ps.decodeProgressConfig(c).rules, ps.GAME_PROGRESS_RULES);
+  assert.equal(rules.length, (15 + 6 + 3) * 8);
+
+  const r = ps.GAME_PROGRESS_RULES;
+  assert.deepEqual(ps.unlockedMaps(149n, r), ['fjord']);
+  assert.deepEqual(ps.unlockedMaps(150n, r), ['fjord', 'tianchi']);
+  assert.deepEqual(ps.unlockedMaps(1000n, r), ['fjord', 'tianchi', 'ocean']);
+  assert.deepEqual(ps.unlockedShips(160n, r), [0, 1, 2]);
+  assert.equal(ps.fishSeedKey('ffffffff'), 0xffffffffn);
+  assert.throws(() => ps.fishSeedKey('xyz'));
+});
+
+test('GAME_PROGRESS_RULES mirror upgrades.ts boat prices and ships.ts thresholds', async () => {
+  const upgrades = await readFile(new URL('../src/upgrades.ts', import.meta.url), 'utf8');
+  for (const id of ps.BOAT_ORDER) {
+    const m = new RegExp(`id: '${id}', group: 'boat'.*prices: \\[(\\d+), (\\d+), (\\d+)\\]`).exec(upgrades);
+    assert.ok(m, id);
+    assert.deepEqual(ps.GAME_PROGRESS_RULES.boatPrices[id], m.slice(1).map(BigInt), id);
+  }
+  const ships = await readFile(new URL('../src/ships.ts', import.meta.url), 'utf8');
+  assert.deepEqual(ps.GAME_PROGRESS_RULES.shipThresholds, [...ships.matchAll(/threshold: (\d+)/g)].map((m) => BigInt(m[1])));
+});

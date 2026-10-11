@@ -8,6 +8,8 @@
     "test:player-state": "bash scripts/test-player-state.sh",
     "init:devnet": "tsx scripts/init-devnet.ts",
     "init:player-state": "tsx scripts/init-player-state.ts",
+    "init:progress-config": "tsx scripts/init-progress-config.ts",
+    "measure:record-catch": "tsx scripts/measure-record-catch.ts",
     "e2e:devnet": "tsx scripts/e2e-devnet.ts",
     "copy-idl": "cp target/idl/fish_market.json ../game/src/idl/fish_market.json",
     "copy-idl:player-state": "cp target/idl/player_state.json ../game/src/idl/player_state.json",

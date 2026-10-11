@@ -14,6 +14,135 @@ export type PlayerState = {
   },
   "instructions": [
     {
+      "name": "buyBoat",
+      "docs": [
+        "Buys `level` of a boat piece at the ProgressConfig price, burning the",
+        "PEARL in the same instruction (the boat twin of `buy_upgrade`). `level`",
+        "must be exactly the next one, so a resent or doubled transaction can",
+        "never buy two levels. Creates the owner's Progress on first use (the",
+        "owner pays its rent). Nothing ever lowers a boat level: a shark bite",
+        "only resets the dive gear (equipment.ts DIVE_GEAR_SLOTS)."
+      ],
+      "discriminator": [
+        92,
+        118,
+        219,
+        59,
+        116,
+        176,
+        51,
+        179
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "Signs, pays the burn and (on first use) the Progress rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "progressConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "progress",
+          "docs": [
+            "created and written by hand in load_or_create_progress / store_progress."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pearlMint",
+          "writable": true
+        },
+        {
+          "name": "ownerPearl",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "slot",
+          "type": "u8"
+        },
+        {
+          "name": "level",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "buyUpgrade",
       "docs": [
         "Buys the next level of a slot at the Config price (main.ts buyNextUpgrade)."
@@ -450,6 +579,92 @@ export type PlayerState = {
       ]
     },
     {
+      "name": "initProgressConfig",
+      "docs": [
+        "Creates the `ProgressConfig` (boat prices, ship and map thresholds). Config admin only."
+      ],
+      "discriminator": [
+        93,
+        241,
+        94,
+        134,
+        156,
+        57,
+        157,
+        173
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "progressConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "rules",
+          "type": {
+            "defined": {
+              "name": "progressRules"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "initializeConfig",
       "docs": [
         "Creates the config. Only the program's upgrade authority may call it,",
@@ -520,6 +735,115 @@ export type PlayerState = {
               "name": "priceTable"
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "recordCatch",
+      "docs": [
+        "The oracle (Config.oracle, the market wallet) records one banked fish:",
+        "its value is added to the owner's lifetime banked value (which unlocks",
+        "ships and maps and never goes down) and the best single catch is kept.",
+        "",
+        "Idempotent per fish: `fish` (the fish's seed, the u32 of its 8-hex id,",
+        "zero-extended) goes into the sorted catch log at the end of the",
+        "Progress account. A fish already in the log is a no-op that succeeds,",
+        "so a retried mint never double-counts and never fails the mint it rides",
+        "with. Creates the Progress on first use; `payer` funds its rent and the",
+        "8 bytes of rent each new fish adds (in the cosigned mint tx that is the",
+        "game's session key, the fee payer, so no extra signature is needed)."
+      ],
+      "discriminator": [
+        36,
+        14,
+        58,
+        242,
+        96,
+        105,
+        45,
+        233
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "docs": [
+            "Must be Config.oracle (the market wallet). Signs, pays nothing."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Funds the Progress rent and its growth; any signer (the mint tx's fee payer)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "progress",
+          "docs": [
+            "created, grown and written by hand."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fish",
+          "type": "u64"
+        },
+        {
+          "name": "value",
+          "type": "u64"
         }
       ]
     },
@@ -635,6 +959,87 @@ export type PlayerState = {
       ]
     },
     {
+      "name": "setProgressConfig",
+      "docs": [
+        "Replaces the boat prices and the ship / map thresholds. Config admin only."
+      ],
+      "discriminator": [
+        62,
+        238,
+        29,
+        56,
+        116,
+        142,
+        192,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "progressConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "rules",
+          "type": {
+            "defined": {
+              "name": "progressRules"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "setSession",
       "docs": [
         "Sets (or clears, with the default pubkey) the session key that may sign",
@@ -686,6 +1091,90 @@ export type PlayerState = {
         {
           "name": "session",
           "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "setShip",
+      "docs": [
+        "Sails a shipyard ship (ships.ts equip): free, any ship whose threshold",
+        "the lifetime banked value has reached. Owner only. Ship 0 needs no call."
+      ],
+      "discriminator": [
+        105,
+        250,
+        223,
+        187,
+        254,
+        147,
+        224,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "progress"
+          ]
+        },
+        {
+          "name": "progressConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "progress",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  103,
+                  114,
+                  101,
+                  115,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "ship",
+          "type": "u8"
         }
       ]
     },
@@ -919,9 +1408,74 @@ export type PlayerState = {
         244,
         195
       ]
+    },
+    {
+      "name": "progress",
+      "discriminator": [
+        125,
+        4,
+        195,
+        102,
+        134,
+        179,
+        253,
+        6
+      ]
+    },
+    {
+      "name": "progressConfig",
+      "discriminator": [
+        127,
+        198,
+        232,
+        142,
+        103,
+        192,
+        144,
+        50
+      ]
     }
   ],
   "events": [
+    {
+      "name": "boatBought",
+      "discriminator": [
+        226,
+        48,
+        202,
+        29,
+        63,
+        100,
+        187,
+        43
+      ]
+    },
+    {
+      "name": "catchAlreadyRecorded",
+      "discriminator": [
+        141,
+        142,
+        164,
+        159,
+        91,
+        230,
+        38,
+        186
+      ]
+    },
+    {
+      "name": "catchRecorded",
+      "discriminator": [
+        247,
+        126,
+        229,
+        38,
+        174,
+        140,
+        20,
+        32
+      ]
+    },
     {
       "name": "configInitialized",
       "discriminator": [
@@ -1027,6 +1581,19 @@ export type PlayerState = {
       ]
     },
     {
+      "name": "progressRulesSet",
+      "discriminator": [
+        64,
+        58,
+        244,
+        114,
+        246,
+        12,
+        205,
+        242
+      ]
+    },
+    {
       "name": "sessionSet",
       "discriminator": [
         217,
@@ -1050,6 +1617,19 @@ export type PlayerState = {
         225,
         176,
         165
+      ]
+    },
+    {
+      "name": "shipSet",
+      "discriminator": [
+        50,
+        93,
+        220,
+        199,
+        237,
+        58,
+        29,
+        149
       ]
     },
     {
@@ -1179,6 +1759,36 @@ export type PlayerState = {
       "code": 6019,
       "name": "badClock",
       "msg": "Clock out of range"
+    },
+    {
+      "code": 6020,
+      "name": "invalidBoatSlot",
+      "msg": "Unknown boat piece"
+    },
+    {
+      "code": 6021,
+      "name": "notNextLevel",
+      "msg": "Only the next level can be bought"
+    },
+    {
+      "code": 6022,
+      "name": "invalidShip",
+      "msg": "Unknown ship"
+    },
+    {
+      "code": 6023,
+      "name": "shipLocked",
+      "msg": "This ship needs more lifetime banked value"
+    },
+    {
+      "code": 6024,
+      "name": "invalidProgressRules",
+      "msg": "Invalid boat prices or unlock thresholds"
+    },
+    {
+      "code": 6025,
+      "name": "badCatchLog",
+      "msg": "Progress account size does not match its catch log"
     }
   ],
   "types": [
@@ -1220,6 +1830,78 @@ export type PlayerState = {
                 }
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "boatBought",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "slot",
+            "type": "u8"
+          },
+          {
+            "name": "level",
+            "type": "u8"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "catchAlreadyRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "fish",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "catchRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "fish",
+            "type": "u64"
+          },
+          {
+            "name": "value",
+            "type": "u64"
+          },
+          {
+            "name": "lifetimeValue",
+            "type": "u64"
+          },
+          {
+            "name": "bestValue",
+            "type": "u64"
+          },
+          {
+            "name": "catches",
+            "type": "u32"
           }
         ]
       }
@@ -1754,6 +2436,181 @@ export type PlayerState = {
       }
     },
     {
+      "name": "progress",
+      "docs": [
+        "One per wallet (`[\"progress\", owner]`), created by `buy_boat` or `record_catch`.",
+        "The fixed header below is followed by `catches` little-endian u64 fish",
+        "keys, sorted ascending (the catch log), so the account is",
+        "`Progress::SIZE + 8 * catches` bytes."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "lifetimeValue",
+            "docs": [
+              "Value of every fish ever banked (oracle-recorded). Never decreases."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bestValue",
+            "docs": [
+              "The most valuable single fish recorded."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "catches",
+            "docs": [
+              "Fish keys in the catch log."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "boatLevels",
+            "docs": [
+              "Level per boat piece (bait, boat, boatSpeed, boatHull, boatDeck), 1..=3."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                5
+              ]
+            }
+          },
+          {
+            "name": "ship",
+            "docs": [
+              "The shipyard ship sailed (SHIPS index); 0 = the starter."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "progressConfig",
+      "docs": [
+        "Admin-set v2 rules. Separate from Config so the v1 Config layout never changes."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "rules",
+            "type": {
+              "defined": {
+                "name": "progressRules"
+              }
+            }
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "progressRules",
+      "docs": [
+        "v2 rules, admin-set in `ProgressConfig`. Amounts are PEARL / banked value units."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "boatPrices",
+            "docs": [
+              "`[boat slot][level - 1]`: PEARL to buy that level (upgrades.ts prices). Level 1 must be 0."
+            ],
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u64",
+                    3
+                  ]
+                },
+                5
+              ]
+            }
+          },
+          {
+            "name": "shipThresholds",
+            "docs": [
+              "Lifetime banked value that unlocks each ship (ships.ts SHIPS[].threshold). Ship 0 must be 0."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                6
+              ]
+            }
+          },
+          {
+            "name": "mapThresholds",
+            "docs": [
+              "Lifetime banked value that unlocks each map (maps.ts unlockValue). Map 0 must be 0."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                3
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "progressRulesSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "sessionSet",
       "type": {
         "kind": "struct",
@@ -1796,6 +2653,22 @@ export type PlayerState = {
                 7
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "shipSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "ship",
+            "type": "u8"
           }
         ]
       }

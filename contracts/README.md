@@ -143,6 +143,55 @@ PLAYER_STATE_ADMIN_KEYPAIR=.keys/player_state-deployer.json npm run init:player-
 `anchor build` drops a fresh random `target/deploy/player_state-keypair.json`
 when none exists; it is not the program key, never pass it to `--program-id`.
 
+### player_state v2: boats, ships, lifetime banked value
+
+Additive to v1: the `Config`, `PlayerState` and `Aquarium` layouts (612 / 249 /
+62 + 16n bytes), every v1 instruction (discriminator, args, accounts) and every
+v1 error code are unchanged; `lib.rs` asserts the sizes at compile time and
+`tests/player_state.ts` compares the IDL against `tests/idl/player_state.v1.json`.
+
+| account | seeds | what |
+| --- | --- | --- |
+| `ProgressConfig` (266 B) | `["progress_config"]` | admin-set: boat prices `[5][3]` (upgrades.ts group `boat`), ship thresholds `[6]` (ships.ts), map thresholds `[3]` (fjord / tianchi / ocean) |
+| `Progress` (100 B + 8 per fish) | `["progress", owner]` | `lifetime_value`, `best_value`, `catches`, `boat_levels[5]` (bait, boat, boatSpeed, boatHull, boatDeck; 1..3), `ship`; then the sorted u64 catch log |
+
+| instruction | signer | does |
+| --- | --- | --- |
+| `init_progress_config(rules)` / `set_progress_config(rules)` | Config.admin | create / replace the rules (validated: Lv1 free, Lv2/3 > 0, thresholds start at 0 and never decrease) |
+| `buy_boat(slot, level)` | owner | burns the ProgressConfig price of `level` (must be current + 1, max 3) via CPI and raises the level, in one instruction; creates Progress on first use (owner pays rent) |
+| `set_ship(ship)` | owner | sails a ship whose threshold the lifetime value reached |
+| `record_catch(fish, value)` | Config.oracle (+ any `payer`) | adds `value` to the lifetime value once per fish key (the fish's seed); a repeat is a successful no-op; creates Progress if needed (no PlayerState required) |
+
+Nothing lowers a boat level or the lifetime value (a shark bite only resets the
+dive gear). Maps / ships unlocked = lifetime value vs the ProgressConfig
+thresholds (`unlockedMaps` / `unlockedShips` in game/src/player-state.ts).
+
+Idempotency is a sorted log of 8-byte fish keys at the end of Progress (binary
+search, then a +8-byte realloc), not a marker PDA per fish: on devnet a fish
+costs 40,640 lamports of rent instead of 690,880 for an 8-byte marker PDA (17x
+less), and the mint transaction needs no extra account. Progress is managed by
+hand (`load_or_create_progress`) because Anchor's `init_if_needed` rejects an
+account whose size has grown.
+
+Appending `record_catch` to the cosigned fish mint (sensor/fish-collection.mjs):
+the market wallet is already a signer there (collection authority) and the
+game's session key is the fee payer, so `oracle = market`, `payer = session
+key` adds no signature. Worst case (300-char URI, new owner) measured by
+`npm run measure:record-catch -- --simulate`: 937 -> 1066 bytes (limit 1232),
+~35-39k CU total (Core create 21.5k, record_catch 13-18k with Progress creation).
+
+```sh
+anchor build -p player_state && rm -f target/deploy/player_state-keypair.json
+npm run test:player-state
+solana program extend EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ <grown bytes> -u devnet -k .keys/player_state-deployer.json
+solana program write-buffer target/deploy/player_state.so -u devnet -k .keys/player_state-deployer.json \
+  --buffer-authority .keys/player_state-deployer.json
+solana program deploy --buffer <BUFFER> --program-id EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ -u devnet \
+  -k .keys/player_state-deployer.json --upgrade-authority .keys/player_state-deployer.json
+PLAYER_STATE_ADMIN_KEYPAIR=.keys/player_state-deployer.json npm run init:progress-config   # --set to update
+npm run copy-idl:player-state
+```
+
 ## Notes
 
 - `max_value` is 30000. Today's biggest catch is mythic 800 × 2.5 (The Abyss) =
