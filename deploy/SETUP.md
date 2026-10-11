@@ -28,7 +28,7 @@ sudo bash /tmp/breathless-deploy/bootstrap-dell.sh
 
 1. 创建系统用户 `breathless`（家目录 `/srv/breathless`，不能登录）；
 2. 从 nodejs.org 下载官方 Node 24 压缩包并校验 SHA256，装到 `/opt/breathless-node`（`sudo NODE_MAJOR=22 bash …` 可以换大版本）；
-3. 安装 `/etc/systemd/system/breathless.service`（`User=breathless`、`MemoryMax=900M`、`Restart=always`、`PORT=8794`）并 enable，第一次部署时才启动；
+3. 安装 `/etc/systemd/system/breathless.service`（`User=breathless`、`MemoryMax=1400M`、`Restart=always`、`PORT=8794`）并 enable，第一次部署时才启动；
 4. 经 `visudo -c` 检查后安装 `/etc/sudoers.d/breathless`：`breathless` 只能免密执行 `systemctl restart breathless`、`systemctl is-active breathless` 和 `journalctl -u breathless -n 50 --no-pager` 这三条命令（参数固定，没有通配符：带通配符的 journalctl 能读别的服务的日志，它的分页器还能开出 root shell）；
 5. 如果没有 `/srv/breathless/app/.env`，就创建一个（权限 600，属于 `breathless`），里面只有一行空的 `PRESAGE_API_KEY=`。
 
@@ -126,7 +126,7 @@ curl -I http://127.0.0.1:8794/
 - 服务只监听 `127.0.0.1:8794`，只有隧道能访问它；不要在防火墙上开这个端口。
 - 录制默认关闭（不设 `SENSOR_RECORD`）：陌生人的呼吸数据不会落盘。
 - `MAX_LIVE_SESSIONS=1` 保护 Presage 配额（SDK 一个进程也只能跑一个会话）；`MAX_CONN_PER_IP=8` 限制单个 IP 的连接数。
-- `breathless` 的 sudo 权限只有上面三条固定命令；应用本身被 `MemoryMax=900M` 限住，不会挤爆这台共享机器。
+- `breathless` 的 sudo 权限只有上面三条固定命令；应用本身被 `MemoryMax=1400M` 限住，不会挤爆这台共享机器。
 
 ### 8. 日常运维
 
@@ -168,7 +168,7 @@ It:
 
 1. creates the system user `breathless` (home `/srv/breathless`, no login shell);
 2. downloads the official Node 24 tarball from nodejs.org, checks its SHA256 and installs it to `/opt/breathless-node` (`sudo NODE_MAJOR=22 bash …` picks another major);
-3. installs `/etc/systemd/system/breathless.service` (`User=breathless`, `MemoryMax=900M`, `Restart=always`, `PORT=8794`) and enables it; the first deploy starts it;
+3. installs `/etc/systemd/system/breathless.service` (`User=breathless`, `MemoryMax=1400M`, `Restart=always`, `PORT=8794`) and enables it; the first deploy starts it;
 4. installs `/etc/sudoers.d/breathless` after `visudo -c`: `breathless` may run, without a password, exactly `systemctl restart breathless`, `systemctl is-active breathless` and `journalctl -u breathless -n 50 --no-pager` (arguments pinned, no wildcards: a wildcard journalctl could read other services' logs, and its pager can open a root shell);
 5. creates `/srv/breathless/app/.env` (mode 600, owned by `breathless`) with an empty `PRESAGE_API_KEY=` line, only if the file doesn't exist.
 
@@ -266,7 +266,7 @@ curl -I http://127.0.0.1:8794/
 - The server binds `127.0.0.1:8794`; only the tunnel exposes it. Don't open that port in the firewall.
 - Recordings are off by default (`SENSOR_RECORD` unset): strangers' breathing data is never written to disk.
 - `MAX_LIVE_SESSIONS=1` protects the Presage quota (and the SDK can only run one session per process anyway); `MAX_CONN_PER_IP=8` limits connections per IP.
-- `breathless` can sudo only the three pinned commands above, and the app is capped by `MemoryMax=900M` so it can't starve the shared box.
+- `breathless` can sudo only the three pinned commands above, and the app is capped by `MemoryMax=1400M` so it can't starve the shared box.
 
 ### 8. Day-to-day
 
