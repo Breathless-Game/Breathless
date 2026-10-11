@@ -15,6 +15,7 @@ import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Aquarium } from './aquarium';
+import { fishFood, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -573,6 +574,10 @@ const aquarium = new Aquarium(bank, {
     aquariumPan = u;
     titleScreen.setLift(u);
   },
+  buyFood: buyAquariumFood,
+  message(text) {
+    hud.message(text, 1600);
+  },
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
@@ -629,6 +634,34 @@ async function syncPearls(earned = 0) {
   } catch (e) {
     console.warn('PEARL balance unavailable', e);
     setPearlsUnavailable(e);
+  }
+}
+
+let foodBuying = false;
+/** Buy one selected aquarium food. Legacy Pearls are spent first; chain PEARL covers the rest. */
+async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<boolean> {
+  if (foodBuying) return false;
+  const cost = food.price;
+  const available = totalPearls(equipment);
+  if (available < cost) {
+    hud.message(`Need ${cost - available} more Pearls for ${food.nameZh}`, 1600);
+    return false;
+  }
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
+  foodBuying = true;
+  try {
+    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
+    equipment.legacyPearls -= fromLegacy;
+    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    refreshEquipment();
+    if (fromChain > 0) void syncPearls();
+    return true;
+  } catch (e) {
+    hud.message(`Food purchase failed · ${(e as Error).message ?? e}`, 1800);
+    return false;
+  } finally {
+    foodBuying = false;
   }
 }
 
