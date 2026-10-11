@@ -1,6 +1,7 @@
 import { connectWallet, onWalletChange, walletState, type WalletState } from './wallet';
 import { onWalletsChange, ownerWallets } from './owner-wallets';
 import { orbNfts } from './explorer-links';
+import { formatPearls, onPearlBalance, pearlBalance } from './pearl-balance';
 import { LAST_WALLET_KEY, devnetHint, explorerAddress, isUserRejection, shortAddress, walletTiles, type WalletTile } from './wallet-storage';
 import phantomLogo from './wallet-logos/phantom.svg';
 import metamaskLogo from './wallet-logos/metamask.svg';
@@ -193,6 +194,30 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
   /** The account menu (menu mode), while open. */
   let open: { trigger: HTMLButtonElement; list: HTMLElement } | null = null;
   let copiedTimer = 0;
+  /** The PEARL pill beside the chip (menu mode), while a wallet is connected. */
+  let badge: HTMLElement | null = null;
+
+  const paintBadge = () => {
+    if (!badge) return;
+    const b = pearlBalance();
+    const amount = b.status === 'ok' ? formatPearls(b.value) : b.status === 'loading' ? '…' : '—';
+    badge.querySelector('.pearl-amount')!.textContent = amount;
+    badge.dataset.state = b.status;
+    badge.title =
+      b.status === 'ok'
+        ? 'Your PEARL balance on chain (devnet)'
+        : b.status === 'loading'
+          ? 'Reading your PEARL balance…'
+          : b.reason;
+    badge.setAttribute('aria-label', b.status === 'ok' ? `${amount} PEARL` : `PEARL balance: ${b.status === 'loading' ? 'loading' : 'unavailable'}`);
+  };
+  const makeBadge = () => {
+    badge = make('span', 'pearl-badge');
+    badge.setAttribute('role', 'status');
+    badge.append(make('span', 'pearl-glyph', '◉'), make('span', 'pearl-amount'), make('span', 'pearl-unit', 'PEARL'));
+    paintBadge();
+    return badge;
+  };
 
   const menuItems = () => (open ? [...open.list.querySelectorAll<HTMLElement>('[role="menuitem"]')] : []);
   const closeMenu = (refocus: boolean) => {
@@ -225,6 +250,7 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
     open = null;
     window.clearTimeout(copiedTimer);
     el.replaceChildren();
+    badge = null;
     el.classList.remove('wallet-menu-open');
     el.classList.toggle('hidden', !s.owner && empty === undefined);
     el.classList.toggle('wallet-confirming', confirming !== null);
@@ -251,7 +277,7 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
     const mark = logo(name, s.wallet?.icon);
     const addr = make('span', 'wallet-addr', shortAddress(owner));
     if (menu) {
-      el.append(...accountMenu(owner, name, mark, addr));
+      el.append(makeBadge(), ...accountMenu(owner, name, mark, addr));
       return;
     }
     mark.title = name;
@@ -396,4 +422,5 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
   el.addEventListener('keydown', (e) => ROW_KEYS.has(e.key) && e.stopPropagation());
   render();
   onWalletChange(render);
+  onPearlBalance(paintBadge);
 }
