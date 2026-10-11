@@ -14,12 +14,24 @@ export function jitter(geo: THREE.BufferGeometry, rng: Rng, amount: number) {
   const g = geo.index ? geo.toNonIndexed() : geo;
   const pos = g.attributes.position;
   const seen = new Map<string, THREE.Vector3>();
+  // A cone or cylinder closes on itself along a seam, where the same point is written once
+  // with x = 0 and once with x = -0 (the sine of a full turn is a hair below zero). Those two
+  // used to be moved apart, which tore the rock open down the seam.
+  const twins = new Set<string>();
+  const draw = () => new THREE.Vector3(rng.range(-amount, amount), rng.range(-amount, amount), rng.range(-amount, amount));
   for (let i = 0; i < pos.count; i++) {
-    const key = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`;
+    const exact = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`;
+    const key = exact.replace(/(^|,)-(0\.000)(?=,|$)/g, '$1$2');
     let off = seen.get(key);
     if (!off) {
-      off = new THREE.Vector3(rng.range(-amount, amount), rng.range(-amount, amount), rng.range(-amount, amount));
+      off = draw();
       seen.set(key, off);
+      twins.add(exact);
+    } else if (!twins.has(exact)) {
+      // The seam's other spelling: it takes its twin's offset. Draw the one it used to get
+      // anyway, so every rock built after this one stays exactly the shape it was.
+      twins.add(exact);
+      draw();
     }
     pos.setXYZ(i, pos.getX(i) + off.x, pos.getY(i) + off.y, pos.getZ(i) + off.z);
   }
