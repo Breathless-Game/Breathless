@@ -368,7 +368,15 @@ function applyEquipmentVisuals() {
   diver.setFinsLevel(activeLevel('fins'));
   diver.setTankLevel(activeLevel('tank'));
   diver.setLampLevel(activeLevel('lamp'));
-  diver.setLampStats(stats.lampDistance, stats.lampIntensity, stats.lampAngle);
+  diver.setLampStats(
+    stats.lampDistance,
+    stats.lampIntensity,
+    stats.lampAngle,
+    stats.lampScatter,
+    stats.lampDecay,
+    stats.lampPenumbra,
+    stats.lampExtinction,
+  );
   diver.setReelLevel(activeLevel('reel'));
   diver.setReelRecovery(stats.reelRecovery);
 }
@@ -2053,6 +2061,7 @@ function update(dt: number, time: number) {
 
   // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
   // depth, air and banking still count from the mean waterline).
+  diver.setLampEnvironment(world.dayCycle.state.nightMix, world.lightingEffectsEnabled);
   diver.update(dt, time, -diver.pos.y, world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6)));
   sonar.update(time, dt);
   if (!sonarCarried && sonar.mode === 'anchored' && !sonarGuiding && sonar.group.visible) {

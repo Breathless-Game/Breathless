@@ -20,8 +20,9 @@ async function moduleUrl(file, dependencies = {}) {
 
 const gearUrl = await moduleUrl('gear');
 const fxUrl = await moduleUrl('fx');
+const lampLightingUrl = await moduleUrl('lamp-lighting');
 const conceptUrl = await moduleUrl('diver-designs');
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './diver-designs': conceptUrl }));
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './diver-designs': conceptUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
@@ -394,6 +395,18 @@ test('the headlamp remains attached to the rotating head in deep water', () => {
   const breath = diver.breathPoint.getWorldPosition(new THREE.Vector3());
   assert.ok(light.distanceTo(breath) < 0.5);
   assert.ok(diver.headlamp.intensity > 0);
+});
+
+test('headlamp keeps direct output and visible water scatter in sync', () => {
+  const { diver } = createDiver(RENDER_QUALITY.high, -24);
+  diver.setLampStats(48, 102, 0.43, 0.075, 2, 0.24, 0.014);
+  diver.setLampEnvironment(0, true);
+  diver.update(1 / 60, 0, 24);
+  const beam = diver.group.getObjectByName('diver-lamp-scatter');
+  assert.ok(beam, 'scatter cone is attached to the diver');
+  assert.ok(diver.headlamp.intensity > 0, 'direct spotlight is active at depth');
+  assert.ok(beam.material.opacity > 0, 'water scatter is visible with the direct beam');
+  assert.equal(diver.headlamp.decay, 2);
 });
 
 function createFish(seed = 42, zone = ZONES[1]) {

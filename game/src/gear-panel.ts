@@ -134,7 +134,7 @@ function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot,
     case 'reel': return language === 'zh' ? `恢复倍率 ${Math.round(stats.reelRecovery * 100)}%` : `${Math.round(stats.reelRecovery * 100)}% recovery rate`;
     case 'fins': return language === 'zh' ? `${stats.swimSpeed.toFixed(1)} m/s 游速 · ${stats.swimAcceleration.toFixed(1)} 加速度` : `${stats.swimSpeed.toFixed(1)} m/s swim speed · ${stats.swimAcceleration.toFixed(1)} acceleration`;
     case 'tank': return language === 'zh' ? `${stats.emergencySeconds.toFixed(1)} s 紧急返航窗口` : `${stats.emergencySeconds.toFixed(1)} s emergency return window`;
-    case 'lamp': return language === 'zh' ? `${stats.lampDistance.toFixed(0)} m 光距 · ${Math.round(stats.lampAngle * 57.3)}° 光束` : `${stats.lampDistance.toFixed(0)} m range · ${Math.round(stats.lampAngle * 57.3)}° beam`;
+    case 'lamp': return language === 'zh' ? `${stats.lampDistance.toFixed(0)} m 光距 · 直射 ${Math.round(stats.lampIntensity)} · 散射 ${Math.round(stats.lampScatter * 100)}% · ${Math.round(stats.lampAngle * 57.3)}°` : `${stats.lampDistance.toFixed(0)} m range · direct ${Math.round(stats.lampIntensity)} · scatter ${Math.round(stats.lampScatter * 100)}% · ${Math.round(stats.lampAngle * 57.3)}°`;
   }
 }
 
@@ -145,7 +145,7 @@ function statCompare(before: ReturnType<typeof deriveStats>, after: ReturnType<t
     case 'reel': return language === 'zh' ? `回收效率 ${Math.round(before.reelRecovery * 100)}% → ${Math.round(after.reelRecovery * 100)}%` : `Recovery ${Math.round(before.reelRecovery * 100)}% → ${Math.round(after.reelRecovery * 100)}%`;
     case 'fins': return language === 'zh' ? `游速 ${before.swimSpeed.toFixed(1)} → ${after.swimSpeed.toFixed(1)} m/s` : `Swim speed ${before.swimSpeed.toFixed(1)} → ${after.swimSpeed.toFixed(1)} m/s`;
     case 'tank': return language === 'zh' ? `返航窗口 ${before.emergencySeconds.toFixed(1)} → ${after.emergencySeconds.toFixed(1)} s` : `Return window ${before.emergencySeconds.toFixed(1)} → ${after.emergencySeconds.toFixed(1)} s`;
-    case 'lamp': return language === 'zh' ? `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 角度 ${Math.round(before.lampAngle * 57.3)} → ${Math.round(after.lampAngle * 57.3)}°` : `Range ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · angle ${Math.round(before.lampAngle * 57.3)} → ${Math.round(after.lampAngle * 57.3)}°`;
+    case 'lamp': return language === 'zh' ? `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 直射 ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} · 散射 ${Math.round(before.lampScatter * 100)}% → ${Math.round(after.lampScatter * 100)}% · ${Math.round(after.lampAngle * 57.3)}°` : `Range ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · direct ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} · scatter ${Math.round(before.lampScatter * 100)}% → ${Math.round(after.lampScatter * 100)}% · ${Math.round(after.lampAngle * 57.3)}°`;
   }
 }
 
