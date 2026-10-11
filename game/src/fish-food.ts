@@ -32,6 +32,20 @@ export const FISH_FOOD_PRICE_BASE = 8;
 export const FISH_FOOD_PRICE_RATIO = 3;
 
 /**
+ * PEARL per pour. The defaults are the game's own table; once the player_state Config is read
+ * (player-chain.ts), setFoodPrices() puts the on-chain prices here so every display and
+ * affordability check shows what the program will actually burn.
+ */
+const FOOD_PRICES: Record<FishFoodId, number> = { plankton: 8, pellet: 24, krill: 72, shrimp: 216, glowCoral: 648 };
+
+/** Replace the food prices with the on-chain Config's (whole PEARL). Unknown or invalid values are ignored. */
+export function setFoodPrices(prices: Partial<Record<FishFoodId, number>>): void {
+  for (const [id, price] of Object.entries(prices) as [FishFoodId, number][]) {
+    if (id in FOOD_PRICES && Number.isSafeInteger(price) && price > 0) FOOD_PRICES[id] = price;
+  }
+}
+
+/**
  * Five deliberately different foods.  Plankton and the basic pellet are
  * entry-level supplies: their growth is intentionally weaker than a neutral
  * one-feed amount, so buying up the ladder is meaningful instead of cosmetic.
@@ -48,7 +62,7 @@ export const FISH_FOODS: readonly FishFoodDef[] = Object.freeze([
     feedCooldownMultiplier: 1.15,
     swimSpeedMultiplier: 0.98,
     glowIntensity: 0,
-    price: 8,
+    get price() { return FOOD_PRICES.plankton; },
     modelKey: 'plankton',
   }),
   Object.freeze({
@@ -62,7 +76,7 @@ export const FISH_FOODS: readonly FishFoodDef[] = Object.freeze([
     feedCooldownMultiplier: 1,
     swimSpeedMultiplier: 1,
     glowIntensity: 0.03,
-    price: 24,
+    get price() { return FOOD_PRICES.pellet; },
     modelKey: 'pellet',
   }),
   Object.freeze({
@@ -76,7 +90,7 @@ export const FISH_FOODS: readonly FishFoodDef[] = Object.freeze([
     feedCooldownMultiplier: 0.9,
     swimSpeedMultiplier: 1.05,
     glowIntensity: 0.1,
-    price: 72,
+    get price() { return FOOD_PRICES.krill; },
     modelKey: 'krill',
   }),
   Object.freeze({
@@ -90,7 +104,7 @@ export const FISH_FOODS: readonly FishFoodDef[] = Object.freeze([
     feedCooldownMultiplier: 0.78,
     swimSpeedMultiplier: 1.12,
     glowIntensity: 0.2,
-    price: 216,
+    get price() { return FOOD_PRICES.shrimp; },
     modelKey: 'shrimp',
   }),
   Object.freeze({
@@ -104,7 +118,7 @@ export const FISH_FOODS: readonly FishFoodDef[] = Object.freeze([
     feedCooldownMultiplier: 0.65,
     swimSpeedMultiplier: 1.2,
     glowIntensity: 0.55,
-    price: 648,
+    get price() { return FOOD_PRICES.glowCoral; },
     modelKey: 'glowCoral',
   }),
 ]);
