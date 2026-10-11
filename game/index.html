@@ -129,7 +129,10 @@
           <aside id="aq-feeder" aria-label="Aquarium food feeder" data-zh-aria-label="鱼缸喂食器">
             <div class="aq-feeder-title" data-zh="鱼食">Fish food</div>
             <div id="aq-feeder-model" class="aq-feeder-model"></div>
-            <select id="aq-food-select" aria-label="Choose fish food" data-zh-aria-label="选择鱼食"></select>
+            <div id="aq-food-picker" class="aq-picker">
+              <button id="aq-food-trigger" class="aq-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="aq-food-list" aria-label="Choose fish food" data-zh-aria-label="选择鱼食"></button>
+              <ul id="aq-food-list" class="aq-picker-list hidden" role="listbox" tabindex="-1" aria-label="Fish food" data-zh-aria-label="鱼食"></ul>
+            </div>
             <div id="aq-feed-status" class="aq-feed-status"></div>
             <button id="aq-feed-all" class="mini primary" type="button">Pour into tank</button>
             <div class="aq-feeder-hint" data-zh="点击鱼食或按钮，所有鱼会来抢">Click the model or button; the whole school will rush in</div>

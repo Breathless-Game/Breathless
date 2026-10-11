@@ -180,7 +180,10 @@ export class Aquarium {
   private lightInput = $<HTMLInputElement>('aq-light');
   private lightRgb = this.parseRgb(DEFAULT_AQUARIUM_LIGHT);
   private feederModel = $('aq-feeder-model');
-  private feederSelect = $<HTMLSelectElement>('aq-food-select');
+  private foodPicker = $('aq-food-picker');
+  private foodTrigger = $<HTMLButtonElement>('aq-food-trigger');
+  private foodList = $('aq-food-list');
+  private foodActive = 0;
   private feederButton = $<HTMLButtonElement>('aq-feed-all');
   private feederStatus = $('aq-feed-status');
   private feeding = false;
@@ -213,13 +216,7 @@ export class Aquarium {
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
     });
     this.renderFoodOptions();
-    this.feederSelect.addEventListener('change', () => {
-      const selected = this.feederSelect.value as FishFoodId;
-      if (!FISH_FOODS.some((food) => food.id === selected)) return;
-      this.selectedFood = selected;
-      this.renderFeeder();
-      this.renderCardFoodHint();
-    });
+    this.initFoodPicker();
     this.feederButton.addEventListener('click', () => void this.feedSchool());
     this.canvas.addEventListener('pointermove', (e) => {
       this.hover = this.fishAt(e);
@@ -309,28 +306,155 @@ export class Aquarium {
     }
   }
 
+  /** Custom picker (no native select): name and price on separate lines so nothing clips. */
   private renderFoodOptions() {
-    this.feederSelect.replaceChildren(...FISH_FOODS.map((food) => {
-      const option = document.createElement('option');
-      option.value = food.id;
-      option.textContent = `${pickName(food)} · ${food.price} PEARL`;
+    const pearls = this.hooks.pearls();
+    this.foodList.replaceChildren(...FISH_FOODS.map((food, i) => {
+      const option = document.createElement('li');
+      option.id = `aq-food-opt-${food.id}`;
+      option.className = 'aq-picker-option';
+      option.setAttribute('role', 'option');
+      option.dataset.food = food.id;
+      const selected = food.id === this.selectedFood;
+      const short = pearls < food.price;
+      option.setAttribute('aria-selected', String(selected));
+      option.classList.toggle('selected', selected);
+      option.classList.toggle('active', i === this.foodActive);
+      option.classList.toggle('short', short);
+      const name = document.createElement('span');
+      name.className = 'aq-picker-name';
+      name.textContent = pickName(food);
+      const price = document.createElement('span');
+      price.className = 'aq-picker-price';
+      price.textContent = `${food.price} PEARL`;
+      if (short) {
+        const hint = document.createElement('em');
+        hint.textContent = t('not enough', '余额不足');
+        price.append(hint);
+      }
+      option.append(name, price);
       return option;
     }));
-    this.feederSelect.value = this.selectedFood;
+    const food = fishFood(this.selectedFood);
+    const label = document.createElement('span');
+    label.className = 'aq-picker-name';
+    label.textContent = pickName(food);
+    const price = document.createElement('span');
+    price.className = 'aq-picker-price';
+    price.textContent = `${food.price} PEARL`;
+    this.foodTrigger.replaceChildren(label, price);
+    this.foodTrigger.setAttribute('aria-label', `${t('Choose fish food', '选择鱼食')}: ${pickName(food)}, ${food.price} PEARL`);
+    this.foodList.setAttribute('aria-label', t('Fish food', '鱼食'));
+    this.foodList.setAttribute('aria-activedescendant', `aq-food-opt-${FISH_FOODS[this.foodActive].id}`);
   }
 
-  /** Feeder status text plus the Pour button; re-run on language change and food selection. */
+  private foodPickerOpen() {
+    return !this.foodList.classList.contains('hidden');
+  }
+
+  private setFoodPickerOpen(open: boolean) {
+    if (open === this.foodPickerOpen()) return;
+    if (open) {
+      this.foodActive = Math.max(0, FISH_FOODS.findIndex((food) => food.id === this.selectedFood));
+      this.renderFoodOptions();
+      this.foodList.classList.remove('hidden', 'up');
+      this.foodList.style.maxHeight = '';
+      // Flip upward when the list would run off the bottom of the viewport; scroll if neither side fits.
+      const height = this.foodList.getBoundingClientRect().height;
+      const triggerRect = this.foodTrigger.getBoundingClientRect();
+      const below = window.innerHeight - triggerRect.bottom - 12;
+      const above = triggerRect.top - 12;
+      const up = height > below && above > below;
+      this.foodList.classList.toggle('up', up);
+      this.foodList.style.maxHeight = `${Math.max(120, Math.min(height, up ? above : below))}px`;
+      this.foodTrigger.setAttribute('aria-expanded', 'true');
+      this.foodList.focus({ preventScroll: true });
+      this.scrollActiveFoodIntoView();
+    } else {
+      this.foodList.classList.add('hidden');
+      this.foodList.style.maxHeight = '';
+      this.foodTrigger.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  private scrollActiveFoodIntoView() {
+    const id = `aq-food-opt-${FISH_FOODS[this.foodActive].id}`;
+    this.foodList.querySelectorAll('.aq-picker-option').forEach((el) => el.classList.toggle('active', el.id === id));
+    this.foodList.setAttribute('aria-activedescendant', id);
+    document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
+  }
+
+  private chooseFood(id: FishFoodId) {
+    if (!FISH_FOODS.some((food) => food.id === id)) return;
+    this.selectedFood = id;
+    this.setFoodPickerOpen(false);
+    this.foodTrigger.focus({ preventScroll: true });
+    this.renderFeeder();
+    this.renderCardFoodHint();
+  }
+
+  private initFoodPicker() {
+    this.foodTrigger.addEventListener('click', () => this.setFoodPickerOpen(!this.foodPickerOpen()));
+    this.foodList.addEventListener('click', (e) => {
+      const option = (e.target as HTMLElement).closest<HTMLElement>('[data-food]');
+      if (option) this.chooseFood(option.dataset.food as FishFoodId);
+    });
+    this.foodList.addEventListener('pointermove', (e) => {
+      const option = (e.target as HTMLElement).closest<HTMLElement>('[data-food]');
+      const i = FISH_FOODS.findIndex((food) => food.id === option?.dataset.food);
+      if (i >= 0 && i !== this.foodActive) {
+        this.foodActive = i;
+        this.scrollActiveFoodIntoView();
+      }
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (this.foodPickerOpen() && !this.foodPicker.contains(e.target as Node)) this.setFoodPickerOpen(false);
+    });
+    // Capture phase on window: Esc closes only the picker, before main.ts's handler can close the whole tank.
+    window.addEventListener('keydown', (e) => {
+      if (!this.foodPickerOpen()) {
+        if (this.open && document.activeElement === this.foodTrigger && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.setFoodPickerOpen(true);
+        }
+        return;
+      }
+      const last = FISH_FOODS.length - 1;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.setFoodPickerOpen(false);
+        this.foodTrigger.focus({ preventScroll: true });
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.foodActive = e.key === 'Home' ? 0 : e.key === 'End' ? last
+          : Math.min(last, Math.max(0, this.foodActive + (e.key === 'ArrowDown' ? 1 : -1)));
+        this.scrollActiveFoodIntoView();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.stopPropagation(); // do not swap the fish under the open list
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.chooseFood(FISH_FOODS[this.foodActive].id);
+      } else if (e.key === 'Tab') {
+        this.setFoodPickerOpen(false);
+      }
+    }, true);
+  }
+
   private renderFeederText() {
     const food = fishFood(this.selectedFood);
-    this.feederSelect.value = food.id;
     const description = lang() === 'zh' ? food.descriptionZh : food.description;
-    this.feederStatus.textContent = `${description} · ${t('the whole school will rush in', '所有鱼会游来抢食')}`;
+    this.feederStatus.textContent = `${description}${lang() === 'zh' ? '' : ' '}${t('The whole school will rush in.', '所有鱼会游来抢食。')}`;
     this.renderFeederButton();
   }
 
   /** The Pour button alone: label, affordability and the in-flight lock. */
   private renderFeederButton() {
     const food = fishFood(this.selectedFood);
+    this.renderFoodOptions();
     const pearls = this.hooks.pearls();
     const affordable = pearls >= food.price;
     this.feederButton.textContent = affordable
@@ -441,6 +565,7 @@ export class Aquarium {
   close() {
     if (!this.open) return;
     // The food preview keeps its renderer across closes; frame() stops drawing it once closed.
+    this.setFoodPickerOpen(false);
     this.state = 'closing';
     this.foodDrop = null;
     this.animate(0, CLOSE_S);
