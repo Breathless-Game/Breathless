@@ -219,6 +219,12 @@ export function cosignedTxProblem(
 
 const OTHER_PROGRAM = 'it calls a program other than Metaplex Core';
 const NO_RECORD_CATCH = 'it does not record the catch';
+/**
+ * The game and the market speak different versions of the co-sign protocol: a tab older than the
+ * server (it sees record_catch, or another new instruction) or newer (the server sends no
+ * record_catch). Reloading the page fixes the first; the second clears when the server catches up.
+ */
+export const staleProtocol = (problem: string | null) => problem === OTHER_PROGRAM || problem === NO_RECORD_CATCH;
 
 /** Where a minted fish stands with the market. */
 export type FishTrust =
@@ -278,6 +284,18 @@ export function mintExpectation(
   return { payer: a.payer, signers: [a.payer, a.asset, a.market], create, recordCatch };
 }
 
+/** The error for a transaction we won't sign; a protocol mismatch asks the player to reload. */
+async function unexpectedTx(what: string, problem: string): Promise<string> {
+  const { t } = await import('./i18n');
+  if (staleProtocol(problem)) {
+    return t(
+      `The game and the market are on different versions (${problem}). Refresh the page and try again; nothing was signed`,
+      `游戏和市场版本不一致（${problem}）。请刷新页面后重试；没有签署任何交易`,
+    );
+  }
+  return t(`The market sent an unexpected ${what} (${problem}); not signing it`, `市场发来了异常的交易（${problem}），未签署`);
+}
+
 // ---- Chain flows --------------------------------------------------------------------------------
 
 export interface CosignedMint {
@@ -308,7 +326,7 @@ export async function cosignMint(
   const ps = await import('./player-state');
   const expect = mintExpectation(ps, u, { market: String(args.info.market), collection, owner: publicKey(args.owner), payer, asset: asset.publicKey.toString(), fish: args.fish });
   const problem = cosignedTxProblem(tx.message, expect);
-  if (problem) throw new Error(`The market sent an unexpected mint transaction (${problem}); not signing it`);
+  if (problem) throw new Error(await unexpectedTx('mint transaction', problem));
   const signed = await asset.signTransaction(await args.session.signTransaction(tx));
   const sig = await u.rpc.sendTransaction(signed, { preflightCommitment: 'confirmed' });
   const done = await u.rpc.confirmTransaction(sig, {
@@ -372,7 +390,7 @@ export async function makeSellable(
         try {
           const tx = u.transactions.deserialize(fromBase64(t.tx));
           const problem = cosignedTxProblem(tx.message, { payer: ctx.session, signers: [ctx.session, String(info.market)] });
-          if (problem) throw new Error(`The market sent an unexpected transaction (${problem}); not signing it`);
+          if (problem) throw new Error(await unexpectedTx('transaction', problem));
           const sig = await u.rpc.sendTransaction(await session.signTransaction(tx), { preflightCommitment: 'confirmed' });
           const done = await u.rpc.confirmTransaction(sig, {
             commitment: 'confirmed',

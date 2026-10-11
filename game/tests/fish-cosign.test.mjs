@@ -77,6 +77,7 @@ test('a co-signed mint may carry exactly one record_catch, and only the one we e
   const p = (instructions, expect = MINT_EXPECT, accounts) => cosign.cosignedTxProblem(mintMsg(instructions, accounts), expect);
   assert.equal(p([CORE_IX, CATCH_IX]), null, 'Core create + our record_catch');
   assert.match(p([CORE_IX]), /does not record the catch/, 'a mint without record_catch is refused');
+  assert.ok(cosign.staleProtocol(p([CORE_IX])), 'a market older than the game: refresh, not "unexpected"');
   const idl = JSON.parse(readFileSync(new URL('../src/idl/player_state.json', import.meta.url), 'utf8'));
   assert.deepEqual([...cosign.RECORD_CATCH_DISCRIMINATOR], idl.instructions.find((i) => i.name === 'record_catch').discriminator);
 
@@ -96,8 +97,12 @@ test('a co-signed mint may carry exactly one record_catch, and only the one we e
   assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xbadn) }]), /another fish/);
   assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xc0ffeen, 30000n) }]), /another fish or value/);
   assert.match(p([CORE_IX, { ...CATCH_IX, programIndex: 9 }]), /other than Metaplex Core/, 'a look-alike from another program');
-  // Without a record_catch expectation (the migrate flow) nothing but Core passes.
-  assert.match(p([CORE_IX, CATCH_IX], { payer: SESSION, signers: [SESSION, ASSET, MARKET] }), /other than Metaplex Core/);
+  // Without a record_catch expectation (the migrate flow, or a game older than the market) nothing
+  // but Core passes, and that is the stale-protocol case too.
+  const migrate = p([CORE_IX, CATCH_IX], { payer: SESSION, signers: [SESSION, ASSET, MARKET] });
+  assert.match(migrate, /other than Metaplex Core/);
+  assert.ok(cosign.staleProtocol(migrate));
+  assert.ok(!cosign.staleProtocol(p([CORE_IX, CATCH_IX, CATCH_IX])), 'a real anomaly is not a version mismatch');
   // The market as payer, or an extra signer, is still refused first.
   assert.match(p([CORE_IX, CATCH_IX], MINT_EXPECT, [MARKET, ASSET, SESSION, ...KEYS.slice(3)]), /fee payer/);
 });
