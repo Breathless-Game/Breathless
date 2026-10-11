@@ -11,7 +11,7 @@ import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet'
 
 // Everything here runs in the browser against Solana devnet. The identity is
 // the player's session wallet (see wallet.ts): it pays for the Metaplex Core
-// mint without a prompt. The fish NFTs belong to the Phantom owner.
+// mint without a prompt. The fish NFTs belong to the owner (the player's wallet).
 // Metadata is not uploaded anywhere: the URI points at our own server, which
 // generates the JSON and the card art from the path (sensor/nft-meta.mjs).
 

@@ -930,7 +930,7 @@ function showTitle(intro: boolean) {
   titleScreen.show(intro);
 }
 
-// Phantom is required: START goes through the login gate unless a wallet is connected.
+// A wallet is required: START goes through the login gate unless one is connected.
 const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
@@ -949,7 +949,7 @@ function openWorkbench() {
 
 // ---- Wallet -------------------------------------------------------------
 // Progress above starts as defaults: storage is per wallet, and saves are
-// no-ops until Phantom connects. The first connect loads that wallet's
+// no-ops until a wallet connects. The first connect loads that wallet's
 // progress in place; switching accounts or logging out reloads the page,
 // so nothing in memory from one wallet can be saved under another, and no
 // timer, poll or mint keeps running for it.
