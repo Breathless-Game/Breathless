@@ -21,7 +21,9 @@ const META = '/api/nft/meta/v1/';
 const IMG = '/api/nft/img/v1/';
 const MAX_TEXT = 64;
 const PNG_CACHE = 256;
-const RENDERS_PER_MINUTE = 120; // each render is ~0.1 s of CPU on the box that also runs the breath sensor
+// Each new image is ~0.1 s of CPU on the box that also runs the breath sensor. Cached images (here
+// and at Cloudflare, which caches .png) don't count, so this only bites a flood of unique URLs.
+const RENDERS_PER_MINUTE = 40;
 
 const int = (s, max) => (/^\d{1,7}$/.test(s) && Number(s) <= max ? Number(s) : null);
 const num = (s, max) => (/^\d{1,7}(\.\d{1,3})?$/.test(s) && Number(s) <= max ? Number(s) : null);
