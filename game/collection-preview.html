@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Collection preview (dev only)</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <style>
+      body { margin: 0; background: #1d2a30; }
+      #dev-bar { position: fixed; top: 6px; left: 6px; z-index: 99; display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; background: #000a; border-radius: 8px; }
+      #dev-bar button { padding: 4px 10px; border: 1px solid #575b54; border-radius: 6px; background: #393d37; color: #f0f0e8; cursor: pointer; font: 12px system-ui; }
+      #dev-bar button[aria-pressed="true"] { border-color: #b3ac83; background: #565844; }
+    </style>
+  </head>
+  <body>
+    <div id="dev-bar">
+      <button id="dev-open">Open collection</button>
+      <button id="dev-fail" aria-pressed="false">Next sale fails</button>
+      <button id="dev-reset">Reset fixtures</button>
+      <button id="dev-over" aria-pressed="false">Toggle over-aquarium</button>
+      <button id="dev-lang">zh/en</button>
+    </div>
+    <div id="collection" class="hidden">
+      <div class="collection-head">
+        <div class="collection-title">
+          <h2 data-zh="收藏">Collection</h2>
+          <span id="collection-count" class="collection-count"></span>
+        </div>
+        <button id="collection-close" class="mini collection-close" title="Close (C)" data-zh-title="关闭 (C)" data-zh-html="关闭 &lt;kbd&gt;C&lt;/kbd&gt;">Close <kbd>C</kbd></button>
+      </div>
+      <!-- The two devnet wallets: the player's (owns the fish, signs sales) and the game's (pays mint fees). -->
+      <div class="wallet-cards">
+        <section class="wallet-card">
+          <div class="wallet-card-label" data-zh="你的钱包">Your wallet</div>
+          <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
+        </section>
+        <section class="wallet-card">
+          <div class="wallet-card-label" data-zh="游戏钱包 · 支付铸造费用">Game wallet · pays mint fees</div>
+          <div id="wallet" class="small"></div>
+        </section>
+      </div>
+      <div id="collection-notice" role="status"></div>
+      <div id="market-bar" class="small"></div>
+      <div id="collection-grid"></div>
+    </div>
+    <script type="module" src="/src/collection-preview.ts"></script>
+  </body>
+</html>
