@@ -10,9 +10,13 @@ export function material(color: THREE.ColorRepresentation, options: THREE.MeshSt
 /** Each model owns its materials, so disposing a preview cannot affect others. */
 export function palette(level: UpgradeLevel) {
   return {
-    body: material(['#78604a', '#626a6d', '#343a3c'][level - 1]),
+    // Keep the three grades readable under the workbench's neutral lights:
+    // warm field gear, blue-gray composite, then a dark shell with a clear
+    // high-grade accent. The geometry still carries the progression; color
+    // simply prevents the extra parts from disappearing into one silhouette.
+    body: material(['#8a6548', '#4f747d', '#263b46'][level - 1]),
     metal: material('#8a9193', { metalness: 0.45, roughness: 0.72 }),
-    accent: material(['#938169', '#697770', '#79745c'][level - 1]),
+    accent: material(['#c0844a', '#46b8b2', '#e3b347'][level - 1]),
     rubber: material('#2b2e2c', { roughness: 0.96 }),
     wood: material('#846141', { roughness: 0.92 }),
     glass: material('#586364', { metalness: 0.12, roughness: 0.48 }),
