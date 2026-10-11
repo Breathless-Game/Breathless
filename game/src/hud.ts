@@ -44,6 +44,8 @@ export class Hud {
   private bestDepth = 0;
   private emergency = $('emergency');
   private alert = $('alert');
+  private mash = $('mash');
+  private mashArc = $('mash-arc');
   private shark = $('shark');
   private sharkLabel = $('shark-label');
   private sharkPulse = $('shark-pulse');
@@ -186,6 +188,20 @@ export class Hud {
   setEmergency(fraction: number | null) {
     this.emergency.classList.toggle('hidden', fraction == null);
     if (fraction != null) this.emergencyFill.style.width = `${Math.max(0, fraction) * 100}%`;
+  }
+
+  /** The key to mash, in the middle of the screen, with a ring `progress` (0..1) full. Null hides it. */
+  setMash(progress: number | null) {
+    this.mash.classList.toggle('hidden', progress == null);
+    if (progress != null) this.mashArc.style.strokeDashoffset = `${326.73 * (1 - Math.min(1, Math.max(0, progress)))}`;
+  }
+
+  /** One press landed: the key punches. */
+  punchMash() {
+    this.mash.classList.remove('hit');
+    // Reading the width restarts the animation when presses come faster than it runs.
+    void this.mash.offsetWidth;
+    this.mash.classList.add('hit');
   }
 
   /** A warning that stays up until cleared with null. `key` is the key to press, shown as a keycap. */
