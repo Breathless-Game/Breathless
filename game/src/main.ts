@@ -42,6 +42,8 @@ import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { FieldGuide } from './field-guide';
+import type { LessonId } from './tutorial';
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
@@ -108,6 +110,9 @@ const JUMP_DEPTH = 1.4;
 const BOARD_REACH = 6.5;
 const BOARD_AFTER_M = 3;
 let wentDown = false;
+let guideWasPaused = false;
+let tutorialDescended = false;
+let fieldGuide: FieldGuide | null = null;
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -705,6 +710,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     gear.toggle();
     if (gear.open) void syncPearls();
+    if (gear.open) fieldGuide?.mark('upgrade');
     return;
   }
   if (phase !== 'play') return;
@@ -713,6 +719,7 @@ window.addEventListener('keydown', (e) => {
     tryCatch();
   } else if (e.key.toLowerCase() === 'c') {
     vault.toggle();
+    if (vault.open) fieldGuide?.mark('collection');
     if (vault.open) void syncPearls();
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
@@ -847,6 +854,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
+  fieldGuide?.mark('catch');
   hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
   // Trench fish are topped up by tendTrench(); shallow ones come back to their band.
@@ -868,6 +876,7 @@ function bankNet() {
   hud.toast(rarest, 'BANKED');
   noteBankValue(true, addBankedValue(mapProgress.bestValue, bankValue(net)));
   net = [];
+  fieldGuide?.mark('bank');
   hud.setNet(net, currentStats().netCapacity);
   hud.setBank(bank);
   nftQueue.kick();
@@ -964,6 +973,7 @@ function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
+  fieldGuide?.mark('launch');
   askAboutSharks();
   resetWorldBounds();
   overlay.classList.add('hidden');
@@ -975,6 +985,7 @@ function startGame() {
   const bow = bowSeat.getWorldPosition(new THREE.Vector3());
   diver.jumpTo(new THREE.Vector3(bow.x + JUMP_OUT, -JUMP_DEPTH, 0));
   wentDown = false;
+  tutorialDescended = false;
 }
 
 /** Beside the boat at the surface, not in trouble: close enough to climb aboard. */
@@ -1339,6 +1350,28 @@ const workbench = new Workbench({
   sonarColor(color) {
     sonar.setColor(color);
   },
+  tutorial(id: LessonId) {
+    fieldGuide?.mark(id);
+  },
+});
+
+fieldGuide = new FieldGuide({
+  canOpen: () => phase !== 'calibrating' && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
+  toggled(open) {
+    if (open) {
+      guideWasPaused = paused;
+      paused = true;
+      keys.clear();
+    } else {
+      paused = guideWasPaused;
+      keys.clear();
+      breathSince = null;
+    }
+  },
+  syncTutorial() {
+    if (workbench.packed.includes('net')) fieldGuide?.mark('pack');
+  },
+  packed: () => workbench.packed,
 });
 // The gear panel (G) buys too: whatever buys or picks a ship, the pieces on the table follow.
 onGearChange = () => workbench.visible && workbench.refreshGear();
@@ -1561,7 +1594,13 @@ function update(dt: number, time: number) {
   }
 
   if (!flying) swimPhysics(dt, s);
-  if (playing && -diver.pos.y > BOARD_AFTER_M) wentDown = true;
+  if (playing && -diver.pos.y > BOARD_AFTER_M) {
+    wentDown = true;
+    if (!tutorialDescended) {
+      tutorialDescended = true;
+      fieldGuide?.mark('descend');
+    }
+  }
   hud.setBoardPrompt(canBoard());
   const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench (as in swimPhysics)
 
