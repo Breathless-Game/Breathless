@@ -119,6 +119,8 @@ export class GearInspector {
   constructor(private hooks: InspectHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.1;
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -317,8 +319,8 @@ export class GearInspector {
       } else if (this.diverMode) {
         m = new THREE.Group();
         m.add(this.hooks.diver.model()); // already centred, standing
-      } else m = buildUpgradeModel(this.def!.id, level as UpgradeLevel);
-      m.scale.setScalar(1.15); // 2 units across
+      } else m = buildUpgradeModel(this.def!.id, level as UpgradeLevel, { preserveTierScale: true });
+      m.scale.setScalar(1.15); // preserve the tier silhouette inside the inspector frame
       this.models.set(level, m);
     }
     return m;

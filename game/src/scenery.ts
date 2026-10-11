@@ -775,10 +775,11 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   const snow = shades(['#f4fbff', '#dcecf5']);
   const mountain = mountainMat();
   // Ranges like sheets of cut paper, one behind the other, each a row of mountains of
-  // uneven size: mostly middling, with the odd giant and the odd foothill, and now and then
-  // a pass between two of them. Every mountain keeps to its own ground: within a range none
-  // touches the next, and a range is no deeper than its slab, so no face can poke through
-  // another. The ranges overlap freely as the camera sees them, which is what hides the rows.
+  // uneven size: mostly middling, with the odd giant and the odd foothill, and often a pass
+  // between two of them. Every mountain keeps to its own ground: within a range none touches
+  // the next, and a range is no deeper than its slab, so no face can poke through another.
+  // The nearer ranges stand back from the middle, so the fjord runs on between them to the
+  // far range and the sky: the view has somewhere to go.
   const range = stream(0xf10d, 7);
   interface Peak extends Massif {
     x: number;
@@ -790,21 +791,30 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   };
   /** The foot reaches up to 1.28 radii: pressed this thin, it stays within 12.5 m of its range's line. */
   const thin = (r: number, depth: number) => Math.min(depth, 12.5 / (r * 1.3));
-  const rangeAcross = (z: number, from: number, to: number, r: readonly [number, number], h: readonly [number, number], depth: number) => {
+  const rangeAcross = (
+    z: number,
+    from: number,
+    to: number,
+    r: readonly [number, number],
+    h: readonly [number, number],
+    depth: number,
+    /** A stretch this range leaves empty. */
+    open?: readonly [number, number],
+  ) => {
     for (let x = from; x < to; ) {
       const roll = range.next();
       const [wide, tall] = roll < 0.22 ? [1.25, 1.25] : roll < 0.5 ? [0.7, 0.55] : [1, 1];
       const pr = range.range(r[0], r[1]) * wide;
       const m = massif(range, pr, range.range(h[0], h[1]) * tall, thin(pr, depth));
-      // Its foot starts where the last one ended; the next starts a little way on from where this one ends.
+      // Its foot starts where the last one ended, or past the open stretch if it would stand in it.
+      if (open && x < open[1] && x + m.right - m.left > open[0]) x = open[1];
       const peak = stand(m, x - m.left, z + range.range(-1, 1));
-      x = peak.x + m.right + (range.next() < 0.18 ? range.range(14, 26) : range.range(0.5, 7));
+      x = peak.x + m.right + (range.next() < 0.3 ? range.range(16, 38) : range.range(2, 12));
     }
   };
-  rangeAcross(-198, -330, 330, [34, 44], [64, 92], 0.24);
-  rangeAcross(-168, -300, 300, [30, 38], [52, 76], 0.27);
-  rangeAcross(-138, -270, 270, [26, 33], [42, 62], 0.3);
-  rangeAcross(-110, -250, 250, [22, 28], [30, 48], 0.3);
+  rangeAcross(-196, -330, 330, [34, 44], [60, 86], 0.24);
+  rangeAcross(-156, -300, 300, [28, 36], [46, 68], 0.27, [-30, 26]);
+  rangeAcross(-118, -260, 260, [22, 29], [30, 50], 0.3, [-64, 58]);
   // The near range leaves the middle open like a channel, and stands clear of the waterfall's bluff (x = 47).
   const near = [-185, -105, 105, 185].map((x0) => {
     const pr = range.range(19, 23);
@@ -1238,8 +1248,10 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
     batch.add(solid(geo, color), painted, x, y, z, o);
   // The lake's mist lies low: rock is hazed in full at the water and less with height.
   const mountain = mountainMat([3, 46, 0.55]);
-  const stone = ['#8a8672', '#77735f', '#9a957f', '#6c6855'];
-  const bush = ['#3f6b3a', '#2f5a35'];
+  // Warm sandstone, so the pillars stand out from the cool rim and the mist; the last tone is
+  // the foot, stained by the lake.
+  const stone = ['#a48e70', '#8c765a', '#b8a180', '#6a5b47'];
+  const bush = ['#4f8a3e', '#3a7236', '#63a049'];
   // Everything that grows on the rock is painted with the mountain's material, so in rain it
   // sinks into the same silhouette.
   const plant = (geo: THREE.BufferGeometry, color: THREE.ColorRepresentation, x: number, y: number, z: number, o?: Placement) =>
@@ -1337,8 +1349,8 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
       f *= step;
       levels.push({ y: y + forest.range(0.35, 0.8), f, cx, cz, ledge: true });
     }
-    // Some heads bulge a little over the last bed.
-    f *= forest.range(0.92, 1.05);
+    // The cap rock is harder than the bed under it: most heads stand out over their necks.
+    f *= forest.range(0.98, 1.2);
     levels.push({ y: h, f, cx, cz, ledge: false });
 
     const rings = levels.map((level, i) =>
@@ -1361,11 +1373,22 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
         face(color, a, d, c);
       }
     }
-    // The summit: a low green cap, its top a little off centre.
+    // The summit: a wooded dome, its top a little off centre.
     const rim = rings[rings.length - 1];
     const top = r * f;
-    const tip = [x + cx + forest.range(-0.3, 0.3) * top, h + top * forest.range(0.25, 0.5), z + cz + forest.range(-0.3, 0.3) * top];
-    for (let k = 0; k < sides; k++) face(forest.pick(bush), rim[k], tip, rim[(k + 1) % sides]);
+    const dome = rim.map(([px, , pz]) => [
+      x + cx + (px - x - cx) * forest.range(0.5, 0.66),
+      h + top * forest.range(0.38, 0.6),
+      z + cz + (pz - z - cz) * forest.range(0.5, 0.66),
+    ]);
+    const tip = [x + cx + forest.range(-0.25, 0.25) * top, h + top * forest.range(0.8, 1.1), z + cz + forest.range(-0.25, 0.25) * top];
+    for (let k = 0; k < sides; k++) {
+      const next = (k + 1) % sides;
+      const color = forest.pick(bush);
+      face(color, rim[k], dome[next], rim[next]);
+      face(color, rim[k], dome[k], dome[next]);
+      face(forest.pick(bush), dome[k], tip, dome[next]);
+    }
 
     const made: Spire = {
       x, z, crown: h, foot: r * flare * 1.1,
@@ -1381,10 +1404,10 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
 
     // Shrubs root on the ledges, mostly on the side the camera sees.
     for (let i = 1; i < levels.length; i++) {
-      if (!levels[i].ledge || forest.next() > 0.7 * lush) continue;
+      if (!levels[i].ledge || forest.next() > 0.9 * lush) continue;
       const a = forest.range(-1.3, 1.3);
       const at = made.face(levels[i].y, Math.sin(a), Math.cos(a));
-      const size = forest.range(0.3, 0.48) * Math.sqrt(r) + 0.2;
+      const size = forest.range(0.4, 0.62) * Math.sqrt(r) + 0.25;
       plant(jitter(new THREE.IcosahedronGeometry(size, 0), forest, size * 0.2), forest.pick(bush), at.x, levels[i].y + size * 0.2, at.z, { sy: 0.65 });
     }
     // A pine on the shoulder, and pines on the summit: the tallest in the middle.
@@ -1394,7 +1417,7 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
       const a = forest.range(0, Math.PI * 2);
       const out = t === 0 ? 0 : forest.range(0.3, 0.7) * top;
       const height = forest.range(2.8, 4.6) * (t === 0 ? 1.15 : 0.85);
-      pine(x + cx + Math.cos(a) * out, h + top * 0.12, z + cz + Math.sin(a) * out * thin, height);
+      pine(x + cx + Math.cos(a) * out, h + top * (t === 0 ? 0.75 : 0.3), z + cz + Math.sin(a) * out * thin, height);
     }
     return made;
   };
@@ -1417,13 +1440,13 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   // half hidden behind it, stepping down away from it, and open water between the groups.
   // Now and then the host is a massif, broad and not so tall.
   const stand = (x: number, z: number, zMin: number, zMax: number, tall: number, guests: number) => {
-    const massif = forest.next() < 0.2;
-    const r = massif ? forest.range(5.2, 7.4) : forest.range(2.5, 4.3);
+    const massif = forest.next() < 0.28;
+    const r = massif ? forest.range(7, 9.5) : forest.range(3.6, 5.6);
     const height = ceiling(z) * (massif ? tall * 0.72 : tall);
     const host = place(x, z, height, r, forest.range(1.3, 1.5), zMin, zMax);
     if (!host) return;
     for (let g = 0; g < guests; g++) {
-      const gr = (massif ? 3.2 : r) * forest.range(0.5, 0.8);
+      const gr = (massif ? 4.4 : r) * forest.range(0.42, 0.72);
       const flare = forest.range(1.2, 1.35);
       const gap = host.foot + gr * flare * 1.1 + forest.range(0.8, 3) + (g > 1 ? gr * 2.6 : 0);
       const beside = forest.next() < 0.65;
@@ -1435,14 +1458,14 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   };
   // Three depths. The far forest fades into the haze; the middle one carries the picture; a
   // few near pillars on each side frame the lake and leave its middle open.
-  for (let x = -330; x <= 330; x += 46) {
-    stand(x + forest.range(-16, 16), forest.range(-126, -110), -128, -106, forest.range(0.55, 0.97), forest.int(1, 3));
+  for (let x = -330; x <= 330; x += 60) {
+    stand(x + forest.range(-20, 20), forest.range(-126, -110), -128, -106, forest.range(0.55, 0.97), forest.int(1, 3));
   }
-  for (let x = -290; x <= 290; x += 58) {
-    stand(x + forest.range(-18, 18), forest.range(-96, -76), -98, -72, forest.range(0.6, 1), forest.int(2, 4));
+  for (let x = -300; x <= 300; x += 75) {
+    stand(x + forest.range(-22, 22), forest.range(-96, -76), -98, -72, forest.range(0.6, 1), forest.int(2, 4));
   }
   for (const side of [-1, 1]) {
-    for (let x = 76; x <= 250; x += 58) {
+    for (let x = 84; x <= 250; x += 72) {
       stand(side * (x + forest.range(0, 22)), forest.range(-60, -48), -62, -46, forest.range(0.6, 1.1), forest.int(0, 2));
     }
   }

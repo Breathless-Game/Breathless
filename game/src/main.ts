@@ -7,15 +7,15 @@ import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
-import { Vault } from './vault';
+import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
-import { Report } from './report';
+import { LazyReport as Report } from './lazy-panels';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
-import { SettingsDesk } from './settings-desk';
+import { LazySettingsDesk as SettingsDesk } from './lazy-panels';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
-import { Aquarium } from './aquarium';
+import { LazyAquarium as Aquarium } from './lazy-panels';
 import { fishFood, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
 import { UPGRADES, type UpgradeId } from './upgrades';
@@ -42,7 +42,8 @@ import { NftQueue } from './nft-queue';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
-import { WorldEvents, type EventContext } from './events';
+import { LazyWorldEvents as WorldEvents } from './lazy-panels';
+import type { EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
 import { PulseEstimate, RestingPulse, SHARK, SharkPack, sharkIntensity, type SharkEvent } from './shark';
@@ -133,7 +134,7 @@ const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
 // dive (see update()); menus show none and cost nothing.
-const events = new WorldEvents(scene, world.map, renderQuality.settings.detail);
+const events = new WorldEvents(scene, world.map, renderQuality.settings.detail, () => world.colorGrade.apply(scene));
 world.colorGrade.apply(scene);
 const eventCtx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
 let eventsLive = false;
@@ -1709,19 +1710,16 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 }, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.17, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.335, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); } },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.83, label: 'SETTINGS', onClick: openSettingsDesk },
-  // The field guide (B) and the tutorial hang on the rope too, instead of buttons in the corner.
-  { seed: 0x5eed04, rarity: 'legendary', species: 'Ember Triggerfish', hue: 14, sat: 0.8, light: 0.55, at: 0.5, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
-  { seed: 0x5eed05, rarity: 'uncommon', species: 'Ghost Angelfish', hue: 150, sat: 0.5, light: 0.6, at: 0.665, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTutorial() },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); } },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
+  // The field guide is a book on the right side of the workbench. Keep the title
+  // rope for the three primary destinations so utility controls don't become fish.
 ]);
 // The fish are built with their English names (which also fixes how each one hangs); the carved names follow the UI language.
 const TITLE_LABELS: readonly (readonly [number, string, string])[] = [
   [1, 'AQUARIUM', '图鉴'],
   [2, 'SETTINGS', '设置'],
-  [3, 'GUIDE', '手册'],
-  [4, 'TUTORIAL', '新手引导'],
 ];
 function labelTitleFish() {
   for (const [i, en, zh] of TITLE_LABELS) titleScreen.setLabel(i, t(en, zh));
@@ -1853,6 +1851,10 @@ const workbench = new Workbench({
   tutorial(id: LessonId) {
     fieldGuide?.mark(id);
   },
+  guide() {
+    // Workbench has finished lifting the physical book; now reveal the pages.
+    return fieldGuide?.openFromWorkbench() ?? false;
+  },
   synthesisOpen() {
     synthPanel.show();
     void syncPearls();
@@ -1870,6 +1872,7 @@ fieldGuide = new FieldGuide({
       paused = true;
       keys.clear();
     } else {
+      workbench.guideClosed();
       paused = guideWasPaused;
       keys.clear();
       breathSince = null;

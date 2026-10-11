@@ -124,15 +124,28 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMat
           // orbit also drives scene lighting and the water reflection path.
           float warmHorizon = (1.0 - smoothstep(0.02, 0.24, uSunDirection.y)) * sunUp;
           sky += vec3(0.24, 0.055, 0.012) * exp(-sunDistance * 2.8) * warmHorizon;
+          // Sunrise and sunset. lowSun is the sun near the horizon; twilight also
+          // holds for a while after it has gone under, which is the afterglow.
+          float lowSun = 1.0 - smoothstep(0.0, 0.11, uSunDirection.y);
+          float twilight = lowSun * smoothstep(-0.06, -0.005, uSunDirection.y) * (1.0 - uNight * 0.55);
+          // The glow lies along the horizon on the sun's side of the sky: a hot band at
+          // the waterline, then a wider flush of rose above it that reaches the far side.
+          float towardSun = max(0.0, dot(normalize(viewDirection.xz), normalize(uSunDirection.xz)));
+          float aloft = max(viewDirection.y, 0.0);
+          vec3 emberColor = mix(vec3(1.0, 0.36, 0.10), vec3(1.0, 0.60, 0.26), smoothstep(0.0, 0.1, uSunDirection.y));
+          sky += emberColor * exp(-aloft * 8.0) * pow(towardSun, 8.0) * twilight * 0.62;
+          sky += vec3(0.95, 0.34, 0.30) * exp(-aloft * 3.2) * pow(towardSun, 2.0) * twilight * 0.20;
           vec3 sunColor = mix(vec3(1.0, 0.44, 0.13), uLightColor, smoothstep(0.0, 0.2, uSunDirection.y));
-          float sunRadius = 0.064;
+          // A low sun looks larger, and is orange where a high one is white.
+          float sunRadius = 0.064 * (1.0 + 0.22 * lowSun);
           float sunCore = 1.0 - smoothstep(sunRadius - 0.0018, sunRadius + 0.0018, sunDistance);
           vec2 sunHalo = celestialHalo(sunDistance, sunRadius);
           vec3 sunAuraColor = mix(vec3(1.0, 0.33, 0.075), vec3(1.0, 0.67, 0.25),
             smoothstep(0.0, 0.24, uSunDirection.y)) * mix(vec3(1.0), sunColor, 0.25);
-          vec3 sunGlow = vec3(1.0, 0.93, 0.76) * sunCore * 3.4;
-          sunGlow += vec3(1.0, 0.83, 0.48) * sunHalo.x * 0.90;
-          sunGlow += sunAuraColor * sunHalo.y * 0.42;
+          vec3 lowDisc = mix(vec3(1.0, 0.34, 0.13), vec3(1.0, 0.56, 0.22), smoothstep(0.0, 0.07, uSunDirection.y)) * 1.8;
+          vec3 sunGlow = mix(vec3(1.0, 0.93, 0.76) * 3.4, lowDisc, lowSun) * sunCore;
+          sunGlow += mix(vec3(1.0, 0.83, 0.48), vec3(1.0, 0.55, 0.24), lowSun) * sunHalo.x * 0.90;
+          sunGlow += sunAuraColor * sunHalo.y * (0.42 + 0.4 * lowSun);
           vec3 celestialLight = sunGlow * sunUp * horizonFade;
 
           float moonDiscRadius = 0.058;
@@ -165,6 +178,11 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMat
           float silver = clamp((densityNoise.r - shadow) * 7.0 + 0.36, 0.0, 1.0);
           vec3 cloudShade = mix(vec3(0.43, 0.51, 0.58), vec3(0.035, 0.055, 0.095), uNight);
           vec3 cloudLight = mix(vec3(0.90, 0.92, 0.93) * mix(vec3(1.0), uLightColor, 0.22), vec3(0.11, 0.15, 0.22), uNight);
+          // At sunrise and sunset the clouds are lit from below: gold and rose where they
+          // face the sun, violet in their shadows.
+          vec3 warmCloud = mix(vec3(1.0, 0.50, 0.34), vec3(1.0, 0.76, 0.52), smoothstep(0.0, 0.1, uSunDirection.y));
+          cloudLight = mix(cloudLight, warmCloud, twilight * (0.4 + 0.5 * towardSun * towardSun));
+          cloudShade = mix(cloudShade, vec3(0.31, 0.24, 0.42), twilight * 0.6);
           vec3 clouds = mix(cloudShade, cloudLight, silver) * (1.0 - uStorm * 0.46);
           // Thin edges catch the same gold/silver glow; dense weather still
           // occludes both discs and their halos instead of glowing over them.

@@ -60,17 +60,57 @@ function spinningReel(parent: THREE.Group, level: UpgradeLevel, colors: ReturnTy
 export function buildReel(level: UpgradeLevel): THREE.Group {
   const group = asset('reel', level);
   const colors = palette(level);
-  const radius = 0.16 + level * 0.025;
-  const spool = mesh(group, new THREE.CylinderGeometry(radius, radius, 0.12, 8), colors.metal, [0, 0.08, 0], 'Reel_Spool');
-  spool.rotation.x = Math.PI / 2;
-  const core = mesh(group, new THREE.CylinderGeometry(radius * 0.62, radius * 0.62, 0.15, 8), colors.line, [0, 0.08, 0], 'Wound_Line');
-  core.rotation.x = Math.PI / 2;
-  ring(group, radius * 0.82, 0.025, colors.accent, [0, 0.08, 0.07], 'z', 10).name = 'Spool_Rim';
-  mesh(group, new THREE.BoxGeometry(0.12 + level * 0.03, 0.08, 0.28), colors.body, [0, -0.1, 0], 'Reel_Body');
-  const handle = mesh(group, new THREE.BoxGeometry(0.22, 0.035, 0.035), colors.accent, [radius + 0.1, 0.08, 0.1], 'Crank_Handle');
-  handle.rotation.z = -0.4;
-  mesh(group, new THREE.IcosahedronGeometry(0.04, 0), level === 1 ? colors.wood : colors.rubber, [radius + 0.2, 0.04, 0.1], 'Crank_Grip');
-  beam(group, [-0.25, -0.1, 0], [0.25, -0.1, 0], 0.025, colors.metal, 5).name = 'Clutch_Bar';
+  const radius = [0.185, 0.23, 0.28][level - 1];
+  const width = [0.13, 0.22, 0.30][level - 1];
+  const y = 0.10;
+  const disk = (name: string, diskRadius: number, depth: number, surface: THREE.Material, z: number) => {
+    const object = mesh(group, new THREE.CylinderGeometry(diskRadius, diskRadius, depth, 8), surface, [0, y, z], name);
+    object.rotation.x = Math.PI / 2;
+    return object;
+  };
+  // An open drum exposes the wound line between its two flanges.
+  disk('Wound_Line', radius * 0.68, width, colors.line, 0);
+  for (const side of [-1, 1]) {
+    disk('Reel_Spool', radius, 0.023, colors.metal, side * width / 2);
+    ring(group, radius * 0.82, 0.017, level === 1 ? colors.metal : colors.accent, [0, y, side * (width / 2 + 0.014)], 'z', 10).name = 'Spool_Rim';
+  }
+  const baseY = y - radius - 0.11;
+  mesh(group, new THREE.BoxGeometry(radius * 1.7, 0.065, width + 0.11), colors.body, [0, baseY, 0], 'Reel_Mounting_Foot');
+  beam(group, [0, baseY + 0.03, 0], [0, y - radius * 0.48, 0], level === 1 ? 0.036 : 0.048, colors.metal, 8).name = 'Reel_Pedestal';
+  const crankZ = width / 2 + (level === 1 ? 0.042 : 0.11);
+  disk('Crank_Bearing', level === 1 ? 0.05 : 0.075, 0.055, colors.body, crankZ - 0.03);
+  const reach = [radius + 0.08, radius + 0.12, radius + 0.17][level - 1];
+  beam(group, [0, y, crankZ], [reach, y - 0.10, crankZ], level === 1 ? 0.019 : 0.028, colors.metal, 8).name = 'Crank_Handle';
+  if (level === 1) {
+    const grip = mesh(group, new THREE.IcosahedronGeometry(0.047, 0), colors.wood, [reach, y - 0.10, crankZ + 0.04], 'Crank_Grip');
+    grip.scale.set(0.8, 0.8, 1.35);
+  } else {
+    // Bearing covers and a rigid frame keep the spool aligned under load.
+    for (const side of [-1, 1]) {
+      disk('Bearing_Side_Plate', radius * 0.45, 0.04, colors.body, side * (width / 2 + 0.035));
+      beam(group, [side * radius * 0.84, baseY + 0.03, -width / 2 - 0.035], [side * radius * 0.84, y + radius * 0.74, -width / 2 - 0.035], 0.027, colors.metal, 8).name = 'Rigid_Spool_Support';
+    }
+    beam(group, [-radius * 0.84, y + radius * 0.74, -width / 2 - 0.035], [radius * 0.84, y + radius * 0.74, -width / 2 - 0.035], 0.028, colors.metal, 8).name = 'Upper_Frame_Cross_Brace';
+    beam(group, [-radius * 0.78, y + radius + 0.075, width / 2 + 0.07], [radius * 0.78, y + radius + 0.075, width / 2 + 0.07], 0.020, colors.metal, 8).name = 'Line_Guide_Rail';
+    for (const side of [-1, 1]) beam(group, [side * radius * 0.84, y + radius * 0.74, -width / 2 - 0.035], [side * radius * 0.78, y + radius + 0.075, width / 2 + 0.07], 0.020, colors.metal, 8).name = 'Line_Guide_Support';
+    ring(group, 0.043, 0.012, colors.rubber, [0, y + radius + 0.075, width / 2 + 0.07], 'z', 8).name = 'Levelwind_Line_Eye';
+    const grip = mesh(group, new THREE.CylinderGeometry(0.045, 0.052, level === 3 ? 0.20 : 0.12, 8), colors.rubber, [reach, y - 0.10, crankZ + 0.055], level === 3 ? 'Power_T_Grip' : 'Rubber_Barrel_Grip');
+    if (level === 2) grip.rotation.x = Math.PI / 2;
+    else grip.rotation.z = Math.PI / 2;
+  }
+  if (level === 3) {
+    // A distinct sealed gearbox sits behind the drum; the line stays exposed.
+    const gearbox = mesh(group, new THREE.IcosahedronGeometry(radius * 0.78, 0), colors.body, [0, y, -width / 2 - 0.10], 'Sealed_Gear_Housing');
+    gearbox.scale.set(1.1, 1.0, 0.54);
+    ring(group, radius * 0.61, 0.023, colors.metal, [0, y, -width / 2 - 0.20], 'z', 8).name = 'Gearbox_Seal';
+    for (const side of [-1, 1]) {
+      beam(group, [side * radius * 0.84, baseY + 0.03, width / 2 + 0.035], [side * radius * 0.84, y + radius * 0.74, width / 2 + 0.035], 0.028, colors.metal, 8).name = 'Front_Load_Brace';
+      beam(group, [side * radius * 0.84, y + radius * 0.74, -width / 2 - 0.035], [side * radius * 0.84, y + radius * 0.74, width / 2 + 0.035], 0.028, colors.metal, 8).name = 'Through_Frame_Tie_Bar';
+    }
+    disk('Adjustable_Drag_Dial', 0.098, 0.035, colors.accent, width / 2 + 0.12);
+    beam(group, [-radius * 0.50, y - radius - 0.015, width / 2 + 0.055], [radius * 0.50, y - radius - 0.015, width / 2 + 0.055], 0.027, colors.rubber, 8).name = 'Thumb_Clutch_Lever';
+  }
+  group.userData.structure = ['open-hand-drum', 'bearing-frame-levelwind', 'sealed-gearbox-power-grip'][level - 1];
   return group;
 }
 
@@ -310,6 +350,7 @@ function polygonTube(points: Point[], radius: number, sides = 6) {
 /** A standalone scoop net display; the approved diver runtime asset is separate. */
 export function buildNet(level: UpgradeLevel): THREE.Group {
   const group = asset('net', level);
+  const colors = palette(level);
   const grip = material('#30332f', { roughness: 0.97 });
   const shaft = material('#4d514d', { metalness: 0.28, roughness: 0.90 });
   const rim = material('#303732', { metalness: 0.24, roughness: 0.96 });
@@ -325,15 +366,22 @@ export function buildNet(level: UpgradeLevel): THREE.Group {
   mouth.scale.setScalar([1, 1.15, 1.30][level - 1]);
   group.add(mouth);
   // A narrow throat and broad forward lip follow a real scooped landing net.
-  const hoopPoints: Point[] = [
+  // The hoop itself gets wider as the tier rises; the fixed pole remains the
+  // same length, so the upgrade reads as a larger working head rather than a
+  // stretched handle.  The deeper bag below makes capacity visible in profile.
+  const openingScale = [1, 1.10, 1.22][level - 1];
+  const baseHoop: Point[] = [
     [-0.57, 0, -0.10], [-0.30, 0, -0.33], [0.25, 0.015, -0.43], [0.58, 0.045, -0.25],
     [0.58, 0.045, 0.25], [0.25, 0.015, 0.43], [-0.30, 0, 0.33], [-0.57, 0, 0.10],
   ];
-  mesh(mouth, polygonTube(hoopPoints, 0.016), rim, [0, 0, 0], 'Faceted_Scooped_Opening_Rim');
-  for (const side of [-1, 1]) beam(mouth, [-0.73, 0, 0], [-0.57, 0, side * 0.10], 0.014, rim, 6).name = 'Throat_Brace';
+  const hoopPoints: Point[] = baseHoop.map(([x, y, z]) => [x * openingScale, y * openingScale, z * openingScale]);
+  const rimRadius = [0.016, 0.024, 0.034][level - 1];
+  mesh(mouth, polygonTube(hoopPoints, rimRadius), rim, [0, 0, 0], 'Faceted_Scooped_Opening_Rim');
+  for (const side of [-1, 1]) beam(mouth, [-0.73 * openingScale, 0, 0], [-0.57 * openingScale, 0, side * 0.10 * openingScale], [0.014, 0.020, 0.027][level - 1], rim, 6).name = 'Throat_Brace';
   const sides = 16;
-  const depths = [0, 0.13, 0.30, 0.48, 0.60];
-  const profile = [1, 1.015, 0.98, 0.87, 0.78];
+  const bagDepth = [1, 1.35, 1.72][level - 1];
+  const depths = [0, 0.13, 0.30, 0.48, 0.60].map((depth) => depth * bagDepth);
+  const profile = level === 3 ? [1, 1.03, 1.01, 0.90, 0.72] : level === 2 ? [1, 1.02, 0.99, 0.89, 0.76] : [1, 1.015, 0.98, 0.87, 0.78];
   const webGeometries: THREE.BufferGeometry[] = [];
   const perimeterPoint = (phase: number, row: number) => {
     const perimeter = ((phase % sides + sides) % sides) / sides * hoopPoints.length;
@@ -374,14 +422,23 @@ export function buildNet(level: UpgradeLevel): THREE.Group {
   const webGeometry = mergeGeometries(webGeometries, false)!;
   for (const geometry of webGeometries) geometry.dispose();
   const web = mesh(mouth, webGeometry, nylon, [0, 0, 0], 'Nylon_Diamond_Web');
-  web.userData = { strandCount: 32, bagFloor: 'broad-flat-woven', hangsAlong: '-Y' };
+  web.userData = { strandCount: 32, bagFloor: level === 3 ? 'deep-reinforced-floor' : level === 2 ? 'deep-flat-woven' : 'broad-flat-woven', hangsAlong: '-Y', depth: depths[4] };
   if (level >= 2) {
-    // This reinforcement is functional and shares the subdued frame finish.
-    for (const side of [-1, 1]) beam(mouth, [-0.67, -0.025, 0], [-0.30, -0.025, side * 0.33], 0.009, rim, 6).name = 'Reinforced_Throat_Rail';
+    // A second outer rail and floor rim turn the thin Lv1 lip into a load-
+    // bearing frame.  They follow the widened opening and the deeper bag.
+    mesh(mouth, polygonTube(hoopPoints, 0.011), colors.metal, [0, 0, 0], 'Reinforced_Outer_Rim');
+    mesh(mouth, polygonTube(bottom, 0.008), rim, [0, 0, 0], 'Deep_Bag_Floor_Rim');
+    for (const side of [-1, 1]) {
+      beam(mouth, [-0.67 * openingScale, -0.025, 0], [-0.30 * openingScale, -depths[4] * 0.82, side * 0.33 * openingScale], 0.009, rim, 6).name = 'Reinforced_Throat_Rail';
+      beam(mouth, [-0.30 * openingScale, -depths[4] * 0.82, side * 0.33 * openingScale], [0.20 * openingScale, -depths[4], side * 0.31 * openingScale], 0.007, colors.metal, 6).name = 'Deep_Bag_Side_Rail';
+    }
   }
   if (level === 3) {
+    // Replaceable corner guards protect the reinforced mouth at full scoop
+    // width, while a second floor hoop keeps the deep bag open under load.
+    mesh(mouth, polygonTube(bottom, 0.014), colors.metal, [0, 0, 0], 'Replaceable_Floor_Rail');
     for (const side of [-1, 1]) {
-      const guard = mesh(mouth, new THREE.BoxGeometry(0.11, 0.037, 0.045), grip, [0.39, 0.035, side * 0.36], 'Replaceable_Rim_Bumper');
+      const guard = mesh(mouth, new THREE.BoxGeometry(0.13, 0.045, 0.060), grip, [0.39 * openingScale, 0.035, side * 0.36 * openingScale], 'Replaceable_Rim_Bumper');
       guard.rotation.y = side * 0.52;
     }
   }
