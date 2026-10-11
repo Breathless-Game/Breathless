@@ -965,6 +965,10 @@ button.link {
   margin: 10px 0 0 0.6em;
 }
 
+/* Before the bundle runs: just the name on the dark sea (title.show() drops .boot). */
+#title-screen.boot .title-hint {
+  display: none;
+}
 .title-hint {
   margin-top: 22px;
   font-size: 13px;
@@ -1436,6 +1440,19 @@ a.button.primary {
   font-size: 28px;
   font-weight: 900;
   letter-spacing: 0.06em;
+}
+
+#pause-chain {
+  display: block;
+  margin: 2px 0 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--gold);
+}
+
+#pause-chain:hover,
+#pause-chain:focus-visible {
+  text-decoration: underline;
 }
 
 .menu-buttons {

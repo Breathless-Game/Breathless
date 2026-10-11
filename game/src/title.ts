@@ -223,7 +223,7 @@ export class TitleScreen {
    * and only the fish fall onto it, straight away; otherwise start settled.
    */
   show(intro: boolean | 'drop') {
-    this.canvas.parentElement!.classList.remove('hidden');
+    this.canvas.parentElement!.classList.remove('hidden', 'boot');
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.build(reduced ? false : intro);
     if (this.running) return;

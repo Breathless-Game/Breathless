@@ -146,6 +146,10 @@ function syncEventDetail() {
 }
 const breath = new BreathSource(document.getElementById('cam') as HTMLVideoElement);
 
+// Declared up here, before the first populate(), because sharksOut() reads it
+// while the title backdrop's fish are rolled. Keep it above every top-level call.
+type Phase = 'menu' | 'calibrating' | 'play' | 'blackout';
+let phase: Phase = 'menu';
 const fishes: Fish[] = [];
 let fishCoverageLeft = worldBounds.left;
 let fishCoverageRight = worldBounds.right;
@@ -306,11 +310,11 @@ function extendFishCoverage() {
     fishCoverageLeft = start;
   }
 }
+// `phase` (declared above) must stay above this call: populate() -> rollFor()
+// -> sharksOut() reads it, and a later `let` would throw a TDZ error at boot.
 populate();
 
 // ---- Game state ---------------------------------------------------------
-type Phase = 'menu' | 'calibrating' | 'play' | 'blackout';
-let phase: Phase = 'menu';
 let outOfAir = false;
 let emergency = 1;
 let net: FishSpec[] = [];
