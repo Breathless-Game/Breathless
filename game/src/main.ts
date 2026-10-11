@@ -366,7 +366,7 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On the Open Ocean, if the player said yes: one by day, two at night.
+// On the Open Ocean, if the player said yes: one to two by day, two to four at night.
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
@@ -395,7 +395,7 @@ function answerSharks(on: boolean) {
   paused = false;
   // The pause was not a breath taken underwater.
   breathSince = null;
-  hud.message(on ? 'One shark by day, two at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  hud.message(on ? 'One to two sharks by day, two to four at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
 }
 document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
 document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
@@ -1086,6 +1086,10 @@ function climbAboard() {
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
+  // The boat is a safe zone: clear live colliders before the workbench opens.
+  noSharks();
+  // The workbench camera is a clean boat view; keep the seated character out of it.
+  diver.group.visible = false;
   keys.clear();
   vault.toggle(false);
   gear.toggle(false);
@@ -1123,6 +1127,7 @@ function backToWater() {
     titleScreen.hide();
     titleScreen.setPan(0);
     benchPan = 0;
+    diver.group.visible = true;
     diver.stand();
     diver.pos.copy(at.pos);
     diver.vel.copy(at.vel);
@@ -1311,6 +1316,7 @@ const workbench = new Workbench({
     if (aboard) {
       // Mid-trip: the breath input is already set up, so straight back in off the bow.
       leaveBoat();
+      diver.group.visible = true;
       titleScreen.hide();
       startGame();
     } else openStartCard();
