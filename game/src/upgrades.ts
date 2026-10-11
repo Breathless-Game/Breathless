@@ -95,6 +95,14 @@ export const UPGRADES: UpgradeDef[] = [
 ];
 
 
+/** Re-read the dive gear's prices from equipment.ts after setUpgradeCosts() (the on-chain Config's). */
+export function syncUpgradePrices(): void {
+  for (const def of UPGRADES) {
+    const tiers = (EQUIPMENT_TIERS as Partial<Record<UpgradeId, readonly { cost: number }[]>>)[def.id];
+    if (tiers) def.prices = [tiers[0].cost, tiers[1].cost, tiers[2].cost];
+  }
+}
+
 const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   rod: buildRod,
   reel: buildReel,

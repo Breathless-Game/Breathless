@@ -189,17 +189,22 @@ test('spendPearls: locked, signature recorded before sending, on-chain errors an
   assert.match(body, /throw new PaymentPendingError\(signature\)/);
 });
 
-test('main.ts: every Pearl purchase pays through payAndDeliver and delivers through deliverPurchase', () => {
+test('main.ts: every purchase is one player_state instruction, rendered from the re-read accounts', () => {
   const src = read('main.ts');
-  assert.equal(src.match(/\.spendPearls\(/g)?.length, 1, 'one call site');
-  const pay = src.slice(src.indexOf('async function payAndDeliver('), src.indexOf('const paidNotApplied'));
-  assert.match(pay, /\.spendPearls\(cost, purchase\)/);
-  assert.match(pay, /deliverPurchase\(purchase, signature, false\)/);
-  assert.match(src, /deliverPurchase\(rec\.what as Purchase, rec\.signature, true\)/, 'reconcile uses the same delivery');
-  const load = src.slice(src.indexOf('function loadWalletProgress()'), src.indexOf('\n}\n', src.indexOf('function loadWalletProgress()')));
-  assert.match(load, /void reconcilePurchases\(\);/, 'settled on wallet load');
-  // Synthesis: the craft is validated before the burn.
-  const craft = src.slice(src.indexOf('async function synthCraft('), src.indexOf('async function synthUpgrade('));
-  assert.ok(craft.indexOf('craftRecipe(synthesisState, id)') < craft.indexOf('spendSynthesisPearls('), 'craft checked before paying');
+  assert.equal(src.match(/\.spendPearls\(/g), null, 'no bare PEARL burn followed by a local grant');
+  assert.doesNotMatch(src, /applySlotUpgrade|applyPearlSpend|deliverPurchase/, 'no level, material or balance bumped locally');
+  const fn = (name, next) => src.slice(src.indexOf(name), src.indexOf(next, src.indexOf(name) + name.length));
+  assert.match(fn('async function buyNextUpgrade(', '\n}\n'), /sendPlayerPurchase\([\s\S]*buyUpgradeIx\(/);
+  assert.match(fn('async function buyAquariumFood(', '\n}\n'), /payOnChain\([\s\S]*feedIx\(/);
+  const craft = fn('async function synthCraft(', '\n}\n');
+  assert.match(craft, /payOnChain\([\s\S]*craftIx\(/);
+  assert.ok(craft.indexOf('canCraft(synthesisState, id)') < craft.indexOf('payOnChain('), 'craft checked before paying');
+  assert.match(fn('async function synthUpgrade(', '\n}\n'), /payOnChain\([\s\S]*synthUpgradeIx\(/);
+  assert.match(fn('async function selectEquipmentPath(', '\n}\n'), /sendSetPath\([\s\S]*setPathIx\(/);
+  const load = fn('function loadWalletProgress()', '\n}\n');
+  assert.match(load, /void startPlayerChain\(\);/, 'chain read on wallet load');
+  const start = fn('async function startPlayerChain(', '\n}\n');
+  assert.ok(start.indexOf('refreshPlayerChain()') < start.indexOf('reconcilePurchases()'), 'read first, then lost confirmations');
+  assert.ok(start.indexOf('reconcilePurchases()') < start.indexOf('settleOwedBite()'), 'then the owed bite (a journaled purchase may carry it)');
   assert.match(src, /'Another payment is in progress', '另一笔付款正在进行'/);
 });
