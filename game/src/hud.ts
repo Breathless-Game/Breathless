@@ -44,6 +44,7 @@ export class Hud {
   private emergency = $('emergency');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
+  private boardPrompt = $('board-prompt');
   private netSlots = $('net-slots');
   private bankCount = $('bank-count');
   private bankValue = $('bank-value');
@@ -176,6 +177,11 @@ export class Hud {
   setEmergency(fraction: number | null) {
     this.emergency.classList.toggle('hidden', fraction == null);
     if (fraction != null) this.emergencyFill.style.width = `${Math.max(0, fraction) * 100}%`;
+  }
+
+  /** The "F: climb aboard" prompt, shown while floating beside the boat. */
+  setBoardPrompt(show: boolean) {
+    this.boardPrompt.classList.toggle('hidden', !show);
   }
 
   message(text: string, ms = 1800) {

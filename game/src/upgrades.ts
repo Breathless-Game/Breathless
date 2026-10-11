@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { buildFishingBoat } from './boat';
 import { ROD_TIERS } from './equipment';
 
-export type UpgradeId = 'rod' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
+export type UpgradeId = 'rod' | 'bait' | 'boat' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
 export type UpgradeLevel = 1 | 2 | 3;
 
 export interface UpgradeDef {
@@ -19,6 +20,8 @@ export interface UpgradeDef {
 export const UPGRADES: UpgradeDef[] = [
   { id: 'rod', group: 'boat', name: 'Fishing rod', nameZh: '鱼竿', effects: ['1 roll per bite', 'Best of 2 rolls', 'Best of 3 rolls'], prices: [0, 60, 400] },
   { id: 'bait', group: 'boat', name: 'Bait', nameZh: '鱼饵', effects: ['Bite wait ×1.0', 'Bite wait ×0.8', 'Bite wait ×0.6'], prices: [0, 40, 300] },
+  // The whole boat as one piece on the workbench: its engine and hull upgrade together.
+  { id: 'boat', group: 'boat', name: 'Boat', nameZh: '船', effects: ['Trip 2 h · hull 3', 'Trip 1 h · hull 5', 'Trip 30 min · hull 8'], prices: [0, 120, 700] },
   { id: 'boatSpeed', group: 'boat', name: 'Boat engine', nameZh: '船 · 速度', effects: ['Trip takes 2 h', 'Trip takes 1 h', 'Trip takes 30 min'], prices: [0, 80, 500] },
   { id: 'boatHull', group: 'boat', name: 'Boat hull', nameZh: '船 · 耐久', effects: ['Durability 3', 'Durability 5', 'Durability 8'], prices: [0, 80, 500] },
   { id: 'boatDeck', group: 'boat', name: 'Fishing deck', nameZh: '船 · 鱼台', effects: ['1 rod', '2 rods', '3 rods'], prices: [0, 80, 500] },
@@ -32,7 +35,7 @@ export const UPGRADES: UpgradeDef[] = [
     prices: [ROD_TIERS[0].cost, ROD_TIERS[1].cost, ROD_TIERS[2].cost],
   },
   { id: 'fins', group: 'dive', name: 'Fins', nameZh: '脚蹼', effects: ['Swim speed 7.5', 'Swim speed 8.5', 'Swim speed 9.5'], prices: [0, 60, 400] },
-  { id: 'tank', group: 'dive', name: 'Emergency tank', nameZh: '应急气瓶', effects: ['No reserve air', '+1 s emergency air', '+2 s emergency air'], prices: [0, 80, 500] },
+  { id: 'tank', group: 'dive', name: 'Oxygen tank', nameZh: '氧气瓶', effects: ['Pony bottle · no reserve air', '+1 s emergency air', '+2 s emergency air'], prices: [0, 80, 500] },
   { id: 'lamp', group: 'dive', name: 'Headlamp', nameZh: '头灯', effects: ['Short beam', 'Wide beam', 'Wide, long beam'], prices: [0, 40, 300] },
 ];
 
@@ -48,6 +51,7 @@ const blue = mat('#287ea6', { metalness: 0.25, roughness: 0.45 });
 const orange = mat('#e27a35', { roughness: 0.5 });
 const teal = mat('#27c4b8', { metalness: 0.35, roughness: 0.3 });
 const gold = mat('#e5b642', { metalness: 0.8, roughness: 0.24 });
+const scubaYellow = mat('#f2c230', { metalness: 0.2, roughness: 0.4 });
 const rope = mat('#a47a50', { roughness: 1 });
 const rubber = mat('#253139', { roughness: 0.95 });
 const dark = mat('#102027', { metalness: 0.4, roughness: 0.4 });
@@ -266,23 +270,60 @@ function buildFins(level: UpgradeLevel) {
   return group;
 }
 
+/** Oxygen tank: a scuffed pony bottle, then a painted full-size one, then twin tanks with a gauge. */
 function buildTank(level: UpgradeLevel) {
   const group = new THREE.Group();
   const colors = palette(level);
-  addStrap(group, 0, level === 1 ? rope : colors.accent, 0.06);
-  addMesh(group, new THREE.BoxGeometry(0.14, 0.12, 0.08), level === 1 ? wornMetal : gold, new THREE.Vector3(0, 0, 0.32));
+  // Scuffed steel, then painted blue, then scuba yellow.
+  const bodyMat = level === 1 ? wornMetal : level === 2 ? blue : scubaYellow;
+  const height = level === 1 ? 0.7 : level === 2 ? 1.1 : 1.2;
+  const radius = level === 1 ? 0.17 : 0.22;
+  const bottles = level === 3 ? [-0.24, 0.24] : [0];
+  for (const x of bottles) {
+    // A cylinder with a rounded shoulder, a neck and a valve on top.
+    addMesh(group, new THREE.CylinderGeometry(radius, radius, height, 10), bodyMat, new THREE.Vector3(x, 0, 0));
+    addMesh(group, new THREE.SphereGeometry(radius, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), bodyMat, new THREE.Vector3(x, height / 2, 0));
+    addMesh(group, new THREE.CylinderGeometry(radius, radius * 0.9, 0.06, 10), dark, new THREE.Vector3(x, -height / 2, 0));
+    addMesh(group, new THREE.CylinderGeometry(0.05, 0.06, 0.12, 6), colors.metal, new THREE.Vector3(x, height / 2 + radius, 0));
+    addMesh(group, new THREE.BoxGeometry(0.16, 0.08, 0.08), colors.metal, new THREE.Vector3(x, height / 2 + radius + 0.09, 0));
+    // A band round the middle: rope on the old one, a coloured stripe on the better ones.
+    const band = addMesh(group, new THREE.TorusGeometry(radius + 0.005, 0.025, 4, 10), level === 1 ? rope : colors.accent, new THREE.Vector3(x, height * 0.12, 0));
+    band.rotation.x = Math.PI / 2;
+  }
+  // Strapped together on a backplate (twin set), or a single strap.
+  if (level === 3) addMesh(group, new THREE.BoxGeometry(0.62, height * 0.75, 0.06), carbon, new THREE.Vector3(0, 0, -radius - 0.02));
+  else addStrap(group, -height * 0.18, level === 1 ? rope : colors.metal, 0.03).scale.setScalar((radius + 0.03) / 0.32);
+  // Regulator hose from the valve, and a pressure gauge on the top level.
+  const top = new THREE.Vector3(bottles[0] + 0.06, height / 2 + radius + 0.08, 0);
+  const end = new THREE.Vector3(bottles[0] + 0.42, height * 0.15, 0.1);
+  cylinderBetween(group, top, end, 0.022, level === 1 ? rubber : colors.accent, 5);
+  addMesh(group, new THREE.SphereGeometry(0.07, 6, 4), dark, end);
+  if (level === 3) {
+    const gauge = addMesh(group, new THREE.CylinderGeometry(0.09, 0.09, 0.05, 10), gold, new THREE.Vector3(0.62, height * 0.05, 0.12));
+    gauge.rotation.x = Math.PI / 2;
+    cylinderBetween(group, new THREE.Vector3(bottles[1] + 0.05, height / 2 + radius + 0.08, 0), new THREE.Vector3(0.62, height * 0.05, 0.12), 0.02, teal, 5);
+  }
+  return group;
+}
+
+/**
+ * The boat on the workbench is the boat from the map (boat.ts), as it is. Each
+ * level adds a little on top: a radar on the wheelhouse roof, then spotlights
+ * and gold trim along the gunwales.
+ */
+function buildBoat(level: UpgradeLevel) {
+  const group = buildFishingBoat();
   if (level >= 2) {
-    const height = level === 2 ? 0.75 : 1.05;
-    addMesh(group, new THREE.CylinderGeometry(0.16, 0.19, height, 8), colors.body, new THREE.Vector3(0, 0.15, 0));
-    addMesh(group, new THREE.CylinderGeometry(0.13, 0.13, 0.12, 8), colors.metal, new THREE.Vector3(0, 0.58 + (level - 2) * 0.15, 0));
-    const hoseStart = new THREE.Vector3(0.12, 0.52 + (level - 2) * 0.15, 0);
-    cylinderBetween(group, hoseStart, new THREE.Vector3(0.42, 0.3, 0.12), 0.025, colors.accent, 5);
-    if (level === 3) {
-      const gauge = addMesh(group, new THREE.CylinderGeometry(0.1, 0.1, 0.06, 8), gold, new THREE.Vector3(0.28, 0.43, 0.16));
-      gauge.rotation.x = Math.PI / 2;
-      addMesh(group, new THREE.SphereGeometry(0.1, 6, 4), dark, new THREE.Vector3(0.5, 0.25, 0.12));
-      cylinderBetween(group, new THREE.Vector3(0.12, 0.45, 0), new THREE.Vector3(0.5, 0.25, 0.12), 0.022, teal, 5);
+    cylinderBetween(group, new THREE.Vector3(-1.6, 2.16, 0), new THREE.Vector3(-1.6, 2.5, 0), 0.04, steel, 6);
+    const radar = addMesh(group, new THREE.BoxGeometry(0.9, 0.07, 0.14), steel, new THREE.Vector3(-1.6, 2.55, 0));
+    radar.rotation.y = 0.5;
+  }
+  if (level === 3) {
+    for (const z of [-0.55, 0.55]) {
+      addMesh(group, new THREE.CylinderGeometry(0.1, 0.13, 0.18, 8), dark, new THREE.Vector3(0.2, 2.25, z)).rotation.z = Math.PI / 2;
+      addMesh(group, new THREE.SphereGeometry(0.09, 6, 4), lens, new THREE.Vector3(0.31, 2.25, z));
     }
+    for (const z of [-0.84, 0.84]) addMesh(group, new THREE.BoxGeometry(5.3, 0.06, 0.04), gold, new THREE.Vector3(-0.5, 0.56, z));
   }
   return group;
 }
@@ -308,16 +349,19 @@ function buildLamp(level: UpgradeLevel) {
 function normalize(group: THREE.Group) {
   const bounds = new THREE.Box3().setFromObject(group);
   const center = bounds.getCenter(new THREE.Vector3());
-  group.position.sub(center);
   const size = bounds.getSize(new THREE.Vector3());
   const largest = Math.max(size.x, size.y, size.z);
-  if (largest > 0) group.scale.setScalar(2 / largest);
+  const scale = largest > 0 ? 2 / largest : 1;
+  group.scale.setScalar(scale);
+  // The offset is in the scaled model's units, or an off-centre model ends up off-centre.
+  group.position.copy(center).multiplyScalar(-scale);
 }
 
 /** Build a centred, icon-sized display model for one upgrade level. */
 export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel): THREE.Group {
   const inner = id === 'rod' ? buildRod(level)
     : id === 'bait' ? buildBait(level)
+      : id === 'boat' ? buildBoat(level)
       : id === 'boatSpeed' ? buildBoatSpeed(level)
         : id === 'boatHull' ? buildBoatHull(level)
           : id === 'boatDeck' ? buildBoatDeck(level)
