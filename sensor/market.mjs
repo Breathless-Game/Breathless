@@ -15,6 +15,7 @@
 // Routes: GET /api/market/info, POST /api/market/quote, POST /api/market/sell (server mode),
 // and for selling many fish with one wallet approval (server mode): POST /api/market/quote-batch
 // { seller, assetIds } and POST /api/market/sell-batch { seller, sales: [{ assetId, transferTx }] }.
+// GET /api/market/balance?owner=&session= reads PEARL + session SOL for the title badge (market-balance.mjs).
 //
 // Secrets (gitignored, mode 600, Solana CLI format, never logged; only public keys are printed):
 //   program mode  MARKET_ORACLE_KEYPAIR, default <dir>/.market-oracle.json
@@ -23,10 +24,10 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { keypairIdentity } from '@metaplex-foundation/umi';
+import { keypairIdentity, publicKey } from '@metaplex-foundation/umi';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { mplCore } from '@metaplex-foundation/mpl-core';
-import { mplToolbox } from '@metaplex-foundation/mpl-toolbox';
+import { findAssociatedTokenPda, mplToolbox } from '@metaplex-foundation/mpl-toolbox';
 import { mplTokenMetadata } from '@metaplex-foundation/mpl-token-metadata';
 import { HttpError, RateLimiter, isAddress } from './market-rules.mjs';
 
@@ -35,6 +36,7 @@ const FISH_PER_TRADE_HIT = 5;
 import { DEFAULT_LAYOUT, layoutFromIdl } from './fish-market.mjs';
 import { createProgramMode } from './market-program-mode.mjs';
 import { createServerMode } from './market-server-mode.mjs';
+import { createBalanceReader, parseBalanceQuery } from './market-balance.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IDL_PATH = path.join(REPO_ROOT, 'game/src/idl/fish_market.json');
@@ -108,6 +110,29 @@ export async function createMarket({
   // (`npm start` passes clientIp, so there they are per player).
   const limiter = new RateLimiter({ limit: 120, windowMs: 60_000 });
   const tradeLimiter = new RateLimiter({ limit: 30, windowMs: 60_000 });
+  // Balance reads: a badge refresh is cheap (cached), but keep one player from hammering the RPC.
+  const balanceLimiter = new RateLimiter({ limit: 60, windowMs: 60_000 });
+  const freshLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 }); // fresh=1 skips the cache
+
+  // The PEARL mint and its token program for balance reads. mode.info() may hit the RPC, so keep it
+  // a minute once the mint exists (it never changes), a few seconds while it does not yet.
+  let mintMemo = { at: 0, value: null };
+  async function mintInfo() {
+    const ttl = mintMemo.value?.pearlMint ? 60_000 : 5_000;
+    if (Date.now() - mintMemo.at < ttl) return mintMemo.value;
+    const { pearlMint, tokenProgram } = await mode.info();
+    mintMemo = { at: Date.now(), value: { pearlMint: pearlMint ?? null, tokenProgram } };
+    return mintMemo.value;
+  }
+  const balances = createBalanceReader({
+    getAccounts: async (addrs) =>
+      (await u.rpc.getAccounts(addrs.map((a) => publicKey(a)))).map((a) => (a.exists ? { exists: true, data: a.data, lamports: a.lamports.basisPoints } : { exists: false })),
+    ataOf: (owner, mint, tokenProgram) =>
+      findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(owner), tokenProgramId: publicKey(tokenProgram) })[0].toString(),
+    mintInfo,
+  });
+  /** A sale paid (or may have paid) the seller: their next balance read goes to the chain. */
+  const paidSeller = (body) => balances.invalidate(typeof body?.seller === 'string' ? body.seller : null);
 
   function send(res, status, obj) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -145,10 +170,20 @@ export async function createMarket({
 
   const ROUTES = {
     'GET /api/market/info': () => mode.info(),
+    'GET /api/market/balance': (_req, ip, url) => {
+      if (!balanceLimiter.allow(ip)) throw new HttpError(429, 'Too many balance reads, slow down');
+      const q = parseBalanceQuery(url.searchParams);
+      return balances.read({ ...q, fresh: q.fresh && freshLimiter.allow(ip) });
+    },
     'POST /api/market/quote': async (req) => mode.quote(await readJson(req)),
     'POST /api/market/sell': async (req) => {
       if (!mode.sell) throw new HttpError(409, PROGRAM_MODE);
-      return mode.sell(await readJson(req));
+      const body = await readJson(req);
+      try {
+        return await mode.sell(body);
+      } finally {
+        paidSeller(body);
+      }
     },
     'POST /api/market/quote-batch': async (req, ip) => {
       if (!mode.quoteBatch) throw new HttpError(409, 'Program mode: quote each fish with /quote');
@@ -169,7 +204,11 @@ export async function createMarket({
       if (!mode.sellBatch) throw new HttpError(409, PROGRAM_MODE);
       const body = await readJson(req);
       chargeBatch(ip, batchSize(body?.sales));
-      return mode.sellBatch(body);
+      try {
+        return await mode.sellBatch(body);
+      } finally {
+        paidSeller(body);
+      }
     },
   };
 
@@ -186,7 +225,7 @@ export async function createMarket({
         throw new HttpError(known ? 405 : 404, known ? 'Method not allowed' : 'Not found');
       }
       if (req.method === 'POST' && !tradeLimiter.allow(ip)) throw new HttpError(429, 'Too many sales, slow down');
-      send(res, 200, await fn(req, ip));
+      send(res, 200, await fn(req, ip, url));
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
       const error = e instanceof HttpError ? e.message : String(e?.message ?? e).split('\n')[0].slice(0, 200);

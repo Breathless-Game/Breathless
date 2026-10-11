@@ -2,6 +2,7 @@ import './polyfills';
 import { createSignerFromKeypair, publicKey, transactionBuilder, type Signer, type Umi } from '@metaplex-foundation/umi';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { findWallet, waitForWallet, type OwnerWallet } from './owner-wallets';
+import { markBalanceStale, readBalances } from './balance-api';
 import {
   SESSION_NAME,
   addressOfSecret,
@@ -246,6 +247,13 @@ function requireSession(): string {
 /** Session wallet balance in SOL. */
 export async function sessionBalance(): Promise<number> {
   const session = requireSession();
+  // The market reads it for us without the Solana client; an older or offline market: ask the RPC.
+  if (owner) {
+    try {
+      const b = await readBalances(owner, session);
+      if (b?.sessionSol != null) return b.sessionSol;
+    } catch {}
+  }
   const u = await solanaUmi();
   const bal = await u.rpc.getBalance(publicKey(session));
   return Number(bal.basisPoints) / 1e9;
@@ -276,6 +284,7 @@ export async function topUpSession(sol: number): Promise<string> {
       bytesCreatedOnChain: 0,
     })
     .setFeePayer(payer)
-    .sendAndConfirm(u);
+    .sendAndConfirm(u)
+    .finally(markBalanceStale); // the market's cached session SOL is now old
   return base58.deserialize(signature)[0];
 }

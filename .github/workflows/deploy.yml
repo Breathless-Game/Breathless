@@ -58,6 +58,7 @@ jobs:
           node --check sensor/fish-gen.mjs
           node --check sensor/fish-trust.mjs
           node --check sensor/fish-collection.mjs
+          node --check sensor/market-balance.mjs
 
       # deploy.sh runs on the Dell, where a broken script means a broken site: test its
       # backup, health checks and rollback here first (fakes for sudo, curl and npm).
