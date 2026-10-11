@@ -39,6 +39,7 @@ import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
 import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
 import { NftQueue } from './nft-queue';
+import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
@@ -56,6 +57,8 @@ import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS
 import { FieldGuide } from './field-guide';
 import type { LessonId } from './tutorial';
 import { initI18n, onLangChange, pickName, t } from './i18n';
+import { createPurchaseStore, PaymentInProgressError, PaymentPendingError, PENDING_PURCHASES, type PendingPurchase } from './payment-safety';
+import { explorerTx } from './wallet-storage';
 
 // One UI language (Settings → Language): <html lang> and index.html's static text.
 initI18n();
@@ -694,6 +697,7 @@ hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
   sold(sales) {
+    chainFish.departed(sales.map((s) => s.fish.assetId));
     hud.setBank(bank);
     const total = sales.reduce((s, x) => s + x.result.pearls, 0);
     // One toast and one balance read per batch: the most valuable fish stands for the rest.
@@ -703,6 +707,19 @@ const nftQueue = new NftQueue(bank, saveBank, {
   },
 });
 const vault = new Vault(bank, nftQueue);
+// The wallet's fish NFTs on chain fill in whatever the local save lacks (a cleared browser, another device).
+const chainFish = new ChainFishSync({
+  bank,
+  owner: () => walletState().owner,
+  busy: () => nftQueue.busy,
+  holds: (f) => nftQueue.holds(f),
+  changed() {
+    saveBank();
+    hud.setBank(bank);
+    vault.refresh();
+    nftQueue.kick(); // newly listed older fish still get their collection check
+  },
+});
 const aquarium = new Aquarium(bank, {
   pan(u) {
     aquariumPan = u;
@@ -789,16 +806,168 @@ async function syncPearls(earned = 0) {
 let foodBuying = false;
 /**
  * Buy one selected aquarium food with on-chain PEARL, like gear upgrades and synthesis.
- * Resolves with the PEARL burned, or null when nothing was spent.
+ * Resolves with the PEARL burned, or null when nothing was spent. A food paid for earlier whose
+ * payment only confirmed later (see deliverPurchase) is poured first, without a new payment.
  */
 async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<number | null> {
   if (foodBuying) return null;
   foodBuying = true;
   try {
-    return await spendPearlsFor(food.price, t('Food purchase failed', '饲料购买失败'), t(`for ${food.name}`, `才能买${food.nameZh}`));
+    if (takeFoodCredit(food.id)) {
+      hud.message(t(`Poured ${food.name} paid earlier`, `已使用之前付款的${food.nameZh}`), 1600);
+      return food.price;
+    }
+    return await spendPearlsFor(food.price, t('Food purchase failed', '饲料购买失败'), t(`for ${food.name}`, `才能买${food.nameZh}`), { kind: 'food', food: food.id });
   } finally {
     foodBuying = false;
   }
+}
+
+/** What a PEARL payment buys. Stored with a payment whose confirmation was lost, so keep it JSON-safe. */
+type Purchase =
+  | { kind: 'food'; food: FishFoodDef['id'] }
+  | { kind: 'upgrade'; slot: UpgradeSlot; level: number }
+  | { kind: 'craft'; recipe: RecipeDef['id'] }
+  | { kind: 'synth-upgrade'; slot: UpgradeSlot; level: number };
+
+const FOOD_CREDITS = 'food.credits';
+/** Foods paid on-chain whose payment confirmed only after the pour gave up: food id -> burn signatures. */
+function foodCredits(): Record<string, string[]> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(storageKey(FOOD_CREDITS)) ?? '{}');
+    return raw && typeof raw === 'object' ? (raw as Record<string, string[]>) : {};
+  } catch {
+    return {};
+  }
+}
+function saveFoodCredits(all: Record<string, string[]>) {
+  try { localStorage.setItem(storageKey(FOOD_CREDITS), JSON.stringify(all)); } catch (e) { console.error('could not save paid food', e); }
+}
+function takeFoodCredit(food: FishFoodDef['id']): boolean {
+  const all = foodCredits();
+  const list = Array.isArray(all[food]) ? all[food] : [];
+  if (!list.length) return false;
+  list.shift();
+  all[food] = list;
+  saveFoodCredits(all);
+  return true;
+}
+
+/**
+ * Hand over what a confirmed PEARL burn bought. The one delivery path, both for a payment
+ * confirmed right away and for one settled later (`late`, from a pending record). Returns false,
+ * logging loudly with the signature, if the purchase can no longer apply (the PEARL is burned).
+ */
+function deliverPurchase(p: Purchase, signature: string, late: boolean): boolean {
+  const lost = (why: string) => {
+    console.error(`PEARL burn ${signature} (${explorerTx(signature)}) was paid but not delivered: ${why}`, p);
+    return false;
+  };
+  switch (p?.kind) {
+    case 'food': {
+      if (!late) return true; // the aquarium pours it right now
+      // Too late to pour into that tank: keep one paid pour of this food, bound to the burn.
+      const all = foodCredits();
+      const list = Array.isArray(all[p.food]) ? all[p.food] : [];
+      if (!list.includes(signature)) list.push(signature);
+      all[p.food] = list;
+      saveFoodCredits(all);
+      return true;
+    }
+    case 'upgrade': {
+      const tier = nextSlotTier(equipment, p.slot);
+      if (!tier || tier.level !== p.level) return lost(`${p.slot} is no longer one level below ${p.level}`);
+      // The burn already came off the cached balance (payAndDeliver) or a fresh read: burned = 0.
+      Object.assign(equipment, applySlotUpgrade(equipment, { slot: p.slot, tier }, 0));
+      refreshEquipment();
+      return true;
+    }
+    case 'craft': {
+      const next = craftRecipe(synthesisState, p.recipe);
+      if (!next) return lost(`materials for ${p.recipe} are missing`);
+      synthesisState = next;
+      saveSynthesis(synthesisState);
+      return true;
+    }
+    case 'synth-upgrade': {
+      const tier = nextSlotTier(equipment, p.slot);
+      if (!tier || tier.level !== p.level) return lost(`${p.slot} is no longer one level below ${p.level}`);
+      if (synthesisState.crafted.composite < 1) return lost('no composite plate left');
+      Object.assign(equipment, applySlotUpgrade(equipment, { slot: p.slot, tier }, 0));
+      synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
+      saveSynthesis(synthesisState);
+      refreshEquipment();
+      return true;
+    }
+    default:
+      return lost('unknown purchase');
+  }
+}
+
+/** Burn `cost` on-chain PEARL for `purchase`, then deliver it. False when paid but not delivered; throws when nothing was paid. */
+async function payAndDeliver(cost: number, purchase: Purchase): Promise<boolean> {
+  // A payment still confirming from before: settle it first, and never stack a second payment on
+  // a state it may still change (it could deliver this very upgrade).
+  if (pendingPurchases().load().length) {
+    await reconcilePurchases();
+    if (pendingPurchases().load().length) throw new PaymentInProgressError();
+    throw new Error(t('A previous payment just settled · try again', '上一笔付款刚刚结算 · 请重试'));
+  }
+  const signature = await (await nftQueue.loadPearl()).spendPearls(cost, purchase);
+  Object.assign(equipment, applyPearlSpend(equipment, cost));
+  const ok = deliverPurchase(purchase, signature, false);
+  refreshEquipment();
+  void syncPearls();
+  return ok;
+}
+
+const paidNotApplied = () => t('Paid, but the purchase could not be applied (details in the console)', '已付款，但购买未能生效（详情见控制台）');
+
+/** Show a payment error as the player should read it (with an explorer link while the burn is still confirming). Returns the text. */
+function showPaymentError(e: unknown, failure: string): string {
+  if (e instanceof PaymentInProgressError) {
+    const text = t('Another payment is in progress', '另一笔付款正在进行');
+    hud.message(text, 1800);
+    return text;
+  }
+  if (e instanceof PaymentPendingError) {
+    scheduleReconcile();
+    const text = t('Payment still confirming · it applies once it lands', '付款仍在确认中 · 到账后自动生效');
+    hud.message(text, 9000, { href: explorerTx(e.signature), label: t('View on explorer', '在区块浏览器中查看') });
+    return text;
+  }
+  const text = `${failure} · ${(e as Error)?.message ?? e}`;
+  hud.message(text, 1800);
+  return text;
+}
+
+const pendingPurchases = () => createPurchaseStore(() => storageKey(PENDING_PURCHASES));
+let reconcileTimer = 0;
+/** Look up this wallet's unconfirmed PEARL payments: deliver the ones that landed (once), drop the rest. */
+async function reconcilePurchases() {
+  window.clearTimeout(reconcileTimer);
+  if (!walletState().owner) return;
+  // The usual case: nothing pending, and no chain code gets loaded.
+  if (!pendingPurchases().load().length) return;
+  try {
+    const pearl = await nftQueue.loadPearl();
+    const report = await pearl.reconcilePurchases((rec: PendingPurchase) => {
+      if (!deliverPurchase(rec.what as Purchase, rec.signature, true)) hud.message(paidNotApplied(), 2400);
+    });
+    if (report.delivered.length) {
+      hud.message(t('A payment that was still confirming went through · purchase applied', '之前确认中的付款已到账 · 购买已生效'), 2400);
+      void syncPearls();
+    }
+    if (report.dropped.length) console.info('PEARL payments that never landed (nothing was burned):', report.dropped);
+    if (report.kept.length) scheduleReconcile();
+  } catch (e) {
+    console.warn('could not settle pending PEARL payments yet', e);
+    scheduleReconcile();
+  }
+}
+function scheduleReconcile(ms = 60_000) {
+  window.clearTimeout(reconcileTimer);
+  reconcileTimer = window.setTimeout(() => void reconcilePurchases(), ms);
 }
 
 /**
@@ -815,11 +984,11 @@ function pearlPurchaseBlocked(): string | null {
 }
 
 /**
- * Pay a flat Pearl price (food, synthesis fees): burn exactly `cost` on-chain PEARL, and only
- * then take it off the cached balance. Null when unaffordable, the balance is unknown, or the
- * burn failed (the purchase must not apply).
+ * Pay a flat Pearl price (food, synthesis fees): burn exactly `cost` on-chain PEARL, then deliver
+ * `purchase` (deliverPurchase). Null when unaffordable, the balance is unknown, the burn failed or
+ * is still confirming, or the purchase could not be applied.
  */
-async function spendPearlsFor(cost: number, failure: string, what = ''): Promise<number | null> {
+async function spendPearlsFor(cost: number, failure: string, what: string, purchase: Purchase): Promise<number | null> {
   const blocked = pearlPurchaseBlocked();
   if (blocked) {
     hud.message(blocked, 1800);
@@ -832,37 +1001,32 @@ async function spendPearlsFor(cost: number, failure: string, what = ''): Promise
     return null;
   }
   try {
-    await (await nftQueue.loadPearl()).spendPearls(burn);
-    Object.assign(equipment, applyPearlSpend(equipment, burn));
-    refreshEquipment();
-    void syncPearls();
-    return burn;
+    if (await payAndDeliver(burn, purchase)) return burn;
+    hud.message(paidNotApplied(), 2400);
+    return null;
   } catch (e) {
-    hud.message(`${failure} · ${(e as Error).message ?? e}`, 1800);
+    showPaymentError(e, failure);
     void syncPearls();
     return null;
   }
 }
 
 let synthesisBusy = false;
-/** Spend a synthesis station fee in on-chain PEARL, like gear upgrades. */
-async function spendSynthesisPearls(cost: number): Promise<boolean> {
-  return (await spendPearlsFor(cost, t('Synthesis payment failed', '合成付款失败'))) !== null;
+/** Pay a synthesis station fee in on-chain PEARL and deliver `purchase`, like gear upgrades. */
+async function spendSynthesisPearls(cost: number, purchase: Purchase): Promise<boolean> {
+  return (await spendPearlsFor(cost, t('Synthesis payment failed', '合成付款失败'), '', purchase)) !== null;
 }
 
 async function synthCraft(id: RecipeDef['id']) {
   if (synthesisBusy) return;
-  if (!canCraft(synthesisState, id)) {
+  // Everything that could stop the craft is checked before anything is burned.
+  if (!canCraft(synthesisState, id) || !craftRecipe(synthesisState, id)) {
     hud.message(t('Materials missing', '材料不足'), 1400);
     return;
   }
   synthesisBusy = true;
   try {
-    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id])) return;
-    const next = craftRecipe(synthesisState, id);
-    if (!next) return;
-    synthesisState = next;
-    saveSynthesis(synthesisState);
+    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id], { kind: 'craft', recipe: id })) return;
     hud.message(id === 'bait' ? t('Tide bait crafted', '鱼饵已合成') : t('Composite plate crafted', '护板已合成'), 1600);
   } finally {
     synthesisBusy = false;
@@ -882,12 +1046,7 @@ async function synthUpgrade(slot: UpgradeSlot) {
   }
   synthesisBusy = true;
   try {
-    if (!await spendSynthesisPearls(cost)) return;
-    // The fee was already burned (and taken off the cache) by spendSynthesisPearls.
-    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost } }, 0));
-    synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
-    saveSynthesis(synthesisState);
-    refreshEquipment();
+    if (!await spendSynthesisPearls(cost, { kind: 'synth-upgrade', slot, level: tier.level })) return;
     hud.message(t(`${nextSlotLabel(slot)} upgraded in synthesis station`, `${nextSlotLabel(slot)} 已在合成台升级`), 1800);
   } finally {
     synthesisBusy = false;
@@ -926,12 +1085,15 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
   gear.setBusy(true);
   let failed: string | null = null;
   try {
-    await (await nftQueue.loadPearl()).spendPearls(plan.tier.cost);
-    Object.assign(equipment, applySlotUpgrade(equipment, plan));
-    hud.message(t(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, `${nextSlotLabel(slot)} 已升级：${plan.tier.level} 级`), 1800);
+    if (await payAndDeliver(plan.tier.cost, { kind: 'upgrade', slot, level: plan.tier.level })) {
+      hud.message(t(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, `${nextSlotLabel(slot)} 已升级：${plan.tier.level} 级`), 1800);
+    } else {
+      failed = paidNotApplied();
+      gear.showNotice(failed);
+    }
   } catch (e) {
     console.error('upgrade failed', e);
-    failed = `${t('Upgrade failed', '升级失败')}: ${(e as Error).message ?? e}`;
+    failed = showPaymentError(e, t('Upgrade failed', '升级失败'));
     gear.showNotice(failed);
   } finally {
     buying = false;
@@ -1711,7 +1873,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); } },
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); void chainFish.run(); } },
   { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
   // The field guide is a book on the right side of the workbench. Keep the title
   // rope for the three primary destinations so utility controls don't become fish.
@@ -2040,6 +2202,7 @@ async function logOut() {
     if (diving()) goToMenu();
     nftQueue.stop();
     gearSync.stop();
+    chainFish.stop();
     await disconnectWallet(); // drops the owner: the listener below reloads
   } finally {
     loggingOut = false;
@@ -2064,6 +2227,10 @@ function loadWalletProgress() {
   nftQueue.start();
   // And bring its Boat and Dive Kit NFTs up to date (minting them the first time).
   if (GEAR_NFT_ON) gearSync.start();
+  // PEARL payments whose confirmation was lost last time: deliver the ones that landed, once.
+  void reconcilePurchases();
+  // And add the fish NFTs it owns on chain that this browser's save does not have.
+  chainFish.start();
 }
 
 onWalletChange((s) => {

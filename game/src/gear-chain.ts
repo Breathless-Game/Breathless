@@ -3,6 +3,7 @@ import { addPlugin, create, fetchAsset, update, updatePlugin } from '@metaplex-f
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import type { GearAttribute } from './gear-nft';
 import type { GearMintRequest, GearUpdateRequest } from './gear-sync';
+import { confirmedOrThrow } from './payment-safety';
 
 // The Boat and Dive Kit NFTs on chain (gear-nft.ts has the layout, gear-sync.ts the schedule). Only
 // chain.ts imports this, so Umi and mpl-core stay out of the entry bundle. Every call takes the Umi
@@ -42,7 +43,7 @@ export async function mintGear(ctx: GearCtx, req: GearMintRequest): Promise<{ as
     return { asset: asset.publicKey.toString(), signature: null, uri: existing.uri };
   }
   const uri = ctx.origin + req.path;
-  const { signature } = await create(umi, {
+  const mintTx = create(umi, {
     asset,
     owner: publicKey(ctx.owner),
     payer: session,
@@ -51,9 +52,8 @@ export async function mintGear(ctx: GearCtx, req: GearMintRequest): Promise<{ as
     name: req.name,
     uri,
     plugins: [{ type: 'Attributes', attributeList: req.attributes, authority: { type: 'UpdateAuthority' } }],
-  })
-    .setFeePayer(session)
-    .sendAndConfirm(umi);
+  }).setFeePayer(session);
+  const signature = await confirmedOrThrow(mintTx, umi, 'Gear NFT mint');
   return { asset: asset.publicKey.toString(), signature: sig(signature), uri };
 }
 
@@ -86,7 +86,7 @@ export async function updateGear(
         : updatePlugin(umi, { asset: id, plugin, authority: session, payer: session }),
     );
   }
-  const { signature } = await tx.setFeePayer(session).sendAndConfirm(umi);
+  const signature = await confirmedOrThrow(tx.setFeePayer(session), umi, 'Gear NFT update');
   return { status: 'updated', signature: sig(signature) };
 }
 

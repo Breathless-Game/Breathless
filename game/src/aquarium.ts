@@ -247,7 +247,8 @@ export class Aquarium {
       else if (e.key === 'ArrowRight') this.step(1);
     });
     new ResizeObserver(() => this.resize()).observe(this.canvas);
-    this.renderFeeder();
+    // Text only: the 3D food preview (a WebGL context) is built on the first show().
+    this.renderFeederText();
   }
 
   private parseRgb(hex: string) {
@@ -299,7 +300,11 @@ export class Aquarium {
       this.foodPreview.model = null;
     }
     if (disposeRenderer) {
+      // dispose() alone keeps the WebGL context alive until GC; browsers cap live
+      // contexts (~16) and then drop the oldest, which can be the game's own.
+      renderer.forceContextLoss();
       renderer.dispose();
+      renderer.domElement.remove();
       this.foodPreview = null;
     }
   }
@@ -339,24 +344,29 @@ export class Aquarium {
   private renderFeeder() {
     const food = fishFood(this.selectedFood);
     this.renderFeederText();
+    // Swap the model, keep the renderer: one WebGL context for the Aquarium's whole life.
     this.disposeFoodPreview();
-    this.feederModel.replaceChildren();
     const modelCanvas = this.makeFoodPreview(food);
     if (modelCanvas) {
       modelCanvas.setAttribute('aria-label', t(`${food.name} · click to pour into the tank`, `${food.nameZh} · 点击倒入鱼缸`));
-      modelCanvas.addEventListener('click', () => void this.feedSchool());
-      this.feederModel.append(modelCanvas);
+      if (modelCanvas.parentElement !== this.feederModel) this.feederModel.replaceChildren(modelCanvas);
+    } else {
+      this.feederModel.replaceChildren();
     }
   }
 
   /** Render the selected food as a small, real low-poly Three.js model in the fish card. */
   private makeFoodPreview(food: FishFoodDef): HTMLCanvasElement | null {
     try {
+      // Rebuild only if the browser took the context away (e.g. too many live contexts).
+      if (this.foodPreview?.renderer.getContext().isContextLost()) this.disposeFoodPreview(true);
       if (!this.foodPreview) {
-        // One context is shared across selections instead of creating one on
-        // each click. Hidden cards stop rendering but retain the renderer.
+        // One context is shared across selections and reopenings instead of creating
+        // one each time. A closed aquarium stops rendering but keeps the renderer.
         const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
         renderer.domElement.className = 'aq-food-model';
+        // Added once, with the canvas: renderFeeder() runs again on every selection.
+        renderer.domElement.addEventListener('click', () => void this.feedSchool());
         renderer.domElement.setAttribute('aria-label', `${food.name} 3D model`);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.setSize(96, 96, false);
@@ -430,7 +440,7 @@ export class Aquarium {
   /** Esc or ×: the tank sinks away and the title's fish come back down. */
   close() {
     if (!this.open) return;
-    this.disposeFoodPreview(true);
+    // The food preview keeps its renderer across closes; frame() stops drawing it once closed.
     this.state = 'closing';
     this.foodDrop = null;
     this.animate(0, CLOSE_S);
