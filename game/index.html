@@ -72,7 +72,7 @@
           </section>
         </div>
 
-        <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> menu</div>
+        <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>B</b> field guide · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> boat &amp; table</div>
 
         <section id="bank" class="panel">
           <div class="small muted">BANKED</div>
@@ -115,6 +115,10 @@
           <button id="aq-prev" class="mini" title="Previous tank (←)">‹</button>
           <div id="aq-tabs"></div>
           <button id="aq-next" class="mini" title="Next tank (→)">›</button>
+          <label class="aq-light-control" title="Aquarium ambience / 鱼缸氛围灯">
+            <span class="small">灯光</span>
+            <input id="aq-light" type="color" value="#42e8d2" aria-label="Aquarium ambience light color" />
+          </label>
           <button id="aq-close" class="mini" title="Back to the title (Esc)">×</button>
         </div>
         <div class="aq-tank">
@@ -127,7 +131,7 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Click gear for a closer look · drag it to the tray to get it ready · click the map to choose where to dive · Esc back</div>
+      <div id="wb-hint" class="small">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the map to dive · Esc back</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
@@ -187,7 +191,7 @@
           </div>
         </div>
         <aside id="wb-inspect-up" class="card">
-          <div class="small muted">UPGRADE · 升级</div>
+          <div id="wb-inspect-up-kind" class="small muted">UPGRADE · 升级</div>
           <h3 id="wb-inspect-up-title"></h3>
           <p id="wb-inspect-up-effect"></p>
           <div id="wb-inspect-up-price"></div>

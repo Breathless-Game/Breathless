@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { HttpError, MAX_BATCH, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
-import { createSaleDesk, quoteMany } from './market-sale.mjs';
+import { HttpError, MAX_BATCH, MAX_BATCH_TXS, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
+import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 
 // Server mode's batch sale, driven with a fake chain: one transaction moving several fish, the
 // same transaction replayed, fish that are not in it, the wrong seller, and concurrent duplicates.
@@ -144,10 +144,11 @@ test('a transfer to someone else, a failed transfer, or a missing one never pays
     },
     owners: { [A]: MARKET, [B]: MARKET, [C]: MARKET },
   });
-  const { results } = await m.desk.sellBatch(batch([[A, TX], [B, TX_OTHER], [C, sig(7)]]));
+  const { results } = await m.desk.sellBatch(batch([[A, TX], [B, TX_OTHER]]));
   assert.match(results[0].error, /not a transfer of this asset/);
   assert.match(results[1].error, /failed on-chain/);
-  assert.match(results[2].error, /not found/);
+  const missing = await m.desk.sellBatch(batch([[C, sig(7)]]));
+  assert.match(missing.results[0].error, /not found/);
   assert.equal(m.payments.length, 0);
 });
 
@@ -302,4 +303,76 @@ test('rate limiter: a batch can cost more than one hit', () => {
   assert.equal(rl.allow('a', 0), true);
   assert.equal(rl.allow('a', 1, 4), true);
   assert.equal(rl.allow('a', 2), false);
+});
+
+// ---- RPC amplification: a batch names at most MAX_BATCH_TXS transfers, each fetched (polled) once.
+
+/**
+ * A desk whose fetchTransfer is the real poll() over a fake getTransaction that counts its calls:
+ * a known transfer is "not found" for its first `lagPolls` calls (still confirming), an unknown one forever.
+ */
+function pollingSetup({ txs = {}, owners = {}, lagPolls = 0 } = {}) {
+  const ledger = new SoldLedger();
+  const rpcCalls = new Map();
+  const getTransaction = async (s) => {
+    const n = (rpcCalls.get(s) ?? 0) + 1;
+    rpcCalls.set(s, n);
+    return s in txs && n > lagPolls ? txs[s] : null;
+  };
+  const payments = [];
+  const desk = createSaleDesk({
+    ledger,
+    market: MARKET,
+    ensureMint: async () => 'PearlMint',
+    fetchTransfer: (s) => poll(() => getTransaction(s), (t) => t !== null, 6, 0),
+    loadMarketAsset: async (id) => (id in owners ? { owner: owners[id], attributes: { attributeList: attrs('common', 1) } } : null),
+    resolvePending: async (id) => (ledger.get(id).payTx ? 'paid' : 'unpaid'),
+    pay: async (id) => {
+      ledger.payPending(id, `pay-${id}`, 100);
+      payments.push(id);
+      ledger.paid(id);
+    },
+    burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+  });
+  const total = () => [...rpcCalls.values()].reduce((a, b) => a + b, 0);
+  return { desk, payments, rpcCalls, total };
+}
+
+const twentyFour = Array.from({ length: MAX_BATCH }, (_, i) => fish(i + 10));
+const fakeSig = (i) => String(i + 1).replace(/0/g, 'z').padStart(88, '9');
+
+test('sell-batch: 3 distinct transferTx in one request is a 400, before any RPC', async () => {
+  const m = pollingSetup();
+  const body = batch([[A, TX], [B, TX_OTHER], [C, sig(7)]]);
+  const is400 = (e) => e instanceof HttpError && e.status === 400 && /At most 2 different transferTx/.test(e.message);
+  assert.equal(MAX_BATCH_TXS, 2);
+  assert.throws(() => parseSellBatchBody(body), is400);
+  await assert.rejects(m.desk.sellBatch(body), is400);
+  // The reviewer's case: 24 fish over 24 made-up signatures (was ~144 RPCs) is refused the same way.
+  await assert.rejects(m.desk.sellBatch(batch(twentyFour.map((id, i) => [id, fakeSig(i)]))), is400);
+  assert.equal(m.total(), 0, 'no transfer was looked up');
+});
+
+test('sell-batch: 24 fish over 2 transfers sell, and each transfer is polled once for the whole batch', async () => {
+  const [first, second] = [twentyFour.slice(0, 20), twentyFour.slice(20)]; // the client packs 20 fish per transfer
+  const m = pollingSetup({
+    txs: {
+      [TX]: transferTx({ moves: first.map((asset) => ({ asset })) }),
+      [TX_OTHER]: transferTx({ moves: second.map((asset) => ({ asset })) }),
+    },
+    owners: Object.fromEntries(twentyFour.map((id) => [id, MARKET])),
+    lagPolls: 2, // each transfer is "not found" twice before it shows up
+  });
+  const { results } = await m.desk.sellBatch(batch(twentyFour.map((id, i) => [id, i < 20 ? TX : TX_OTHER])));
+  assert.ok(results.every((r) => r.pearls === 1), JSON.stringify(results.find((r) => r.error)));
+  assert.equal(m.payments.length, MAX_BATCH);
+  assert.deepEqual(Object.fromEntries(m.rpcCalls), { [TX]: 3, [TX_OTHER]: 3 }, 'one poll sequence per transfer, not per fish');
+});
+
+test('sell-batch: 24 fish naming 2 made-up transfers cost 2 poll sequences (12 RPCs), not 24', async () => {
+  const m = pollingSetup();
+  const { results } = await m.desk.sellBatch(batch(twentyFour.map((id, i) => [id, i % 2 ? TX : TX_OTHER])));
+  assert.ok(results.every((r) => r.status === 400 && /not found/.test(r.error)));
+  assert.equal(m.total(), 12);
+  assert.equal(m.payments.length, 0);
 });
