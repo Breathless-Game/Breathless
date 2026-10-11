@@ -12,7 +12,7 @@ import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
-import { buildScenery, waterY, type Scenery, type SceneryEnv } from './scenery';
+import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
 import { auroraGlow } from './aurora';
 import { FLORA, understorySpecies } from './flora';
 import { KelpBed, type KelpPlant } from './kelp';
@@ -1167,11 +1167,6 @@ export class World {
     this.rogueDir = dir < 0 ? -1 : 1;
     this.rogueHeight = x === null ? 0 : height;
     (this.surface.material as WaterSurfaceMaterial).setRogueWave(this.rogueX, this.rogueHeight, this.rogueDir);
-  }
-
-  /** Height of the sea at (x, z) right now, as the water shader draws it. */
-  waterHeight(x: number, z: number) {
-    return waterY(x, z, this.waveTime, this.swell() * this.map.waves);
   }
 
   private updateDecorations(time: number, dt: number, cameraY: number) {
