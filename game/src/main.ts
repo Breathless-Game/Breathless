@@ -730,6 +730,14 @@ const aquarium = new Aquarium(bank, {
   message(text) {
     hud.message(text, 1600);
   },
+  openCollection() {
+    vault.toggle(true);
+    fieldGuide?.mark('collection');
+    void syncPearls();
+  },
+  closeCollection() {
+    vault.toggle(false);
+  },
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
@@ -1765,9 +1773,9 @@ function onEscape() {
   else if (!sharkBitten.classList.contains('hidden')) sharkBitten.classList.add('hidden');
   else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
+  else if (vault.open) vault.toggle(false); // the Collection can sit on top of the aquarium
   else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
-  else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
   else if (loginGate.visible) showTitle(false);
@@ -1880,7 +1888,7 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
 ]);
 // The fish are built with their English names (which also fixes how each one hangs); the carved names follow the UI language.
 const TITLE_LABELS: readonly (readonly [number, string, string])[] = [
-  [1, 'AQUARIUM', '图鉴'],
+  [1, 'AQUARIUM', '鱼缸'],
   [2, 'SETTINGS', '设置'],
 ];
 function labelTitleFish() {
