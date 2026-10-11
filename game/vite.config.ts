@@ -1,9 +1,13 @@
 import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 export default defineConfig({
   // Umi and the Irys uploader still reach for Node built-ins (Buffer, stream, crypto).
   plugins: [nodePolyfills({ include: ['buffer', 'crypto', 'stream', 'util', 'events', 'process'], globals: { Buffer: true, process: true, global: true } })],
+  // umi-http-fetch imports node-fetch, whose Node build (whatwg-url, tr46, streams, qs) the browser
+  // does not need: hand it native fetch instead (src/shims/node-fetch.ts).
+  resolve: { alias: { 'node-fetch': fileURLToPath(new URL('./src/shims/node-fetch.ts', import.meta.url)) } },
   server: {
     port: 5173,
     host: true,

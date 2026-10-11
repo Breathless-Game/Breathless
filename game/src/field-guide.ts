@@ -8,7 +8,7 @@ interface Chapter {
   id: ChapterId; tab: string; title: string; subtitle: string; art: GuideArt;
   caption: string; steps: readonly [string, string][]; note: string;
 }
-const CHAPTERS: readonly Chapter[] = [
+export const CHAPTERS: readonly Chapter[] = [
   { id: 'prepare', tab: '准备', title: '出发前，先收拾好桌面', subtitle: '01 / BEFORE THE DIVE', art: 'bench', caption: '看装备 → 放入托盘 → 展开海图',
     steps: [['打开工作台', '点击 START 鱼或按 Enter，连接钱包后进入。'], ['准备装备', '点击装备查看效果，放入右侧 READY 托盘；也可以直接拖过去。'], ['选好水域', '展开桌上的海图，第一次推荐峡湾。点击「下潜」，再选呼吸输入。']],
     note: '漏装配件时会使用基础属性。准备区里的装备，才会带上这次下潜。' },
@@ -32,7 +32,7 @@ const CHAPTERS: readonly Chapter[] = [
     note: '声纳可升级缆绳长度：10 / 17 / 26 米。它不占用 1–6 的快捷装备位。' },
 ];
 // The same chapters in English (ids, art and order match CHAPTERS).
-const CHAPTERS_EN: readonly Chapter[] = [
+export const CHAPTERS_EN: readonly Chapter[] = [
   { id: 'prepare', tab: 'Prepare', title: 'Before you go, set out the desk', subtitle: '01 / BEFORE THE DIVE', art: 'bench', caption: 'Inspect gear → put it on the tray → unfold the chart',
     steps: [['Open the workbench', 'Click the START fish or press Enter, and connect a wallet to enter.'], ['Get your gear ready', 'Click a piece of gear to see what it does, and put it on the READY tray on the right; you can also drag it there.'], ['Pick a water', 'Unfold the chart on the desk; the Fjord is best for a first dive. Click "Dive", then pick your breath input.']],
     note: 'Missing parts fall back to basic stats. Only the gear in the ready area comes along on this dive.' },
@@ -42,9 +42,9 @@ const CHAPTERS_EN: readonly Chapter[] = [
   { id: 'gear', tab: 'Gear', title: 'Pack the right gear for the job', subtitle: '03 / PACK LIGHT', art: 'gear', caption: 'Swim smooth · room to get home · see clearly',
     steps: [['Fins', 'Improve normal swim speed and acceleration; they do not speed up an emergency ascent.'], ['Emergency tank', 'Only lengthens the in-game return window after you breathe underwater. It does not change your real breath hold.'], ['Lamp', 'Improves range and brightness in the dark. 1–6 switch gear quickly; hold Tab for the wheel and release to confirm.']],
     note: 'Quick keys: 1 net · 2 rod · 3 reel · 4 fins · 5 tank · 6 lamp. Gear you did not pack cannot be switched to.' },
-  { id: 'synthesis', tab: 'Synthesis', title: 'Make materials, then upgrade modules', subtitle: '04 / SYNTHESIS STATION', art: 'bench', caption: 'Scales + fibre → bait · scrap + crystal → plating',
-    steps: [['Open the station', 'Click the half-hidden green synthesis station on the workbench; click materials or drag them into the centre.'], ['Craft two outputs', 'Tidal bait uses 2 fish scales and 1 coral fibre; composite plating uses scrap, a depth crystal and coral fibre.'], ['Upgrade a module', 'Prepare one composite plate, then pay Pearls for the module level you want.']],
-    note: 'Materials are saved per wallet. If payment fails, materials, plates and levels remain unchanged.' },
+  { id: 'synthesis', tab: 'Craft', title: 'Make materials first, then upgrade modules', subtitle: '04 / SYNTHESIS STATION', art: 'bench', caption: 'Fish scales + fibre → bait · scrap iron + crystal → plating',
+    steps: [['Open the synthesis station', 'Click the half-hidden green station on the workbench; click materials or drag them into the centre, and it crafts automatically once the recipe is complete.'], ['Craft two products', 'Tide bait = fish scales ×2 + coral fibre ×1 + 38 Pearl; composite plating = scrap iron ×3 + deep crystal ×1 + coral fibre ×2 + 128 Pearl.'], ['Upgrade modules', 'Prepare 1 composite plating first, then pay the Pearl cost: lamp 58/299, rod 68/329, reel 78/389, net 89/499, fins 99/549, tank 119/699, sonar 149/899 (Lv2/Lv3).']],
+    note: 'Supplies are stored per wallet; if payment or the on-chain charge fails, materials, plating and levels stay as they were. Bait and plating are synthesis station products, and station settings do not affect the loadout case.' },
   { id: 'dive', tab: 'Dive', title: 'Go down slowly; practise in the shallows', subtitle: '05 / YOUR FIRST FISH', art: 'dive', caption: 'HOLDING → arrow keys → Space',
     steps: [['Pick an input', 'Keyboard / simulator: hold Shift for HOLDING. Camera: the detected breathing decides.'], ['Swim down', 'WASD / arrow keys move; only while HOLDING can you swim down from the surface. Practise around 3 m first.'], ['Find a fish', 'Get close so the fish is in the net mouth, then press Space. If you miss, wait for the net to recover and try again.']],
     note: 'Keyboard mode needs no real breath hold. The game pauses while this book is open; when you close it, check your breathing before you move.' },
@@ -55,7 +55,12 @@ const CHAPTERS_EN: readonly Chapter[] = [
     steps: [['Ready the beacon', 'Put the sonar on the tray and set its colour by the chart before you leave.'], ['Drop the sonar', 'Press V during a dive to drop it. The cable and pulse nodes give off a glow and show the way.'], ['Follow the light home', 'The sonar is not an air supply and does not lengthen your hold. Use depth and your net to judge when to turn back.']],
     note: 'Sonar upgrades lengthen the cable: 10 / 17 / 26 m. It does not take one of the 1–6 quick gear slots.' },
 ];
-const chapters = () => (lang() === 'zh' ? CHAPTERS : CHAPTERS_EN);
+/** Current-language chapters, one per CHAPTERS entry; falls back to the other language if an entry is ever missing. */
+const chapters = (): readonly Chapter[] => {
+  const primary = lang() === 'zh' ? CHAPTERS : CHAPTERS_EN;
+  const other = lang() === 'zh' ? CHAPTERS_EN : CHAPTERS;
+  return CHAPTERS.map((c, i) => primary.find(x => x.id === c.id) ?? other.find(x => x.id === c.id) ?? primary[i] ?? c);
+};
 interface GuideHooks {
   canOpen(): boolean;
   toggled(open: boolean): void;

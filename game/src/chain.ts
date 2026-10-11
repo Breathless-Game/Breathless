@@ -12,6 +12,7 @@ import type { GearCtx } from './gear-chain';
 import type { GearMintRequest, GearUpdateRequest } from './gear-sync';
 import { fishImagePath, fishMetaPath, nftName, nftOrigin } from './nft-uri';
 import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
+import { markBalanceStale } from './balance-api';
 
 // Everything here runs in the browser against Solana devnet. The identity is
 // the player's session wallet (see wallet.ts): it pays for the Metaplex Core
@@ -52,7 +53,7 @@ export async function balanceSol(): Promise<number> {
 /** Devnet faucet. Rate limited, so callers must handle failure gracefully. */
 export async function airdrop(amount = 1): Promise<void> {
   const u = getUmi();
-  await u.rpc.airdrop(u.identity.publicKey, sol(amount), { commitment: 'confirmed' });
+  await u.rpc.airdrop(u.identity.publicKey, sol(amount), { commitment: 'confirmed' }).finally(markBalanceStale);
 }
 
 /** The zone the HUD showed where the fish was caught: below the map's shelf that is the trench. */
