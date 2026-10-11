@@ -113,6 +113,10 @@ export class Dropdown {
       if (this.swallowed.delete(e.key)) e.stopPropagation();
     });
     b.addEventListener('blur', () => this.close());
+    // The row's <label> would take the focus (blur: close) and then click the button (open again).
+    b.closest('label')?.addEventListener('mousedown', (e) => {
+      if (this.isOpen && !b.contains(e.target as Node)) e.preventDefault();
+    });
     // Keep the focus on the button while the list is clicked, so it doesn't blur shut.
     this.list.addEventListener('pointerdown', (e) => e.preventDefault());
     this.list.addEventListener('mousedown', (e) => e.preventDefault());
