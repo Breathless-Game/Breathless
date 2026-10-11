@@ -14,6 +14,7 @@ import {
   type UpgradeSlot,
   type EquipmentState,
 } from './equipment';
+import { pearls as pearlText } from './market';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -130,7 +131,7 @@ export class GearPanel {
     this.icon.textContent = ui.icon;
     this.level.textContent = `${ui.title} · Lv${current.level} · ${current.name}`;
     this.effect.textContent = ui.slot === 'sonar' ? current.effect : statSummary(stats, ui.slot);
-    this.pearls.textContent = `${pearls} Pearls${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · 选择模块后再打包下潜`;
+    this.pearls.textContent = `${pearlText(pearls)}${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · 选择模块后再打包下潜`;
 
     if (!next) {
       this.progress.max = 1;
@@ -148,7 +149,7 @@ export class GearPanel {
     const missing = Math.max(0, next.cost - pearls);
     this.progress.max = next.cost;
     this.progress.value = Math.min(next.cost, pearls);
-    this.progressLabel.textContent = `${Math.min(next.cost, pearls)} / ${next.cost} Pearls`;
+    this.progressLabel.textContent = `${Math.min(next.cost, pearls)} / ${pearlText(next.cost)}`;
     this.next.textContent = `Lv${next.level} · ${next.name} · ${next.effect}`;
     this.compare.textContent = !preview
       ? '升级预览暂不可用'
