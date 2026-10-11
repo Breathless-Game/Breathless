@@ -88,7 +88,7 @@
       </div>
     </div>
 
-    <div id="title-screen" class="hidden">
+    <div id="title-screen" class="boot">
       <canvas id="title-canvas"></canvas>
       <!-- The hanging fish as 3D models, over the rope; clicks go through to the canvas below. -->
       <canvas id="title-fish3d"></canvas>
@@ -201,7 +201,7 @@
       </div>
     </div>
 
-    <div id="overlay">
+    <div id="overlay" class="hidden">
       <div class="card">
         <h1>BREATH<span>LESS</span></h1>
         <p class="tagline">Your real lungs are the oxygen tank.</p>
@@ -269,6 +269,7 @@
             <button id="pause-menu">Main menu</button>
           </div>
           <div id="pause-wallet" class="wallet-row wallet-pause hidden"></div>
+          <a id="pause-chain" class="button hidden" href="#" target="_blank" rel="noopener noreferrer">View on chain ↗</a>
           <p class="small muted">Esc to resume</p>
         </div>
 
