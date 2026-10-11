@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { Shipyard, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
+import { SkinPicker } from './skins';
+import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { Vault } from './vault';
@@ -101,7 +103,7 @@ diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 diver.setWaterSurface((x, z) => world.surfaceAt(x, z));
 // Between dives the diver sits on the bow (it rocks with the boat); a dive starts with a jump off it.
 const bowSeat = new THREE.Object3D();
-bowSeat.position.set(3.38, 0.66, 0);
+bowSeat.position.set(3.02, 0.66, 0);
 world.boat.add(bowSeat);
 diver.sit(bowSeat);
 const JUMP_OUT = 2.6; // where the jump lands: this far past the bow, and this deep
@@ -337,8 +339,9 @@ const currentStats = () => {
   return {
     ...stats,
     netCapacity: stats.netCapacity + shipBonus.capacity,
-    catchRadius: stats.catchRadius * (1 + shipBonus.range),
-    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed),
+    catchRadius: stats.catchRadius * (1 + shipBonus.range) * (diver.skinIndex===1&&world.map.id==='tianchi'?1.1:1),
+    swimSpeed: stats.swimSpeed * (1 + shipBonus.speed) * (diver.skinIndex===0&&world.map.id==='fjord'?1.1:1),
+    lampDistance: stats.lampDistance * (diver.skinIndex===2&&world.map.id==='ocean'?1.15:1),
   };
 };
 const activeLevel = (slot: EquipmentSlot): number => {
@@ -692,6 +695,7 @@ function nextSlotLabel(slot: UpgradeSlot) {
 // ---- Input --------------------------------------------------------------
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  if(skinPicker.open)return;
   // An open settings dropdown has the keyboard. It stops its own keys; this is the backstop.
   if (dropdownOpen()) return;
   if (e.key === 'Escape') {
@@ -1020,6 +1024,7 @@ function startGame() {
   hud.message('Hold your breath and dive!', 2400);
   const bow = bowSeat.getWorldPosition(new THREE.Vector3());
   diver.jumpTo(new THREE.Vector3(bow.x + JUMP_OUT, -JUMP_DEPTH, 0));
+  visitSkinMap(world.map.id);
   wentDown = false;
   tutorialDescended = false;
 }
@@ -1113,6 +1118,68 @@ function updateCalibration() {
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
 let paused = false;
+let trialSkinActive=false;
+const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
+const endSkinTrial=()=>{if(!trialSkinActive)return;trialSkinActive=false;diver.setSkin(0);skinPicker.resetChoice();applyEquipmentVisuals();};
+const skinHint=document.createElement('div');skinHint.className='skin-hint';skinHint.textContent='长按角色或 E 换装 · Hold diver or E';skinHint.hidden=true;document.body.append(skinHint);
+setInterval(()=>{skinHint.hidden=phase!=='play'||diver.seated||diver.jumping||paused||-diver.pos.y>SURFACE_DEPTH;},400);
+let skinHold:ReturnType<typeof setTimeout>|null=null;
+const skinRing=document.createElement('div');skinRing.style.cssText='position:fixed;width:30px;height:30px;transform:translate(-50%,-50%);pointer-events:none;z-index:9999;filter:drop-shadow(0 0 2px #7aead9);display:none';
+skinRing.innerHTML='<svg viewBox="0 0 64 64" width="30" height="30"><circle cx="32" cy="32" r="26" fill="#0b273850" stroke="#ffffff40" stroke-width="3"/><circle data-progress cx="32" cy="32" r="26" fill="none" stroke="#b6fff0" stroke-width="3" stroke-linecap="round" stroke-dasharray="163.363" stroke-dashoffset="163.363" transform="rotate(-90 32 32)"/></svg>';document.body.append(skinRing);
+let skinProgressFrame=0;
+let skinPointer:number|null=null,skinX=0,skinY=0,skinOpened=false;
+let skinHoldMode:'pointer'|'keyboard'|null=null;
+const clearSkinHold=()=>{if(skinHold!==null)clearTimeout(skinHold);skinHold=null;skinPointer=null;skinHoldMode=null;cancelAnimationFrame(skinProgressFrame);skinRing.style.display='none';};
+const canHoldSkin=()=>phase==='play'&&!paused&&!diver.seated&&!diver.jumping&&-diver.pos.y<=SURFACE_DEPTH;
+const startSkinProgress=(mode:'pointer'|'keyboard')=>{
+  skinHoldMode=mode;
+  const rect=canvas.getBoundingClientRect();
+  const holdStarted=performance.now();skinRing.style.display='block';
+  const drawProgress=()=>{
+    if(!canHoldSkin()){clearSkinHold();return;}
+    const center=diver.group.getWorldPosition(new THREE.Vector3()).project(camera);
+    skinRing.style.left=`${rect.left+(center.x+1)*rect.width/2}px`;skinRing.style.top=`${rect.top+(1-center.y)*rect.height/2}px`;
+    skinRing.querySelector('[data-progress]')!.setAttribute('stroke-dashoffset',String(163.363*(1-Math.min(1,(performance.now()-holdStarted)/500))));
+    skinProgressFrame=requestAnimationFrame(drawProgress);
+  };drawProgress();
+  skinHold=setTimeout(()=>{const pointer=skinHoldMode==='pointer';clearSkinHold();if(!canHoldSkin())return;skinOpened=pointer;skinPicker.show();},500);
+};
+canvas.addEventListener('pointerdown',e=>{
+  if(!canHoldSkin()||e.button!==0||skinHoldMode==='keyboard')return;
+  const rect=canvas.getBoundingClientRect();
+  const screen=diver.group.getWorldPosition(new THREE.Vector3()).project(camera);
+  const x=rect.left+(screen.x+1)*rect.width/2,y=rect.top+(1-screen.y)*rect.height/2;
+  if(screen.z>1||Math.hypot(e.clientX-x,e.clientY-y)>55)return;
+  clearSkinHold();skinPointer=e.pointerId;skinX=e.clientX;skinY=e.clientY;skinOpened=false;
+  startSkinProgress('pointer');
+},true);
+window.addEventListener('keydown',e=>{
+  if(e.code!=='KeyE'||!canHoldSkin())return;
+  const target=e.target as HTMLElement;
+  if(target.closest('input,textarea,select,[contenteditable="true"]'))return;
+  e.preventDefault();e.stopImmediatePropagation();
+  if(e.repeat)return;
+  clearSkinHold();startSkinProgress('keyboard');
+},true);
+window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('e');}},true);
+window.addEventListener('pointermove',e=>{if(e.pointerId===skinPointer&&Math.hypot(e.clientX-skinX,e.clientY-skinY)>14)clearSkinHold();},true);
+window.addEventListener('pointerup',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
+window.addEventListener('pointercancel',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
+window.addEventListener('blur',()=>clearSkinHold());
+let catchClickStart=-Infinity,catchClickX=0,catchClickY=0,catchClickReady=false;
+canvas.addEventListener('pointerdown',e=>{
+  catchClickReady=e.button===0&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickStart=performance.now();catchClickX=e.clientX;catchClickY=e.clientY;
+},true);
+window.addEventListener('pointermove',e=>{if(Math.hypot(e.clientX-catchClickX,e.clientY-catchClickY)>14)catchClickReady=false;},true);
+window.addEventListener('pointercancel',()=>{catchClickReady=false;},true);
+window.addEventListener('blur',()=>{catchClickReady=false;});
+canvas.addEventListener('click',e=>{
+  if(skinOpened){e.preventDefault();e.stopImmediatePropagation();skinOpened=false;catchClickReady=false;return;}
+  const catchNow=catchClickReady&&e.button===0&&performance.now()-catchClickStart<350&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickReady=false;
+  if(catchNow){e.preventDefault();e.stopImmediatePropagation();tryCatch();}
+},true);
 let resetDayClock = false;
 
 function pause() {
@@ -1139,6 +1206,7 @@ let aboard: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
 let leavingBoat = false;
 
 function climbAboard() {
+  endSkinTrial();
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
@@ -1242,6 +1310,7 @@ function onEscape() {
 
 /** Ends the dive: back to the title, with the diver sitting back on the bow. */
 function goToMenu() {
+  endSkinTrial();
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
   diver.sit(bowSeat);
