@@ -2691,6 +2691,27 @@ button:disabled {
   color: #2a1d00;
 }
 
+.aq-light-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(4, 18, 30, 0.55);
+  color: var(--muted);
+}
+
+.aq-light-control input {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
 .aq-tank {
   position: relative;
 }
@@ -2727,6 +2748,7 @@ button:disabled {
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(8px);
+  flex-wrap: wrap;
 }
 
 #aq-card img {
@@ -2789,6 +2811,16 @@ button:disabled {
     width: 40px;
     height: 40px;
   }
+}
+
+.aq-growth {
+  color: var(--hold);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+#aq-card .aq-feed {
+  white-space: nowrap;
 }
 
 /* ---- gear inspector (workbench) ---- */
