@@ -1882,6 +1882,7 @@ function update(dt: number, time: number) {
   camera.position.add(shakeOffset);
 
   hud.setBreath(s, outOfAir);
+  hud.placeBreath(overDiversHead());
   hud.setDepth(-diver.pos.y);
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
@@ -1931,6 +1932,18 @@ function swimPhysics(dt: number, s: BreathState) {
       }
     }
   }
+}
+
+const HEAD_TAG_Y = 1.3; // the breath tag floats this far above the diver's middle
+const headTag = new THREE.Vector3();
+
+/** Where the breath tag goes: just above the diver's head on screen, or null if that's off screen. */
+function overDiversHead(): { x: number; y: number } | null {
+  camera.updateMatrixWorld();
+  headTag.copy(diver.pos).setY(diver.pos.y + HEAD_TAG_Y).project(camera);
+  if (headTag.z > 1 || Math.abs(headTag.x) > 1.1 || Math.abs(headTag.y) > 1.1) return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  return { x: r.left + ((headTag.x + 1) / 2) * r.width, y: r.top + ((1 - headTag.y) / 2) * r.height };
 }
 
 /**

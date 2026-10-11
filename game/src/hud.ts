@@ -126,7 +126,9 @@ export class Hud {
     this.chip.textContent = danger ? 'OUT OF AIR' : holding ? 'HOLDING' : 'BREATHING';
     this.chip.className = `chip ${danger ? 'danger' : holding ? 'holding' : 'breathing'}`;
     this.holdTime.textContent = `${(s.holdMs / 1000).toFixed(1)}s`;
-    this.camWrap.className = danger ? 'danger' : holding ? 'holding' : '';
+    // Toggled, not assigned: the camera bubble also carries `.off` (Settings → camera preview).
+    this.camWrap.classList.toggle('danger', danger);
+    this.camWrap.classList.toggle('holding', holding && !danger);
     this.source.textContent =
       s.mode === 'presage' && !s.connected
         ? 'Presage · sensor offline'
@@ -139,6 +141,16 @@ export class Hud {
     this.vitals.textContent = parts.join(' · ');
     this.hint.textContent = s.mode === 'presage' ? s.hint || (s.calibrated ? '' : 'Calibrating: breathe normally') : s.error;
     this.drawTrace(s.trace, holding, danger);
+  }
+
+  /**
+   * The breath readout rides above the diver's head: x, y is that point on screen
+   * (null: off screen, or no diver to follow).
+   */
+  placeBreath(at: { x: number; y: number } | null) {
+    const el = $('breath');
+    el.classList.toggle('offscreen', !at);
+    if (at) el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px) translate(-50%, -100%)`;
   }
 
   private drawTrace(trace: number[], holding: boolean, danger: boolean) {

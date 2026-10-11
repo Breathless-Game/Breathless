@@ -68,11 +68,41 @@ body {
 }
 
 /* ---- breath panel ---- */
+/* A small tag over the diver's head (main.ts places it every frame via hud.placeBreath). */
 #breath {
   position: absolute;
-  top: 16px;
-  left: 16px;
-  width: 252px;
+  top: 0;
+  left: 0;
+  width: 168px;
+  padding: 8px 10px 6px;
+  border-radius: 14px;
+  will-change: transform;
+}
+
+#breath.offscreen {
+  visibility: hidden;
+}
+
+#breath .chip {
+  font-size: 10px;
+  padding: 3px 8px;
+}
+
+#breath #hold-time {
+  font-size: 18px;
+}
+
+#breath #trace {
+  height: 26px;
+  margin: 4px 0 2px;
+}
+
+#breath .small {
+  font-size: 10px;
+}
+
+#breath #hint:empty {
+  display: none;
 }
 
 .chip {
@@ -125,12 +155,13 @@ body {
 }
 
 /* ---- camera bubble ---- */
+/* Top left: the breath numbers ride over the diver's head instead. */
 #cam-wrap {
   position: absolute;
   top: 16px;
-  right: 16px;
-  width: 168px;
-  height: 126px;
+  left: 16px;
+  width: 224px;
+  height: 168px;
   border-radius: 16px;
   overflow: hidden;
   border: 3px solid var(--breathe);
@@ -1997,10 +2028,10 @@ button:disabled {
     height: 84px;
   }
   #breath {
-    width: 200px;
+    width: 140px;
   }
   #time-of-day {
-    top: 108px; /* top-right, under the camera preview, beside the breath panel */
+    top: 108px; /* top-right */
     left: auto;
     right: 16px;
     transform: none;
