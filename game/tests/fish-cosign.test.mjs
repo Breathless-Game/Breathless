@@ -74,19 +74,35 @@ test('a fish the market can never buy is not sellable, not bulk-sold, and keeps 
   assert.equal(market.nftStep(minting, { type: 'paused' }).mintTries, undefined, 'a limit costs no attempt');
 });
 
+/**
+ * Transpile `entries` (src module names) and every module they import, found by following the
+ * relative imports left in the transpiled output (type-only ones are erased), into `dir` as .mjs,
+ * with three.js stubbed (the generator never touches it).
+ */
+function transpileTree(entries, dir) {
+  writeFileSync(path.join(dir, 'three.mjs'), 'export {};\n');
+  const todo = [...entries];
+  const done = new Set();
+  while (todo.length) {
+    const name = todo.pop();
+    if (done.has(name)) continue;
+    done.add(name);
+    let js = transpile(readFileSync(new URL(`../src/${name}.ts`, import.meta.url), 'utf8'));
+    for (const [, dep] of js.matchAll(/from '\.\/([\w-]+)'/g)) todo.push(dep);
+    js = js.replace(/from 'three'/g, "from './three.mjs'").replace(/from '\.\/([\w-]+)'/g, "from './$1.mjs'");
+    writeFileSync(path.join(dir, `${name}.mjs`), js);
+  }
+}
+
 test('sensor/fish-gen.mjs (the market\'s generator) grows exactly the game\'s fish', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'fish-parity-'));
   try {
-    writeFileSync(path.join(dir, 'three.mjs'), 'export {};\n');
-    for (const name of ['rng', 'depth-odds', 'fish', 'nft-uri']) {
-      const js = transpile(readFileSync(new URL(`../src/${name}.ts`, import.meta.url), 'utf8'))
-        .replace(/from 'three'/g, "from './three.mjs'")
-        .replace(/from '\.\/([\w-]+)'/g, "from './$1.mjs'");
-      writeFileSync(path.join(dir, `${name}.mjs`), js);
-    }
+    transpileTree(['fish', 'depth-odds', 'nft-uri'], dir);
     const game = await import(pathToFileURL(path.join(dir, 'fish.mjs')).href);
+    const odds = await import(pathToFileURL(path.join(dir, 'depth-odds.mjs')).href);
     const uri = await import(pathToFileURL(path.join(dir, 'nft-uri.mjs')).href);
     const port = await import(new URL('../../sensor/fish-gen.mjs', import.meta.url).href);
+    assert.deepEqual(port.RARITY_BY_DEPTH, odds.RARITY_BY_DEPTH);
     for (let i = 0; i < 3000; i++) {
       const seed = Math.imul(i + 1, 2654435761) >>> 0;
       for (const depth of [(i * 0.731) % 70, 60 + ((i * 3.17) % 400), [0, 18, 50, 235, 1000][i % 5]]) {
@@ -94,6 +110,9 @@ test('sensor/fish-gen.mjs (the market\'s generator) grows exactly the game\'s fi
         assert.deepEqual(port.rollFish(seed, depth), want, `seed ${seed} at ${depth} m`);
         assert.equal(port.fishLook(want), uri.fishLook(want));
       }
+    }
+    for (const r of ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic']) {
+      for (let seed = 1; seed < 400; seed++) assert.deepEqual(port.fishOf(seed, r), game.rollFish(seed, 0, [[r, 1]]), `${r} seed ${seed}`);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

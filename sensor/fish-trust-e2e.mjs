@@ -25,7 +25,7 @@ import path from 'node:path';
 import { createSignerFromKeypair, generateSigner, keypairIdentity, publicKey, sol } from '@metaplex-foundation/umi';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
-import { rarityAt, recordedDepth, rollFish } from './fish-gen.mjs';
+import { GENERATORS, Rng, recordedDepth, rollFish } from './fish-gen.mjs';
 import { createMarket } from './market.mjs';
 
 const RPC = process.env.SOLANA_RPC;
@@ -56,9 +56,13 @@ for (const k of [session.publicKey, ownerSigner.publicKey]) await u.rpc.airdrop(
 console.log(`session ${session.publicKey}\nowner   ${owner}\nmarket dir ${DIR}`);
 
 // ---- Fish: real catches from the game's generator, and seeds that could never be mythic.
-/** A seed whose first draw is so low it rolls common at every depth. */
-function commonOnlySeed(from) {
-  for (let s = from; ; s++) if (rarityAt(s, 1000) === 'common' && rarityAt(s, 0) === 'common') return s >>> 0;
+/**
+ * A seed whose first draw is so low that no generator version ever rolls it mythic: not at 1000 m
+ * (rarity never drops with depth, so nowhere above either) and not with the first day's zone odds.
+ */
+function neverMythicSeed(from) {
+  const never = (s) => GENERATORS.every((g) => g.rarityAt(s, 1000) !== 'mythic' && g.legacyZones.every((z) => new Rng(s).weighted(z.odds) !== 'mythic'));
+  for (let s = from; ; s++) if (new Rng(s).next() < 0.5 && never(s)) return s >>> 0;
 }
 /** A real catch: rolled at its spawn depth, recorded where it was hooked. */
 function catchAt(seed, spawnM, hookedM = spawnM + 3) {
@@ -117,8 +121,8 @@ async function mintBySession(f) {
   return asset.publicKey.toString();
 }
 
-// The forged mythic: a seed that can only ever be common, written up as a 600-PEARL mythic.
-const forgedSeed = commonOnlySeed(0x10000);
+// The forged mythic: a seed no generator can ever make mythic, written up as a 600-PEARL mythic.
+const forgedSeed = neverMythicSeed(0x10000);
 const forged = {
   ...catchAt(forgedSeed, 400),
   rarity: 'mythic',
@@ -130,7 +134,7 @@ const forged = {
 step('before the market exists: two fish minted the old way (a real catch and a forged one)');
 const legacyFish = catchAt(0x00c0ffee, 42);
 const legacyAsset = await mintBySession(legacyFish);
-const legacyForged = await mintBySession({ ...forged, id: commonOnlySeed(0x20000).toString(16).padStart(8, '0') });
+const legacyForged = await mintBySession({ ...forged, id: neverMythicSeed(0x20000).toString(16).padStart(8, '0') });
 console.log(`  legacy ${legacyFish.rarity} ${legacyFish.name} (${legacyFish.value}) ${legacyAsset}\n  forged legacy mythic ${legacyForged}`);
 
 step('market start (server mode, fresh wallet): PEARL mint and fish collection created once');

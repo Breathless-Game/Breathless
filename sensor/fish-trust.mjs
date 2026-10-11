@@ -5,7 +5,8 @@
 //       market's collection, has no plugin that could rewrite it, and its attributes are ones the
 //       game's generator can produce for its seed. Returns the price (appraise()).
 //   checkFish(facts, { legacy })   the generator check: species follows from (seed, rarity); the
-//       rarity and catch value must be reachable from some spawn depth near the recorded depth.
+//       rarity and catch value must be reachable from some spawn depth near the recorded depth,
+//       under one of the generator versions that has minted fish (fish-gen.mjs GENERATORS).
 //   parseCosignMint(body, ...)     what a co-signed mint may write on-chain.
 //   checkMigratable(asset, ...)    whether a fish minted before the collection may move into it.
 //   payout cap helpers             DAILY_PEARL_CAP per wallet per 24 h, from the sale ledger.
@@ -13,7 +14,7 @@
 // Boat / Dive Kit gear NFTs (and anything else the session key mints) are never in the fish
 // collection, so assertTrustedFish refuses them: the market can never buy one.
 
-import { LEGACY_ZONES, RARITY_ORDER, Rng, fishLook, fishOf, rarityAt, seedOfId } from './fish-gen.mjs';
+import { CURRENT_GENERATOR, GENERATORS, RARITY_ORDER, Rng, fishLook, seedOfId } from './fish-gen.mjs';
 import {
   DAILY_PEARL_CAP,
   HttpError,
@@ -48,14 +49,14 @@ export function readFacts(attributeList) {
 const rank = (rarity) => RARITY_ORDER.indexOf(rarity);
 
 /**
- * The spawn depths in [lo, hi] at which `seed` rolls `rarity` with the current odds, as [a, b], or
- * null. For a fixed seed the rolled rarity never drops as depth grows (P(rarity >= k) is
- * non-decreasing in depth, game/tests/depth-odds.test.mjs), so the set is one interval; its edges
- * are found by bisection.
+ * The spawn depths in [lo, hi] at which `seed` rolls `rarity` with generator `gen`'s odds (default:
+ * today's), as [a, b], or null. For a fixed seed the rolled rarity never drops as depth grows
+ * (P(rarity >= k) is non-decreasing in depth in every version's table, game/tests/depth-odds.test.mjs
+ * and fish-trust.test.mjs), so the set is one interval; its edges are found by bisection.
  */
-export function rarityInterval(seed, rarity, lo, hi) {
+export function rarityInterval(seed, rarity, lo, hi, gen = CURRENT_GENERATOR) {
   const target = rank(rarity);
-  const at = (d) => rank(rarityAt(seed, d));
+  const at = (d) => rank(gen.rarityAt(seed, d));
   if (at(lo) > target || at(hi) < target) return null;
   let a = lo;
   if (at(lo) < target) {
@@ -105,12 +106,16 @@ function valueRange(rarity, a, b) {
 
 /**
  * The generator check. `facts`: { id, rarity, species, depth, value } as on-chain.
- *   strict (new mints): the current generator must give this rarity at a spawn depth within
- *     SPAWN_TOLERANCE_M of `depth`, and exactly this catch value at one of those depths.
+ *   strict (new mints): some generator version must give this species for (seed, rarity), this
+ *     rarity at a spawn depth within SPAWN_TOLERANCE_M of `depth` with that version's odds, and
+ *     exactly this catch value at one of those depths.
  *   legacy (fish minted before the collection, and every sale): also accepts the old fixed zone
- *     odds the game rolled with on its first day, an old fish's value from that day's formula
- *     (rarity value x zone multiplier) or its plain rarity value, and a missing value.
- * Returns { ok: true, fish } (fish = the generator's fish for this seed and rarity) or { ok: false, reason }.
+ *     odds the game rolled with on its first day (v1 only), an old fish's value from that day's
+ *     formula (rarity value x zone multiplier) or its plain rarity value, and a missing value.
+ * Nothing on-chain records the generator version, so every version is tried (newest first). That
+ * is no wider for a forger than one version: any seed is theirs to pick and every version reaches
+ * the same top value (a mythic below 235 m); the per-wallet limits bound what a forger can take.
+ * Returns { ok: true, fish, version } (fish = that version's fish for this seed and rarity) or { ok: false, reason }.
  */
 export function checkFish(facts, { legacy = false, tolerance = SPAWN_TOLERANCE_M } = {}) {
   const { id, rarity, species, depth, value } = facts;
@@ -121,29 +126,41 @@ export function checkFish(facts, { legacy = false, tolerance = SPAWN_TOLERANCE_M
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) return { ok: false, reason: `Bad catch value "${value}"` };
   if (value === undefined && !legacy) return { ok: false, reason: 'The catch value is missing' };
 
-  const fish = fishOf(seed, rarity);
-  if (species !== fish.species) {
-    return { ok: false, reason: `Fish ${id} is not a ${species || '(no species)'}: a ${rarity} from this seed is a ${fish.species}` };
+  const grown = GENERATORS.map((gen) => ({ gen, fish: gen.fishOf(seed, rarity) }));
+  const matching = grown.filter((g) => g.fish.species === species);
+  if (!matching.length) {
+    const could = [...new Set(grown.map((g) => g.fish.species))].join(' or ');
+    return { ok: false, reason: `Fish ${id} is not a ${species || '(no species)'}: a ${rarity} from this seed is a ${could}` };
   }
+  let failed = null;
+  for (const { gen, fish } of matching) {
+    const reason = depthAndValueProblem(gen, seed, facts, { legacy, tolerance });
+    if (!reason) return { ok: true, fish, version: gen.version };
+    failed ??= reason;
+  }
+  return { ok: false, reason: failed };
+}
 
+/** Could generator `gen` have rolled this rarity and catch value near the recorded depth? A reason, or null. */
+function depthAndValueProblem(gen, seed, { id, rarity, depth, value }, { legacy, tolerance }) {
   const lo = Math.max(0, depth - tolerance);
   const hi = depth + tolerance;
-  const span = rarityInterval(seed, rarity, lo, hi);
+  const span = rarityInterval(seed, rarity, lo, hi, gen);
   const rv = RARITY_VALUE[rarity];
   if (span) {
-    if (value === undefined || valueReachable(value, rarity, span[0], span[1])) return { ok: true, fish };
-    if (legacy && value === rv) return { ok: true, fish };
+    if (value === undefined || valueReachable(value, rarity, span[0], span[1])) return null;
+    if (legacy && value === rv) return null;
   }
   if (legacy) {
-    for (const z of LEGACY_ZONES) {
+    for (const z of gen.legacyZones) {
       if (depth < z.top - tolerance || depth >= z.bottom + tolerance) continue;
       if (new Rng(seed).weighted(z.odds) !== rarity) continue;
-      if (value === undefined || value === rv || value === Math.round(rv * z.rewardMultiplier)) return { ok: true, fish };
+      if (value === undefined || value === rv || value === Math.round(rv * z.rewardMultiplier)) return null;
     }
   }
-  if (!span) return { ok: false, reason: `Fish ${id} cannot be ${rarity} when caught at ${depth} m` };
+  if (!span) return `Fish ${id} cannot be ${rarity} when caught at ${depth} m`;
   const [min, max] = valueRange(rarity, span[0], span[1]);
-  return { ok: false, reason: `Catch value ${value} does not fit a ${rarity} caught at ${depth} m (${min}–${max})` };
+  return `Catch value ${value} does not fit a ${rarity} caught at ${depth} m (${min}–${max})`;
 }
 
 // ---- The asset itself ------------------------------------------------------------------------

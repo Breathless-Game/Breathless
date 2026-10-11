@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
+import { GENERATORS, GENERATOR_V1, GENERATOR_V2, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
 import {
   FishRegistry,
   Quota,
@@ -42,15 +42,15 @@ const ASSET = 'Asset11111111111111111111111111111111111111';
 const fishKey = (n) => `Fish${String(n).replace(/0/g, 'z')}`.padEnd(43, '1');
 const TX = '5'.repeat(88);
 
-/** The first seed from `from` whose fish rolled at `depth` is `rarity` (deterministic). */
-function seedFor(rarity, depth, from = 1) {
-  for (let s = from; s < from + 2_000_000; s++) if (rarityAt(s, depth) === rarity) return s;
+/** The first seed from `from` whose fish rolled at `depth` is `rarity` (deterministic); `ok` filters further. */
+function seedFor(rarity, depth, from = 1, gen = GENERATOR_V2, ok = () => true) {
+  for (let s = from; s < from + 2_000_000; s++) if (gen.rarityAt(s, depth) === rarity && ok(s)) return s;
   throw new Error(`no ${rarity} seed at ${depth} m`);
 }
 
 /** A fish as the game banks it: rolled at spawn depth `spawn`, recorded where caught. */
-function caught(seed, spawn, catchDepth = Math.round(spawn)) {
-  const f = rollFish(seed, spawn);
+function caught(seed, spawn, catchDepth = Math.round(spawn), gen = GENERATOR_V2) {
+  const f = gen.rollFish(seed, spawn);
   return { ...f, depthM: catchDepth };
 }
 
@@ -79,33 +79,66 @@ function asset({ attributeList, ua = { type: 'Collection', address: COLLECTION }
   };
 }
 
+/** Is a (seed, rarity) a different species in v1 and v2? */
+const renamed = (rarity) => (x) => GENERATOR_V1.fishOf(x, rarity).species !== GENERATOR_V2.fishOf(x, rarity).species;
+
 const facts = (f) => ({ id: f.id, rarity: f.rarity, species: f.species, depth: f.depthM, value: f.value });
 
 // ---- The generator check ----------------------------------------------------------------------
 
-test('honest catches pass the strict check, wherever in its roaming range the fish was caught', () => {
-  let n = 0;
-  for (let s = 1; n < 3000; s += 7919) {
-    const spawn = (s % 997) / 1.7; // 0 .. ~586 m, fractional like the game's spawn depths
-    for (const drift of [-24, -9, 0, 3, 12, 24]) {
-      const f = caught(s, spawn, Math.min(1000, Math.max(0, Math.round(spawn + drift))));
-      const r = checkFish(facts(f));
-      assert.ok(r.ok, `seed ${s} rolled at ${spawn.toFixed(2)} m, caught at ${f.depthM} m: ${r.reason}`);
-      n++;
+test('honest catches pass the strict check, wherever in its roaming range the fish was caught, from either generator', () => {
+  // v2: today's game. v1: fish caught before the 35-species roster (banked, still to be minted,
+  // or already minted): they keep their old species and odds and must stay mintable and sellable.
+  assert.deepEqual(GENERATORS, [GENERATOR_V2, GENERATOR_V1]);
+  for (const gen of [GENERATOR_V2, GENERATOR_V1]) {
+    let n = 0;
+    for (let s = 1; n < 3000; s += 7919) {
+      const spawn = (s % 997) / 1.7; // 0 .. ~586 m, fractional like the game's spawn depths
+      for (const drift of [-24, -9, 0, 3, 12, 24]) {
+        const f = caught(s, spawn, Math.min(1000, Math.max(0, Math.round(spawn + drift))), gen);
+        const r = checkFish(facts(f));
+        assert.ok(r.ok, `v${gen.version} seed ${s} rolled at ${spawn.toFixed(2)} m, caught at ${f.depthM} m: ${r.reason}`);
+        assert.deepEqual(r.fish, gen.fishOf(s, f.rarity), 'the fish of the generator that made it');
+        n++;
+      }
     }
   }
 });
 
-test('for one seed the rolled rarity never drops with depth (rarityInterval bisects on it)', () => {
+test('for one seed the rolled rarity never drops with depth, in every generator (rarityInterval bisects on it)', () => {
   const order = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
-  for (let s = 1; s < 3_000_000_000; s += 7_654_321) {
-    let prev = 0;
-    for (let d = 0; d <= 400; d += 0.5) {
-      const r = order.indexOf(rarityAt(s, d));
-      assert.ok(r >= prev, `seed ${s} drops at ${d} m`);
-      prev = r;
+  for (const gen of GENERATORS) {
+    for (let s = 1; s < 3_000_000_000; s += 7_654_321) {
+      let prev = 0;
+      for (let d = 0; d <= 400; d += 0.5) {
+        const r = order.indexOf(gen.rarityAt(s, d));
+        assert.ok(r >= prev, `v${gen.version} seed ${s} drops at ${d} m`);
+        prev = r;
+      }
     }
   }
+  assert.equal(rarityAt, GENERATOR_V2.rarityAt, 'the default is today\'s generator');
+});
+
+test('generator versions are not mixed: a species from one with odds only the other gives is refused', () => {
+  // v1 gave legendaries from 30 m down; v2 not above 80 m. A v1 legendary spawned at 50 m and
+  // caught at 20 m is fine as v1's species, impossible as v2's.
+  const s = seedFor('legendary', 50, 1, GENERATOR_V1, renamed('legendary'));
+  const v1 = caught(s, 50, 20, GENERATOR_V1);
+  assert.equal(v1.rarity, 'legendary');
+  assert.ok(checkFish(facts(v1)).ok, 'the v1 fish itself');
+  const v2species = GENERATOR_V2.fishOf(s, 'legendary').species;
+  assert.match(checkFish({ ...facts(v1), species: v2species }).reason, /cannot be legendary when caught at 20 m/, 'v2 species with v1 odds');
+  assert.match(checkFish({ ...facts(v1), species: v2species }, { legacy: true }).reason, /cannot be legendary/, 'not even in legacy mode');
+  // And the other way: a v2 legendary at 130 m whose v1 species v1 could not make legendary there.
+  const t = seedFor('legendary', 130, 1, GENERATOR_V2, (x) => GENERATOR_V1.rarityAt(x, 160) !== 'legendary' && GENERATOR_V1.fishOf(x, 'legendary').species !== GENERATOR_V2.fishOf(x, 'legendary').species);
+  const v2 = caught(t, 130, 130);
+  assert.ok(checkFish(facts(v2)).ok);
+  assert.ok(!checkFish({ ...facts(v2), species: GENERATOR_V1.fishOf(t, 'legendary').species }).ok, 'v1 species with v2 odds');
+  assert.ok(!checkFish({ ...facts(v2), species: GENERATOR_V1.fishOf(t, 'legendary').species }, { legacy: true }).ok, 'not even in legacy mode');
+  // A species neither roster gives this seed names both.
+  const other = GENERATOR_V2.SPECIES_BY_RARITY.legendary.map(([n]) => n).find((n) => n !== v2species && n !== v1.species);
+  assert.match(checkFish({ ...facts(v1), species: other }).reason, new RegExp(`is not a ${other}: a legendary from this seed is a ${v2species} or ${v1.species}`));
 });
 
 test('a forged rarity, catch value, species or seed fails the strict check', () => {
@@ -127,13 +160,20 @@ test('a forged rarity, catch value, species or seed fails the strict check', () 
 });
 
 test('legacy: fish rolled with the first day\'s zone odds, or with no / plain value, pass only in legacy mode', () => {
-  // A seed that the old Abyss table makes mythic but today's odds cannot near 45 m.
+  // A seed that the old Abyss table makes mythic but neither depth table can near 45 m. The zone
+  // odds were rolled with the v1 roster, so the fish is v1's.
   const abyss = LEGACY_ZONES[2];
+  assert.equal(GENERATOR_V1.legacyZones, LEGACY_ZONES);
+  assert.deepEqual(GENERATOR_V2.legacyZones, []);
   let s = 1;
-  while (!(new Rng(s).weighted(abyss.odds) === 'mythic' && rarityAt(s, 75) !== 'mythic')) s++;
-  const f = { ...fishOf(s, 'mythic'), depthM: 45, value: Math.round(800 * abyss.rewardMultiplier) };
-  assert.ok(!checkFish(facts(f)).ok, 'strict: today\'s generator cannot make it');
+  while (!(new Rng(s).weighted(abyss.odds) === 'mythic' && GENERATOR_V1.rarityAt(s, 75) !== 'mythic' && GENERATOR_V2.rarityAt(s, 75) !== 'mythic')) s++;
+  const f = { ...GENERATOR_V1.fishOf(s, 'mythic'), depthM: 45, value: Math.round(800 * abyss.rewardMultiplier) };
+  assert.ok(!checkFish(facts(f)).ok, 'strict: no depth table can make it');
   assert.ok(checkFish(facts(f), { legacy: true }).ok, 'legacy: the old zone table made it');
+  if (GENERATOR_V2.fishOf(s, 'mythic').species !== f.species) {
+    const v2 = { ...f, species: GENERATOR_V2.fishOf(s, 'mythic').species };
+    assert.ok(!checkFish(facts(v2), { legacy: true }).ok, 'the zone odds never rolled a v2 species');
+  }
   assert.ok(checkFish({ ...facts(f), value: undefined }, { legacy: true }).ok, 'no value attribute (first mints)');
   assert.ok(!checkFish({ ...facts(f), value: 4800 }, { legacy: true }).ok, 'but not a made-up value');
   assert.ok(!checkFish({ ...facts(f), depth: 200 }, { legacy: true }).ok, 'and not far from the old zone');
@@ -147,6 +187,16 @@ const goodFish = caught(seedFor('rare', 70), 70.6, 72);
 
 test('assertTrustedFish: a collection fish the generator agrees with gets its on-chain value', () => {
   assert.equal(assertTrustedFish(asset({ attributeList: attributesOf(goodFish) }), { collection: COLLECTION }), goodFish.value);
+});
+
+/** A fish co-minted before the 35-species roster: a legendary at 50 m (v2 has none above 80 m), with a v1-only species. */
+const oldFish = caught(seedFor('legendary', 48.2, 1, GENERATOR_V1, renamed('legendary')), 48.2, 50, GENERATOR_V1);
+
+test('fish from the generator before the 35-species roster stay sellable at their on-chain value', () => {
+  assert.ok(!checkFish({ ...facts(oldFish), species: GENERATOR_V2.fishOf(oldFish.seed, 'legendary').species }).ok, 'today\'s generator alone would refuse it');
+  assert.equal(assertTrustedFish(asset({ attributeList: attributesOf(oldFish) }), { collection: COLLECTION }), oldFish.value);
+  assert.equal(checkFish(facts(oldFish)).version, 1);
+  assert.equal(checkFish(facts(goodFish)).version, 2);
 });
 
 test('assertTrustedFish refuses forged fish: no collection, the wrong collection, tampered attributes, plugins', () => {
@@ -257,13 +307,25 @@ test('cosign-mint accepts the game\'s own request and writes exactly the validat
   assert.ok(parseCosignMint(mintBody(goodFish, { serial: 0 }), { market: MARKET }), 'a fish without a number (v1 URI)');
 });
 
+test('cosign-mint accepts a fish banked before the 35-species roster, with its old name, look and size', () => {
+  const m = parseCosignMint(mintBody(oldFish), { market: MARKET });
+  assert.deepEqual(m.attributeList, attributesOf(oldFish));
+  // Its v2 twin (same seed and rarity, today's species) is a different fish: its URI does not fit.
+  const twin = GENERATOR_V2.fishOf(oldFish.seed, 'legendary');
+  const mixed = mintBody(oldFish, { fishOver: { species: twin.species } });
+  assert.throws(() => parseCosignMint(mixed, { market: MARKET }), (e) => e.status === 422);
+  assert.throws(() => parseCosignMint(mintBody({ ...oldFish, name: twin.name }), { market: MARKET }), (e) => e.status === 422 && /NFT name/.test(e.message));
+});
+
 test('cosign-mint rejects inconsistent params', () => {
   const bad = (body, status, re) =>
     assert.throws(() => parseCosignMint(body, { market: MARKET }), (e) => e instanceof HttpError && e.status === status && re.test(e.message));
   const mythic = fishOf(goodFish.seed, 'mythic');
   bad(mintBody(goodFish, { fishOver: { rarity: 'mythic', species: mythic.species, value: 4800 } }), 422, /cannot be mythic/);
   bad(mintBody(goodFish, { fishOver: { value: 4800 } }), 422, /does not fit/);
-  bad(mintBody(goodFish, { fishOver: { species: 'Azure Tang' === goodFish.species ? 'Neon Cardinal' : 'Azure Tang' } }), 422, /is not a/);
+  const grown = GENERATORS.map((g) => g.fishOf(goodFish.seed, 'rare').species);
+  const notGrown = GENERATOR_V2.SPECIES_BY_RARITY.rare.map(([n]) => n).find((n) => !grown.includes(n));
+  bad(mintBody(goodFish, { fishOver: { species: notGrown } }), 422, /is not a/);
   bad(mintBody(goodFish, { fishOver: { id: 'zz' } }), 422, /Bad fish seed/);
   bad(mintBody(goodFish, { fishOver: { value: undefined } }), 422, /Bad catch value/);
   bad(mintBody(goodFish, { over: { name: 'Prismatic Moonfin Leviathan #0042' } }), 422, /NFT name/);
@@ -283,7 +345,8 @@ test('cosign-mint rejects inconsistent params', () => {
 test('migration validates the legacy fish like a new mint, and only the session key that minted it can move it', () => {
   const legacy = (attributeList, o = {}) => asset({ attributeList, ua: { type: 'Address', address: SESSION }, ...o });
   const opts = { owner: SELLER, payer: SESSION, collection: COLLECTION };
-  assert.equal(migrationProblem(legacy(attributesOf(goodFish)), opts), null);
+  assert.equal(migrationProblem(legacy(attributesOf(goodFish)), opts), null, 'a v2 fish minted by the game before the collection existed');
+  assert.equal(migrationProblem(legacy(attributesOf(oldFish)), opts), null, 'a v1 fish');
   const forged = attributesOf({ ...goodFish, rarity: 'mythic', species: fishOf(goodFish.seed, 'mythic').species, value: 4800, depthM: 1000 });
   assert.match(migrationProblem(legacy(forged), opts), /do not match the game: .*cannot be mythic/);
   assert.match(migrationProblem(legacy(attributesOf({ ...goodFish, value: 999 })), opts), /does not fit/);
