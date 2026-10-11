@@ -10,5 +10,5 @@ export default defineConfig({
     // The PEARL market (sensor/market-server.mjs, `npm run market`); `npm start` serves /api/market same-origin.
     proxy: { '/api': `http://127.0.0.1:${process.env.MARKET_PORT ?? 8795}` },
   },
-  build: { rollupOptions: { input: ['index.html', 'showcase.html', 'accessory-preview.html'] } },
+  build: { rollupOptions: { input: ['index.html', 'showcase.html', 'accessory-preview.html', 'gear-preview.html'] } },
 });

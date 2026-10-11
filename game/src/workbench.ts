@@ -29,7 +29,9 @@ export interface WorkbenchHooks {
   dive(map: MapId, gear: UpgradeId[]): void;
 }
 
-const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'bait'];
+// The six dive-loadout slots. The rod carries the net and the reel changes its
+// recovery; bait is a boat upgrade and is not packed on this workbench.
+const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel'];
 /** Where each piece lands, in table units (x right, z toward the camera). */
 // Kept off the back strip of the table: the title fish hang over it and would take the clicks.
 const SPOTS: [number, number][] = [
