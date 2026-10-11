@@ -61,7 +61,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
 | Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
-| Sharks | None | None | One by day, two at night if you opt in; hunt by your heart rate; rarer fish |
+| Sharks | None | None | One or two by day, two to four at night if you opt in; hunt by your heart rate; rarer fish |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
 - **The trench**: on every map the seabed is a shelf, and under the boat a trench drops away with no bottom. There is no depth limit on any map; the deeper you go, the rarer the fish and the higher their catch value (section 7). The zones a map does not open on its shelf (e.g. below 18 m on the Fjord) are only reachable down the trench.
@@ -674,7 +674,7 @@ Plants sway in the vertex shader. A slow wave of current crosses the bed, so nei
 
 The first time a dive starts on the Open Ocean the game asks whether you want sharks, and says what it costs and what it pays. The answer is saved; Esc → Settings → "Sharks" changes it (On / Off / Ask before a dive).
 
-With sharks on, one hunts during daytime dives (morning and afternoon), and two at night. Population does not change with your pulse; hunting intensity does:
+With sharks on, one or two hunt during daytime dives (morning and afternoon), and two to four at night. The group size is picked once for each day/night period, independently of your pulse; hunting intensity does:
 
 | Your pulse above rest | Notice you from | Charge at | A bite takes |
 | --- | --- | --- | --- |
@@ -682,7 +682,7 @@ With sharks on, one hunts during daytime dives (morning and afternoon), and two 
 | About 23 bpm | 20 m | 7.3 m/s | 2 fish |
 | 42 bpm or more | 31 m | 10 m/s | 3 fish |
 
-Hunting intensity scales smoothly between these values. The diver swims about 7.5 m/s, so a calm diver can outswim a charge and a frightened one cannot. A charge that has not caught you in 6 s is broken off and the shark keeps away for about 5 s (2 s in a frenzy); after a bite it keeps away for 9 s (4 s). Sharks do not follow you within 3.5 m of the surface. A bite tears fish out of the net (never banked fish) and knocks you aside; with an empty net it only rams you. Their faceted skin responds to sunlight, moonlight and the diver’s headlamp, with moving caustics that fade at depth and at night. Each charging shark gradually warms its eyes, exposes its teeth and jaw, and sweeps its tail harder; the other shark stays in its own state. At dawn the farther shark swims off, leaving one. Disabling sharks dismisses both.
+Hunting intensity scales smoothly between these values. The diver swims about 7.5 m/s, so a calm diver can outswim a charge and a frightened one cannot. A charge that has not caught you in 6 s is broken off and the shark keeps away for about 5 s (2 s in a frenzy); after a bite it keeps away for 9 s (4 s). Sharks do not follow you within 3.5 m of the surface. A bite tears fish out of the net (never banked fish) and knocks you aside; with an empty net it only rams you. Their faceted skin responds to sunlight, moonlight and the diver’s headlamp, with moving caustics that fade at depth and at night. Each charging shark gradually warms its eyes, exposes its teeth and jaw, and sweeps its tail harder; nearby sharks keep their own state. At dawn the group returns to the daytime range. Climbing aboard immediately clears the sharks, so the boat is a safe zone. Disabling sharks dismisses them all.
 
 - **The pulse** is Presage's heart rate, compared with your own resting pulse, learned while you float at the surface. In keyboard mode there is no sensor, so the game estimates a pulse from how hard you swim (shown as `♥ ~80`): drifting slowly past a shark keeps it low.
 - **What it pays**: while sharks are out, every newly spawned fish rolls its rarity three times instead of the usual one by day or two at night and keeps the best.
