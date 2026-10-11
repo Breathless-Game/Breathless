@@ -1,6 +1,7 @@
 import './polyfills';
 import { createSignerFromKeypair, publicKey, transactionBuilder, type Signer, type Umi } from '@metaplex-foundation/umi';
 import { base58 } from '@metaplex-foundation/umi/serializers';
+import { findWallet, waitForWallet, type OwnerWallet } from './owner-wallets';
 import {
   SESSION_NAME,
   addressOfSecret,
@@ -12,51 +13,33 @@ import {
   restoreTarget,
 } from './wallet-storage';
 
-// Phantom is the account. The connected Phantom address owns fish NFTs and
-// PEARL; a per-owner session keypair in localStorage pays fees and signs mints
-// without a prompt. Phantom only prompts for what the owner does: sell, spend,
-// and topping up the session wallet.
+// The player's wallet (Phantom, MetaMask, Solflare, Backpack, …) is the
+// account. Its address owns fish NFTs and PEARL; a per-owner session keypair in
+// localStorage pays fees and signs mints without a prompt. The wallet only
+// prompts for what the owner does: sell, spend, and topping up the session
+// wallet. owner-wallets.ts hides which wallet it is.
 //
 // This module is loaded with the game, so everything heavy (web3.js, the RPC
 // client, ed25519) is imported lazily on first use.
 
 const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://api.devnet.solana.com'; // as in chain.ts
 const SYSTEM_PROGRAM = publicKey('11111111111111111111111111111111');
-
-interface PhantomKey {
-  toString(): string;
-  toBase58?(): string;
-}
-
-interface PhantomProvider {
-  isPhantom?: boolean;
-  publicKey: PhantomKey | null;
-  connect(opts?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PhantomKey }>;
-  disconnect(): Promise<void>;
-  signTransaction<T>(tx: T): Promise<T>;
-  signAllTransactions<T>(txs: T[]): Promise<T[]>;
-  signMessage(message: Uint8Array): Promise<{ signature: Uint8Array }>;
-  on(event: 'accountChanged' | 'disconnect', cb: (arg?: PhantomKey | null) => void): void;
-  off?(event: 'accountChanged' | 'disconnect', cb: (arg?: PhantomKey | null) => void): void;
-  removeListener?(event: 'accountChanged' | 'disconnect', cb: (arg?: PhantomKey | null) => void): void;
-}
-
-declare global {
-  interface Window {
-    phantom?: { solana?: PhantomProvider };
-  }
-}
+/** How long a page load waits for the last-used wallet's extension to register before giving up on a silent reconnect. */
+const RESTORE_WAIT_MS = 1200;
 
 export interface WalletState {
   owner: string | null;
   session: string | null;
   connected: boolean;
+  /** The wallet app logged in with. `icon` is its own logo (data: URI), or '' when it has none. */
+  wallet: { name: string; icon: string } | null;
 }
 
 let owner: string | null = null;
 let secret: Uint8Array | null = null;
+let current: OwnerWallet | null = null;
+let unwatch: (() => void) | null = null;
 const listeners = new Set<(s: WalletState) => void>();
-let hooked: { p: PhantomProvider; off: () => void } | null = null;
 // Connect, restore, account switches and disconnects run one at a time.
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -66,18 +49,13 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Phantom's injected provider. Looked up on every call: extensions can inject late. */
-function phantom(): PhantomProvider | null {
-  const p = window.phantom?.solana;
-  return p?.isPhantom ? p : null;
-}
-
-export const phantomInstalled = () => phantom() !== null;
-
-const keyString = (k: PhantomKey) => k.toBase58?.() ?? k.toString();
-
 export function walletState(): WalletState {
-  return { owner, session: secret && addressOfSecret(secret), connected: owner !== null && secret !== null };
+  return {
+    owner,
+    session: secret && addressOfSecret(secret),
+    connected: owner !== null && secret !== null,
+    wallet: owner && current ? { name: current.name, icon: current.icon } : null,
+  };
 }
 
 export function onWalletChange(cb: (s: WalletState) => void): () => void {
@@ -96,9 +74,9 @@ function emit() {
   }
 }
 
-/** Per-wallet localStorage key, e.g. `deepbreath.<owner>.bank`. Throws until Phantom is connected. */
+/** Per-wallet localStorage key, e.g. `deepbreath.<owner>.bank`. Throws until a wallet is connected. */
 export function storageKey(name: string): string {
-  if (!owner) throw new Error('Connect Phantom first');
+  if (!owner) throw new Error('Connect a wallet first');
   return namespacedKey(owner, name);
 }
 
@@ -121,95 +99,81 @@ async function loadSession(forOwner: string): Promise<Uint8Array> {
   return fresh;
 }
 
-async function adopt(next: string): Promise<WalletState> {
-  if (next === owner && secret) return walletState();
+async function adopt(w: OwnerWallet, next: string): Promise<WalletState> {
+  if (next === owner && w === current && secret) return walletState();
   try {
     migrateLegacy(localStorage, next);
   } catch (e) {
     console.warn('Could not move pre-login progress into this wallet; will retry next login', e);
   }
   const s = await loadSession(next);
+  stopWatching();
   owner = next;
   secret = s;
+  current = w;
+  unwatch = w.watch((addresses) => void serial(async () => accountsChanged(w, addresses)));
   emit();
   return walletState();
 }
 
+function stopWatching() {
+  try {
+    unwatch?.();
+  } catch {}
+  unwatch = null;
+}
+
 function drop() {
+  stopWatching();
   if (!owner && !secret) return;
   owner = null;
   secret = null; // the key itself stays in storage: it may hold SOL
+  current = null;
   emit();
 }
 
-function hook(p: PhantomProvider) {
-  if (hooked?.p === p) return;
-  unhook();
-  const changed = (pk?: PhantomKey | null) => void serial(async () => accountChanged(pk ?? null));
-  // Disconnecting the site inside Phantom is a logout too: don't reconnect on the next page load.
-  const disconnected = () =>
-    void serial(async () => {
-      if (!owner) return;
-      try {
-        markLoggedOut(localStorage);
-      } catch {}
-      drop();
-    });
-  p.on('accountChanged', changed);
-  p.on('disconnect', disconnected);
-  hooked = {
-    p,
-    off() {
-      const off = (p.off ?? p.removeListener)?.bind(p);
-      off?.('accountChanged', changed);
-      off?.('disconnect', disconnected);
-    },
-  };
-}
-
-function unhook() {
-  try {
-    hooked?.off();
-  } catch {}
-  hooked = null;
-}
-
 /**
- * Phantom switched accounts. Nothing is adopted in place: the old owner is
- * dropped first (so a save still in flight can't land in the new owner's
- * storage), main.ts reloads, and that page load reconnects whichever account
- * Phantom now has active if it has approved this site, or shows the gate.
+ * The wallet's accounts changed. Still holding the owner: nothing to do.
+ * Disconnected this site (no accounts): a logout, so page loads don't
+ * reconnect. Switched to another account: nothing is adopted in place. The
+ * old owner is dropped first (so a save still in flight can't land in the new
+ * owner's storage), main.ts reloads, and that page load silently reconnects
+ * whichever account the wallet now has for this site, or shows the gate.
  */
-async function accountChanged(pk: PhantomKey | null) {
-  if (!owner) return; // not logged in: the next connect picks up whatever account is active
-  if (pk && keyString(pk) === owner) return;
+async function accountsChanged(w: OwnerWallet, addresses: string[]) {
+  if (!owner || w !== current || addresses.includes(owner)) return;
+  if (!addresses.length) {
+    try {
+      markLoggedOut(localStorage);
+    } catch {}
+  }
   drop();
 }
 
-/** Ask Phantom to connect (shows its prompt the first time). */
-export function connectWallet(): Promise<WalletState> {
+/** Connect the wallet called `name` (it shows its own prompt the first time). */
+export function connectWallet(name: string): Promise<WalletState> {
   return serial(async () => {
-    const p = phantom();
-    if (!p) throw new Error('Phantom is not installed');
-    hook(p);
-    const { publicKey: pk } = await p.connect();
+    const w = findWallet(name);
+    if (!w) throw new Error(`${name} is not installed`);
+    const address = await w.connect(false);
+    if (!address) throw new Error(`${name} didn't share a Solana account`);
     try {
-      markLoggedIn(localStorage, 'Phantom');
+      markLoggedIn(localStorage, w.name);
     } catch {}
-    return adopt(keyString(pk));
+    return adopt(w, address);
   });
 }
 
-/** Silent reconnect on page load, if this site is already trusted and the player didn't log out. */
+/** Silent reconnect on page load: only the wallet last used, only if it already trusts this site and the player didn't log out. */
 export function restoreWallet(): Promise<WalletState> {
   return serial(async () => {
-    const p = phantom();
-    if (!p || owner) return walletState();
+    if (owner) return walletState();
     try {
-      if (restoreTarget(localStorage) !== 'Phantom') return walletState();
-      hook(p);
-      const { publicKey: pk } = await p.connect({ onlyIfTrusted: true });
-      return await adopt(keyString(pk));
+      const target = restoreTarget(localStorage);
+      if (!target) return walletState();
+      const w = await waitForWallet(target, RESTORE_WAIT_MS);
+      const address = w && (await w.connect(true));
+      return w && address ? await adopt(w, address) : walletState();
     } catch {
       return walletState();
     }
@@ -226,10 +190,10 @@ export function disconnectWallet(): Promise<void> {
     try {
       markLoggedOut(localStorage);
     } catch {}
-    const p = hooked?.p ?? phantom();
-    unhook(); // first, so our own disconnect isn't handled as an event
+    const w = current;
+    stopWatching(); // first, so our own disconnect isn't handled as an event
     try {
-      await p?.disconnect();
+      await w?.disconnect();
     } catch {}
     drop();
   });
@@ -238,49 +202,25 @@ export function disconnectWallet(): Promise<void> {
 // ---- Signers (the seam chain.ts and the sell / PEARL code build on) -------
 
 function requireOwner(): string {
-  if (!owner) throw new Error('Connect Phantom first');
+  if (!owner) throw new Error('Connect a wallet first');
   return owner;
 }
 
-/** The Phantom address: owns fish NFTs and PEARL. */
+/** The player's wallet address: owns fish NFTs and PEARL. */
 export function ownerAddress(_umi: Umi): string {
   return requireOwner();
 }
 
-/** Owner actions (sell, spend PEARL, top up): every signature is a Phantom prompt. */
-export function ownerSigner(_umi: Umi): Signer {
+/** Owner actions (sell, spend PEARL, burn, top up): every signature is a prompt in the player's wallet. */
+export function ownerSigner(umi: Umi): Signer {
   const key = requireOwner();
-  const p = phantom();
-  if (!p) throw new Error('Phantom is not available');
-  const provider = p;
-  const adapters = () => import('@metaplex-foundation/umi-web3js-adapters');
-  const sameAccount = () => {
-    if (provider.publicKey && keyString(provider.publicKey) !== key) {
-      throw new Error('Phantom switched accounts. Reload the game to continue.');
-    }
-  };
-  return {
-    publicKey: publicKey(key),
-    async signMessage(message) {
-      sameAccount();
-      return (await provider.signMessage(message)).signature;
-    },
-    async signTransaction(tx) {
-      sameAccount();
-      const { toWeb3JsTransaction, fromWeb3JsTransaction } = await adapters();
-      return fromWeb3JsTransaction(await provider.signTransaction(toWeb3JsTransaction(tx)));
-    },
-    async signAllTransactions(txs) {
-      sameAccount();
-      const { toWeb3JsTransaction, fromWeb3JsTransaction } = await adapters();
-      return (await provider.signAllTransactions(txs.map(toWeb3JsTransaction))).map(fromWeb3JsTransaction);
-    },
-  };
+  if (!current) throw new Error('Connect a wallet first');
+  return current.signer(umi, key);
 }
 
 /** Silent signer for mints and fees: this owner's session keypair. */
 export function sessionSigner(umi: Umi): Signer {
-  if (!secret) throw new Error('Connect Phantom first');
+  if (!secret) throw new Error('Connect a wallet first');
   return createSignerFromKeypair(umi, umi.eddsa.createKeypairFromSecretKey(secret));
 }
 
@@ -299,7 +239,7 @@ function solanaUmi(): Promise<Umi> {
 }
 
 function requireSession(): string {
-  if (!secret) throw new Error('Connect Phantom first');
+  if (!secret) throw new Error('Connect a wallet first');
   return addressOfSecret(secret);
 }
 
@@ -311,7 +251,7 @@ export async function sessionBalance(): Promise<number> {
   return Number(bal.basisPoints) / 1e9;
 }
 
-/** Phantom sends `sol` from the owner to the session wallet (one prompt). Returns the signature. */
+/** The player's wallet sends `sol` from the owner to the session wallet (one prompt). Returns the signature. */
 export async function topUpSession(sol: number): Promise<string> {
   const session = requireSession();
   if (!Number.isFinite(sol) || sol <= 0) throw new Error('Top-up must be a positive amount of SOL');

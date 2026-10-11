@@ -17,7 +17,7 @@ import { walletState } from './wallet';
 // ones the player asked to sell. The rules live in market.ts; this class only runs them. Solana code
 // is imported lazily on the first job, so it never delays or breaks a dive.
 // Mints are paid by the game (session) wallet, so only they wait for its SOL. Sales are signed and
-// paid by the owner's Phantom wallet, which says so itself if it is short.
+// paid by the owner's own wallet, which says so itself if it is short.
 // Nothing runs before a wallet connects; logging out stops the queue, and main.ts reloads the page when the wallet changes.
 
 type Chain = typeof import('./chain');
@@ -270,7 +270,7 @@ export class NftQueue {
     if (this.sellBusy) return;
     this.sellBusy = true;
     try {
-      // One at a time: each sale is its own Phantom approval.
+      // One at a time: each sale is its own approval in the player's wallet.
       for (let f = nextToSell(this.bank); f && !this.stopped; f = nextToSell(this.bank)) await this.sellOne(f);
     } finally {
       this.sellBusy = false;

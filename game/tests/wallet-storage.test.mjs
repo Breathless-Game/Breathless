@@ -175,6 +175,47 @@ test('an explicit logout sticks across page loads until the player connects agai
   assert.equal(W.restoreTarget(store), 'MetaMask');
 });
 
+test('the picker offers only Solana wallets that connect and sign without sending', () => {
+  const solana = ['solana:mainnet', 'solana:devnet'];
+  assert.ok(W.usableWallet({ chains: solana, features: ['standard:connect', 'standard:events', 'solana:signTransaction'] }));
+  assert.ok(!W.usableWallet({ chains: solana, features: ['standard:connect', 'solana:signAndSendTransaction'] }), 'sign-and-send only');
+  assert.ok(!W.usableWallet({ chains: solana, features: ['solana:signTransaction'] }), 'no connect');
+  assert.ok(!W.usableWallet({ chains: ['sui:devnet'], features: ['standard:connect', 'solana:signTransaction'] }), 'not Solana');
+});
+
+test('tiles: last used first, then known wallets in order, then the rest, then known ones to install', () => {
+  const tiles = W.walletTiles(
+    [
+      { name: 'Zeta', devnet: true },
+      { name: 'Solflare', devnet: true },
+      { name: 'MetaMask', devnet: false },
+      { name: 'solflare', devnet: true },
+    ],
+    'MetaMask',
+  );
+  assert.deepEqual(
+    tiles.map((t) => `${t.name}:${t.installed ? 'in' : 'get'}${t.lastUsed ? ':last' : ''}`),
+    ['MetaMask:in:last', 'Solflare:in', 'Zeta:in', 'Phantom:get', 'Backpack:get'],
+  );
+  assert.equal(tiles[0].devnet, false);
+  assert.equal(tiles[2].url, null, 'an unknown wallet has no install link');
+  assert.match(tiles[3].url, /^https:\/\/phantom\.com\//);
+  assert.ok(tiles.filter((t) => !t.installed).every((t) => t.url?.startsWith('https://')));
+});
+
+test('with nothing installed every known wallet is offered to install', () => {
+  assert.deepEqual(
+    W.walletTiles([], null).map((t) => t.name),
+    W.KNOWN_WALLETS.map((k) => k.name),
+  );
+  assert.ok(W.walletTiles([], 'Backpack').find((t) => t.name === 'Backpack').lastUsed);
+});
+
+test('devnet hints name the wallet', () => {
+  assert.match(W.devnetHint('Phantom'), /Developer Settings/);
+  assert.match(W.devnetHint('MetaMask'), /MetaMask.*Devnet/);
+});
+
 test('logging out keeps every wallet’s progress and session key', () => {
   const entries = {
     [`deepbreath.${OWNER_A}.session`]: JSON.stringify(SECRET),
