@@ -1610,22 +1610,6 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
   keys.clear();
   if (!open) breathSince = null;
 }, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
-const boatRay = new THREE.Raycaster();
-document.addEventListener('click', (e) => {
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible) return;
-  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
-  const rect = canvas.getBoundingClientRect();
-  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
-  if (boatRay.intersectObject(world.boat, true).length) { e.preventDefault(); e.stopPropagation(); shipyard.show(); }
-}, true);
-document.addEventListener('pointermove', (e) => {
-  if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
-  const target = e.target as HTMLCanvasElement;
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || aquarium.open) { target.style.cursor = ''; return; }
-  const rect = canvas.getBoundingClientRect();
-  boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
-  if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
-});
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.17, label: 'START', onClick: startFish }, // MAIN MENU while aboard
