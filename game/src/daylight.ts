@@ -33,18 +33,25 @@ function rgb(hex: number): RGB {
 }
 
 // Colors are sRGB. The renderer converts them into its working color space.
+// Dawn and dusk each run through four keys of their own: violet first light, a rose
+// and orange sunrise, then gold; and in the evening gold, a red-orange sunset, a magenta
+// afterglow and a violet blue hour. The hours of full day and full night are unchanged.
 const LIGHTING_KEYS: readonly LightingKey[] = [
   { hour: 0, daylight: 0, sky: rgb(0x0b1736), horizon: rgb(0x1a3558), light: rgb(0xa8c8ff), sun: 0.34, ambient: 0.56 },
-  { hour: 5, daylight: 0, sky: rgb(0x101d3d), horizon: rgb(0x324466), light: rgb(0xb2cfff), sun: 0.36, ambient: 0.60 },
-  { hour: 6, daylight: 0.2, sky: rgb(0x7d8baf), horizon: rgb(0xf2b092), light: rgb(0xffd4ab), sun: 0.65, ambient: 0.75 },
-  { hour: 7, daylight: 0.7, sky: rgb(0x91c4de), horizon: rgb(0xffe5b6), light: rgb(0xffdcaa), sun: 1.25, ambient: 1.05 },
+  { hour: 4.6, daylight: 0, sky: rgb(0x0e1a3c), horizon: rgb(0x263a60), light: rgb(0xaecbff), sun: 0.35, ambient: 0.58 },
+  { hour: 5.3, daylight: 0.04, sky: rgb(0x27306a), horizon: rgb(0x8a5a86), light: rgb(0xc3c2ee), sun: 0.40, ambient: 0.62 },
+  { hour: 5.9, daylight: 0.2, sky: rgb(0x4a5aa2), horizon: rgb(0xf0806a), light: rgb(0xffb894), sun: 0.62, ambient: 0.74 },
+  { hour: 6.4, daylight: 0.5, sky: rgb(0x6f94cf), horizon: rgb(0xffa45e), light: rgb(0xffc08a), sun: 0.95, ambient: 0.90 },
+  { hour: 7.2, daylight: 0.82, sky: rgb(0x8fc2e2), horizon: rgb(0xffd79a), light: rgb(0xffd9a6), sun: 1.45, ambient: 1.10 },
   { hour: 9, daylight: 1, sky: rgb(0xa6ddef), horizon: rgb(0xd8f0ed), light: rgb(0xfff0d1), sun: 2.15, ambient: 1.35 },
   { hour: 12, daylight: 1, sky: rgb(0x9fdaf0), horizon: rgb(0xd4eef5), light: rgb(0xfff8e8), sun: 2.30, ambient: 1.40 },
   { hour: 15, daylight: 1, sky: rgb(0xa3d4e7), horizon: rgb(0xf3d7aa), light: rgb(0xffe0b3), sun: 2.05, ambient: 1.30 },
-  { hour: 17, daylight: 0.85, sky: rgb(0x8faabf), horizon: rgb(0xffc091), light: rgb(0xffd09a), sun: 1.50, ambient: 1.12 },
-  { hour: 18, daylight: 0.42, sky: rgb(0x5c779e), horizon: rgb(0xe6a09b), light: rgb(0xffc5ad), sun: 0.90, ambient: 0.88 },
-  { hour: 19, daylight: 0.08, sky: rgb(0x253b64), horizon: rgb(0x8f7497), light: rgb(0xbbcdf4), sun: 0.44, ambient: 0.68 },
-  { hour: 20, daylight: 0, sky: rgb(0x102145), horizon: rgb(0x354a70), light: rgb(0xa8c8ff), sun: 0.34, ambient: 0.58 },
+  { hour: 16.6, daylight: 0.92, sky: rgb(0x8fb6dc), horizon: rgb(0xffcb86), light: rgb(0xffd096), sun: 1.70, ambient: 1.18 },
+  { hour: 17.5, daylight: 0.68, sky: rgb(0x6c86c6), horizon: rgb(0xffa25a), light: rgb(0xffb878), sun: 1.25, ambient: 1.02 },
+  { hour: 18.1, daylight: 0.4, sky: rgb(0x4b569f), horizon: rgb(0xff7a48), light: rgb(0xff9f72), sun: 0.85, ambient: 0.86 },
+  { hour: 18.7, daylight: 0.14, sky: rgb(0x2e3272), horizon: rgb(0xd15a76), light: rgb(0xd9a6c4), sun: 0.52, ambient: 0.72 },
+  { hour: 19.4, daylight: 0.02, sky: rgb(0x182457), horizon: rgb(0x624a86), light: rgb(0xb6c2f2), sun: 0.38, ambient: 0.62 },
+  { hour: 20.2, daylight: 0, sky: rgb(0x0e1c40), horizon: rgb(0x2a3f66), light: rgb(0xa8c8ff), sun: 0.34, ambient: 0.58 },
   { hour: 22, daylight: 0, sky: rgb(0x0b1736), horizon: rgb(0x1a3558), light: rgb(0xa8c8ff), sun: 0.34, ambient: 0.56 },
   { hour: 24, daylight: 0, sky: rgb(0x0b1736), horizon: rgb(0x1a3558), light: rgb(0xa8c8ff), sun: 0.34, ambient: 0.56 },
 ];
