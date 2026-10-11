@@ -16,6 +16,7 @@ import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
 import { loadSonarConfig, saveSonarConfig, sonarLengthMeters } from './sonar-config';
+import type { LessonId } from './tutorial';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -34,6 +35,8 @@ export interface WorkbenchHooks {
   owned(id: UpgradeId): number;
   /** The ready-room color for the deep sonar beacon. */
   sonarColor?(color: string): void;
+  /** Optional progress hooks for the action-driven field guide. */
+  tutorial?(id: LessonId): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
   buy(id: UpgradeId): Promise<string | null>;
   pearls(): number;
@@ -328,6 +331,7 @@ export class Workbench {
 
   /** intro: pan down from the title and drop the gear; otherwise come back to the table as it was. */
   show(intro: boolean) {
+    this.hooks.tutorial?.('bench');
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
@@ -1042,6 +1046,7 @@ export class Workbench {
       },
       () => {
         p.mode = 'ready';
+        this.hooks.tutorial?.('pack');
         p.yaw = 0;
         this.puff(x, z, 0.5);
         this.lightSlot(this.slotRings[slot], true);
@@ -1244,6 +1249,7 @@ export class Workbench {
    * laid out, which then takes over.
    */
   private openChart() {
+    this.hooks.tutorial?.('chart');
     this.state = 'opening';
     this.hovered = null;
     this.tip.classList.add('hidden');
