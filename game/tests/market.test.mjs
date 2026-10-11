@@ -22,6 +22,7 @@ const {
   addBankedValue,
   bankEntry,
   bulkSellable,
+  bulkSellableBelowEpic,
   migrateBank,
   migrateUnlockProgress,
   needsConfirm,
@@ -182,6 +183,24 @@ test('epic and rarer fish need a confirm; "sell all commons" skips paid-out, min
     bankEntry(fish('rare')),
   ];
   assert.deepEqual(bulkSellable(bank, 'common'), [ok1, ok2]);
+});
+
+test('"sell all" takes every sellable fish below epic, and never an epic, legendary or mythic one', () => {
+  const common = bankEntry(fish('common'));
+  const rare = { ...fish('rare'), nft: 'minted', assetId: 'R' };
+  const uncommon = bankEntry(fish('uncommon'));
+  const bank = [
+    common,
+    rare,
+    uncommon,
+    { ...fish('epic'), nft: 'minted', assetId: 'E' },
+    { ...fish('legendary'), nft: 'minted', assetId: 'L' },
+    bankEntry(fish('mythic')),
+    { ...fish('rare'), legacy: true },
+    { ...fish('uncommon'), nft: 'minting' },
+    nftStep(bankEntry(fish('rare')), { type: 'sell' }),
+  ];
+  assert.deepEqual(bulkSellableBelowEpic(bank), [common, rare, uncommon]);
 });
 
 test('map unlock progress is lifetime banked value: selling never lowers it', () => {

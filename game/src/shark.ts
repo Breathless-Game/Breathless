@@ -1,4 +1,6 @@
-// Sharks on the Open Ocean, always: one by day, two at night.
+// Sharks on the Open Ocean, always (there is no opting out): one or two by day,
+// two to four at night. The population is picked once per day/night period, so
+// it feels like a group arriving rather than a counter flickering every frame.
 // They hunt by the diver's heartbeat: the faster it beats, the sooner
 // they notice and the faster they charge. A bite ends the dive (main.ts). Pure
 // rules with no rendering, so the tests can load this straight from
@@ -45,9 +47,13 @@ export function sharkIntensity(bpm: number, rest: number = SHARK.rest): number {
   return clamp01((bpm - rest - SHARK.calm) / (SHARK.frenzy - SHARK.calm));
 }
 
-/** Population follows the day, independently of the diver's pulse. */
-export function sharkCount(night: boolean): 1 | 2 {
-  return night ? 2 : 1;
+/** Pick a population for this day/night period, independently of pulse. */
+export function sharkCount(night: boolean, rng: () => number = Math.random): 1 | 2 | 3 | 4 {
+  const raw = rng();
+  const roll = Number.isFinite(raw) ? Math.min(0.999999, Math.max(0, raw)) : 0;
+  const minimum = night ? 2 : 1;
+  const choices = night ? 3 : 2;
+  return (minimum + Math.floor(roll * choices)) as 1 | 2 | 3 | 4;
 }
 
 /**
@@ -220,6 +226,8 @@ export class SharkPack {
   readonly sharks: Shark[] = [];
   private next = 0;
   private announced = false;
+  private target = 0;
+  private targetNight: boolean | null = null;
 
   constructor(private rng: () => number = Math.random) {}
 
@@ -228,6 +236,8 @@ export class SharkPack {
     this.sharks.length = 0;
     this.next = 0;
     this.announced = false;
+    this.target = 0;
+    this.targetNight = null;
   }
 
   /**
@@ -236,7 +246,15 @@ export class SharkPack {
    */
   tick(dt: number, prey: Prey, intensity: number, out: boolean, floor: number, events: SharkEvent[], night: boolean) {
     events.length = 0;
-    const want = out ? sharkCount(night) : 0;
+    if (!out) {
+      this.target = 0;
+      this.targetNight = null;
+      this.announced = false;
+    } else if (this.targetNight !== night || this.target === 0) {
+      this.targetNight = night;
+      this.target = sharkCount(night, this.rng);
+    }
+    const want = out ? this.target : 0;
     const hunting = this.sharks.filter((s) => s.mode !== 'leave');
     if (hunting.length > want) {
       // The farthest one loses interest first.
@@ -246,12 +264,12 @@ export class SharkPack {
       this.next -= dt;
       if (this.next <= 0) {
         // Reuse a departing shark if dusk or the setting changes again before
-        // it has left. The two render slots must never hide a third collider.
+        // it has left. The four render slots must never hide a fifth collider.
         const returning = this.sharks.find((s) => s.mode === 'leave' && !s.gone);
         if (returning) {
           returning.mode = 'patrol';
           returning.wait = 3;
-        } else if (this.sharks.length < 2) {
+        } else if (this.sharks.length < 4) {
           const side = this.rng() < 0.5 ? -1 : 1;
           const far = SHARK.arrive[0] + (SHARK.arrive[1] - SHARK.arrive[0]) * this.rng();
           const y = Math.max(floor + 3, Math.min(-SHARK.ceiling - 3, prey.y - 4 + this.rng() * 6));
@@ -264,7 +282,6 @@ export class SharkPack {
         }
       }
     }
-    if (!out) this.announced = false;
     for (let i = this.sharks.length - 1; i >= 0; i--) {
       const shark = this.sharks[i];
       const event = shark.step(dt, prey, intensity, floor);

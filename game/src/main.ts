@@ -13,7 +13,7 @@ import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Aquarium } from './aquarium';
-import { Workbench } from './workbench';
+import { Workbench, type WorkbenchConditions } from './workbench';
 import { UPGRADES, type UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
@@ -366,9 +366,9 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// Always on the Open Ocean (the only map with sharks): one by day, two at night.
-// A bite there ends the dive: this dive's unsettled catch is lost and the dive
-// gear drops back to level 1 (see sharkBite).
+// Always on the Open Ocean (the only map with sharks): one to two by day, two to
+// four at night. A bite there ends the dive: this dive's unsettled catch is lost
+// and the dive gear drops back to level 1 (see sharkBite).
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
@@ -418,7 +418,7 @@ function closeSharkWarning(dive: boolean) {
     markSharkWarningSeen();
     // The pause was not a breath taken underwater.
     breathSince = null;
-    hud.message('One shark by day, two at night. Keep your heart rate down.', 2600);
+    hud.message('One to two sharks by day, two to four at night. Keep your heart rate down.', 2600);
     return;
   }
   // Not diving after all: the dive that just began ends, back at the workbench.
@@ -641,10 +641,13 @@ hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
-  sold(fish, result) {
+  sold(sales) {
     hud.setBank(bank);
-    hud.toast(fish, `SOLD · +${pearls(result.pearls).toUpperCase()}`);
-    void syncPearls(result.pearls);
+    const total = sales.reduce((s, x) => s + x.result.pearls, 0);
+    // One toast and one balance read per batch: the most valuable fish stands for the rest.
+    const top = sales.reduce((a, b) => (b.result.pearls > a.result.pearls ? b : a));
+    hud.toast(top.fish, `${sales.length > 1 ? `SOLD ${sales.length} FISH` : 'SOLD'} · +${pearls(total).toUpperCase()}`);
+    void syncPearls(total);
   },
 });
 const vault = new Vault(bank, nftQueue);
@@ -840,6 +843,33 @@ function setTimeOfDay(mode: TimeOfDay) {
   world.setTimeOfDay(mode);
   const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
   hud.message(labels[mode]);
+}
+
+const WEATHER_LABELS = {
+  clear: 'Clear · 晴朗',
+  cloudy: 'Cloudy · 多云',
+  rain: 'Rain · 降雨',
+  storm: 'Storm · 暴风雨',
+} as const;
+
+/** The live field note shown while a map is being prepared on the workbench. */
+function workbenchConditions(id: MapId): WorkbenchConditions {
+  const map = MAPS[id];
+  const lighting = world.dayCycle.state;
+  const weather = world.weather.state;
+  const minute = Math.round(lighting.hour * 60) % (24 * 60);
+  const temperatureC = map.surfaceTempC
+    + (lighting.daylight - 1) * 3
+    - weather.cloud * 1.2
+    - weather.rain * 0.8
+    - weather.wind * 0.4;
+  return {
+    time: `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`,
+    temperatureC: Math.round(temperatureC * 10) / 10,
+    weather: WEATHER_LABELS[weather.kind],
+    wind: `${Math.round(4 + weather.wind * 30)} km/h`,
+    rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+  };
 }
 
 function carrySonarForDive() {
@@ -1057,6 +1087,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  diver.group.visible = true;
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
@@ -1194,6 +1225,10 @@ function climbAboard() {
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
+  // The boat is a safe zone: clear live colliders before the workbench opens.
+  noSharks();
+  // The workbench camera is a clean boat view; keep the seated character out of it.
+  diver.group.visible = false;
   keys.clear();
   vault.toggle(false);
   gear.toggle(false);
@@ -1215,6 +1250,7 @@ function climbAboard() {
 /** Not aboard any more: START reads START again and the title comes back. */
 function leaveBoat() {
   aboard = null;
+  diver.group.visible = true;
   leavingBoat = false;
   titleScreen.setLabel(START_FISH, 'START');
   titleScreen.setLift(0);
@@ -1231,6 +1267,7 @@ function backToWater() {
     titleScreen.hide();
     titleScreen.setPan(0);
     benchPan = 0;
+    diver.group.visible = true;
     diver.stand();
     diver.pos.copy(at.pos);
     diver.vel.copy(at.vel);
@@ -1454,6 +1491,7 @@ const workbench = new Workbench({
       startGame();
     } else openStartCard();
   },
+  conditions: workbenchConditions,
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
   owned: (id) => (isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1),
   buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve('Not upgradable here')),

@@ -1,6 +1,6 @@
 import { fishValue, zoneForDepth } from './fish';
 import { MAPS, type MapId } from './maps';
-import { bulkSellable, isFundsError, needsConfirm, pearls, sellQuote, type BankedFish } from './market';
+import { bulkSellable, bulkSellableBelowEpic, isFundsError, needsConfirm, pearls, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
 import { formatSerial, nftName } from './nft-uri';
 import { fishCard } from './portrait';
@@ -38,9 +38,9 @@ function explorerLink(address: string, label = 'View on Explorer ↗') {
 }
 
 const SELL_LABEL = {
-  verify: 'Market verifying…',
-  sign: 'Burning NFT for PEARL…',
-  confirm: 'Confirming…',
+  verify: () => 'Market verifying…',
+  sign: () => `Approve in ${walletName()}…`,
+  confirm: () => 'Confirming…',
 };
 
 const FAUCET_HINT = 'Faucet is rate limited. Use Fund game wallet, or faucet.solana.com with the game wallet address.';
@@ -80,6 +80,8 @@ export class Vault {
   private marketEl = $('market-bar');
   private cards = new WeakMap<BankedFish, { fig: HTMLElement; cap: HTMLElement; img: HTMLImageElement; serial?: number }>();
   private confirming: BankedFish | null = null;
+  /** "Sell all" is asking once more (it never takes epic or rarer fish, but it is still many fish). */
+  private confirmingAll = false;
   private confirmTimer = 0;
   private funding = false;
 
@@ -209,7 +211,10 @@ export class Vault {
     const waiting = queued || this.bank.some((f) => f.sellQueued);
     const more = queued ? `${queued} NFT${queued > 1 ? 's' : ''} waiting` : '';
     let box: HTMLElement | null = null;
-    if (q.funds === 'needs-sol' && waiting) {
+    const forSale = this.bank.filter((f) => f.sellQueued && f.nft !== 'minted').length;
+    if (q.batch) {
+      box = this.batchNotice(q.batch);
+    } else if (q.funds === 'needs-sol' && waiting) {
       // Fund sits on the game wallet card just above: one button, not two.
       box = notice('warn', 'Minting paused: the game wallet needs devnet SOL.', `Fund it above. Checking again every minute.${more ? ` ${more}.` : ''}`);
     } else if (q.funds === 'offline' && waiting) {
@@ -218,23 +223,51 @@ export class Vault {
       box = notice('warn', 'Waiting for fish numbers: the game server is not answering.', 'Retrying shortly.');
     } else if (q.minting) {
       const step = q.minting.step ? STEP_LABEL[q.minting.step] : 'Starting…';
-      box = notice('busy', `Minting ${nftName(q.minting.fish)}: ${step}`, queued ? `${queued} more queued` : '');
+      const then = forSale > 1 ? ` Then ${forSale} fish sell together: one approval in ${walletName()}.` : '';
+      box = notice('busy', `Minting ${nftName(q.minting.fish)}: ${step}`, `${queued ? `${queued} more queued.` : ''}${then}`.trim());
+    } else if (q.declined) {
+      box = notice('info', `Sale cancelled in ${walletName()}.`, `Nothing was sent: ${q.declined === 1 ? 'the fish is' : `all ${q.declined} fish are`} still yours.`);
     } else if (queued) {
       box = notice('info', `${queued} NFT${queued > 1 ? 's' : ''} queued`);
     }
     this.noticeEl.replaceChildren(...(box ? [box] : []));
 
     const parts: HTMLElement[] = [];
+    const worth = (list: BankedFish[]) => list.reduce((s, f) => s + fishValue(f), 0);
     const commons = bulkSellable(this.bank, 'common');
+    // Every bulk sale is one batch: one approval in the player's wallet, however many fish.
     if (commons.length) {
-      const total = commons.reduce((s, f) => s + fishValue(f), 0);
-      const btn = el('button', 'mini', `Sell all commons (${commons.length}) · ${pearls(total)}`);
-      btn.addEventListener('click', () => commons.forEach((f) => this.queue.sell(f)));
+      const btn = el('button', 'mini', `Sell all commons (${commons.length}) · ${pearls(worth(commons))}`);
+      btn.title = `One approval in ${walletName()} for all of them`;
+      btn.addEventListener('click', () => this.queue.sellMany(bulkSellable(this.bank, 'common')));
       parts.push(btn);
     }
+    // "Sell all" only when it is more than the commons: every fish below epic, after one more click.
+    const below = bulkSellableBelowEpic(this.bank);
+    if (below.length > commons.length) {
+      if (this.confirmingAll) {
+        const wrap = el('span', 'sell-confirm', '');
+        const yes = el('button', 'mini primary', `Sell ${below.length} fish · ${pearls(worth(below))}`);
+        yes.title = 'Epic, legendary and mythic fish are kept';
+        const no = el('button', 'mini', 'Cancel');
+        yes.addEventListener('click', () => {
+          this.setConfirmingAll(false);
+          this.queue.sellMany(bulkSellableBelowEpic(this.bank));
+        });
+        no.addEventListener('click', () => this.setConfirmingAll(false));
+        wrap.append(yes, no);
+        parts.push(wrap);
+      } else {
+        const btn = el('button', 'mini', `Sell all below epic (${below.length}) · ${pearls(worth(below))}`);
+        btn.title = `Every fish except epic, legendary and mythic, with one approval in ${walletName()}`;
+        btn.addEventListener('click', () => this.setConfirmingAll(true));
+        parts.push(btn);
+      }
+    }
     if (q.lastSale) {
-      const { name, result } = q.lastSale;
-      const sale = el('span', 'sale', `Sold ${name} · +${pearls(result.pearls)}`);
+      const { name, result, count, total, failed } = q.lastSale;
+      const what = count > 1 ? `Sold ${count} fish · +${pearls(total)}` : `Sold ${name} · +${pearls(result.pearls)}`;
+      const sale = el('span', 'sale', failed ? `${what} · ${failed} not sold` : what);
       if (isSignature(result.tx)) {
         const a = el('a', '', 'tx ↗');
         a.target = '_blank';
@@ -361,7 +394,7 @@ export class Vault {
     }
     if (q.selling.has(f)) {
       const step = q.selling.get(f);
-      const btn = el('button', 'mini', step ? SELL_LABEL[step] : 'Selling…');
+      const btn = el('button', 'mini', step ? SELL_LABEL[step]() : 'Selling…');
       btn.disabled = true;
       return btn;
     }
@@ -398,6 +431,26 @@ export class Vault {
       else this.queue.sell(f);
     });
     return btn;
+  }
+
+  /** The notice while a batch sells: what it waits for, and that the wallet asks only once. */
+  private batchNotice(b: { step: string | null; fish: number; txs?: number }) {
+    const n = b.fish;
+    const fish = n === 1 ? '1 fish' : `${n} fish`;
+    if (b.step === 'sign') {
+      const once = n > 1 ? 'approve once' : 'approve';
+      const detail = b.txs && b.txs > 1 ? `${b.txs} transfers, one approval.` : n > 1 ? `One transfer for all ${n}.` : '';
+      return notice('busy', `Selling ${fish}… ${once} in ${walletName()}`, detail);
+    }
+    if (b.step === 'confirm') return notice('busy', `Selling ${fish}: confirming on Solana…`, 'The market checks each transfer and pays each fish in PEARL.');
+    return notice('busy', `Selling ${fish}: the market is checking prices…`);
+  }
+
+  private setConfirmingAll(on: boolean) {
+    this.confirmingAll = on;
+    window.clearTimeout(this.confirmTimer);
+    if (on) this.confirmTimer = window.setTimeout(() => this.setConfirmingAll(false), CONFIRM_MS);
+    this.refresh();
   }
 
   /** Epic and rarer fish ask once more; the question goes away on its own. */

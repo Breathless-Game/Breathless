@@ -146,18 +146,18 @@
           <div id="wb-place-sub" class="small"></div>
           <p id="wb-place-text"></p>
           <div id="wb-place-warn" class="small hidden"></div>
-          <div id="wb-place-gear" class="small muted"></div>
-          <section id="wb-sonar-config" aria-label="Deep sonar settings">
-            <div class="wb-sonar-heading">
-              <span>深潜声纳 · DEEP SONAR</span>
-              <span id="wb-sonar-length" class="small muted">10 m cable</span>
+          <section id="wb-place-conditions" class="wb-weather-card" aria-label="Entry conditions">
+            <div class="wb-weather-title">FIELD NOTES · 入场记录</div>
+            <div class="wb-weather-grid">
+              <span>Entry time · 进入时间</span><b id="wb-entry-time">--:--</b>
+              <span>Surface temp · 水温</span><b id="wb-entry-temp">--°C</b>
+              <span>Weather · 天气</span><b id="wb-entry-weather">—</b>
+              <span>Wind · 风</span><b id="wb-entry-wind">—</b>
+              <span>Rain · 雨</span><b id="wb-entry-rain">—</b>
             </div>
-            <label class="wb-sonar-color">
-              <span class="small">Beacon color · 信标颜色</span>
-              <input id="wb-sonar-color" type="color" value="#42e8d2" aria-label="Deep sonar beacon color" />
-            </label>
-            <p class="wb-sonar-note">Set before diving · weak light + quick guidance</p>
+            <div class="wb-weather-note">Configure beacon on Sonar · 在声纳装备上设置信标</div>
           </section>
+          <div id="wb-place-gear" class="small muted"></div>
           <button id="wb-dive" class="primary">Dive · 下潜</button>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl">Click outside the chart or press Esc to fold it</div>
@@ -172,6 +172,10 @@
           <div id="wb-inspect-level" class="small"></div>
           <p id="wb-inspect-effect"></p>
           <ul id="wb-inspect-levels" class="small"></ul>
+          <label id="wb-inspect-sonar-color" class="wb-inspect-sonar-color hidden">
+            <span>Beacon color · 信标颜色</span>
+            <input id="wb-inspect-sonar-input" type="color" value="#42e8d2" aria-label="Deep sonar beacon color" />
+          </label>
           <button id="wb-inspect-ready"></button>
         </aside>
         <div id="wb-inspect-stage">

@@ -201,6 +201,11 @@ export function bulkSellable(bank: readonly BankedFish[], rarity: Rarity): Banke
   return bank.filter((f) => f.rarity === rarity && !f.sellQueued && sellQuote(f, () => 0).ok);
 }
 
+/** Fish "Sell all" would queue now: every sellable fish except the ones that ask first (epic and rarer). */
+export function bulkSellableBelowEpic(bank: readonly BankedFish[]): BankedFish[] {
+  return bank.filter((f) => !needsConfirm(f.rarity) && !f.sellQueued && sellQuote(f, () => 0).ok);
+}
+
 // ---- Map unlock progress -------------------------------------------------
 // Maps unlock by the lifetime value of every fish ever banked. Selling never lowers it.
 
