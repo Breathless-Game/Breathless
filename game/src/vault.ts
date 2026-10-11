@@ -1,4 +1,5 @@
 import { fishValue, zoneForDepth } from './fish';
+import { onLangChange, pickName, t } from './i18n';
 import { MAPS, type MapId } from './maps';
 import { bulkSellable, bulkSellableBelowEpic, isFundsError, needsConfirm, pearls, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
@@ -23,13 +24,13 @@ const FUND_SOL = 0.1;
 const $ = (id: string) => document.getElementById(id)!;
 
 /** The wallet app the player logged in with ("Phantom", "MetaMask", …). Plain text: never put it in innerHTML. */
-const walletName = () => walletState().wallet?.name ?? 'Your wallet';
+const walletName = () => walletState().wallet?.name ?? t('Your wallet', '你的钱包');
 
 const STEP_LABEL = {
-  mint: 'Minting on Solana…',
+  mint: () => t('Minting on Solana…', '正在 Solana 上铸造…'),
 };
 
-function explorerLink(address: string, label = 'View on Explorer ↗') {
+function explorerLink(address: string, label = t('View on Explorer ↗', '在浏览器中查看 ↗')) {
   const a = el('a', 'explorer', label);
   a.href = explorerAddress(address);
   a.target = '_blank';
@@ -38,12 +39,16 @@ function explorerLink(address: string, label = 'View on Explorer ↗') {
 }
 
 const SELL_LABEL = {
-  verify: () => 'Market verifying…',
-  sign: () => `Approve in ${walletName()}…`,
-  confirm: () => 'Confirming…',
+  verify: () => t('Market verifying…', '市场验证中…'),
+  sign: () => t(`Approve in ${walletName()}…`, `请在 ${walletName()} 中确认…`),
+  confirm: () => t('Confirming…', '确认中…'),
 };
 
-const FAUCET_HINT = 'Faucet is rate limited. Use Fund game wallet, or faucet.solana.com with the game wallet address.';
+const faucetHint = () =>
+  t(
+    'Faucet is rate limited. Use Fund game wallet, or faucet.solana.com with the game wallet address.',
+    '水龙头已限流。请为游戏钱包充值，或用游戏钱包地址前往 faucet.solana.com 领取。',
+  );
 const CONFIRM_MS = 5000;
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
@@ -88,7 +93,13 @@ export class Vault {
   constructor(
     private bank: BankedFish[],
     private queue: NftQueue,
-  ) {}
+  ) {
+    onLangChange(() => {
+      if (!this.open) return;
+      this.render();
+      void this.refreshWallet();
+    });
+  }
 
   get open() {
     return !this.panel.classList.contains('hidden');
@@ -111,10 +122,10 @@ export class Vault {
   private async refreshWallet(note = '') {
     const { owner, session } = walletState();
     if (!owner || !session) {
-      this.walletEl.replaceChildren(el('span', 'wallet-card-empty', 'Connect a wallet to mint.'));
+      this.walletEl.replaceChildren(el('span', 'wallet-card-empty', t('Connect a wallet to mint.', '连接钱包后即可铸造。')));
       return;
     }
-    this.walletEl.replaceChildren(el('span', 'wallet-card-empty', 'Connecting to Solana devnet…'));
+    this.walletEl.replaceChildren(el('span', 'wallet-card-empty', t('Connecting to Solana devnet…', '正在连接 Solana devnet…')));
     try {
       const c = await this.queue.loadChain();
       let sol: number | null = null;
@@ -128,28 +139,31 @@ export class Vault {
       addr.href = c.explorer('address', session);
       addr.target = '_blank';
       addr.rel = 'noopener';
-      addr.title = `${session}\nView on Solana Explorer (devnet)`;
-      const bal = el('span', `game-wallet-balance${low ? ' low' : ''}`, sol == null ? 'balance unavailable' : `${sol.toFixed(3)} SOL`);
+      addr.title = `${session}\n${t('View on Solana Explorer (devnet)', '在 Solana 浏览器中查看（devnet）')}`;
+      const bal = el('span', `game-wallet-balance${low ? ' low' : ''}`, sol == null ? t('balance unavailable', '余额不可用') : `${sol.toFixed(3)} SOL`);
       info.append(addr, bal);
 
       const actions = el('div', 'game-wallet-actions');
       if (low) {
-        const fund = el('button', 'mini primary', `Fund ${FUND_SOL} SOL`);
+        const fund = el('button', 'mini primary', t(`Fund ${FUND_SOL} SOL`, `充值 ${FUND_SOL} SOL`));
         fund.id = 'fund';
-        fund.title = `Send ${FUND_SOL} devnet SOL from ${walletName()} to the game wallet (one prompt)`;
+        fund.title = t(
+          `Send ${FUND_SOL} devnet SOL from ${walletName()} to the game wallet (one prompt)`,
+          `从 ${walletName()} 向游戏钱包发送 ${FUND_SOL} devnet SOL（需确认一次）`,
+        );
         fund.addEventListener('click', () => this.fund(fund));
         actions.append(fund);
       }
-      const airdrop = el('button', 'mini ghost', 'Airdrop 1 SOL');
+      const airdrop = el('button', 'mini ghost', t('Airdrop 1 SOL', '空投 1 SOL'));
       airdrop.id = 'airdrop';
-      airdrop.title = 'Ask the devnet faucet for 1 SOL (often rate limited)';
+      airdrop.title = t('Ask the devnet faucet for 1 SOL (often rate limited)', '向 devnet 水龙头申请 1 SOL（常被限流）');
       airdrop.addEventListener('click', () => this.airdrop());
       actions.append(airdrop);
 
       this.walletEl.replaceChildren(info, actions);
       if (note) this.walletEl.append(el('div', 'note', note));
     } catch (e) {
-      this.walletEl.replaceChildren(el('span', 'wallet-card-empty', `Solana unavailable: ${(e as Error).message}`));
+      this.walletEl.replaceChildren(el('span', 'wallet-card-empty', `${t('Solana unavailable', 'Solana 不可用')}: ${(e as Error).message}`));
     }
   }
 
@@ -158,20 +172,23 @@ export class Vault {
     if (this.funding) return;
     this.funding = true;
     btn.disabled = true;
-    btn.textContent = `Approve in ${walletName()}…`;
+    btn.textContent = t(`Approve in ${walletName()}…`, `请在 ${walletName()} 中确认…`);
     try {
       await topUpSession(FUND_SOL);
-      await this.refreshWallet('Game wallet funded.');
+      await this.refreshWallet(t('Game wallet funded.', '游戏钱包已充值。'));
       this.queue.recheck();
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
       console.error('top-up failed', e);
       await this.refreshWallet(
         isUserRejection(e)
-          ? 'Top-up cancelled.'
+          ? t('Top-up cancelled.', '已取消充值。')
           : /insufficient|debit an account|0x1\b/i.test(msg)
-            ? `${walletName()} needs devnet SOL (faucet.solana.com) and must be on Devnet.`
-            : `Top-up failed: ${msg.slice(0, 100)}`,
+            ? t(
+                `${walletName()} needs devnet SOL (faucet.solana.com) and must be on Devnet.`,
+                `${walletName()} 需要 devnet SOL（faucet.solana.com），且须切换到 Devnet。`,
+              )
+            : `${t('Top-up failed', '充值失败')}: ${msg.slice(0, 100)}`,
       );
     } finally {
       this.funding = false;
@@ -182,13 +199,13 @@ export class Vault {
     const c = await this.queue.loadChain();
     const btn = $('airdrop') as HTMLButtonElement;
     btn.disabled = true;
-    btn.textContent = 'Requesting…';
+    btn.textContent = t('Requesting…', '申请中…');
     try {
       await c.airdrop(1);
-      await this.refreshWallet('Airdrop received.');
+      await this.refreshWallet(t('Airdrop received.', '空投已到账。'));
       this.queue.recheck();
     } catch {
-      await this.refreshWallet(FAUCET_HINT);
+      await this.refreshWallet(faucetHint());
     }
   }
 
@@ -196,9 +213,9 @@ export class Vault {
     this.renderMarket();
     const sorted = [...this.bank].sort((a, b) => fishValue(b) - fishValue(a));
     const worth = this.bank.filter((f) => !f.legacy).reduce((s, f) => s + fishValue(f), 0);
-    this.countEl.textContent = sorted.length ? `${sorted.length} fish · worth ${pearls(worth)}` : '';
+    this.countEl.textContent = sorted.length ? t(`${sorted.length} fish · worth ${pearls(worth)}`, `${sorted.length} 条鱼 · 价值 ${pearls(worth)}`) : '';
     if (!sorted.length) {
-      this.grid.replaceChildren(el('p', 'collection-empty', 'Nothing banked yet. Dive!'));
+      this.grid.replaceChildren(el('p', 'collection-empty', t('Nothing banked yet. Dive!', '还没有收获。去下潜吧！')));
       return;
     }
     this.grid.replaceChildren(...sorted.map((f) => this.card(f)));
@@ -209,7 +226,7 @@ export class Vault {
     const q = this.queue;
     const queued = this.bank.filter((f) => f.nft === 'pending' || f.nft === 'failed').length;
     const waiting = queued || this.bank.some((f) => f.sellQueued);
-    const more = queued ? `${queued} NFT${queued > 1 ? 's' : ''} waiting` : '';
+    const more = queued ? t(`${queued} NFT${queued > 1 ? 's' : ''} waiting`, `${queued} 个 NFT 等待中`) : '';
     let box: HTMLElement | null = null;
     const forSale = this.bank.filter((f) => f.sellQueued && f.nft !== 'minted').length;
     if (q.batch) {
@@ -219,19 +236,19 @@ export class Vault {
       box = notice('warn', `Minting paused until ${at}: this wallet reached the market's hourly mint limit.`, `Nothing is lost: ${queued} NFT${queued > 1 ? 's' : ''} stay queued and mint on their own.`);
     } else if (q.funds === 'needs-sol' && waiting) {
       // Fund sits on the game wallet card just above: one button, not two.
-      box = notice('warn', 'Minting paused: the game wallet needs devnet SOL.', `Fund it above. Checking again every minute.${more ? ` ${more}.` : ''}`);
+      box = notice('warn', t('Minting paused: the game wallet needs devnet SOL.', '铸造已暂停：游戏钱包需要 devnet SOL。'), t(`Fund it above. Checking again every minute.${more ? ` ${more}.` : ''}`, `请在上方充值，每分钟重新检查一次。${more ? `${more}。` : ''}`));
     } else if (q.funds === 'offline' && waiting) {
-      box = notice('warn', 'Solana devnet is not answering.', 'Retrying every minute.');
+      box = notice('warn', t('Solana devnet is not answering.', 'Solana devnet 没有响应。'), t('Retrying every minute.', '每分钟重试一次。'));
     } else if (q.serials === 'waiting' && queued) {
-      box = notice('warn', 'Waiting for fish numbers: the game server is not answering.', 'Retrying shortly.');
+      box = notice('warn', t('Waiting for fish numbers: the game server is not answering.', '正在等待鱼的编号：游戏服务器没有响应。'), t('Retrying shortly.', '稍后重试。'));
     } else if (q.minting) {
-      const step = q.minting.step ? STEP_LABEL[q.minting.step] : 'Starting…';
-      const then = forSale > 1 ? ` Then ${forSale} fish sell together: one approval in ${walletName()}.` : '';
-      box = notice('busy', `Minting ${nftName(q.minting.fish)}: ${step}`, `${queued ? `${queued} more queued.` : ''}${then}`.trim());
+      const step = q.minting.step ? STEP_LABEL[q.minting.step]() : t('Starting…', '启动中…');
+      const then = forSale > 1 ? t(` Then ${forSale} fish sell together: one approval in ${walletName()}.`, `随后 ${forSale} 条鱼一起出售：在 ${walletName()} 中确认一次。`) : '';
+      box = notice('busy', t(`Minting ${nftName(q.minting.fish)}: ${step}`, `正在铸造 ${nftName(q.minting.fish)}：${step}`), `${queued ? t(`${queued} more queued.`, `还有 ${queued} 个排队中。`) : ''}${then}`.trim());
     } else if (q.declined) {
-      box = notice('info', `Sale cancelled in ${walletName()}.`, `Nothing was sent: ${q.declined === 1 ? 'the fish is' : `all ${q.declined} fish are`} still yours.`);
+      box = notice('info', t(`Sale cancelled in ${walletName()}.`, `已在 ${walletName()} 中取消出售。`), t(`Nothing was sent: ${q.declined === 1 ? 'the fish is' : `all ${q.declined} fish are`} still yours.`, `没有发送任何内容：${q.declined === 1 ? '这条鱼' : `全部 ${q.declined} 条鱼`}仍归你所有。`));
     } else if (queued) {
-      box = notice('info', `${queued} NFT${queued > 1 ? 's' : ''} queued`);
+      box = notice('info', t(`${queued} NFT${queued > 1 ? 's' : ''} queued`, `${queued} 个 NFT 排队中`));
     }
     this.noticeEl.replaceChildren(...(box ? [box] : []));
 
@@ -240,8 +257,8 @@ export class Vault {
     const commons = bulkSellable(this.bank, 'common');
     // Every bulk sale is one batch: one approval in the player's wallet, however many fish.
     if (commons.length) {
-      const btn = el('button', 'mini', `Sell all commons (${commons.length}) · ${pearls(worth(commons))}`);
-      btn.title = `One approval in ${walletName()} for all of them`;
+      const btn = el('button', 'mini', t(`Sell all commons (${commons.length}) · ${pearls(worth(commons))}`, `出售全部普通鱼 (${commons.length}) · ${pearls(worth(commons))}`));
+      btn.title = t(`One approval in ${walletName()} for all of them`, `在 ${walletName()} 中一次确认全部`);
       btn.addEventListener('click', () => this.queue.sellMany(bulkSellable(this.bank, 'common')));
       parts.push(btn);
     }
@@ -250,9 +267,9 @@ export class Vault {
     if (below.length > commons.length) {
       if (this.confirmingAll) {
         const wrap = el('span', 'sell-confirm', '');
-        const yes = el('button', 'mini primary', `Sell ${below.length} fish · ${pearls(worth(below))}`);
-        yes.title = 'Epic, legendary and mythic fish are kept';
-        const no = el('button', 'mini', 'Cancel');
+        const yes = el('button', 'mini primary', t(`Sell ${below.length} fish · ${pearls(worth(below))}`, `出售 ${below.length} 条鱼 · ${pearls(worth(below))}`));
+        yes.title = t('Epic, legendary and mythic fish are kept', '史诗、传说和神话级的鱼会保留');
+        const no = el('button', 'mini', t('Cancel', '取消'));
         yes.addEventListener('click', () => {
           this.setConfirmingAll(false);
           this.queue.sellMany(bulkSellableBelowEpic(this.bank));
@@ -261,16 +278,16 @@ export class Vault {
         wrap.append(yes, no);
         parts.push(wrap);
       } else {
-        const btn = el('button', 'mini', `Sell all below epic (${below.length}) · ${pearls(worth(below))}`);
-        btn.title = `Every fish except epic, legendary and mythic, with one approval in ${walletName()}`;
+        const btn = el('button', 'mini', t(`Sell all below epic (${below.length}) · ${pearls(worth(below))}`, `出售史诗以下全部 (${below.length}) · ${pearls(worth(below))}`));
+        btn.title = t(`Every fish except epic, legendary and mythic, with one approval in ${walletName()}`, `除史诗、传说和神话级外的所有鱼，在 ${walletName()} 中确认一次`);
         btn.addEventListener('click', () => this.setConfirmingAll(true));
         parts.push(btn);
       }
     }
     if (q.lastSale) {
       const { name, result, count, total, failed } = q.lastSale;
-      const what = count > 1 ? `Sold ${count} fish · +${pearls(total)}` : `Sold ${name} · +${pearls(result.pearls)}`;
-      const sale = el('span', 'sale', failed ? `${what} · ${failed} not sold` : what);
+      const what = count > 1 ? t(`Sold ${count} fish · +${pearls(total)}`, `已售出 ${count} 条鱼 · +${pearls(total)}`) : t(`Sold ${name} · +${pearls(result.pearls)}`, `已售出 ${name} · +${pearls(result.pearls)}`);
+      const sale = el('span', 'sale', failed ? t(`${what} · ${failed} not sold`, `${what} · ${failed} 条未售出`) : what);
       if (isSignature(result.tx)) {
         const a = el('a', '', 'tx ↗');
         a.target = '_blank';
@@ -310,7 +327,7 @@ export class Vault {
    */
   private caption(f: BankedFish, cap: HTMLElement) {
     const q = this.queue;
-    const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
+    const where = f.map && f.map in MAPS ? pickName(MAPS[f.map as MapId]) : zoneForDepth(f.depthM).name;
     const meta = el('div', 'card-meta');
     meta.append(el('span', 'card-where', where), el('span', 'card-value', pearls(fishValue(f))));
     const status = el('div', 'card-status');
@@ -325,14 +342,14 @@ export class Vault {
       parts.push(line);
     } else if (err) {
       const sale = q.sellErrors.has(f);
-      const line = el('div', 'err', sale ? `Sale failed: ${err}` : `Mint failed: ${err}`);
+      const line = el('div', 'err', sale ? t(`Sale failed: ${err}`, `出售失败：${err}`) : t(`Mint failed: ${err}`, `铸造失败：${err}`));
       line.title = line.textContent ?? '';
       // Mints are paid by the game wallet, sales by the player's own wallet.
-      if (sale && isUserRejection({ message: err })) line.textContent = `Sale cancelled in ${walletName()}.`;
+      if (sale && isUserRejection({ message: err })) line.textContent = t(`Sale cancelled in ${walletName()}.`, `已在 ${walletName()} 中取消出售。`);
       else if (isFundsError(err)) {
         line.textContent = sale
-          ? `${walletName()} needs devnet SOL for the sale fee (faucet.solana.com) and must be on Devnet.`
-          : 'The game wallet is out of devnet SOL. Fund it above.';
+          ? t(`${walletName()} needs devnet SOL for the sale fee (faucet.solana.com) and must be on Devnet.`, `${walletName()} 需要 devnet SOL 支付出售手续费（faucet.solana.com），且须切换到 Devnet。`)
+          : t('The game wallet is out of devnet SOL. Fund it above.', '游戏钱包的 devnet SOL 用完了，请在上方充值。');
       }
       parts.push(line);
     }
@@ -350,41 +367,41 @@ export class Vault {
     const num = f.serial ? `${formatSerial(f.serial)} · ` : '';
     const pill = (tone: string, text: string) => el('span', `nft-status pill pill-${tone}`, `${num}${text}`);
     if (f.nft === 'minted' && f.assetId) {
-      const a = el('a', 'onchain pill pill-ok', `${num}On-chain ✓`);
+      const a = el('a', 'onchain pill pill-ok', `${num}${t('On-chain ✓', '已上链 ✓')}`);
       a.target = '_blank';
       a.rel = 'noopener';
       void q.loadChain().then((c) => (a.href = c.explorer('address', f.assetId!)));
       return a;
     }
     if (f.nft === 'minting') {
-      const step = q.minting?.fish === f && q.minting.step ? STEP_LABEL[q.minting.step] : 'Minting…';
+      const step = q.minting?.fish === f && q.minting.step ? STEP_LABEL[q.minting.step]() : t('Minting…', '铸造中…');
       const p = pill('busy', step);
       p.classList.add('busy');
       return p;
     }
     if (f.nft === 'pending') {
-      if (q.funds === 'needs-sol') return pill('warn', 'NFT queued · needs SOL');
-      if (q.serials === 'waiting' && !f.serial) return pill('warn', 'Waiting for number');
-      return pill('info', 'NFT queued');
+      if (q.funds === 'needs-sol') return pill('warn', t('NFT queued · needs SOL', 'NFT 排队中 · 需要 SOL'));
+      if (q.serials === 'waiting' && !f.serial) return pill('warn', t('Waiting for number', '等待编号'));
+      return pill('info', t('NFT queued', 'NFT 排队中'));
     }
     if (f.nft === 'failed') {
-      const p = pill('err', f.retryAt ? 'Mint failed · retrying soon' : 'Mint failed');
+      const p = pill('err', f.retryAt ? t('Mint failed · retrying soon', '铸造失败 · 即将重试') : t('Mint failed', '铸造失败'));
       p.classList.add('failed');
       return p;
     }
-    return pill('muted', 'Not minted');
+    return pill('muted', t('Not minted', '未铸造'));
   }
 
   /** What fixes a stuck NFT: Retry a failed mint, or Mint a legacy fish nobody asked to mint. */
   private nftAction(f: BankedFish): HTMLElement | null {
     if (f.nft === 'failed') {
-      const btn = el('button', 'mini', 'Retry');
+      const btn = el('button', 'mini', t('Retry', '重试'));
       btn.addEventListener('click', () => this.queue.retry(f));
       return btn;
     }
     if (f.nft === undefined) {
       // A legacy fish keeps the manual Mint button.
-      const btn = el('button', 'mini primary', 'Mint NFT');
+      const btn = el('button', 'mini primary', t('Mint NFT', '铸造 NFT'));
       btn.addEventListener('click', () => this.queue.enqueue(f));
       return btn;
     }
@@ -395,8 +412,8 @@ export class Vault {
     const q = this.queue;
     const quote = sellQuote(f, fishValue);
     if (!quote.ok && quote.reason === 'paid-out') {
-      const tag = el('span', 'paid', 'Paid out');
-      tag.title = 'Banked before selling existed: its Pearls were paid on surfacing.';
+      const tag = el('span', 'paid', t('Paid out', '已结算'));
+      tag.title = t('Banked before selling existed: its Pearls were paid on surfacing.', '在出售功能上线前入库：珍珠已在上浮时发放。');
       return tag;
     }
     if (!quote.ok && quote.reason === 'blocked') {
@@ -406,28 +423,28 @@ export class Vault {
     }
     if (q.selling.has(f)) {
       const step = q.selling.get(f);
-      const btn = el('button', 'mini', step ? SELL_LABEL[step]() : 'Selling…');
+      const btn = el('button', 'mini', step ? SELL_LABEL[step]() : t('Selling…', '出售中…'));
       btn.disabled = true;
       return btn;
     }
     if (f.sellQueued) {
-      const wrap = el('span', 'sell-queued', f.nft === 'minted' ? 'Sale queued ' : 'Mint, then sell ');
-      const cancel = el('button', 'mini', 'Cancel');
+      const wrap = el('span', 'sell-queued', f.nft === 'minted' ? t('Sale queued ', '出售排队中 ') : t('Mint, then sell ', '先铸造再出售 '));
+      const cancel = el('button', 'mini', t('Cancel', '取消'));
       cancel.addEventListener('click', () => this.queue.cancelSell(f));
       wrap.appendChild(cancel);
       return wrap;
     }
     if (!quote.ok) {
-      const btn = el('button', 'mini sell', `Sell · ${pearls(fishValue(f))}`);
+      const btn = el('button', 'mini sell', `${t('Sell', '出售')} · ${pearls(fishValue(f))}`);
       btn.disabled = true;
-      btn.title = 'Wait for the mint to finish';
+      btn.title = t('Wait for the mint to finish', '请等待铸造完成');
       return btn;
     }
-    const verb = quote.mintFirst ? 'Mint & sell' : 'Sell';
+    const verb = quote.mintFirst ? t('Mint & sell', '铸造并出售') : t('Sell', '出售');
     if (this.confirming === f) {
       const wrap = el('span', 'sell-confirm', '');
-      const yes = el('button', 'mini primary', `Confirm${f.serial ? ` ${formatSerial(f.serial)}` : ''} · ${pearls(quote.pearls)}`);
-      const no = el('button', 'mini', 'Cancel');
+      const yes = el('button', 'mini primary', `${t('Confirm', '确认')}${f.serial ? ` ${formatSerial(f.serial)}` : ''} · ${pearls(quote.pearls)}`);
+      const no = el('button', 'mini', t('Cancel', '取消'));
       yes.addEventListener('click', () => {
         this.setConfirming(null);
         this.queue.sell(f);
@@ -437,7 +454,9 @@ export class Vault {
       return wrap;
     }
     const btn = el('button', 'mini sell', `${verb} · ${pearls(quote.pearls)}`);
-    btn.title = quote.mintFirst ? 'Mints the NFT first: the market only buys NFTs' : 'The market burns the NFT and pays you its value in PEARL';
+    btn.title = quote.mintFirst
+      ? t('Mints the NFT first: the market only buys NFTs', '先铸造 NFT：市场只收购 NFT')
+      : t('The market burns the NFT and pays you its value in PEARL', '市场销毁这个 NFT，并按价值支付 PEARL');
     btn.addEventListener('click', () => {
       if (needsConfirm(f.rarity)) this.setConfirming(f);
       else this.queue.sell(f);
@@ -448,14 +467,14 @@ export class Vault {
   /** The notice while a batch sells: what it waits for, and that the wallet asks only once. */
   private batchNotice(b: { step: string | null; fish: number; txs?: number }) {
     const n = b.fish;
-    const fish = n === 1 ? '1 fish' : `${n} fish`;
+    const fish = t(n === 1 ? '1 fish' : `${n} fish`, `${n} 条鱼`);
     if (b.step === 'sign') {
-      const once = n > 1 ? 'approve once' : 'approve';
-      const detail = b.txs && b.txs > 1 ? `${b.txs} transfers, one approval.` : n > 1 ? `One transfer for all ${n}.` : '';
-      return notice('busy', `Selling ${fish}… ${once} in ${walletName()}`, detail);
+      const once = n > 1 ? t('approve once', '确认一次') : t('approve', '确认');
+      const detail = b.txs && b.txs > 1 ? t(`${b.txs} transfers, one approval.`, `${b.txs} 笔转账，确认一次。`) : n > 1 ? t(`One transfer for all ${n}.`, `全部 ${n} 条一笔转账。`) : '';
+      return notice('busy', t(`Selling ${fish}… ${once} in ${walletName()}`, `正在出售 ${fish}… 请在 ${walletName()} 中${once}`), detail);
     }
-    if (b.step === 'confirm') return notice('busy', `Selling ${fish}: confirming on Solana…`, 'The market checks each transfer and pays each fish in PEARL.');
-    return notice('busy', `Selling ${fish}: the market is checking prices…`);
+    if (b.step === 'confirm') return notice('busy', t(`Selling ${fish}: confirming on Solana…`, `正在出售 ${fish}：Solana 确认中…`), t('The market checks each transfer and pays each fish in PEARL.', '市场会核对每笔转账，并为每条鱼支付 PEARL。'));
+    return notice('busy', t(`Selling ${fish}: the market is checking prices…`, `正在出售 ${fish}：市场正在核价…`));
   }
 
   private setConfirmingAll(on: boolean) {
