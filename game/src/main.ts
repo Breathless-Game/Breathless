@@ -48,6 +48,8 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { FieldGuide } from './field-guide';
 import { isAction, keysFor, openControls } from './controls';
 import { Trip, TripReport } from './trip';
+import { TableScene } from './table-scene';
+import { HealthDesk } from './health-desk';
 import type { LessonId } from './tutorial';
 
 // ---- Tuning -------------------------------------------------------------
@@ -570,12 +572,10 @@ const nftQueue = new NftQueue(bank, saveBank, {
   },
 });
 const vault = new Vault(bank, nftQueue);
-const aquarium = new Aquarium(bank, {
-  pan(u) {
-    aquariumPan = u;
-    titleScreen.setLift(u);
-  },
-});
+// The aquarium and the health desk each come up on a table like the workbench's (table-scene.ts).
+const aquariumTable = new TableScene('aquarium-table', { pan: (u, y) => setTablePan('aquarium', u, y) });
+const aquarium = new Aquarium(bank, { table: aquariumTable });
+const healthDesk = new HealthDesk({ pan: (u, y) => setTablePan('health', u, y) });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
 // One trip: the first dive off the title to the main menu again (trip.ts); its report at the end.
@@ -723,14 +723,14 @@ window.addEventListener('keydown', (e) => {
   }
   if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !settingsDesk.visible && !loginGate.visible && !pauseMenu.open && !aquarium.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !settingsDesk.visible && !healthDesk.visible && !loginGate.visible && !pauseMenu.open && !aquarium.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
   }
   keys.add(e.code);
   // Not on the workbench: the report would pop up over the table and the chart.
-  if (isAction('report', e) && phase !== 'calibrating' && !workbench.visible && !aquarium.open) report.toggle();
+  if (isAction('report', e) && phase !== 'calibrating' && !workbench.visible && !aquarium.open && !healthDesk.visible) report.toggle();
   if (isAction('upgrades', e) && phase !== 'play' && phase !== 'calibrating') {
     e.preventDefault();
     gear.toggle();
@@ -1294,7 +1294,24 @@ function startFish() {
   } else if (settingsDesk.visible) {
     deskFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
     settingsDesk.escape();
+  } else if (healthDesk.visible) {
+    if (healthDesk.atRest) healthDesk.escape();
   } else openWorkbench();
+}
+
+/** Only from the title itself: no other table up, no aquarium. */
+function onTitleOnly() {
+  return !workbench.visible && !settingsDesk.visible && !healthDesk.visible && !aquarium.open && !loginGate.visible;
+}
+
+/** HEALTH: a table comes up with the latest trip report on it, and the jar of earlier ones. */
+function openHealthDesk() {
+  if (onTitleOnly()) healthDesk.show();
+}
+
+/** AQUARIUM: a table comes up and the tank drops onto it. */
+function openAquarium() {
+  if (onTitleOnly()) aquarium.show();
 }
 
 /**
@@ -1317,6 +1334,7 @@ function onEscape() {
   else if (breathTest.open) breathTest.stop();
   else if (loginGate.visible) showTitle(false);
   else if (settingsDesk.visible) settingsDesk.escape();
+  else if (healthDesk.visible) healthDesk.escape();
   // Aboard, Esc from the bare table goes back into the water, not to the title.
   else if (aboard && phase === 'menu' && workbench.atRest) backToWater();
   else if (workbench.visible && phase === 'menu') workbench.escape();
@@ -1410,7 +1428,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 }, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
 const boatRay = new THREE.Raycaster();
 document.addEventListener('click', (e) => {
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible) return;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible || healthDesk.visible) return;
   if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
   const rect = canvas.getBoundingClientRect();
   boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
@@ -1419,16 +1437,17 @@ document.addEventListener('click', (e) => {
 document.addEventListener('pointermove', (e) => {
   if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
   const target = e.target as HTMLCanvasElement;
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || aquarium.open) { target.style.cursor = ''; return; }
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || aquarium.open || healthDesk.visible) { target.style.cursor = ''; return; }
   const rect = canvas.getBoundingClientRect();
   boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
   if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
 });
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => aquarium.show() },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.25, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.42, label: 'AQUARIUM', onClick: openAquarium },
+  { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.59, label: 'HEALTH', onClick: openHealthDesk },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.76, label: 'SETTINGS', onClick: openSettingsDesk },
 ]);
 
 // Gear set in the workbench's READY tray for this dive. The selected slots are
@@ -1438,23 +1457,26 @@ let loadout: UpgradeId[] = [];
 // How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
 const BENCH_CAMERA_DROP = 1.4;
 let benchPan = 0;
-let aquariumPan = 0; // the aquarium pans the same way
 
-// The workbench and the settings desk each report their own pan. Switching from
-// one to the other, one sinks while the other rises: the camera, the title's rope
-// and the START fish follow whichever is further in.
-const tablePan = { bench: 0, desk: 0 };
-const tableY = { bench: 0, desk: 0 };
+// Each table (the workbench, the settings desk, the health desk, the aquarium's)
+// reports its own pan. Switching from one to another, one sinks while the other
+// rises: the camera, the title's rope and the START fish follow whichever is
+// further in, and mid-swap (two tables up) they hold still.
+type TableId = 'bench' | 'desk' | 'health' | 'aquarium';
+const tablePan: Record<TableId, number> = { bench: 0, desk: 0, health: 0, aquarium: 0 };
+const tableY: Record<TableId, number> = { bench: 0, desk: 0, health: 0, aquarium: 0 };
 let deskFromBench = false; // the settings desk was opened from the workbench, and goes back to it
 
-function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
+function tableUp(which: TableId) {
+  return which === 'bench' ? workbench.visible : which === 'desk' ? settingsDesk.visible : which === 'health' ? healthDesk.visible : aquariumTable.visible;
+}
+
+function setTablePan(which: TableId, u: number, y: number) {
   tablePan[which] = u;
   tableY[which] = y;
-  const bench = workbench.visible ? tablePan.bench : 0;
-  const desk = settingsDesk.visible ? tablePan.desk : 0;
-  const top = bench >= desk ? 'bench' : 'desk';
-  // Mid-swap (both tables up) the rope and the sea stay where they are: only the tables move.
-  benchPan = workbench.visible && settingsDesk.visible ? 1 : Math.max(bench, desk);
+  const up = (Object.keys(tablePan) as TableId[]).filter(tableUp);
+  const top = up.reduce<TableId>((a, b) => (tablePan[b] > tablePan[a] ? b : a), which);
+  benchPan = up.length > 1 ? 1 : up.length ? tablePan[up[0]] : 0;
   titleScreen.setPan(benchPan, tableY[top]);
   labelStartFish(benchPan);
 }
@@ -1565,6 +1587,7 @@ function showTitle(intro: boolean) {
   loginGate.hide();
   workbench.hide();
   settingsDesk.hide();
+  healthDesk.hide();
   deskFromBench = false;
   benchPan = 0;
   titleScreen.setPan(0);
@@ -1864,7 +1887,7 @@ function update(dt: number, time: number) {
   }
 
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
-  cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
+  cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
   camera.position.sub(shakeOffset);
   // The settings desk's camera leans in over a plaque: the sea camera moves and turns
   // with it, so it reads as the camera moving rather than the table sliding over a
@@ -2052,6 +2075,9 @@ frame();
 
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
+  healthDesk,
+  aquarium,
+  aquariumTable,
   workbench,
   equipment,
   shipyard,

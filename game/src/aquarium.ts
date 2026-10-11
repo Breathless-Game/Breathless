@@ -7,25 +7,35 @@ import { fishIcon } from './portrait';
 import { Rng } from './rng';
 import { storageKey } from './wallet';
 
-// The aquarium (图鉴): the fish you've banked, swimming in a 2.5D glass tank. It comes
-// in the way the workbench does: the camera pans down, the title's rope and fish ride
-// straight up off the screen, and the tank rises into view from below. Every TANK_SIZE
-// fish fill one tank, in the order they were caught; starred fish move to their own
-// Favorites tank instead.
+// The aquarium (图鉴): the fish you've banked, swimming in a 2.5D glass tank. A table
+// comes up the way the workbench does (the title's fish ride up to hang over it), then
+// the big tank drops from above and lands on it with a thud: the table jolts, the tank
+// bounces once and the water sloshes. Leaving, the tank is lifted away and the table
+// sinks. Every TANK_SIZE fish fill one tank, in the order they were caught; starred
+// fish move to their own Favorites tank instead.
 // Drawn on a 2D canvas: the tank is a box seen in one-point perspective, and each
 // fish is its rendered sprite placed at a depth (smaller, dimmer further back).
 
 export const TANK_SIZE = 50;
 const FAVORITES_KEY = 'favorites';
 const ICONS_PER_FRAME = 3; // sprites rendered per frame while a tank fills, so opening never stalls
-// The pan in and out, as long as the workbench's.
-const OPEN_S = 1.15;
-const CLOSE_S = 0.9;
-const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+// The tank's fall onto the table, and its lift off it again.
+const DROP_S = 0.55;
+const LIFT_S = 0.45;
+const DROP_VH = 125; // it starts this far above its place, off the top of the screen
+const THUD = 0.35; // how hard the table jolts when it lands
+
+/** The table the tank lands on (table-scene.ts). */
+export interface AquariumTable {
+  show(arrived?: () => void): void;
+  leave(done?: () => void): void;
+  jolt(amount: number): void;
+  /** Screen y, once the table is up, where the tank's foot rests. */
+  surfaceY(): number;
+}
 
 export interface AquariumHooks {
-  /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
-  pan(u: number): void;
+  table: AquariumTable;
 }
 
 // Tank box: where its front glass sits on the canvas (in fractions) when it faces you,
@@ -160,19 +170,20 @@ export class Aquarium {
     return this.state === 'opening' || this.state === 'open';
   }
 
-  /** Pan down from the title: its fish ride up out of sight and the tank rises from below. */
+  /** The table comes up; once it's there, the tank drops onto it. */
   show() {
-    if (this.open) return;
-    if (this.state === 'closed') {
-      this.yaw = this.yawTarget = 0;
-      this.favorites = loadFavorites(); // per wallet, so read fresh each time
-      this.swimmers.clear();
-      this.pick(null);
-      this.setTank(0, true);
-    }
-    this.root.classList.remove('hidden');
+    if (this.open || this.state === 'closing') return;
+    this.yaw = this.yawTarget = 0;
+    this.favorites = loadFavorites(); // per wallet, so read fresh each time
+    this.swimmers.clear();
+    this.pick(null);
+    this.setTank(0, true);
     this.state = 'opening';
-    this.animate(1, OPEN_S);
+    this.panU = 0;
+    this.setPan(0); // up above the screen, waiting
+    this.root.classList.remove('hidden');
+    this.hooks.table.show(() => this.state === 'opening' && this.animate(1, DROP_S));
+    this.fitToTable(); // after show(): the table's camera has the screen's shape by then
     this.resize();
     if (!this.raf) {
       this.last = performance.now();
@@ -185,11 +196,23 @@ export class Aquarium {
     }
   }
 
-  /** Esc or ×: the tank sinks away and the title's fish come back down. */
+  /** Esc or ×: the tank is lifted off, then the table sinks and the title's fish come back down. */
   close() {
     if (!this.open) return;
     this.state = 'closing';
-    this.animate(0, CLOSE_S);
+    // Still waiting up above (the table hadn't arrived): no tank to lift.
+    if (this.panU === 0) this.leaveTable();
+    else this.animate(0, LIFT_S);
+  }
+
+  private leaveTable() {
+    this.tween = null;
+    this.hooks.table.leave(() => {
+      this.state = 'closed';
+      this.root.classList.add('hidden');
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    });
   }
 
   private animate(to: number, dur: number) {
@@ -197,14 +220,26 @@ export class Aquarium {
     this.tween = { t: 0, dur: reduced ? 0.01 : dur, from: this.panU, to };
   }
 
-  /** The tank sits below the screen at 0 and in place at 1; the bar fades in as it arrives. */
+  /**
+   * The tank stands on the table: its foot on the table's front half, and as big as
+   * the room above that allows.
+   */
+  private fitToTable() {
+    const y = this.hooks.table.surfaceY();
+    const room = y - 40; // up to the top of the screen, less a margin
+    this.stage.style.width = `${Math.round(Math.max(320, Math.min(1080, window.innerWidth * 0.84, room * 1.75)))}px`;
+    this.root.style.placeItems = 'end center';
+    // The bar sits under the tank (clear of the title fish hanging over the table's back),
+    // so the stage reaches that much below where the tank's foot rests.
+    this.root.style.paddingBottom = `${Math.max(0, Math.round(window.innerHeight - y - this.bar.offsetHeight - 10))}px`;
+  }
+
+  /** 0: up above the screen; 1: standing on the table. It falls (gravity: ease in); the bar fades in as it lands. */
   private setPan(u: number) {
     this.panU = u;
-    const e = easeInOut(u);
-    this.stage.style.transform = e < 1 ? `translateY(${((1 - e) * 110).toFixed(2)}vh)` : 'none';
-    this.bar.style.opacity = String(clamp((u - 0.75) / 0.25, 0, 1));
-    this.root.style.setProperty('--aq-bg', e.toFixed(3)); // the scene behind blurs as the tank comes up
-    this.hooks.pan(e);
+    const e = u * u;
+    this.stage.style.transform = e < 1 ? `translateY(${(-(1 - e) * DROP_VH).toFixed(2)}vh)` : 'none';
+    this.bar.style.opacity = String(clamp((u - 0.85) / 0.15, 0, 1));
   }
 
   private advance(dt: number) {
@@ -215,13 +250,21 @@ export class Aquarium {
     if (tw.t < tw.dur) return;
     this.tween = null;
     if (this.state === 'opening') {
+      // Landed: the table jolts, the tank squashes and bounces once, the water rocks.
       this.state = 'open';
-      this.slosh = 1; // the water rocks as the tank comes to a stop
-    } else if (this.state === 'closing') {
-      this.state = 'closed';
-      this.root.classList.add('hidden');
-      this.raf = 0;
-    }
+      this.slosh = 1;
+      this.hooks.table.jolt(THUD);
+      this.stage.animate(
+        [
+          { transform: 'none' },
+          { transform: 'translateY(6px) scale(1.02, 0.96)', offset: 0.18 },
+          { transform: 'translateY(-14px) scale(0.99, 1.01)', offset: 0.5 },
+          { transform: 'translateY(2px)', offset: 0.8 },
+          { transform: 'none' },
+        ],
+        { duration: 420, easing: 'ease-out' },
+      );
+    } else if (this.state === 'closing') this.leaveTable();
   }
 
   // ---- Tanks ------------------------------------------------------------
