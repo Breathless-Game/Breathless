@@ -8,16 +8,19 @@ skip-lint = false
 
 [programs.localnet]
 fish_market = "5HEuVNCHKjpfnsdJzov3zDy9UFSj8V2tzF8L9eQnKsDG"
+player_state = "EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ"
 
 [programs.devnet]
 fish_market = "5HEuVNCHKjpfnsdJzov3zDy9UFSj8V2tzF8L9eQnKsDG"
+player_state = "EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ"
 
 [provider]
 cluster = "localnet"
 wallet = ".keys/deployer.json"
 
 [scripts]
-test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/fish_market.ts"
+# player_state has its own runner (needs an upgradeable load): npm run test:player-state
 
 [test]
 startup_wait = 20000
