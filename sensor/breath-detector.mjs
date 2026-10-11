@@ -12,8 +12,13 @@
 // So we measure *activity*: how far the trace travels per second (path
 // length), which is high while breathing, falls once the post-inhale decay
 // settles, and jumps the instant you breathe again. Thresholds are ratios of
-// this person's own breathing activity, learned with a robust median that
-// ignores the start-up transient and the seconds leading into a hold.
+// this person's own breathing activity: a robust median of the first
+// `minBaselineUs` of breathing after the start-up transient. It is learned
+// once and then frozen, so the breathing a player does while playing (deep
+// breaths before a dive, gasps after one) can never drag it around. A baseline
+// that is already known (`new BreathDetector({ baseline })`) is used as is and
+// never relearned: index.mjs carries it across Presage restarts, and the game
+// sends it back as a seed when it reconnects.
 // A hold ends on the exhale (a big drop below the hold level), on a big jump
 // up (someone who held with empty lungs breathes in first), or, as a slow
 // fallback, on sustained breathing-sized activity. Only in its first moments,
@@ -37,23 +42,41 @@ export const DEFAULTS = {
   releaseHoldUs: 200_000, //   ...for this long
   sustainedRatio: 0.8, // later, only hold-window activity above this * baseline...
   sustainedUs: 4_000_000, // ...for this long counts without an exhale
-  baselineWindowUs: 30_000_000, // learn "normal breathing" over this much history
   warmupUs: 8_000_000, // ignore Presage's start-up swings
-  minBaselineUs: 6_000_000, // clean breathing needed before we call any hold
+  minBaselineUs: 6_000_000, // breathing learned once, before any hold is called; then frozen
+  // With a known baseline the start-up swings are harmless: at ~10x normal
+  // breathing they read as heavy breathing (far above holdRatio * baseline), so
+  // they can't call a hold. The 8 s warmup only exists to keep them out of the
+  // learned median. A seeded detector just needs one full activityWindowUs of
+  // this pipeline's own samples, plus 1 s of margin, before its first decision.
+  seededWarmupUs: 3_000_000,
   talkingHoldUs: 500_000, // talking this long ends a hold
   useApnea: false, // Presage's apnea flag: never fired in testing, off by default
 };
 
 const SAMPLE_EVERY_US = 100_000;
 
+// Accepted seed baselines, in the detector's unit: path length per second of
+// Presage's breathing trace. That trace is roughly unit amplitude (the
+// simulator's sine of amplitude 1 gives a baseline of ~1), so three decades
+// either way covers any person and camera while refusing garbage. A seed
+// outside the range is ignored and the baseline is learned normally.
+export const SEED_MIN = 1e-3;
+export const SEED_MAX = 1e3;
+
+/** The seed baseline if it is usable, else null. */
+export function parseSeedBaseline(x) {
+  return typeof x === 'number' && Number.isFinite(x) && x >= SEED_MIN && x <= SEED_MAX ? x : null;
+}
+
 export class BreathDetector {
-  constructor(opts = {}) {
+  constructor({ baseline, ...opts } = {}) {
     this.o = { ...DEFAULTS, ...opts };
     this.samples = []; // {ts, v}, ts in microseconds
     this.firstTs = 0;
     this.lastTs = 0;
-    this.base = []; // {ts, a}: activity while breathing, for the baseline
-    this.baseline = null; // median breathing activity (trace units per second)
+    this.base = []; // {ts, a}: activity while breathing, during calibration only
+    this.baseline = null; // median breathing activity (trace units per second), fixed once set
     this.lastBaseTs = 0;
     this.holding = false;
     this.holdStartTs = 0;
@@ -69,6 +92,24 @@ export class BreathDetector {
     this.apnea = null;
     this.talking = null;
     this.flatness = 0; // 0 = breathing hard, 1 = perfectly still
+    this.seeded = false; // baseline given, not learned
+    if (baseline != null) this.seed(baseline);
+  }
+
+  /** Uses a known baseline instead of learning one. Only before any baseline exists. */
+  seed(baseline) {
+    const b = parseSeedBaseline(baseline);
+    if (b == null || this.baseline != null) return false;
+    this.baseline = b;
+    this.seeded = true;
+    this.base = [];
+    return true;
+  }
+
+  /** Past the start-up swings of this pipeline, so hold decisions are made. */
+  get warm() {
+    const warmup = this.seeded ? this.o.seededWarmupUs : this.o.warmupUs;
+    return this.firstTs !== 0 && this.lastTs - this.firstTs >= warmup;
   }
 
   pushTrace(points) {
@@ -114,15 +155,19 @@ export class BreathDetector {
     return n < 4 ? null : path / (us / 1e6);
   }
 
+  // Calibration: no hold can be called before the baseline exists, so every
+  // sample here is breathing. Once enough is collected the median is frozen.
   #learn(a) {
-    const o = this.o;
+    if (this.baseline != null) return;
     if (this.lastTs - this.lastBaseTs < SAMPLE_EVERY_US) return;
     this.lastBaseTs = this.lastTs;
     this.base.push({ ts: this.lastTs, a });
-    while (this.base.length && this.base[0].ts < this.lastTs - o.baselineWindowUs) this.base.shift();
-    if (this.base.length && this.lastTs - this.base[0].ts >= o.minBaselineUs) {
+    if (this.lastTs - this.base[0].ts >= this.o.minBaselineUs) {
       const sorted = this.base.map((b) => b.a).sort((x, y) => x - y);
-      this.baseline = sorted[sorted.length >> 1];
+      const median = sorted[sorted.length >> 1];
+      // A dead-flat trace (no breathing seen) would freeze a useless 0: start over.
+      if (median > 0) this.baseline = median;
+      this.base = [];
     }
   }
 
@@ -130,7 +175,7 @@ export class BreathDetector {
     const o = this.o;
     const dt = this.lastTs - this.lastUpdateTs;
     this.lastUpdateTs = this.lastTs;
-    if (this.lastTs - this.firstTs < o.warmupUs) return;
+    if (!this.warm) return;
     const a = this.#activity(o.activityWindowUs);
     if (a == null) return;
     if (!this.holding) this.#learn(a);
@@ -150,9 +195,6 @@ export class BreathDetector {
         this.sustainedSince = null;
         this.exhaleSince = null;
         this.level = this.samples.at(-1).v;
-        // The seconds sliding into a hold are not "normal breathing".
-        const cut = this.holdStartTs - 1_000_000;
-        while (this.base.length && this.base.at(-1).ts > cut) this.base.pop();
       }
       return;
     }
@@ -193,7 +235,10 @@ export class BreathDetector {
     return {
       holding: this.holding,
       holdMs: this.holding ? Math.round((this.lastTs - this.holdStartTs) / 1000) : 0,
-      calibrated: this.baseline != null,
+      // True only once a hold can actually be called: baseline known and warm.
+      calibrated: this.baseline != null && this.warm,
+      warm: this.warm,
+      baseline: this.baseline, // the game keeps it in memory and sends it back as a seed
       flatness: Number(this.flatness.toFixed(3)),
       apnea: this.apnea,
       talking: this.talking,
@@ -201,3 +246,4 @@ export class BreathDetector {
     };
   }
 }
+

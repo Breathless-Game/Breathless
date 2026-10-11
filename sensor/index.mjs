@@ -28,7 +28,7 @@ import {
   breathingMetrics,
 } from '@smartspectra/node-sdk';
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
-import { BreathDetector } from './breath-detector.mjs';
+import { BreathDetector, parseSeedBaseline } from './breath-detector.mjs';
 import { loadJpegDecoder } from './decode.mjs';
 import { FrameFormat, LatestFrameDecoder, parseFrame } from './frames.mjs';
 import { createGearHandler } from './nft-gear.mjs';
@@ -102,6 +102,10 @@ class Session {
   constructor(ws) {
     this.ws = ws;
     this.detector = new BreathDetector();
+    // This connection's live breathing baseline, once learned or seeded by the game. Every
+    // later live detector starts with it, so it is never relearned. Memory only.
+    this.liveBaseline = null;
+    this.seededByClient = false;
     this.sim = FORCE_SIM || !API_KEY;
     this.simHolding = false;
     this.sdk = null;
@@ -161,6 +165,11 @@ class Session {
     });
     sdk.on('metrics', (buf) => this.#onMetrics(buf));
     sdk.useCustomInput(FrameTransform.kNone);
+    // A new Presage pipeline (first frame, camera reopen, stall or error) gets a fresh
+    // detector for its own start-up swings and timestamps, but keeps the known baseline.
+    // The old SDK is fully torn down by now (teardowns === 0), so nothing stale reaches it.
+    this.liveBaseline = this.#knownLiveBaseline();
+    this.detector = new BreathDetector({ baseline: this.liveBaseline });
     sdk.start();
     this.sdk = sdk;
     this.sdkStartedAt = performance.now();
@@ -239,7 +248,7 @@ class Session {
       rate: rate ? [rate.value, rate.confidence] : undefined,
       pulse: pulse ? [pulse.value, pulse.confidence] : undefined,
       holding: this.detector.holding,
-      baseline: this.detector.baseline,
+      baseline: this.seededByClient ? undefined : this.detector.baseline, // a client's seed is never written to disk
     });
   }
 
@@ -367,12 +376,30 @@ class Session {
     this.simTimer = null;
   }
 
+  #knownLiveBaseline() {
+    return this.liveBaseline ?? (this.sim ? null : this.detector.baseline);
+  }
+
+  // Client -> server JSON messages (binary messages are camera frames):
+  //   { t: 'sim', on }            simulator on/off; sent on connect
+  //   { t: 'simHold', holding }   the simulator's Shift key
+  //   { t: 'label', holding, ts } ground truth for the recording (live only)
+  //   { t: 'calib', phase, ts }   guided-calibration phase for the recording (live only)
+  //   { t: 'seed', baseline }     (`type: 'seed'` is accepted too) a live breathing baseline
+  //                               the game remembered from an earlier connection's state
+  //                               messages. Used only if this connection has none yet, and
+  //                               only if it is a finite number in [SEED_MIN, SEED_MAX] =
+  //                               [0.001, 1000] trace units per second (breath-detector.mjs);
+  //                               anything else is ignored. Kept in memory only: never
+  //                               logged, recorded or sent anywhere but back in `state`.
   onCommand(msg) {
     if (msg.t === 'sim') {
       const on = Boolean(msg.on) || !API_KEY;
       if (on !== this.sim) {
+        // The simulator's trace has its own scale: keep the live baseline aside, not in it.
+        this.liveBaseline = this.#knownLiveBaseline();
         this.sim = on;
-        this.detector = new BreathDetector();
+        this.detector = new BreathDetector(on ? {} : { baseline: this.liveBaseline });
         if (on) {
           liveSessions.delete(this);
           this.hint = '';
@@ -392,6 +419,13 @@ class Session {
       this.rec.write({ k: 'label', ts: msg.ts, holding: Boolean(msg.holding) });
     } else if (msg.t === 'calib' && !this.sim) {
       this.rec.write({ k: 'calib', ts: msg.ts, phase: msg.phase });
+    } else if (msg.t === 'seed' || msg.type === 'seed') {
+      const b = parseSeedBaseline(msg.baseline);
+      if (b != null && this.#knownLiveBaseline() == null) {
+        this.liveBaseline = b;
+        this.seededByClient = true;
+        if (!this.sim) this.detector.seed(b);
+      }
     }
   }
 
@@ -411,6 +445,8 @@ class Session {
       pulse: this.pulse,
       frames: this.frames,
       ...this.detector.snapshot(),
+      // Only a live baseline is worth seeding a later connection with: the simulator's trace has its own scale.
+      ...(this.sim ? { baseline: null } : {}),
     });
   }
 
