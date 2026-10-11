@@ -3,6 +3,8 @@
 // device. The Settings desk opens the list (openControls), where a key can be
 // clicked and re-pressed to change it.
 
+import { onLangChange, t } from './i18n';
+
 export type Action =
   | 'left'
   | 'right'
@@ -152,19 +154,21 @@ function build(): HTMLElement {
   const el = document.createElement('div');
   el.id = 'controls';
   el.className = 'hidden';
+  // The words are filled in by renderText(), in the current language.
   el.innerHTML = `
     <div class="card">
       <div class="controls-head">
-        <h2>Controls · 操作</h2>
-        <button class="mini" id="controls-close" title="Close (Esc)">×</button>
+        <h2 id="controls-title"></h2>
+        <button class="mini" id="controls-close">×</button>
       </div>
-      <p class="small muted">Click a key, then press the new one. A second key slot is optional. · 点击按键后按下新键。</p>
+      <p class="small muted" id="controls-hint"></p>
       <div id="controls-list"></div>
       <div class="controls-foot">
-        <button class="mini" id="controls-reset">Reset to defaults · 恢复默认</button>
-        <button class="primary" id="controls-done">Done · 完成</button>
+        <button class="mini" id="controls-reset"></button>
+        <button class="primary" id="controls-done"></button>
       </div>
     </div>`;
+  onLangChange(() => controlsOpen() && render());
   document.body.append(el);
   el.querySelector('#controls-close')!.addEventListener('click', close);
   el.querySelector('#controls-done')!.addEventListener('click', close);
@@ -207,13 +211,24 @@ function build(): HTMLElement {
   return el;
 }
 
+/** The list's fixed words, in the current language. */
+function renderText() {
+  const q = (sel: string) => root!.querySelector<HTMLElement>(sel)!;
+  q('#controls-title').textContent = t('Controls', '操作');
+  q('#controls-close').title = t('Close (Esc)', '关闭 (Esc)');
+  q('#controls-hint').textContent = t('Click a key, then press the new one. A second key slot is optional.', '点击按键后按下新键。第二个按键位可不填。');
+  q('#controls-reset').textContent = t('Reset to defaults', '恢复默认');
+  q('#controls-done').textContent = t('Done', '完成');
+}
+
 function render() {
+  renderText();
   const list = root!.querySelector('#controls-list')!;
   const rows = ACTIONS.map((a) => {
     const row = document.createElement('div');
     row.className = 'controls-row';
     const name = document.createElement('span');
-    name.innerHTML = `${a.en} <span class="muted">· ${a.zh}</span>`;
+    name.textContent = t(a.en, a.zh);
     const keys = document.createElement('span');
     keys.className = 'controls-keys';
     for (let slot = 0; slot < 2; slot++) {
@@ -227,7 +242,7 @@ function render() {
         render();
       });
       if (listening?.action === a.id && listening.slot === slot) {
-        btn.textContent = 'Press a key…';
+        btn.textContent = t('Press a key…', '请按下新键…');
         btn.classList.add('listening');
       }
       keys.append(btn);

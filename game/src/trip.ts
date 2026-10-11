@@ -1,7 +1,7 @@
 import type { BreathState } from './breath';
 import { fishValue, RARITY, RARITY_ORDER, type FishSpec, type Rarity } from './fish';
 import type { DiveRecord } from './health';
-import { t } from './i18n';
+import { onLangChange, t } from './i18n';
 import { MAPS, type MapId } from './maps';
 import { compute, wellnessDisclaimer } from './report';
 import { storageKey } from './wallet';
@@ -347,7 +347,7 @@ function drawSheet(c: CanvasRenderingContext2D, r: TripRecord | null, W: number,
   c.textAlign = 'right';
   c.fillStyle = ink;
   c.font = '800 44px Inter, system-ui, sans-serif';
-  c.fillText(`${r.score.total} pts`, W - 290, 150);
+  c.fillText(`${r.score.total} ${t('pts', '分')}`, W - 290, 150);
 
   // Left column: the catch and the dives. Right column: health.
   const line = (x: number, y: number, w: number, k: string, v: string) => {
@@ -456,12 +456,25 @@ export class TripReport {
     this.root.innerHTML = `
       <div class="trip-paper">
         <canvas width="${SHEET_W}" height="${SHEET_H}"></canvas>
-        <button class="primary" id="trip-done">Keep it · 收起报告</button>
+        <button class="primary" id="trip-done"></button>
       </div>
-      <div class="table-hint small">Click anywhere or press Esc to put it away</div>`;
+      <div class="table-hint small"></div>`;
     this.sheet = this.root.querySelector('canvas')!;
     document.body.append(this.root);
     this.root.addEventListener('click', () => this.close());
+    this.renderText();
+    onLangChange(() => {
+      this.renderText();
+      if (this.open && this.record) drawTripSheet(this.sheet.getContext('2d')!, this.record, SHEET_W, SHEET_H);
+    });
+  }
+
+  private record: TripRecord | null = null;
+
+  /** The button and the hint, in the current language. */
+  private renderText() {
+    this.root.querySelector('#trip-done')!.textContent = t('Keep it', '收起报告');
+    this.root.querySelector('.table-hint')!.textContent = t('Click anywhere or press Esc to put it away', '点击任意处或按 Esc 收起');
   }
 
   get open() {
@@ -471,6 +484,7 @@ export class TripReport {
   show(r: TripRecord, done?: () => void) {
     this.done = done ?? null;
     this.closing = false;
+    this.record = r;
     drawTripSheet(this.sheet.getContext('2d')!, r, SHEET_W, SHEET_H);
     const paper = this.root.querySelector<HTMLElement>('.trip-paper')!;
     paper.getAnimations().forEach((a) => a.cancel());
