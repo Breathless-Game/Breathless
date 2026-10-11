@@ -143,6 +143,7 @@
         <div id="wb-paper"></div>
         <div id="wb-pins" class="wb-ctl"></div>
         <aside id="wb-place" class="wb-ctl">
+          <div id="wb-place-scroll">
           <!-- One frame of the place itself, from where the dive starts; diving grows it to the full screen. -->
           <div id="wb-place-preview"></div>
           <div id="wb-place-title"></div>
@@ -165,7 +166,10 @@
             <div class="wb-weather-note" data-zh="在声纳装备上设置信标">Configure beacon on Sonar</div>
           </section>
           <div id="wb-place-gear" class="small muted"></div>
-          <button id="wb-dive" class="primary" data-zh="下潜">Dive</button>
+          </div>
+          <footer id="wb-place-foot">
+            <button id="wb-dive" class="primary" data-zh="下潜">Dive</button>
+          </footer>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl" data-zh="点击海图外或按 Esc 收起">Click outside the chart or press Esc to fold it</div>
       </div>
