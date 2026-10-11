@@ -88,6 +88,7 @@ const diver = new Diver(scene);
 diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
 diver.setMaterialBinder((root) => world.colorGrade.apply(root));
+diver.setWaterSurface((x, z) => world.surfaceAt(x, z));
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -1279,10 +1280,9 @@ function update(dt: number, time: number) {
   if (stormSea.x !== null && !stormSea.capsized) stormShake = Math.max(stormShake, 0.12 * (stormSea.height / ROGUE.height) * Math.exp(-Math.abs(stormSea.x - diver.pos.x) / 25));
   stormShake = Math.max(0, stormShake - dt * 0.55);
 
-  diver.update(dt, time, -diver.pos.y);
   // In heavy seas a swimmer near the surface rises and falls with the swell (the picture only:
   // depth, air and banking still count from the mean waterline).
-  diver.group.position.y += world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6));
+  diver.update(dt, time, -diver.pos.y, world.heaveAt(diver.pos.x) * (1 - THREE.MathUtils.smoothstep(-diver.pos.y, 0.5, 6)));
   tendTrench(-diver.pos.y);
   const scattering = time >= scatterFrom && time < scatterUntil;
   if (scattering && scatterFresh) {

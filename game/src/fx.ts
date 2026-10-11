@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 
-// Pooled effects shared by the world events (events.ts): soft particles and
-// foam rings. Each pool is one draw call, allocated once at a fixed capacity
-// and hidden whenever nothing in it is alive. Nothing here allocates per frame.
+// Pooled effects shared by the world events (events.ts) and the diver: soft
+// particles, foam rings and faceted white water. Each pool is one draw call,
+// allocated once at a fixed capacity and hidden whenever nothing in it is
+// alive. Nothing here allocates per frame.
 
 export const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 export const smoothstep = (a: number, b: number, x: number) => {
@@ -422,5 +423,128 @@ export class Rings {
     this.mesh.setColorAt(i, _c.setRGB(0, 0, 0));
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.instanceColor!.needsUpdate = true;
+  }
+}
+
+// ---- White water --------------------------------------------------------
+
+const _e = new THREE.Euler();
+const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
+const GRAVITY = 9.8;
+
+/**
+ * White water where something breaks the surface: faceted droplets on a
+ * ballistic arc, and flat chips of foam left riding the swell. Both are the
+ * same faceted lump, so they share one instanced mesh.
+ */
+export class Splash {
+  readonly mesh: THREE.InstancedMesh;
+  /** Height of the water at (x, z): droplets end where they fall back into it, foam floats on it. */
+  waterAt: (x: number, z: number) => number = () => 0;
+  private pos: Float32Array;
+  private vel: Float32Array;
+  private age: Float32Array;
+  private life: Float32Array;
+  private size: Float32Array;
+  private foam: Uint8Array;
+  private alive = 0;
+  private cursor = 0;
+
+  constructor(capacity = 72) {
+    const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.3, flatShading: true, roughness: 0.9 });
+    this.mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), mat, capacity);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
+    this.pos = new Float32Array(capacity * 3);
+    this.vel = new Float32Array(capacity * 3);
+    this.age = new Float32Array(capacity);
+    this.life = new Float32Array(capacity);
+    this.size = new Float32Array(capacity);
+    this.foam = new Uint8Array(capacity);
+    for (let i = 0; i < capacity; i++) this.mesh.setMatrixAt(i, HIDDEN);
+  }
+
+  /** Throw one droplet of radius `size`. It appears after `delay` seconds and shrinks as it flies. */
+  droplet(x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, delay = 0) {
+    // Its flight back down to where it left, so the shrink is paced to the arc.
+    const i = this.claim(x, y, z, vx, vy, vz, size, Math.max(0.25, (2 * vy) / GRAVITY), delay);
+    this.foam[i] = 0;
+  }
+
+  /** Leave a chip of foam of radius `size` on the water, drifting off at (vx, vz) for `life` seconds. */
+  chip(x: number, z: number, vx: number, vz: number, size: number, life: number) {
+    const i = this.claim(x, 0, z, vx, 0, vz, size, life, 0);
+    this.foam[i] = 1;
+  }
+
+  private claim(x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, life: number, delay: number) {
+    const i = this.cursor;
+    this.cursor = (this.cursor + 1) % this.mesh.count;
+    if (this.life[i] <= 0) this.alive++;
+    const i3 = i * 3;
+    this.pos[i3] = x;
+    this.pos[i3 + 1] = y;
+    this.pos[i3 + 2] = z;
+    this.vel[i3] = vx;
+    this.vel[i3 + 1] = vy;
+    this.vel[i3 + 2] = vz;
+    this.age[i] = -Math.max(0, delay);
+    this.life[i] = Math.max(0.05, life);
+    this.size[i] = size;
+    this.mesh.setMatrixAt(i, HIDDEN);
+    this.mesh.visible = true;
+    return i;
+  }
+
+  update(dt: number) {
+    if (this.alive === 0) {
+      this.mesh.visible = false;
+      return;
+    }
+    let alive = 0;
+    for (let i = 0; i < this.mesh.count; i++) {
+      if (this.life[i] <= 0) continue;
+      const a = (this.age[i] += dt);
+      const i3 = i * 3;
+      // Still waiting its turn.
+      if (a <= 0) {
+        alive++;
+        continue;
+      }
+      const u = a / this.life[i];
+      let r = 0;
+      if (this.foam[i]) {
+        const damp = Math.exp(-2.2 * dt);
+        this.vel[i3] *= damp;
+        this.vel[i3 + 2] *= damp;
+        this.pos[i3] += this.vel[i3] * dt;
+        this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
+        this.pos[i3 + 1] = this.waterAt(this.pos[i3], this.pos[i3 + 2]) + 0.03;
+        // Spreads out of the splash, then the sea takes it back.
+        if (u < 1) r = this.size[i] * Math.min(1, u * 7) * (1 - smoothstep(0.4, 1, u));
+      } else {
+        this.vel[i3 + 1] -= GRAVITY * dt;
+        this.pos[i3] += this.vel[i3] * dt;
+        this.pos[i3 + 1] += this.vel[i3 + 1] * dt;
+        this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
+        const fell = this.vel[i3 + 1] < 0 && this.pos[i3 + 1] < this.waterAt(this.pos[i3], this.pos[i3 + 2]);
+        // Holds its size on the way up and thins on the way down.
+        if (!fell && u < 2) r = this.size[i] * (1 - 0.5 * Math.min(1, u * u));
+      }
+      if (r <= 0) {
+        this.life[i] = 0;
+        this.mesh.setMatrixAt(i, HIDDEN);
+        continue;
+      }
+      alive++;
+      _p.set(this.pos[i3], this.pos[i3 + 1], this.pos[i3 + 2]);
+      if (this.foam[i]) _m.compose(_p, _q.setFromEuler(_e.set(0, i * 2.4, 0)), _s.set(r, r * 0.2, r * 0.8));
+      else _m.compose(_p, _q.setFromEuler(_e.set(a * 5 + i, i * 1.7, 0)), _s.set(r, r, r));
+      this.mesh.setMatrixAt(i, _m);
+    }
+    this.alive = alive;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.mesh.visible = alive > 0;
   }
 }
