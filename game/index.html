@@ -127,12 +127,17 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Click gear for a closer look · drag it to the tray to get it ready · click the map to choose where to dive · Esc back</div>
+      <div id="wb-hint" class="small">点击桌后半隐藏工作台 · 从左右物资箱拖到中央工作垫进行合成 · 右侧托盘用于准备装备 · Esc 返回</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
     <div id="wb-ui" class="hidden">
       <div id="wb-tip" class="hidden"></div>
+      <div id="wb-synth-hud" class="hidden" aria-live="polite">
+        <strong>FIELD SYNTHESIS · 合成工作台</strong>
+        <span id="wb-synth-status">从左右物资箱拖入中央工作垫</span>
+        <small id="wb-synth-cost">0 TOKENS · 0/2</small>
+      </div>
       <div id="wb-chart" class="hidden">
         <div id="wb-chart-bg"></div>
         <!-- The 3D chart itself, held up over the blurred table; #wb-paper only reserves its place in the layout. -->

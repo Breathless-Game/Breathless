@@ -1044,6 +1044,28 @@ button.link {
   backdrop-filter: blur(8px);
 }
 
+#wb-synth-hud {
+  position: absolute;
+  left: 50%;
+  top: 20px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 3px;
+  min-width: 250px;
+  padding: 10px 16px;
+  border: 1px solid rgba(184, 211, 173, 0.42);
+  border-radius: 12px;
+  background: rgba(24, 31, 24, 0.84);
+  color: #e6f0db;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  pointer-events: none;
+}
+
+#wb-synth-hud strong { letter-spacing: 0.08em; font-size: 11px; color: #b9d9a8; }
+#wb-synth-status { font-size: 13px; }
+#wb-synth-cost { color: #f0ca78; font-size: 11px; }
+
 .wb-tip-title {
   font-weight: 900;
 }

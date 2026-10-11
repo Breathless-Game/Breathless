@@ -2,7 +2,7 @@
 export const LESSONS = [
   { id: 'book', title: '先翻开你的潜水手册', body: '按 B 打开书。彩色书签是目录，插画把每个操作拆成小步骤。', action: '按 B 翻开手册', chapter: 'prepare' },
   { id: 'bench', title: '来到装备工作台', body: '点击 START 鱼或按 Enter。连接钱包后进入工作台；连接本身不需要付费。', action: 'START → 工作台', chapter: 'prepare' },
-  { id: 'pack', title: '把捕捞网装进准备区', body: '点击桌上的网查看，再选「放入准备区」；也可以直接拖到右侧托盘。', action: '把捕捞网放入 READY 托盘', chapter: 'assembly' },
+  { id: 'pack', title: '整理装备与合成物资', body: '桌后军绿色工作台升起后，从左右物资箱拖入中央灰色工作垫；潜水装备仍可拖到右侧托盘。', action: '拖入中央工作垫或 READY 托盘', chapter: 'assembly' },
   { id: 'chart', title: '展开海图，选择水域', body: '点击桌上的折叠海图。初次推荐平静的峡湾；确认装备后点击「下潜」。', action: '打开海图', chapter: 'prepare' },
   { id: 'launch', title: '选择你的呼吸输入', body: '初次推荐「Play with keyboard」。摄像头模式需要传感器和校准；键盘模式无需摄像头。', action: '选择键盘或摄像头，开始下潜', chapter: 'dive' },
   { id: 'descend', title: '练习向下游', body: '键盘 / 模拟模式按住 Shift，再按 S 或 ↓ 游到 3 米。摄像头模式以实际检测信号为准。', action: '保持 HOLDING，游到 3 m', chapter: 'dive' },
