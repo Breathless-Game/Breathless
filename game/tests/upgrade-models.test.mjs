@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,29 @@ function count(model, name) {
   return found;
 }
 
+/**
+ * A level must change the actual display geometry, rather than only changing a
+ * material or the metadata on the wrapper.  Hash world-space vertices after
+ * the two-unit normalization so this also catches regressions where two raw
+ * builders happen to normalize to the same shape.
+ */
+function geometrySignature(model) {
+  model.updateMatrixWorld(true);
+  const values = [];
+  model.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const position = object.geometry.getAttribute('position');
+    const vertices = [];
+    for (let index = 0; index < position.count; index++) {
+      const point = new THREE.Vector3().fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld);
+      // Quantize to retain shape differences while ignoring harmless float noise.
+      vertices.push(Math.round(point.x * 1e5), Math.round(point.y * 1e5), Math.round(point.z * 1e5));
+    }
+    values.push(object.name, position.count, object.geometry.index?.count ?? 0, ...vertices);
+  });
+  return createHash('sha256').update(JSON.stringify(values)).digest('hex');
+}
+
 test('all 36 display models are centred, finite, and fit the two-unit workbench API', () => {
   assert.equal(UPGRADES.length, 12); // 11 gear pieces and the whole boat (workbench.ts)
   for (const definition of UPGRADES) {
@@ -65,6 +89,13 @@ test('all 36 display models are centred, finite, and fit the two-unit workbench 
       for (const surface of surfaces(model)) assert.equal(surface.flatShading, true, `${context} keeps faceted materials`);
       assert.doesNotThrow(() => JSON.stringify(model.userData));
     }
+  }
+});
+
+test('each upgrade tier has a distinct normalized display geometry', () => {
+  for (const definition of UPGRADES) {
+    const signatures = [1, 2, 3].map((level) => geometrySignature(buildUpgradeModel(definition.id, level)));
+    assert.equal(new Set(signatures).size, signatures.length, `${definition.id} tiers must not be geometry-identical`);
   }
 });
 
