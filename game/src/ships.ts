@@ -232,7 +232,8 @@ export class Shipyard {
       camera.position.copy(c).add(new T.Vector3(0, 0, size.z + 20)); camera.lookAt(c); renderer.render(scene,camera);
       this.thumbnails.push(renderer.domElement.toDataURL());
     }
-    renderer.dispose();
+    // A throwaway renderer: release its WebGL context now rather than at GC.
+    renderer.forceContextLoss(); renderer.dispose();
   }
   private draw() {
     queueMicrotask(() => this.animateWater());

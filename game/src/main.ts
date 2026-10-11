@@ -39,6 +39,7 @@ import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
 import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
 import { NftQueue } from './nft-queue';
+import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
@@ -694,6 +695,7 @@ hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
   sold(sales) {
+    chainFish.departed(sales.map((s) => s.fish.assetId));
     hud.setBank(bank);
     const total = sales.reduce((s, x) => s + x.result.pearls, 0);
     // One toast and one balance read per batch: the most valuable fish stands for the rest.
@@ -703,6 +705,19 @@ const nftQueue = new NftQueue(bank, saveBank, {
   },
 });
 const vault = new Vault(bank, nftQueue);
+// The wallet's fish NFTs on chain fill in whatever the local save lacks (a cleared browser, another device).
+const chainFish = new ChainFishSync({
+  bank,
+  owner: () => walletState().owner,
+  busy: () => nftQueue.busy,
+  holds: (f) => nftQueue.holds(f),
+  changed() {
+    saveBank();
+    hud.setBank(bank);
+    vault.refresh();
+    nftQueue.kick(); // newly listed older fish still get their collection check
+  },
+});
 const aquarium = new Aquarium(bank, {
   pan(u) {
     aquariumPan = u;
@@ -1711,7 +1726,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
   { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); } },
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); void chainFish.run(); } },
   { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
   // The field guide is a book on the right side of the workbench. Keep the title
   // rope for the three primary destinations so utility controls don't become fish.
@@ -2040,6 +2055,7 @@ async function logOut() {
     if (diving()) goToMenu();
     nftQueue.stop();
     gearSync.stop();
+    chainFish.stop();
     await disconnectWallet(); // drops the owner: the listener below reloads
   } finally {
     loggingOut = false;
@@ -2064,6 +2080,8 @@ function loadWalletProgress() {
   nftQueue.start();
   // And bring its Boat and Dive Kit NFTs up to date (minting them the first time).
   if (GEAR_NFT_ON) gearSync.start();
+  // And add the fish NFTs it owns on chain that this browser's save does not have.
+  chainFish.start();
 }
 
 onWalletChange((s) => {
