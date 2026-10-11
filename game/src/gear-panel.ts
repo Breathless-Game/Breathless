@@ -42,7 +42,7 @@ function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot)
     case 'reel': return `恢复倍率 ${Math.round(stats.reelRecovery * 100)}%`;
     case 'fins': return `${stats.swimSpeed.toFixed(1)} m/s 游速 · ${stats.swimAcceleration.toFixed(1)} 加速度`;
     case 'tank': return `${stats.emergencySeconds.toFixed(1)} s 紧急返航窗口`;
-    case 'lamp': return `${stats.lampDistance.toFixed(0)} m 光距 · ${Math.round(stats.lampAngle * 57.3)}° 光束`;
+    case 'lamp': return `${stats.lampDistance.toFixed(0)} m 光距 · 直射 ${Math.round(stats.lampIntensity)} · 散射 ${Math.round(stats.lampScatter * 100)}% · ${Math.round(stats.lampAngle * 57.3)}°`;
   }
 }
 
@@ -53,7 +53,7 @@ function statCompare(before: ReturnType<typeof deriveStats>, after: ReturnType<t
     case 'reel': return `回收效率 ${Math.round(before.reelRecovery * 100)}% → ${Math.round(after.reelRecovery * 100)}%`;
     case 'fins': return `游速 ${before.swimSpeed.toFixed(1)} → ${after.swimSpeed.toFixed(1)} m/s`;
     case 'tank': return `返航窗口 ${before.emergencySeconds.toFixed(1)} → ${after.emergencySeconds.toFixed(1)} s`;
-    case 'lamp': return `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 角度 ${Math.round(before.lampAngle * 57.3)} → ${Math.round(after.lampAngle * 57.3)}°`;
+    case 'lamp': return `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 直射 ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} · 散射 ${Math.round(before.lampScatter * 100)}% → ${Math.round(after.lampScatter * 100)}% · ${Math.round(after.lampAngle * 57.3)}°`;
   }
 }
 

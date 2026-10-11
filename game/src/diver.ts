@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Splash } from './fx';
 import { buildFishingNetMesh } from './gear';
+import { lampActivation, lampDistanceAttenuation, lampProfile, type LampProfile } from './lamp-lighting';
 import type { RenderQuality } from './render-quality';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
@@ -57,7 +58,12 @@ export class Diver {
   /** Small head-mounted lamp housing, separate from the actual PointLight. */
   private lampGroup = new THREE.Group();
   private lampLens: THREE.Mesh | null = null;
+  private lampBeam: THREE.Mesh;
+  private lampBeamMaterial: THREE.MeshBasicMaterial;
+  private lampOptics: LampProfile = lampProfile(1);
   private lampLevel = 1;
+  private lampNight = 0;
+  private lampEffects = true;
   private breathPoint: THREE.Object3D;
   private breathOrigin = new THREE.Vector3();
   private bubbleOffset = new THREE.Vector3();
@@ -163,10 +169,23 @@ export class Diver {
     this.lampGroup.rotation.x = Math.PI / 2;
     this.lampLens = new THREE.Mesh(
       new THREE.CylinderGeometry(0.1, 0.12, 0.18, 6),
-      mat('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 2.4, metalness: 0.1, roughness: 0.25 }),
+      mat('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 0, metalness: 0.1, roughness: 0.25 }),
     );
     this.lampGroup.add(this.lampLens);
     this.head.add(this.lampGroup);
+
+    // A single low-poly cone makes suspended particles visible in the beam.
+    // The real SpotLight still provides direct illumination; this mesh only
+    // represents the volume between the lens and the water.
+    this.lampBeamMaterial = new THREE.MeshBasicMaterial({
+      color: '#bcecff', transparent: true, opacity: 0, depthWrite: false,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+    this.lampBeam = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 8, 1, true), this.lampBeamMaterial);
+    this.lampBeam.name = 'diver-lamp-scatter';
+    this.lampBeam.rotation.z = -Math.PI / 2;
+    this.lampBeam.renderOrder = 1;
+    this.body.add(this.lampBeam);
 
     // The old design called this item a fishing rod; the fused game design
     // uses its shaft and hoop as an underwater net. Keep the model pivot at
@@ -189,6 +208,7 @@ export class Diver {
     this.headlamp.position.set(1.4, 0.2, 0.6);
     this.headlamp.target.position.set(4.5, 0.05, 0.6);
     this.body.add(this.headlamp, this.headlamp.target);
+    this.headlamp.decay = this.lampOptics.decay;
     scene.add(this.group);
   }
 
@@ -453,17 +473,69 @@ export class Diver {
   /** Set lamp visual tier and its light reach; intensity still follows depth. */
   setLampLevel(level: number) {
     this.lampLevel = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
-    this.headlamp.distance = [18, 28, 38][this.lampLevel - 1];
-    this.headlamp.angle = [0.65, 0.85, 1.05][this.lampLevel - 1];
-    this.lampMaxIntensity = [48, 64, 82][this.lampLevel - 1];
+    this.lampOptics = lampProfile(this.lampLevel);
+    this.headlamp.distance = this.lampOptics.distance;
+    this.headlamp.angle = this.lampOptics.angle;
+    this.headlamp.penumbra = this.lampOptics.penumbra;
+    this.headlamp.decay = this.lampOptics.decay;
+    this.lampMaxIntensity = this.lampOptics.intensity;
     this.lampGroup.scale.setScalar(this.lampLevel === 3 ? 1.18 : this.lampLevel === 2 ? 1.08 : 1);
   }
 
   /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
-  setLampStats(distance: number, intensity: number, angle: number) {
-    this.headlamp.distance = THREE.MathUtils.clamp(distance, 1, 100);
-    this.headlamp.angle = THREE.MathUtils.clamp(angle, 0.2, 1.5);
-    this.lampMaxIntensity = Math.max(1, intensity);
+  setLampStats(distance: number, intensity: number, angle: number, scatter = this.lampOptics.scatter, decay = this.lampOptics.decay, penumbra = this.lampOptics.penumbra, extinction = this.lampOptics.extinction) {
+    this.lampOptics = {
+      distance: THREE.MathUtils.clamp(Number.isFinite(distance) ? distance : 18, 1, 100),
+      intensity: Math.max(1, Number.isFinite(intensity) ? intensity : 48),
+      angle: THREE.MathUtils.clamp(Number.isFinite(angle) ? angle : 0.65, 0.2, 1.5),
+      scatter: THREE.MathUtils.clamp(Number.isFinite(scatter) ? scatter : 0.12, 0, 1),
+      decay: THREE.MathUtils.clamp(Number.isFinite(decay) ? decay : 2, 0, 4),
+      penumbra: THREE.MathUtils.clamp(Number.isFinite(penumbra) ? penumbra : 0.55, 0, 1),
+      extinction: Math.max(0, Number.isFinite(extinction) ? extinction : 0.03),
+    };
+    this.headlamp.distance = this.lampOptics.distance;
+    this.headlamp.angle = this.lampOptics.angle;
+    this.headlamp.penumbra = this.lampOptics.penumbra;
+    this.headlamp.decay = this.lampOptics.decay;
+    this.lampMaxIntensity = this.lampOptics.intensity;
+  }
+
+  /** Set the environmental mix used by the beam's depth transmission. */
+  setLampEnvironment(nightMix: number, effectsEnabled = true) {
+    this.lampNight = THREE.MathUtils.clamp(Number.isFinite(nightMix) ? nightMix : 0, 0, 1);
+    this.lampEffects = effectsEnabled;
+  }
+
+  /**
+   * Drive the direct spotlight and its low-poly suspended-particle volume.
+   * Three.js applies the inverse-square falloff to the SpotLight itself; the
+   * shared attenuation curve keeps the visible scatter beam in step with it.
+   */
+  private updateLamp(depth: number) {
+    const activation = this.lampEffects ? lampActivation(depth, this.lampNight) : 0;
+    this.headlamp.intensity = this.lampMaxIntensity * activation;
+
+    const beamLength = Math.max(0.5, this.lampOptics.distance * 0.48);
+    const beamRadius = Math.max(0.045, Math.tan(Math.min(this.lampOptics.angle, 1.3)) * beamLength * 0.1);
+    this.lampBeam.position.set(1.4 + beamLength * 0.5, 0.2, 0.6);
+    this.lampBeam.scale.set(beamRadius, beamLength, beamRadius);
+
+    const transmission = lampDistanceAttenuation(beamLength * 0.55, this.lampOptics);
+    const scatter = activation * this.lampOptics.scatter * (0.55 + transmission * 0.45);
+    this.lampBeamMaterial.opacity = THREE.MathUtils.clamp(scatter * 0.68, 0, 0.22);
+    this.lampBeam.visible = this.lampBeamMaterial.opacity > 0.001;
+
+    if (this.lampLens) {
+      const material = this.lampLens.material as THREE.MeshStandardMaterial;
+      material.emissiveIntensity = activation > 0 ? 0.35 + activation * 1.7 : 0;
+    }
+  }
+
+  private setLampOff() {
+    this.headlamp.intensity = 0;
+    this.lampBeamMaterial.opacity = 0;
+    this.lampBeam.visible = false;
+    if (this.lampLens) (this.lampLens.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
   }
 
   /** Configure how quickly the net can be swung again after a catch attempt. */
@@ -586,7 +658,7 @@ export class Diver {
       this.netArm.rotation.z = -0.35 + Math.sin(time * 1.5) * 0.05;
     }
 
-    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
+    this.updateLamp(depth);
     this.updateWaterContact(dt, heave);
 
     this.bubbleUpdateAccumulator += dt;
@@ -626,11 +698,12 @@ export class Diver {
     this.netArm.rotation.z = SIT_ARM + Math.sin(time * 0.9) * 0.04;
     this.showNet(false);
     this.head.rotation.z = SIT_HEAD + Math.sin(time * 0.5) * 0.06;
-    this.headlamp.intensity = 0;
+    this.setLampOff();
   }
 
   /** The arc off the bow: up and out, then down into the water, rolling head first. */
   private updateJump(dt: number) {
+    this.setLampOff();
     const j = this.jump!;
     j.t = Math.min(1, j.t + dt / JUMP_S);
     const u = j.t;

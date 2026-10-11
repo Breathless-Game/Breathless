@@ -6,6 +6,8 @@ import ts from 'typescript';
 // Stand-in for wallet.ts: equipment.ts only needs storageKey, and the real one pulls in Umi and Phantom.
 // It maps names to the pre-namespacing keys so the fixtures below keep their shape.
 const WALLET_STUB = `data:text/javascript;base64,${Buffer.from("export const storageKey = (name) => (name.startsWith('deepbreath.') ? name : 'deepbreath.' + name);").toString('base64')}`;
+const lampLightingCode = 'export const lampProfile=(level,path)=>{const tier=Math.max(1,Math.min(3,Math.floor(Number(level)||1)));const wide=path==="wideLamp";const profiles=wide?[[18,48,.65,2,.55,.12,.03],[24,60,1.03,2,.8,.2,.045],[32,74,1.25,2,.9,.24,.05]]:[[18,48,.65,2,.55,.12,.03],[33,74,.52,2,.3,.09,.018],[48,102,.43,2,.24,.075,.014]];const p=profiles[tier-1];return {distance:p[0],intensity:p[1],angle:p[2],decay:p[3],penumbra:p[4],scatter:p[5],extinction:p[6]};};';
+const LAMP_LIGHTING_STUB = `data:text/javascript;base64,${Buffer.from(lampLightingCode).toString('base64')}`;
 
 // Transpile market.ts and equipment.ts in memory to keep tests usable on Node 20.
 async function load(path) {
@@ -13,7 +15,9 @@ async function load(path) {
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   });
-  const code = outputText.replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`);
+  const code = outputText
+    .replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`)
+    .replace(/from ['"]\.\/lamp-lighting['"]/g, `from '${LAMP_LIGHTING_STUB}'`);
   return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
 }
 
