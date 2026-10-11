@@ -76,7 +76,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 赛道 | Social Good（呼吸训练 / 肺部健康意识），最终以提交时为准 |
+| 赛道 | Maverick |
 | MLH 奖项目标 | **Best Use of Presage**（憋气检测、心率）· **Best Use of Solana**（鱼 NFT、交易）· 后续可加 ElevenLabs（音效/旁白）、Tiger Data（市场与经济数据）、.Tech 域名 |
 
 ### 多人范围（重要）

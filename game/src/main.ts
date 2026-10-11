@@ -15,9 +15,9 @@ import { LazySettingsDesk as SettingsDesk } from './lazy-panels';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { LazyAquarium as Aquarium } from './lazy-panels';
-import { fishFood, type FishFoodDef } from './fish-food';
+import { setFoodPrices, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
-import { UPGRADES, type UpgradeId } from './upgrades';
+import { syncUpgradePrices, UPGRADES, type UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import {
@@ -32,7 +32,7 @@ import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { activePath, applyPearlSpend, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planPearlSpend, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, spendablePearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { activePath, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planPearlSpend, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, setUpgradeCosts, spendablePearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { GearSync } from './gear-sync';
 import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
@@ -52,7 +52,7 @@ import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { SynthesisPanel } from './synthesis-panel';
-import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
+import { canCraft, loadSynthesis, saveSynthesis, setSynthesisCosts, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
 import { isAction, keysFor, openControls } from './controls';
 import { Trip, TripReport } from './trip';
@@ -60,7 +60,26 @@ import { TankTable } from './aquarium-tank';
 import { HealthDesk } from './health-desk';
 import type { LessonId } from './tutorial';
 import { initI18n, onLangChange, pickName, t } from './i18n';
-import { createPurchaseStore, PaymentInProgressError, PaymentPendingError, PENDING_PURCHASES, type PendingPurchase } from './payment-safety';
+import { PaymentInProgressError, PaymentPendingError } from './payment-safety';
+import {
+  biteUnsettled,
+  onPlayerChainChange,
+  pendingPlayerPurchases,
+  playerChain,
+  playerChainStatus,
+  PreviousPaymentSettledError,
+  reconcilePlayerPurchases,
+  recordSharkBite,
+  refreshPlayerChain,
+  sendPlayerPurchase,
+  sendSetPath,
+  settleOwedBite,
+  type OwnerTxContext,
+  type PurchasePlan,
+} from './player-chain';
+import { craftQuote, equipmentFromChain, gamePrices, growthByFishId, planFeed, synthesisFromChain, synthQuote, upgradeQuote, type FeedBlock } from './player-sync';
+import { buyUpgrade as buyUpgradeIx, craft as craftIx, feed as feedIx, MAX_FISH_PER_CALL, setPath as setPathIx, synthUpgrade as synthUpgradeIx } from './player-state';
+import { playerStateErrorName, type PlayerStateErrorName } from './player-state-errors';
 import { explorerTx } from './wallet-storage';
 
 // One UI language (Settings → Language): <html lang> and index.html's static text.
@@ -484,6 +503,9 @@ document.getElementById('shark-bitten-ok')!.addEventListener('click', () => shar
  * follows upgrade levels sees a reset exactly as it sees a purchase.
  */
 function resetDiveGearAfterBite(): DiveGearReset['dropped'] {
+  // On chain it is shark_bite, signed by the session key (no wallet prompt mid-dive). It never
+  // blocks the dive: if it cannot go now it is owed and retried at the next login or purchase.
+  void recordSharkBite();
   const { state, dropped } = resetDiveGear(equipment);
   Object.assign(equipment, state);
   refreshEquipment();
@@ -734,6 +756,12 @@ const aquariumTable = new TankTable({
 const aquarium = new Aquarium(bank, {
   table: aquariumTable,
   buyFood: buyAquariumFood,
+  chainGrowth() {
+    const snap = playerChain();
+    return snap ? growthByFishId(snap.aquarium, bank.map((f) => f.id)) : null;
+  },
+  feedLocked: () => chainBlocked(),
+  onChainChange: (cb) => void onPlayerChainChange(cb),
   pearls: () => spendablePearls(equipment),
   message(text) {
     hud.message(text, 1600);
@@ -754,7 +782,8 @@ const health = new HealthLog();
 const trip = new Trip();
 const tripReport = new TripReport();
 const report = new Report(health);
-const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => selectEquipmentPath(slot, path));
+const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => void selectEquipmentPath(slot, path));
+gear.setLock(() => chainBlocked());
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
 diver.setNetLevel(currentTier().level);
@@ -823,127 +852,99 @@ async function syncPearls(earned = 0) {
   }
 }
 
-let foodBuying = false;
+// ---- On-chain player state (player-chain.ts) -------------------------------------------
+// Gear levels, module paths, synthesis materials and aquarium growth live in the player_state
+// program; the local saves are only a cache of its last read. Nothing here bumps a level: each
+// purchase is one player_state instruction (it burns the PEARL itself), and once it landed the
+// accounts are read again and the game renders from them (applyPlayerChain).
+
+let chainRetryTimer = 0;
 /**
- * Buy one selected aquarium food with on-chain PEARL, like gear upgrades and synthesis.
- * Resolves with the PEARL burned, or null when nothing was spent. A food paid for earlier whose
- * payment only confirmed later (see deliverPurchase) is poured first, without a new payment.
+ * Login: read the player's accounts (retrying later on failure; purchases stay locked meanwhile),
+ * then settle payments whose confirmation was lost and a shark bite owed from an earlier dive.
  */
-async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<number | null> {
-  if (foodBuying) return null;
-  foodBuying = true;
+async function startPlayerChain(retryMs = 15_000) {
+  window.clearTimeout(chainRetryTimer);
+  if (!walletState().owner) return;
   try {
-    if (takeFoodCredit(food.id)) {
-      hud.message(t(`Poured ${food.name} paid earlier`, `已使用之前付款的${food.nameZh}`), 1600);
-      return food.price;
-    }
-    return await spendPearlsFor(food.price, t('Food purchase failed', '饲料购买失败'), t(`for ${food.name}`, `才能买${food.nameZh}`), { kind: 'food', food: food.id });
-  } finally {
-    foodBuying = false;
+    await refreshPlayerChain();
+  } catch (e) {
+    console.warn('player_state read failed', e);
+    chainRetryTimer = window.setTimeout(() => void startPlayerChain(Math.min(retryMs * 2, 120_000)), retryMs);
+    return;
   }
+  // Lost confirmations first: a purchase among them may carry the owed bite (or have raised a
+  // level after it), and a bite re-sent before it settles could take that level back.
+  await reconcilePurchases();
+  await settleOwedBite();
 }
 
-/** What a PEARL payment buys. Stored with a payment whose confirmation was lost, so keep it JSON-safe. */
-type Purchase =
-  | { kind: 'food'; food: FishFoodDef['id'] }
-  | { kind: 'upgrade'; slot: UpgradeSlot; level: number }
-  | { kind: 'craft'; recipe: RecipeDef['id'] }
-  | { kind: 'synth-upgrade'; slot: UpgradeSlot; level: number };
-
-const FOOD_CREDITS = 'food.credits';
-/** Foods paid on-chain whose payment confirmed only after the pour gave up: food id -> burn signatures. */
-function foodCredits(): Record<string, string[]> {
+/** Set once this wallet's gear cache came from a chain read (older saves are test data). */
+const CHAIN_CACHE = 'player-state.cached';
+function chainCached(): boolean {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(storageKey(FOOD_CREDITS)) ?? '{}');
-    return raw && typeof raw === 'object' ? (raw as Record<string, string[]>) : {};
+    return localStorage.getItem(storageKey(CHAIN_CACHE)) === '1';
   } catch {
-    return {};
-  }
-}
-function saveFoodCredits(all: Record<string, string[]>) {
-  try { localStorage.setItem(storageKey(FOOD_CREDITS), JSON.stringify(all)); } catch (e) { console.error('could not save paid food', e); }
-}
-function takeFoodCredit(food: FishFoodDef['id']): boolean {
-  const all = foodCredits();
-  const list = Array.isArray(all[food]) ? all[food] : [];
-  if (!list.length) return false;
-  list.shift();
-  all[food] = list;
-  saveFoodCredits(all);
-  return true;
-}
-
-/**
- * Hand over what a confirmed PEARL burn bought. The one delivery path, both for a payment
- * confirmed right away and for one settled later (`late`, from a pending record). Returns false,
- * logging loudly with the signature, if the purchase can no longer apply (the PEARL is burned).
- */
-function deliverPurchase(p: Purchase, signature: string, late: boolean): boolean {
-  const lost = (why: string) => {
-    console.error(`PEARL burn ${signature} (${explorerTx(signature)}) was paid but not delivered: ${why}`, p);
     return false;
-  };
-  switch (p?.kind) {
-    case 'food': {
-      if (!late) return true; // the aquarium pours it right now
-      // Too late to pour into that tank: keep one paid pour of this food, bound to the burn.
-      const all = foodCredits();
-      const list = Array.isArray(all[p.food]) ? all[p.food] : [];
-      if (!list.includes(signature)) list.push(signature);
-      all[p.food] = list;
-      saveFoodCredits(all);
-      return true;
-    }
-    case 'upgrade': {
-      const tier = nextSlotTier(equipment, p.slot);
-      if (!tier || tier.level !== p.level) return lost(`${p.slot} is no longer one level below ${p.level}`);
-      // The burn already came off the cached balance (payAndDeliver) or a fresh read: burned = 0.
-      Object.assign(equipment, applySlotUpgrade(equipment, { slot: p.slot, tier }, 0));
-      refreshEquipment();
-      return true;
-    }
-    case 'craft': {
-      const next = craftRecipe(synthesisState, p.recipe);
-      if (!next) return lost(`materials for ${p.recipe} are missing`);
-      synthesisState = next;
-      saveSynthesis(synthesisState);
-      return true;
-    }
-    case 'synth-upgrade': {
-      const tier = nextSlotTier(equipment, p.slot);
-      if (!tier || tier.level !== p.level) return lost(`${p.slot} is no longer one level below ${p.level}`);
-      if (synthesisState.crafted.composite < 1) return lost('no composite plate left');
-      Object.assign(equipment, applySlotUpgrade(equipment, { slot: p.slot, tier }, 0));
-      synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
-      saveSynthesis(synthesisState);
-      refreshEquipment();
-      return true;
-    }
-    default:
-      return lost('unknown purchase');
   }
 }
 
-/** Burn `cost` on-chain PEARL for `purchase`, then deliver it. False when paid but not delivered; throws when nothing was paid. */
-async function payAndDeliver(cost: number, purchase: Purchase): Promise<boolean> {
-  // A payment still confirming from before: settle it first, and never stack a second payment on
-  // a state it may still change (it could deliver this very upgrade).
-  if (pendingPurchases().load().length) {
-    await reconcilePurchases();
-    if (pendingPurchases().load().length) throw new PaymentInProgressError();
-    throw new Error(t('A previous payment just settled · try again', '上一笔付款刚刚结算 · 请重试'));
+/** Take over the latest on-chain read: the Config's prices, then levels, paths, materials and growth. */
+function applyPlayerChain() {
+  const snap = playerChain();
+  if (snap) {
+    try {
+      localStorage.setItem(storageKey(CHAIN_CACHE), '1');
+    } catch {
+      // only a cache marker
+    }
+    try {
+      const prices = gamePrices(snap.config.prices);
+      setUpgradeCosts(prices.upgrade);
+      syncUpgradePrices();
+      setSynthesisCosts(prices.synthUpgrade, prices.recipe);
+      setFoodPrices(prices.food);
+    } catch (e) {
+      console.error('player_state Config prices out of range', e);
+    }
+    // A shark bite the chain does not show yet already took the dive gear back here.
+    Object.assign(equipment, equipmentFromChain(equipment, snap.player, biteUnsettled()));
+    synthesisState = synthesisFromChain(snap.player, snap.config.prices);
+    saveSynthesis(synthesisState);
   }
-  const signature = await (await nftQueue.loadPearl()).spendPearls(cost, purchase);
-  Object.assign(equipment, applyPearlSpend(equipment, cost));
-  const ok = deliverPurchase(purchase, signature, false);
-  refreshEquipment();
-  void syncPearls();
-  return ok;
+  refreshEquipment(); // saves the equipment cache; repaints the gear panel, HUD and workbench (the aquarium listens itself)
+}
+onPlayerChainChange(applyPlayerChain);
+
+/** Why nothing can be bought or changed yet: the on-chain player state has not been read. */
+function chainBlocked(): string | null {
+  if (!walletState().owner) return t('Connect a wallet first', '请先连接钱包');
+  const { status, error } = playerChainStatus();
+  if (status === 'ready') return null;
+  if (status === 'error') return `${t('Could not read your gear from the chain · purchases unavailable', '无法读取链上装备 · 暂时无法购买')}${error ? ` · ${error}` : ''}`;
+  return t('Reading your gear from the chain…', '正在读取链上装备…');
 }
 
-const paidNotApplied = () => t('Paid, but the purchase could not be applied (details in the console)', '已付款，但购买未能生效（详情见控制台）');
+/** chainBlocked(), then the PEARL balance (pearlPurchaseBlocked). */
+function purchaseBlocked(): string | null {
+  return chainBlocked() ?? pearlPurchaseBlocked();
+}
 
-/** Show a payment error as the player should read it (with an explorer link while the burn is still confirming). Returns the text. */
+const PROGRAM_ERRORS: Partial<Record<PlayerStateErrorName, readonly [string, string]>> = {
+  InsufficientPearl: ['Not enough PEARL', 'PEARL 不足'],
+  MaxLevel: ['Already at the top level', '已是最高等级'],
+  MissingMaterials: ['Materials missing', '材料不足'],
+  NoComposite: ['Craft one composite plate first', '先合成复合护板'],
+  PathLocked: ['Upgrade this slot to Lv2 first', '先把这件装备升到 Lv2'],
+  FullyGrown: ['Every fish here is fully grown', '这里的鱼都长到最大了'],
+  FeedCooldown: ['The school is still full', '鱼群还在饱腹冷却'],
+  Unauthorized: ['This wallet may not change that player', '此钱包无权修改该玩家'],
+};
+
+const feedBlockText = (why: FeedBlock | null) =>
+  why === 'max' ? t('Every fish here is fully grown', '这里的鱼都长到最大了') : t('The school is still full', '鱼群还在饱腹冷却');
+
+/** Show a payment error as the player should read it (with an explorer link while it is still confirming). Returns the text. */
 function showPaymentError(e: unknown, failure: string): string {
   if (e instanceof PaymentInProgressError) {
     const text = t('Another payment is in progress', '另一笔付款正在进行');
@@ -956,32 +957,34 @@ function showPaymentError(e: unknown, failure: string): string {
     hud.message(text, 9000, { href: explorerTx(e.signature), label: t('View on explorer', '在区块浏览器中查看') });
     return text;
   }
-  const text = `${failure} · ${(e as Error)?.message ?? e}`;
+  if (e instanceof PreviousPaymentSettledError) {
+    const text = t('A previous payment just settled · try again', '上一笔付款刚刚结算 · 请重试');
+    hud.message(text, 2400);
+    return text;
+  }
+  const code = playerStateErrorName(e);
+  const known = code ? PROGRAM_ERRORS[code] : undefined;
+  const reason = known ? t(known[0], known[1]) : code ?? (e as Error)?.message ?? String(e);
+  const text = `${failure} · ${reason}`;
   hud.message(text, 1800);
   return text;
 }
 
-const pendingPurchases = () => createPurchaseStore(() => storageKey(PENDING_PURCHASES));
 let reconcileTimer = 0;
-/** Look up this wallet's unconfirmed PEARL payments: deliver the ones that landed (once), drop the rest. */
+/** Settle this wallet's payments whose confirmation was lost: by re-reading the accounts first, then by signature. Never re-sends. */
 async function reconcilePurchases() {
   window.clearTimeout(reconcileTimer);
-  if (!walletState().owner) return;
-  // The usual case: nothing pending, and no chain code gets loaded.
-  if (!pendingPurchases().load().length) return;
+  if (!walletState().owner || !pendingPlayerPurchases().length) return;
   try {
-    const pearl = await nftQueue.loadPearl();
-    const report = await pearl.reconcilePurchases((rec: PendingPurchase) => {
-      if (!deliverPurchase(rec.what as Purchase, rec.signature, true)) hud.message(paidNotApplied(), 2400);
-    });
+    const report = await reconcilePlayerPurchases();
     if (report.delivered.length) {
       hud.message(t('A payment that was still confirming went through · purchase applied', '之前确认中的付款已到账 · 购买已生效'), 2400);
       void syncPearls();
     }
-    if (report.dropped.length) console.info('PEARL payments that never landed (nothing was burned):', report.dropped);
+    if (report.dropped.length) console.info('player_state payments that never landed (nothing was burned):', report.dropped);
     if (report.kept.length) scheduleReconcile();
   } catch (e) {
-    console.warn('could not settle pending PEARL payments yet', e);
+    console.warn('could not settle pending payments yet', e);
     scheduleReconcile();
   }
 }
@@ -991,7 +994,7 @@ function scheduleReconcile(ms = 60_000) {
 }
 
 /**
- * Why no Pearl purchase can go through right now, or null when the on-chain balance is known.
+ * Why no PEARL purchase can go through right now, or null when the on-chain balance is known.
  * Every purchase is paid in on-chain PEARL only, so an unread balance (still loading, market
  * offline, RPC down) blocks it instead of letting a stale cache through.
  */
@@ -1003,51 +1006,100 @@ function pearlPurchaseBlocked(): string | null {
     : `${t('Purchases unavailable', '暂时无法购买')} · ${balance.reason}`;
 }
 
+/** Not enough cached PEARL for `cost`: say how much is missing. True when short. */
+function pearlShort(cost: number, what = ''): boolean {
+  if (planPearlSpend(equipment, cost) != null) return false;
+  const short = Math.max(0, cost - spendablePearls(equipment));
+  hud.message(t(`Need ${short} more PEARL${what ? ` ${what}` : ''}`, `还差 ${short} PEARL${what}`), 1600);
+  return true;
+}
+
 /**
- * Pay a flat Pearl price (food, synthesis fees): burn exactly `cost` on-chain PEARL, then deliver
- * `purchase` (deliverPurchase). Null when unaffordable, the balance is unknown, the burn failed or
- * is still confirming, or the purchase could not be applied.
+ * Send one player_state purchase (sendPlayerPurchase). True once it landed and the accounts were
+ * read again; false when nothing was bought (refused, failed on chain, or still confirming: then
+ * it applies by itself once it lands, see reconcilePurchases).
  */
-async function spendPearlsFor(cost: number, failure: string, what: string, purchase: Purchase): Promise<number | null> {
-  const blocked = pearlPurchaseBlocked();
+async function payOnChain(plan: (ctx: OwnerTxContext) => PurchasePlan, label: string, failure: string): Promise<boolean> {
+  try {
+    await sendPlayerPurchase(plan, label);
+    return true;
+  } catch (e) {
+    console.warn(`${label} not bought`, e);
+    showPaymentError(e, failure);
+    return false;
+  } finally {
+    void syncPearls();
+  }
+}
+
+let foodBuying = false;
+/**
+ * Pour one aquarium food over these fish with the program's feed instruction: the PEARL burn and
+ * the growth land together, and only fish that are neither fully grown nor still full eat (the
+ * chain's rule). Resolves with how many ate and the PEARL burned, or null when nothing was spent.
+ */
+async function buyAquariumFood(food: FishFoodDef, fishIds: readonly string[]): Promise<{ fed: number; paid: number } | null> {
+  if (foodBuying) return null;
+  const blocked = purchaseBlocked();
   if (blocked) {
     hud.message(blocked, 1800);
     return null;
   }
-  const burn = planPearlSpend(equipment, cost);
-  if (burn == null) {
-    const short = Math.max(0, cost - spendablePearls(equipment));
-    hud.message(t(`Need ${short} more PEARL${what ? ` ${what}` : ''}`, `还差 ${short} PEARL${what}`), 1600);
+  const first = playerChain();
+  const check = first && planFeed(first.aquarium, fishIds, Date.now() / 1000, first.config.prices, MAX_FISH_PER_CALL);
+  if (check && !check.ids.length) {
+    hud.message(feedBlockText(check.blocked), 1600);
     return null;
   }
+  if (pearlShort(food.price, t(`for ${food.name}`, `才能买${food.nameZh}`))) return null;
+  foodBuying = true;
+  let fed = 0;
+  let paid = 0;
   try {
-    if (await payAndDeliver(burn, purchase)) return burn;
-    hud.message(paidNotApplied(), 2400);
-    return null;
-  } catch (e) {
-    showPaymentError(e, failure);
-    void syncPearls();
-    return null;
+    const ok = await payOnChain(({ u, owner, pearl, snap }) => {
+      const plan = planFeed(snap.aquarium, fishIds, Date.now() / 1000, snap.config.prices, MAX_FISH_PER_CALL);
+      if (!plan.ids.length) throw new Error(feedBlockText(plan.blocked));
+      fed = plan.ids.length;
+      paid = Number(snap.config.prices.foodPrice[food.id]);
+      return {
+        builder: feedIx(u, { owner, ...pearl, food: food.id, fish: plan.keys }),
+        what: { v: 1, kind: 'food', food: food.id, keys: plan.keysHex, feeds: plan.feedsBefore },
+        cost: paid,
+      };
+    }, 'Feed', t('Food purchase failed', '饲料购买失败'));
+    return ok ? { fed, paid } : null;
+  } finally {
+    foodBuying = false;
   }
 }
 
 let synthesisBusy = false;
-/** Pay a synthesis station fee in on-chain PEARL and deliver `purchase`, like gear upgrades. */
-async function spendSynthesisPearls(cost: number, purchase: Purchase): Promise<boolean> {
-  return (await spendPearlsFor(cost, t('Synthesis payment failed', '合成付款失败'), '', purchase)) !== null;
-}
-
 async function synthCraft(id: RecipeDef['id']) {
   if (synthesisBusy) return;
-  // Everything that could stop the craft is checked before anything is burned.
-  if (!canCraft(synthesisState, id) || !craftRecipe(synthesisState, id)) {
+  // Everything that could stop the craft is checked before anything is sent; the program checks again.
+  const blocked = purchaseBlocked();
+  if (blocked) {
+    hud.message(blocked, 1800);
+    return;
+  }
+  if (!canCraft(synthesisState, id)) {
     hud.message(t('Materials missing', '材料不足'), 1400);
     return;
   }
+  if (pearlShort(SYNTHESIS_RECIPE_COSTS[id])) return;
   synthesisBusy = true;
   try {
-    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id], { kind: 'craft', recipe: id })) return;
-    hud.message(id === 'bait' ? t('Tide bait crafted', '鱼饵已合成') : t('Composite plate crafted', '护板已合成'), 1600);
+    const ok = await payOnChain(({ u, owner, pearl, snap }) => {
+      const state = synthesisFromChain(snap.player, snap.config.prices);
+      const quote = craftQuote(snap.config.prices, state.materials, id, 0);
+      if (!quote) throw new Error(t('Materials missing', '材料不足'));
+      return {
+        builder: craftIx(u, { owner, ...pearl, recipe: id }),
+        what: { v: 1, kind: 'craft', recipe: id, crafted: state.crafted[id] },
+        cost: quote.cost,
+      };
+    }, 'Craft', t('Synthesis payment failed', '合成付款失败'));
+    if (ok) hud.message(id === 'bait' ? t('Tide bait crafted', '鱼饵已合成') : t('Composite plate crafted', '护板已合成'), 1600);
   } finally {
     synthesisBusy = false;
   }
@@ -1055,23 +1107,36 @@ async function synthCraft(id: RecipeDef['id']) {
 
 async function synthUpgrade(slot: UpgradeSlot) {
   if (synthesisBusy) return;
-  const level = slot === 'rod' ? equipment.rodGearLevel : equipment[`${slot}Level` as keyof EquipmentState] as number;
+  const level = ownedLevel(equipment, slot);
   if (level >= 3) return;
-  const cost = SYNTHESIS_UPGRADE_COSTS[slot][level - 1];
-  const tier = nextSlotTier(equipment, slot);
-  if (!tier) return;
+  const blocked = purchaseBlocked();
+  if (blocked) {
+    hud.message(blocked, 1800);
+    return;
+  }
   if (synthesisState.crafted.composite < 1) {
     hud.message(t('Craft one composite plate first', '先合成复合护板'), 1800);
     return;
   }
+  if (pearlShort(SYNTHESIS_UPGRADE_COSTS[slot][level - 1])) return;
   synthesisBusy = true;
   try {
-    if (!await spendSynthesisPearls(cost, { kind: 'synth-upgrade', slot, level: tier.level })) return;
-    hud.message(t(`${nextSlotLabel(slot)} upgraded in synthesis station`, `${nextSlotLabel(slot)} 已在合成台升级`), 1800);
+    const ok = await payOnChain(({ u, owner, pearl, snap, levels }) => {
+      const { crafted } = synthesisFromChain(snap.player, snap.config.prices);
+      const quote = synthQuote(snap.config.prices, levels, crafted, slot, 0);
+      if ('blocked' in quote) throw new Error(quote.blocked === 'max' ? t('Already at the top level', '已是最高等级') : t('Craft one composite plate first', '先合成复合护板'));
+      return {
+        builder: synthUpgradeIx(u, { owner, ...pearl, slot }),
+        what: { v: 1, kind: 'synth-upgrade', slot, level: quote.level, composite: crafted.composite },
+        cost: quote.cost,
+      };
+    }, 'Synthesis upgrade', t('Synthesis payment failed', '合成付款失败'));
+    if (ok) hud.message(t(`${nextSlotLabel(slot)} upgraded in synthesis station`, `${nextSlotLabel(slot)} 已在合成台升级`), 1800);
   } finally {
     synthesisBusy = false;
   }
- }
+}
+
 let buying = false;
 /** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
 async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
@@ -1086,31 +1151,33 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
     gear.showNotice(t(`${nextSlotLabel(slot)} is already at maximum level.`, `${nextSlotLabel(slot)} 已是最高等级。`));
     return t('Already at the top level.', '已是最高等级。');
   }
-  const blocked = pearlPurchaseBlocked();
+  const blocked = purchaseBlocked();
   if (blocked) {
     gear.showNotice(blocked);
     hud.message(blocked, 1800);
     return blocked;
   }
-  const plan = planSlotUpgrade(equipment, slot);
-  if (!plan) {
+  if (!planSlotUpgrade(equipment, slot)) {
     const short = next.cost - spendablePearls(equipment);
     const need = t(`Need ${short} more PEARL`, `还差 ${short} PEARL`);
     gear.showNotice(t(`${need}.`, `${need}。`));
     hud.message(need, 1500);
     return need;
   }
-  // The full cost is burned on-chain, and the tier applies only once that lands.
+  // buy_upgrade burns the Config price and raises the level in one transaction; the panel shows
+  // the new level once the re-read accounts have it.
   buying = true;
   gear.setBusy(true);
   let failed: string | null = null;
+  let bought: number = next.level;
   try {
-    if (await payAndDeliver(plan.tier.cost, { kind: 'upgrade', slot, level: plan.tier.level })) {
-      hud.message(t(`${nextSlotLabel(slot)} upgraded: Level ${plan.tier.level}`, `${nextSlotLabel(slot)} 已升级：${plan.tier.level} 级`), 1800);
-    } else {
-      failed = paidNotApplied();
-      gear.showNotice(failed);
-    }
+    await sendPlayerPurchase(({ u, owner, pearl, snap, levels }) => {
+      const quote = upgradeQuote(snap.config.prices, levels, slot, 0);
+      if (!quote) throw new Error(t('Already at the top level', '已是最高等级'));
+      bought = quote.level;
+      return { builder: buyUpgradeIx(u, { owner, ...pearl, slot }), what: { v: 1, kind: 'upgrade', slot, level: quote.level }, cost: quote.cost };
+    }, 'Upgrade');
+    hud.message(t(`${nextSlotLabel(slot)} upgraded: Level ${bought}`, `${nextSlotLabel(slot)} 已升级：${bought} 级`), 1800);
   } catch (e) {
     console.error('upgrade failed', e);
     failed = showPaymentError(e, t('Upgrade failed', '升级失败'));
@@ -1124,19 +1191,35 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null>
   return failed;
 }
 
-function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
+let pathBusy = false;
+/** Switch a module path with set_path (free; the session key signs it when registered). */
+async function selectEquipmentPath(slot: EquipmentSlot, path: EquipmentPathId) {
   if (phase === 'play') {
     gear.showNotice(t('Return to the workbench before changing a module.', '先回到工作台再更换模块。'));
     return;
   }
-  const next = setEquipmentPath(equipment, slot, path);
-  if (!next) {
+  if (!setEquipmentPath(equipment, slot, path)) {
     gear.showNotice(t('Upgrade this slot to Lv2 before selecting a branch.', '先把这件装备升到 Lv2 再选择分支。'));
     return;
   }
-  Object.assign(equipment, next);
-  refreshEquipment();
-  hud.message(t(`${nextSlotLabel(slot)} module changed`, `${nextSlotLabel(slot)} 模块已更换`), 1200);
+  if (activePath(equipment, slot) === path) return;
+  const blocked = chainBlocked();
+  if (blocked) {
+    gear.showNotice(blocked);
+    return;
+  }
+  if (pathBusy) return;
+  pathBusy = true;
+  try {
+    await sendSetPath((authority, owner, u) => setPathIx(u, { authority, owner, slot, path: path as never }), { v: 1, kind: 'path', slot, path });
+    hud.message(t(`${nextSlotLabel(slot)} module changed`, `${nextSlotLabel(slot)} 模块已更换`), 1200);
+  } catch (e) {
+    console.warn('set_path failed', e);
+    gear.showNotice(showPaymentError(e, t('Module change failed', '模块更换失败')));
+  } finally {
+    pathBusy = false;
+    refreshEquipment();
+  }
 }
 
 const SLOT_LABELS: Record<UpgradeSlot, readonly [string, string]> = {
@@ -2336,6 +2419,8 @@ function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());
   Object.assign(equipment, loadEquipment());
   synthesisState = loadSynthesis();
+  // A save from before on-chain player state is test data: show the start until the chain is read.
+  if (!chainCached()) Object.assign(equipment, equipmentFromChain(equipment, null));
   Object.assign(mapProgress, loadMapProgress());
   if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
@@ -2350,8 +2435,9 @@ function loadWalletProgress() {
   nftQueue.start();
   // And bring its Boat and Dive Kit NFTs up to date (minting them the first time).
   if (GEAR_NFT_ON) gearSync.start();
-  // PEARL payments whose confirmation was lost last time: deliver the ones that landed, once.
-  void reconcilePurchases();
+  // Gear, paths, materials and aquarium growth come from the player_state accounts (the local
+  // saves above are only their cache); then an owed shark bite and lost confirmations settle.
+  void startPlayerChain();
   // And add the fish NFTs it owns on chain that this browser's save does not have.
   chainFish.start();
 }

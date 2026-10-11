@@ -265,6 +265,13 @@ export class GearPanel {
     if (this.lastState) this.render(this.lastState);
   }
 
+  private lockReason: () => string | null = () => null;
+  /** While `reason()` gives a reason (the on-chain gear is not read yet), the upgrade buttons are disabled and show it. */
+  setLock(reason: () => string | null) {
+    this.lockReason = reason;
+    if (this.lastState) this.render(this.lastState);
+  }
+
   render(state: EquipmentState) {
     this.lastState = state;
     this.renderSlots(state);
@@ -412,8 +419,9 @@ export class GearPanel {
       : ui.slot === 'sonar'
         ? `${copy.preview}: ${currentText.effect} → ${nextText.effect}`
         : `${copy.preview}: ${statCompare(stats, deriveStats(preview), ui.slot, this.language)}`;
-    this.upgrade.textContent = this.busy ? copy.spending : missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} ${next.cost} ◇`;
-    this.upgrade.disabled = this.busy || missing > 0;
+    const locked = this.busy ? null : this.lockReason();
+    this.upgrade.textContent = this.busy ? copy.spending : locked ?? (missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} ${next.cost} ◇`);
+    this.upgrade.disabled = this.busy || missing > 0 || !!locked;
   }
 
   private offsetSlot(delta: number): UpgradeSlot {
@@ -540,8 +548,9 @@ export class GearPanel {
       } else {
         const missing = Math.max(0, next.cost - spendablePearls(state));
         nextLine.textContent = `${copy.nextLevel}: ${nextText!.name} · ${nextText!.effect}`;
-        button.textContent = this.busy ? copy.spending : missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} · ${next.cost} ◇`;
-        button.disabled = this.busy || missing > 0;
+        const locked = this.busy ? null : this.lockReason();
+        button.textContent = this.busy ? copy.spending : locked ?? (missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} · ${next.cost} ◇`);
+        button.disabled = this.busy || missing > 0 || !!locked;
         button.addEventListener('click', () => {
           this.selectSlot(ui.slot);
           this.onUpgrade(ui.slot);

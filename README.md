@@ -76,7 +76,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 
 | Item | Details |
 | --- | --- |
-| Track | Social Good (breath training / lung-health awareness); the final choice is made at submission |
+| Track | Maverick |
 | MLH prize targets | **Best Use of Presage** (breath-hold detection, heart rate) · **Best Use of Solana** (fish NFTs, trading) · possible later: ElevenLabs (sound effects / narration), Tiger Data (market and economy data), a .Tech domain |
 
 ### Multiplayer scope (important)

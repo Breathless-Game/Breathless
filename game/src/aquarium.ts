@@ -13,12 +13,12 @@ import { fishIcon } from './portrait';
 import { storageKey } from './wallet';
 import {
   AQUARIUM_STORAGE_KEY,
-  feedAquariumFish,
   loadAquariumState,
   normalizeLightColor,
   saveAquariumState,
   growthScaleForGrowth,
   activeFoodEffects,
+  type AquariumGrowth,
   type AquariumState,
 } from './aquarium-state';
 
@@ -42,10 +42,18 @@ export interface AquariumHooks {
   /** The table and tank (aquarium-tank.ts). */
   table: TankTable;
   /**
-   * Pay for one food in on-chain PEARL, like gear upgrades.
-   * Resolves with the PEARL burned, or null when nothing was spent: the fish is fed only then.
+   * Pour one food over these fish with the on-chain feed instruction (it burns the PEARL and
+   * grows them in one transaction; the chain decides who can eat). Resolves with how many ate and
+   * the PEARL burned, or null when nothing was spent (the hook has said why). Growth then comes
+   * from chainGrowth().
    */
-  buyFood(food: FishFoodDef): Promise<number | null>;
+  buyFood(food: FishFoodDef, fishIds: readonly string[]): Promise<{ fed: number; paid: number } | null>;
+  /** Growth per fish id from the on-chain Aquarium account, or null until it has been read. */
+  chainGrowth(): Record<string, AquariumGrowth> | null;
+  /** Why no food can be poured right now (the on-chain state is not read yet), or null. */
+  feedLocked(): string | null;
+  /** Call `cb` whenever the on-chain accounts were read again. */
+  onChainChange(cb: () => void): void;
   /** Spendable Pearls (the cached on-chain PEARL balance), for the feed button's affordability state. */
   pearls(): number;
   message(text: string): void;
@@ -126,6 +134,7 @@ export class Aquarium {
     });
     // The balance often lands after show(): re-render the Pour button's affordability whenever it moves.
     onPearlBalance(() => this.renderFeederButton());
+    hooks.onChainChange(() => this.refreshGrowth());
     $('aq-close').addEventListener('click', () => this.close());
     $('aq-manage').addEventListener('click', () => this.manageFish());
     $('aq-prev').addEventListener('click', () => this.step(-1));
@@ -200,6 +209,7 @@ export class Aquarium {
     const table = this.hooks.table;
     this.favorites = loadFavorites(); // per wallet, so read fresh each time
     this.aquariumState = loadAquariumState(undefined, this.stateKey());
+    this.applyChainGrowth();
     this.lightInput.value = this.aquariumState.light.color;
     table.setLight(this.aquariumState.light.color);
     this.renderFeeder();
@@ -469,12 +479,15 @@ export class Aquarium {
     this.renderFoodOptions();
     const pearls = this.hooks.pearls();
     const affordable = pearls >= food.price;
-    this.feederButton.textContent = affordable
-      ? `${t('Pour into tank', '倒入鱼缸')} · ${pickName(food)} · ${food.price} PEARL`
-      : t(`Need ${food.price - pearls} more PEARL`, `还差 ${food.price - pearls} PEARL`);
-    this.feederButton.title = `${food.price} PEARL`;
+    const locked = this.hooks.feedLocked();
+    this.feederButton.textContent = locked
+      ? locked
+      : affordable
+        ? `${t('Pour into tank', '倒入鱼缸')} · ${pickName(food)} · ${food.price} PEARL`
+        : t(`Need ${food.price - pearls} more PEARL`, `还差 ${food.price - pearls} PEARL`);
+    this.feederButton.title = locked ?? `${food.price} PEARL`;
     // Locked while a payment is in flight so rapid clicks cannot pay twice; feedSchool() clears the lock before re-rendering.
-    this.feederButton.disabled = !affordable || this.feeding;
+    this.feederButton.disabled = !affordable || this.feeding || !!locked;
   }
 
   private renderFeeder() {
@@ -676,6 +689,28 @@ export class Aquarium {
     if (hint) hint.textContent = t(`Selected: ${pickName(fishFood(this.selectedFood))} · click the food beside the tank to feed all fish`, `已选：${pickName(fishFood(this.selectedFood))} · 点击鱼缸旁的鱼食喂所有鱼`);
   }
 
+  /**
+   * The on-chain Aquarium is the growth record: take it over (the local copy is only a cache).
+   * Fish it has no entry for were never fed. Returns false while it has not been read.
+   */
+  private applyChainGrowth(): boolean {
+    const growth = this.hooks.chainGrowth();
+    if (!growth) return false;
+    this.aquariumState = { ...this.aquariumState, growth: { ...growth } };
+    saveAquariumState(this.aquariumState, undefined, this.stateKey());
+    return true;
+  }
+
+  /** The on-chain Aquarium was read again: take its growth (the tank redraws from it) and repaint the card. */
+  refreshGrowth() {
+    // Closed, aquariumState is not loaded yet (show() loads it and applies the chain's growth):
+    // saving it now would write the default light over the player's.
+    // The tank reads growth through its look callback every frame, so the fish resize on their own.
+    if (!this.open || !this.applyChainGrowth()) return;
+    this.renderFeederButton();
+    if (this.picked) this.pick(this.picked);
+  }
+
   private async feedSchool() {
     const food = fishFood(this.selectedFood);
     const fish = this.fishIn(this.tank);
@@ -684,21 +719,9 @@ export class Aquarium {
       return;
     }
     if (this.feeding) return;
-    const now = Date.now();
-    let next = this.aquariumState;
-    let fedCount = 0;
-    let blockedReason: 'max' | 'cooldown' | null = null;
-    for (const f of fish) {
-      const result = feedAquariumFish(next, f.id, food.id, now);
-      if (result.fed) {
-        next = result.state;
-        fedCount++;
-      } else if (result.reason === 'max' || result.reason === 'cooldown') {
-        blockedReason = blockedReason ?? result.reason;
-      }
-    }
-    if (!fedCount) {
-      this.hooks.message(blockedReason === 'max' ? t('Every fish here is fully grown', '这里的鱼都长到最大了') : t('The school is still full', '鱼群还在饱腹冷却'));
+    const locked = this.hooks.feedLocked();
+    if (locked) {
+      this.hooks.message(locked);
       return;
     }
     if (this.hooks.pearls() < food.price) {
@@ -709,16 +732,22 @@ export class Aquarium {
     this.feeding = true;
     this.renderFeederButton();
     try {
-      const paid = await this.hooks.buyFood(food);
+      // Taken before paying: the re-read after the tx may already land via refreshGrowth() mid-await.
+      const before = this.aquariumState.growth;
+      // Who can eat (fully grown, still full) is the program's rule: the hook plans and refuses.
+      const paid = await this.hooks.buyFood(food, fish.map((f) => f.id));
       if (!paid) return;
-      this.aquariumState = { ...next, light: { ...this.aquariumState.light } };
-      saveAquariumState(this.aquariumState, undefined, this.stateKey());
-      // Flakes sink from the surface and the school rushes over; each fed fish swells as it grows.
+      const fedCount = paid.fed;
+      // Growth comes from the re-read on-chain Aquarium, never from a local guess.
+      this.applyChainGrowth();
+      // Flakes sink from the surface and the school rushes over; each fish the chain fed swells as it grows.
       const table = this.hooks.table;
       table.pourFood();
-      for (const f of fish) if (this.aquariumState.growth[f.id]?.feedCount) table.pulse(f);
+      for (const f of fish) {
+        if ((this.aquariumState.growth[f.id]?.feedCount ?? 0) > (before[f.id]?.feedCount ?? 0)) table.pulse(f);
+      }
       this.feederStatus.textContent = t(`${fedCount} fish are rushing in · ${pickName(food)} is sinking`, `${fedCount} 条鱼正在冲过来 · ${pickName(food)} 正在下落`);
-      this.hooks.message(t(`${fedCount} fish rushed in for food · ${spentText(paid)}`, `${fedCount} 条鱼正在抢食 · ${spentText(paid)}`));
+      this.hooks.message(t(`${fedCount} fish rushed in for food · ${spentText(paid.paid)}`, `${fedCount} 条鱼正在抢食 · ${spentText(paid.paid)}`));
     } finally {
       // Release the lock before re-rendering: the feeder renders disabled while `feeding` is set,
       // so this must run on success, on a declined/failed payment (null) and on a throw.

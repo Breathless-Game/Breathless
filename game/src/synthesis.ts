@@ -32,10 +32,27 @@ export const RECIPES: readonly RecipeDef[] = Object.freeze([
 ]);
 
 /** Synthesis upgrade prices. They deliberately replace the old workshop prices only in this station. */
-export const SYNTHESIS_UPGRADE_COSTS: Readonly<Record<UpgradeSlot, readonly [number, number]>> = Object.freeze({
+// Not frozen: setSynthesisCosts() replaces them with the on-chain Config's prices once it is read.
+export const SYNTHESIS_UPGRADE_COSTS: Readonly<Record<UpgradeSlot, readonly [number, number]>> = {
   net: [89, 499], rod: [68, 329], reel: [78, 389], fins: [99, 549], tank: [119, 699], lamp: [58, 299], sonar: [149, 899],
-});
-export const SYNTHESIS_RECIPE_COSTS: Readonly<Record<RecipeDef['id'], number>> = Object.freeze({ bait: 38, composite: 128 });
+};
+export const SYNTHESIS_RECIPE_COSTS: Readonly<Record<RecipeDef['id'], number>> = { bait: 38, composite: 128 };
+
+/** Replace the station's fees and recipe costs with the on-chain Config's (player-chain.ts). */
+export function setSynthesisCosts(
+  upgrade: Partial<Record<UpgradeSlot, readonly [number, number]>>,
+  recipes: Partial<Record<RecipeDef['id'], number>>,
+): void {
+  const ok = (n: number) => Number.isSafeInteger(n) && n > 0;
+  const up = SYNTHESIS_UPGRADE_COSTS as Record<UpgradeSlot, readonly [number, number]>;
+  for (const [slot, costs] of Object.entries(upgrade) as [UpgradeSlot, readonly [number, number]][]) {
+    if (slot in up && costs.every(ok)) up[slot] = [costs[0], costs[1]];
+  }
+  const rc = SYNTHESIS_RECIPE_COSTS as Record<RecipeDef['id'], number>;
+  for (const [id, cost] of Object.entries(recipes) as [RecipeDef['id'], number][]) {
+    if (id in rc && ok(cost)) rc[id] = cost;
+  }
+}
 
 export const SYNTHESIS_STORAGE_KEY = 'deepbreath.synthesis';
 

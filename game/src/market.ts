@@ -214,6 +214,43 @@ export function bulkSellableBelowEpic(bank: readonly BankedFish[]): BankedFish[]
   return bank.filter((f) => !needsConfirm(f.rarity) && !f.sellQueued && sellQuote(f, () => 0).ok);
 }
 
+// ---- Bulk-sell selection ---------------------------------------------------
+// The Collection's checkboxes. Pure helpers so the rule stays in step with the per-card Sell button.
+
+type Selling = { has(f: BankedFish): boolean };
+const NOT_SELLING: Selling = { has: () => false };
+
+/** Why a fish cannot be ticked for a bulk sale, or null when it can. Same rule as the Sell button, plus fish already queued or selling. */
+export function bulkSelectBlock(f: BankedFish, selling: Selling = NOT_SELLING): 'paid-out' | 'blocked' | 'minting' | 'queued' | null {
+  const quote = sellQuote(f, () => 0);
+  if (!quote.ok) return quote.reason;
+  if (f.sellQueued || selling.has(f)) return 'queued';
+  return null;
+}
+
+/** Can this fish be ticked for a bulk sale? */
+export function bulkSelectable(f: BankedFish, selling: Selling = NOT_SELLING): boolean {
+  return bulkSelectBlock(f, selling) === null;
+}
+
+/** Keep only ticked fish that are still in the bank and still sellable (in bank order). */
+export function pruneSelection(selected: ReadonlySet<BankedFish>, bank: readonly BankedFish[], selling: Selling = NOT_SELLING): Set<BankedFish> {
+  return new Set(bank.filter((f) => selected.has(f) && bulkSelectable(f, selling)));
+}
+
+/** Count, total value, and whether the sale needs an extra confirm (any epic or rarer fish). */
+export function selectionSummary(list: readonly BankedFish[], value: (f: BankedFish) => number): { count: number; total: number; needsConfirm: boolean } {
+  return { count: list.length, total: list.reduce((s, f) => s + value(f), 0), needsConfirm: list.some((f) => needsConfirm(f.rarity)) };
+}
+
+/** Shift-click range: every selectable item between two positions of the displayed order, inclusive, in either direction. */
+export function selectionRange<T>(order: readonly T[], from: T, to: T, selectable: (item: T) => boolean): T[] {
+  const a = order.indexOf(from);
+  const b = order.indexOf(to);
+  if (a < 0 || b < 0) return selectable(to) ? [to] : [];
+  return order.slice(Math.min(a, b), Math.max(a, b) + 1).filter(selectable);
+}
+
 // ---- Map unlock progress -------------------------------------------------
 // Maps unlock by the lifetime value of every fish ever banked. Selling never lowers it.
 
