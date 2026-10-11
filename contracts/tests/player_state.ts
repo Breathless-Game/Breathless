@@ -511,18 +511,20 @@ describe("player_state", () => {
       await updatePrices(GAME);
     });
 
-    it("grows the account for a full tank of 50 fish in one transaction (owner pays rent)", async () => {
+    it("grows the account by a full tank of 50 fish per transaction, up to 5 tanks (owner pays rent)", async () => {
       const pda = aquariumPda(carol.publicKey);
       const n0 = (await aquarium(carol)).entries.length;
-      const tank = Array.from({ length: 50 }, () => randomBytes(8));
-      const sig = await feedIx(carol, PLANKTON, tank).rpc({ commitment: "confirmed" });
-      const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-      const cu = tx!.meta!.computeUnitsConsumed!;
-      console.log(`      feed of 50 new fish: ${cu} CU, tx ${tx!.transaction.message.serialize().length + 64} bytes`);
-      expect(cu).to.be.below(200_000);
+      for (let t = 1; t <= 5; t++) {
+        const tank = Array.from({ length: 50 }, () => randomBytes(8));
+        const sig = await feedIx(carol, PLANKTON, tank).rpc({ commitment: "confirmed" });
+        const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+        const cu = tx!.meta!.computeUnitsConsumed!;
+        console.log(`      feed of 50 new fish into ${n0 + 50 * (t - 1)} entries: ${cu} CU, tx ${tx!.transaction.message.serialize().length + 64} bytes`);
+        expect(cu).to.be.below(200_000);
+      }
       const info = (await connection.getAccountInfo(pda))!;
-      expect((await aquarium(carol)).entries.length).to.equal(n0 + 50);
-      expect(info.data.length).to.equal(62 + (n0 + 50) * 16);
+      expect((await aquarium(carol)).entries.length).to.equal(n0 + 250);
+      expect(info.data.length).to.equal(62 + (n0 + 250) * 16);
       expect(info.lamports).to.be.at.least(await connection.getMinimumBalanceForRentExemption(info.data.length));
       await expectFail(() => feed(carol, PLANKTON, Array.from({ length: 65 }, () => randomBytes(8))), "");
       await expectFail(() => feed(carol, 5, [randomBytes(8)]), "InvalidFood");
