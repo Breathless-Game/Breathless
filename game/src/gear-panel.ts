@@ -11,13 +11,14 @@ import {
   upgradeSlot,
   type EquipmentSlot,
   type EquipmentPathId,
+  type UpgradeSlot,
   type EquipmentState,
 } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 interface SlotUi {
-  slot: EquipmentSlot;
+  slot: UpgradeSlot;
   title: string;
   icon: string;
   tradeoff: string;
@@ -30,6 +31,7 @@ const SLOT_UI: readonly SlotUi[] = [
   { slot: 'fins', title: '流线脚蹼', icon: '≋', tradeoff: '游速和加速度提升；紧急上浮速度不变。' },
   { slot: 'tank', title: '应急气瓶', icon: '▣', tradeoff: '只延长水下换气后的紧急返航窗口。' },
   { slot: 'lamp', title: '探照灯', icon: '✦', tradeoff: '照明距离和亮度提升；光束角度随等级变化。' },
+  { slot: 'sonar', title: '深潜声纳', icon: '⌇', tradeoff: '缆绳更长、脉冲节点更多；只提供微光和快速引导，不延长憋气时间。下潜中按 V 投放。' },
 ];
 
 function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot): string {
@@ -68,13 +70,13 @@ export class GearPanel {
   private upgrade = $<HTMLButtonElement>('gear-upgrade');
   private notice = $('gear-notice');
   private icon = $('gear-icon');
-  private onUpgrade: (slot: EquipmentSlot) => void;
+  private onUpgrade: (slot: UpgradeSlot) => void;
   private onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void;
-  private selectedSlot: EquipmentSlot = 'net';
+  private selectedSlot: UpgradeSlot = 'net';
   private lastState: EquipmentState | null = null;
   private busy = false;
 
-  constructor(onUpgrade: (slot: EquipmentSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
+  constructor(onUpgrade: (slot: UpgradeSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
     this.onUpgrade = onUpgrade;
     this.onPathChange = onPathChange;
     $('gear-close').addEventListener('click', () => this.toggle(false));
@@ -127,7 +129,7 @@ export class GearPanel {
     const pearls = totalPearls(state);
     this.icon.textContent = ui.icon;
     this.level.textContent = `${ui.title} · Lv${current.level} · ${current.name}`;
-    this.effect.textContent = statSummary(stats, ui.slot);
+    this.effect.textContent = ui.slot === 'sonar' ? current.effect : statSummary(stats, ui.slot);
     this.pearls.textContent = `${pearls} Pearls${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · 选择模块后再打包下潜`;
 
     if (!next) {
@@ -148,19 +150,21 @@ export class GearPanel {
     this.progress.value = Math.min(next.cost, pearls);
     this.progressLabel.textContent = `${Math.min(next.cost, pearls)} / ${next.cost} Pearls`;
     this.next.textContent = `Lv${next.level} · ${next.name} · ${next.effect}`;
-    this.compare.textContent = preview
-      ? `升级预览：${statCompare(stats, deriveStats(preview), ui.slot)}`
-      : '升级预览暂不可用';
+    this.compare.textContent = !preview
+      ? '升级预览暂不可用'
+      : ui.slot === 'sonar'
+        ? `升级预览：${current.effect} → ${next.effect}`
+        : `升级预览：${statCompare(stats, deriveStats(preview), ui.slot)}`;
     this.upgrade.textContent = this.busy ? 'Spending PEARL…' : missing ? `还差 ${missing} ◇` : `升级 ${next.cost} ◇`;
     this.upgrade.disabled = this.busy || missing > 0;
   }
 
-  private offsetSlot(delta: number): EquipmentSlot {
+  private offsetSlot(delta: number): UpgradeSlot {
     const index = SLOT_UI.findIndex((item) => item.slot === this.selectedSlot);
     return SLOT_UI[(index + delta + SLOT_UI.length) % SLOT_UI.length].slot;
   }
 
-  private selectSlot(slot: EquipmentSlot) {
+  private selectSlot(slot: UpgradeSlot) {
     if (this.selectedSlot === slot && this.lastState) {
       this.focusSelected();
       return;
@@ -177,6 +181,41 @@ export class GearPanel {
     window.setTimeout(() => {
       this.slots.querySelector<HTMLElement>(`[data-slot="${this.selectedSlot}"]`)?.focus();
     }, 0);
+  }
+
+  private renderPaths(state: EquipmentState, slot: EquipmentSlot, level: number): HTMLElement {
+    const paths = document.createElement('div');
+    paths.className = 'gear-paths';
+    const pathLabel = document.createElement('span');
+    pathLabel.className = 'gear-path-label';
+    pathLabel.textContent = level >= 2 ? '分支模块' : 'Lv2 解锁分支模块';
+    paths.appendChild(pathLabel);
+    const selectedPath = activePath(state, slot);
+    const selectedDef = equipmentPath(slot, selectedPath);
+    const selectedTier = pathTier(state, slot);
+    for (const path of EQUIPMENT_PATHS[slot]) {
+      const pathButton = document.createElement('button');
+      pathButton.type = 'button';
+      pathButton.className = 'gear-path-button';
+      pathButton.textContent = path.nameZh;
+      pathButton.title = `${path.name}: ${path.summary}`;
+      const pathSelected = level >= 2 && path.id === selectedPath;
+      pathButton.setAttribute('aria-pressed', String(pathSelected));
+      pathButton.disabled = level < 2;
+      pathButton.classList.toggle('selected', pathSelected);
+      pathButton.addEventListener('click', () => {
+        this.selectSlot(slot);
+        this.onPathChange(slot, path.id);
+      });
+      paths.appendChild(pathButton);
+    }
+    const pathSummary = document.createElement('div');
+    pathSummary.className = 'gear-path-summary';
+    pathSummary.textContent = level >= 2
+      ? `${selectedDef.summary} · Lv${selectedTier.level}: ${selectedTier.effect}`
+      : '升级到 Lv2 后可选择专精路线';
+    paths.appendChild(pathSummary);
+    return paths;
   }
 
   private renderSlots(state: EquipmentState) {
@@ -222,38 +261,8 @@ export class GearPanel {
       tradeoff.className = 'gear-slot-tradeoff';
       tradeoff.textContent = ui.tradeoff;
 
-      const paths = document.createElement('div');
-      paths.className = 'gear-paths';
-      const pathLabel = document.createElement('span');
-      pathLabel.className = 'gear-path-label';
-      pathLabel.textContent = current.level >= 2 ? '分支模块' : 'Lv2 解锁分支模块';
-      paths.appendChild(pathLabel);
-      const selectedPath = activePath(state, ui.slot);
-      const selectedDef = equipmentPath(ui.slot, selectedPath);
-      const selectedTier = pathTier(state, ui.slot);
-      for (const path of EQUIPMENT_PATHS[ui.slot]) {
-        const pathButton = document.createElement('button');
-        pathButton.type = 'button';
-        pathButton.className = 'gear-path-button';
-        pathButton.textContent = path.nameZh;
-        pathButton.title = `${path.name}: ${path.summary}`;
-        const pathSelected = current.level >= 2 && path.id === selectedPath;
-        pathButton.setAttribute('aria-pressed', String(pathSelected));
-        pathButton.disabled = current.level < 2;
-        pathButton.classList.toggle('selected', pathSelected);
-        pathButton.addEventListener('click', () => {
-          this.selectSlot(ui.slot);
-          this.onPathChange(ui.slot, path.id);
-        });
-        paths.appendChild(pathButton);
-      }
-      const pathSummary = document.createElement('div');
-      pathSummary.className = 'gear-path-summary';
-      pathSummary.textContent = current.level >= 2
-        ? `${selectedDef.summary} · Lv${selectedTier.level}: ${selectedTier.effect}`
-        : '升级到 Lv2 后可选择专精路线';
-      paths.appendChild(pathSummary);
-      card.appendChild(paths);
+      // The sonar levels its cable reach only; it has no specialisation branches.
+      if (ui.slot !== 'sonar') card.appendChild(this.renderPaths(state, ui.slot, current.level));
 
       const footer = document.createElement('div');
       footer.className = 'gear-slot-footer';

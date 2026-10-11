@@ -226,7 +226,7 @@ function fakeStorage(data = {}) {
 
 test('Pearls saved before on-chain PEARL become a separate legacy balance', () => {
   // A rod-only save migrates to the six-slot loadout: rodLevel becomes the net tier, the rest start at Lv1.
-  const slots = (net) => ({ rodLevel: net, netLevel: net, rodGearLevel: 1, reelLevel: 1, finsLevel: 1, tankLevel: 1, lampLevel: 1 });
+  const slots = (net) => ({ rodLevel: net, netLevel: net, rodGearLevel: 1, reelLevel: 1, finsLevel: 1, tankLevel: 1, lampLevel: 1, sonarLevel: 1 });
   const paths = { ...equipment.DEFAULT_EQUIPMENT_PATHS };
   globalThis.localStorage = fakeStorage({ 'deepbreath.equipment': JSON.stringify({ rodLevel: 2, pearls: 420 }) });
   const state = equipment.loadEquipment();
@@ -266,6 +266,24 @@ test('slot upgrades follow the same legacy-first PEARL rule and keep the other s
   assert.equal(after.legacyPearls, 0);
   assert.equal(after.pearls, 250 - (cost - 100));
   assert.equal(equipment.planSlotUpgrade({ ...start, pearls: 0, legacyPearls: cost - 1 }, 'reel'), null, 'one short');
+});
+
+test('deep sonar cable tiers are bought through the same slot plan', () => {
+  const [lv1, lv2, lv3] = equipment.EQUIPMENT_TIERS.sonar;
+  assert.deepEqual([lv1.cost, lv2.cost, lv3.cost], [0, 300, 1200]);
+  const start = { rodLevel: 2, reelLevel: 2, pearls: 400, legacyPearls: 120 };
+  assert.equal(equipment.slotTier(start, 'sonar').level, 1, 'older saves start at the 10 m cable');
+  const plan = equipment.planSlotUpgrade(start, 'sonar');
+  assert.deepEqual({ ...plan, tier: plan.tier.level }, { slot: 'sonar', tier: 2, fromLegacy: 120, fromChain: lv2.cost - 120 });
+  const after = equipment.applySlotUpgrade(start, plan);
+  assert.equal(after.sonarLevel, 2);
+  assert.equal(after.netLevel, 2);
+  assert.equal(after.reelLevel, 2);
+  assert.equal(after.legacyPearls, 0);
+  assert.equal(after.pearls, 400 - (lv2.cost - 120));
+  assert.equal(equipment.planSlotUpgrade(after, 'sonar'), null, 'Lv3 costs more than is left');
+  assert.equal(equipment.nextSlotTier({ ...after, sonarLevel: 3 }, 'sonar'), null, 'maxed out');
+  assert.equal(equipment.deriveStats(after).netCapacity, equipment.deriveStats({ ...after, sonarLevel: 1 }).netCapacity, 'sonar leaves the other stats alone');
 });
 
 test('migrateBank keeps a valid fish number and drops a broken one', () => {
