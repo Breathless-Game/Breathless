@@ -243,7 +243,6 @@ const SLOT_LEVELS: Record<UpgradeSlot, readonly SlotTier[]> = {
 
 /** Tier metadata for the multi-slot workshop UI. */
 export const EQUIPMENT_TIERS: Readonly<Record<UpgradeSlot, readonly SlotTier[]>> = SLOT_LEVELS;
-
 function pathDef(
   slot: EquipmentSlot,
   id: EquipmentPathId,
