@@ -2040,19 +2040,81 @@ button:disabled {
 #gear-panel {
   position: fixed;
   inset: 12px auto auto 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(-14px) scale(0.98);
   z-index: 35;
   width: min(760px, calc(100vw - 32px));
+  height: min(720px, calc(100vh - 24px));
   background: rgba(3, 12, 24, 0.97);
   border: 1px solid rgba(62, 240, 168, 0.35);
   border-radius: 20px;
   padding: 22px 24px;
   box-shadow: 0 18px 70px rgba(0, 0, 0, 0.45), 0 0 40px rgba(62, 240, 168, 0.08);
-  max-height: calc(100vh - 24px);
-  overflow-y: auto;
+  overflow: hidden;
   /* One scroll area, not two nested ones: the slot grid takes the height the rest leaves. */
   display: flex;
   flex-direction: column;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.2, 0.8, 0.3, 1), visibility 0s linear 0.28s;
+}
+
+#gear-panel.is-open {
+  transform: translateX(-50%) translateY(0) scale(1);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.gear-head-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: none;
+}
+
+#gear-language {
+  min-width: 48px;
+}
+
+.gear-pages {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 2px;
+}
+
+.gear-page {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(24px);
+  transition: opacity 0.22s ease, transform 0.28s cubic-bezier(0.2, 0.8, 0.3, 1), visibility 0s linear 0.28s;
+}
+
+.gear-page.active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+  transition-delay: 0s;
+}
+
+.gear-page.enter-left { transform: translateX(-24px); }
+.gear-page.enter-right { transform: translateX(24px); }
+.gear-page.exit-left { opacity: 0; transform: translateX(-24px); }
+.gear-page.exit-right { opacity: 0; transform: translateX(24px); }
+
+#gear-upgrade-view,
+#gear-assembly-view {
+  padding-right: 3px;
 }
 
 .gear-slots {
@@ -2060,8 +2122,8 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 16px;
-  /* Shrinks to fit the panel and scrolls inside it; the module and upgrade cards stay in view. */
-  flex: 0 1 auto;
+  /* The fixed notebook page keeps the outer panel stable; this list owns its scroll. */
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding-right: 3px;
@@ -2210,8 +2272,22 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
+  #gear-panel {
+    inset: 8px auto auto 50%;
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+    padding: 16px;
+  }
+
   .gear-slots {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #gear-panel,
+  .gear-page {
+    transition-duration: 0.01ms;
   }
 }
 
@@ -2224,6 +2300,138 @@ button:disabled {
 
 .gear-head h2 {
   margin: 4px 0;
+}
+
+.gear-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.gear-tab {
+  flex: 1 1 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.gear-tab:hover,
+.gear-tab:focus-visible {
+  border-color: rgba(106, 184, 255, 0.65);
+  outline: none;
+}
+
+.gear-tab.selected {
+  border-color: rgba(62, 240, 168, 0.72);
+  background: rgba(62, 240, 168, 0.12);
+  color: var(--ink);
+}
+
+.assembly-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.assembly-intro h3 {
+  margin: 4px 0 0;
+}
+
+.assembly-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 30px;
+  margin: 12px 0;
+  padding: 8px;
+  border: 1px dashed rgba(62, 240, 168, 0.35);
+  border-radius: 10px;
+  background: rgba(62, 240, 168, 0.05);
+}
+
+.assembly-chip {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(62, 240, 168, 0.16);
+  color: var(--hold);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.assembly-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  max-height: min(54vh, 520px);
+  overflow: auto;
+  padding: 2px 3px 2px 0;
+}
+
+.assembly-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, transform 0.16s;
+}
+
+.assembly-card:hover,
+.assembly-card:focus-visible {
+  border-color: rgba(106, 184, 255, 0.65);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.assembly-card.selected {
+  border-color: rgba(62, 240, 168, 0.78);
+  background: rgba(62, 240, 168, 0.1);
+  box-shadow: 0 0 20px rgba(62, 240, 168, 0.08);
+}
+
+.assembly-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assembly-card-title {
+  font-weight: 800;
+}
+
+.assembly-card-slot {
+  color: var(--gold);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.assembly-card p {
+  min-height: 32px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assembly-card-status {
+  color: var(--hold);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+@media (max-width: 640px) {
+  .assembly-grid {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
 }
 
 #gear-level {
