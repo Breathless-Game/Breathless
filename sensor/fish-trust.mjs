@@ -115,6 +115,10 @@ function valueRange(rarity, a, b) {
  * Nothing on-chain records the generator version, so every version is tried (newest first). That
  * is no wider for a forger than one version: any seed is theirs to pick and every version reaches
  * the same top value (a mythic below 235 m); the per-wallet limits bound what a forger can take.
+ * The same holds for player_state's lifetime banked value (record_catch rides in every co-signed
+ * mint): a client picks its seeds, so it can mint only top-value fish and inflate lifetime_value,
+ * opening maps and ships sooner. An accepted hackathon limitation, bounded by the per-wallet mint
+ * quota (MINTS_PER_HOUR, 240 an hour); there is no backfill and no separate value cap.
  * Returns { ok: true, fish, version } (fish = that version's fish for this seed and rarity) or { ok: false, reason }.
  */
 export function checkFish(facts, { legacy = false, tolerance = SPAWN_TOLERANCE_M } = {}) {
