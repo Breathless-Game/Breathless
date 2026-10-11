@@ -136,8 +136,6 @@
     <!-- Above the title layer, whose fish hang in front of the table. -->
     <div id="wb-ui" class="hidden">
       <div id="wb-tip" class="hidden"></div>
-      <!-- The player's Boat and Dive Kit NFTs: sync status and explorer links (gear-chain-ui.ts). -->
-      <aside id="wb-chain" aria-label="On-chain gear" aria-live="polite" hidden></aside>
       <div id="wb-chart" class="hidden">
         <div id="wb-chart-bg"></div>
         <!-- The 3D chart itself, held up over the blurred table; #wb-paper only reserves its place in the layout. -->
@@ -153,6 +151,10 @@
           <div id="wb-place-warn" class="small hidden"></div>
           <section id="wb-place-conditions" class="wb-weather-card" aria-label="Entry conditions">
             <div class="wb-weather-title">FIELD NOTES · 入场记录</div>
+            <div id="wb-fishing-advice" class="wb-fishing-advice" role="status">
+              <b id="wb-fishing-label"></b>
+              <span id="wb-fishing-reason"></span>
+            </div>
             <div class="wb-weather-grid">
               <span>Entry time · 进入时间</span><b id="wb-entry-time">--:--</b>
               <span>Surface temp · 水温</span><b id="wb-entry-temp">--°C</b>
