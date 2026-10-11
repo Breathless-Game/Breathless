@@ -110,7 +110,9 @@ export function buildKelpGeometry(
   const colors: number[] = [];
   const motion: number[] = [];
   const indices: number[] = [];
-  const segments = [5, 8, 11][detail - 1];
+  // Keep the hard polygon planes broad enough to read, while limiting the
+  // non-indexed face-color budget on weaker devices.
+  const segments = [3, 5, 7][detail - 1];
   const color = new THREE.Color();
   const youngTip = new THREE.Color('#bdd875');
   let tallest = 0;
@@ -231,7 +233,7 @@ export function buildKelpGeometry(
         angle: facing + rng.range(-0.25, 0.25), lift: rng.range(0.15, 0.5),
       }));
       const joints = leaves.flatMap(leaf => [leaf.t, leaf.t + leaf.length * 0.60 / h]);
-      addFrond(primary, [8, 12, 16][detail - 1], joints);
+      addFrond(primary, [4, 6, 8][detail - 1], joints);
       for (const { t, side, length, angle, lift } of leaves) {
         const base = midrib(primary, t);
         const tip = base.clone().add(new THREE.Vector3(Math.cos(angle) * side * length,
@@ -253,7 +255,7 @@ export function buildKelpGeometry(
           width: primary.width * rng.range(0.78, 1.05), reach: h * side * rng.range(0.14, 0.23),
           angle: facing + rng.range(-0.3, 0.3), curl: h * rng.range(0.045, 0.085) * -side,
           arc: rng.range(0.65, 1.0), twist: side * rng.range(0.25, 0.65), shade: rng.range(0.91, 1.1),
-        }, Math.max(4, segments - 2));
+        }, Math.max(5, segments - 6));
       }
       for (let f = 0; f < 6; f++) {
         const t = attachments[f];
@@ -263,16 +265,40 @@ export function buildKelpGeometry(
           width: primary.width * rng.range(0.62, 0.85), reach: side * h * rng.range(0.13, 0.21),
           angle: facing + rng.range(-0.4, 0.4), curl: h * rng.range(-0.015, 0.015),
           arc: rng.range(1.65, 2.2), twist: side * rng.range(0.4, 0.9), shade: rng.range(0.96, 1.14),
-        }, Math.max(3, segments - 5));
+        }, Math.max(3, segments - 8));
       }
     }
   }
 
+  // A shared vertex cannot carry two face pigments. Expand the compact build
+  // index into triangles and give each triangle one deliberately quantized
+  // color. This keeps the low-poly blocks visible instead of interpolating a
+  // smooth, plastic gradient across every leaf.
+  const facetPositions: number[] = [];
+  const facetColors: number[] = [];
+  const facetMotion: number[] = [];
+  const facetColor = new THREE.Color();
+  const facetHsl = { h: 0, s: 0, l: 0 };
+  for (let tri = 0; tri < indices.length; tri += 3) {
+    const ids = [indices[tri], indices[tri + 1], indices[tri + 2]];
+    facetColor.setRGB(
+      (colors[ids[0] * 3] + colors[ids[1] * 3] + colors[ids[2] * 3]) / 3,
+      (colors[ids[0] * 3 + 1] + colors[ids[1] * 3 + 1] + colors[ids[2] * 3 + 1]) / 3,
+      (colors[ids[0] * 3 + 2] + colors[ids[1] * 3 + 2] + colors[ids[2] * 3 + 2]) / 3,
+    ).getHSL(facetHsl);
+    // Eight lightness steps make the broad bands read as painted facets while
+    // retaining each map's hue and saturation.
+    facetColor.setHSL(facetHsl.h, facetHsl.s, THREE.MathUtils.clamp(Math.round(facetHsl.l * 8) / 8, 0.08, 0.92));
+    for (const id of ids) {
+      facetPositions.push(positions[id * 3], positions[id * 3 + 1], positions[id * 3 + 2]);
+      facetColors.push(facetColor.r, facetColor.g, facetColor.b);
+      facetMotion.push(motion[id * 4], motion[id * 4 + 1], motion[id * 4 + 2], motion[id * 4 + 3]);
+    }
+  }
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setAttribute('aKelpMotion', new THREE.Float32BufferAttribute(motion, 4));
-  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(facetPositions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(facetColors, 3));
+  geometry.setAttribute('aKelpMotion', new THREE.Float32BufferAttribute(facetMotion, 4));
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   if (geometry.boundingBox && positions.length) {

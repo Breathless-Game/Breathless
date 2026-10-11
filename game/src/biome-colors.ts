@@ -41,7 +41,9 @@ export function paintBiomeFaces(
     colour.copy(swatches[0]).lerp(swatches[Math.floor(patch * swatches.length)], amount);
     // Independent light/dark facets retain the old illustrated polygon look;
     // a small, map-specific palette keeps the colour variation coherent.
-    colour.multiplyScalar(1 + (lightness - 0.5) * 0.44 * amount);
+    // Keep deterministic facet separation visible, but close enough in value
+    // that a bed reads as one mineral surface instead of a checkerboard.
+    colour.multiplyScalar(1 + (lightness - 0.5) * 0.16 * amount);
     const deep = 1 - Math.exp(-Math.max(0, depth - y - 20) / 140);
     colour.lerp(ABYSS_TINT, 0.5 * deep).multiplyScalar(1 - 0.55 * deep);
     for (let vertex = 0; vertex < 3; vertex++) colour.toArray(colours, (i + vertex) * 3);
