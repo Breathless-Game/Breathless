@@ -586,7 +586,13 @@ export class Diver {
       this.netArm.rotation.z = -0.35 + Math.sin(time * 1.5) * 0.05;
     }
 
-    this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
+    // The first lamp tier should still illuminate the fjord's shallow shelf.
+    // Starting the beam only below 18 m made a 20 m dive read almost black
+    // (about 3% of the lamp output), even though the diver was already in
+    // working depth. Fade in gently after the surface, then reach full output
+    // by 24 m so deeper water gets a clear cone without a sudden switch-on.
+    const beam = THREE.MathUtils.smoothstep(depth, 4, 24);
+    this.headlamp.intensity = beam * this.lampMaxIntensity;
     this.updateWaterContact(dt, heave);
 
     this.bubbleUpdateAccumulator += dt;
