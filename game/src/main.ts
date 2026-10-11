@@ -365,6 +365,7 @@ function applyEquipmentVisuals() {
 }
 const sonar = new DeepSonar({ color: loadSonarConfig().color, lengthLevel: equipment.sonarLevel, detail: renderQuality.settings.detail, startsCarried: false });
 scene.add(sonar.group);
+world.colorGrade.apply(sonar.group);
 sonar.group.visible = false;
 let sonarCarried = false;
 let sonarGuiding = false;
@@ -1286,6 +1287,7 @@ function applySettings(s: Settings) {
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   sonar.setDetail(renderQuality.settings.detail);
+  sonar.setLightingEnabled(s.lightingEffects);
   syncEventDetail();
   resize();
   camWrap.classList.toggle('off', !s.showCamera);
@@ -1429,6 +1431,7 @@ const workbench = new Workbench({
   },
   sonarColor(color) {
     sonar.setColor(color);
+    world.colorGrade.apply(sonar.group);
   },
   tutorial(id: LessonId) {
     fieldGuide?.mark(id);
