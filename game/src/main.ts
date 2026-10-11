@@ -573,7 +573,13 @@ const nftQueue = new NftQueue(bank, saveBank, {
 });
 const vault = new Vault(bank, nftQueue);
 // The aquarium and the health desk each come up on a table like the workbench's (table-scene.ts).
-const aquariumTable = new TankTable({ pan: (u, y) => setTablePan('aquarium', u, y) });
+// Over the aquarium the title's rope and fish ride all the way up off the screen (lift), out of the tank's way.
+const aquariumTable = new TankTable({
+  pan: (u, y) => {
+    setTablePan('aquarium', u, y);
+    titleScreen.setLift(u);
+  },
+});
 const aquarium = new Aquarium(bank, { table: aquariumTable });
 const healthDesk = new HealthDesk({ pan: (u, y) => setTablePan('health', u, y) });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
@@ -1476,9 +1482,14 @@ function setTablePan(which: TableId, u: number, y: number) {
   tableY[which] = y;
   const up = (Object.keys(tablePan) as TableId[]).filter(tableUp);
   const top = up.reduce<TableId>((a, b) => (tablePan[b] > tablePan[a] ? b : a), which);
+  // The sea camera sinks for any table.
   benchPan = up.length > 1 ? 1 : up.length ? tablePan[up[0]] : 0;
-  titleScreen.setPan(benchPan, tableY[top]);
-  labelStartFish(benchPan);
+  // The title's rope hangs over the table, except the aquarium's: there it's lifted off the
+  // screen instead (titleScreen.setLift), and a table pan would pull its ends back down.
+  const hung: TableId[] = up.filter((t) => t !== 'aquarium');
+  const titlePan = hung.length > 1 ? 1 : hung.length ? tablePan[hung[0]] : 0;
+  titleScreen.setPan(titlePan, tableY[hung.includes(top) ? top : (hung[0] ?? top)]);
+  labelStartFish(titlePan);
 }
 
 const workbench = new Workbench({
