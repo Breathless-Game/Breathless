@@ -41,6 +41,8 @@ export interface EventContext {
   /** Current weather, 0-1 (WeatherState.storm / .cloud). Lightning needs a storm; cloud hides the aurora. */
   storm?: number;
   cloud?: number;
+  /** World y of the floor under the camera: the map's shelf by default, -Infinity down the bottomless trench. */
+  floorY?: number;
 }
 
 export interface WorldEventsOptions {
@@ -219,6 +221,8 @@ class Kit {
   depth = 0;
   shelfDepth = 30;
   seabedY: number;
+  /** The floor under the camera (see EventContext.floorY): what deep events keep above. */
+  floorY: number;
   /** True when the context passed a camera x, so events may stay close to it. */
   aimed = false;
   aspect = 1.6;
@@ -229,6 +233,7 @@ class Kit {
   constructor(readonly scene: THREE.Scene, public map: MapDef, public detail: Detail, readonly rng: () => number) {
     this.root.name = 'world-events';
     this.seabedY = -mapDepth(map);
+    this.floorY = this.seabedY;
     scene.add(this.root);
   }
 
@@ -316,6 +321,7 @@ class Kit {
     this.depth = ctx.depth;
     this.shelfDepth = ctx.shelfDepth;
     this.cloud = THREE.MathUtils.clamp(ctx.cloud ?? 0, 0, 1);
+    this.floorY = ctx.floorY ?? this.seabedY;
     // Same falloff World uses for its own lights.
     this.light = THREE.MathUtils.clamp(1 + ctx.cameraY / 75, 0.12, 1) * (ctx.night ? 0.35 : 1);
   }
@@ -1813,7 +1819,7 @@ class Leviathan extends Effect {
     const half = (k.aimed ? k.halfWidth(z) : 70) + 24;
     this.x0 = k.cam.x - this.dir * half;
     this.speed = (2 * half) / this.duration;
-    const y = THREE.MathUtils.clamp(k.cam.y - 2.5 + k.range(-2, 2), k.seabedY + 6, -4);
+    const y = THREE.MathUtils.clamp(k.cam.y - 2.5 + k.range(-2, 2), k.floorY + 6, -4);
     this.group.position.set(this.x0, y, z);
     this.group.rotation.set(0, this.dir > 0 ? 0 : Math.PI, k.range(-0.05, 0.05));
     this.group.visible = true;
@@ -1878,8 +1884,8 @@ class Vent extends Effect {
     const k = this.k;
     this.x = k.cam.x + k.range(-12, 12);
     this.z = k.range(-6, -1);
-    this.seabed = k.seabedY + 0.4 >= k.cam.y - 15;
-    this.y = Math.max(k.seabedY + 0.4, k.cam.y - 15);
+    this.seabed = k.floorY + 0.4 >= k.cam.y - 15;
+    this.y = Math.max(k.floorY + 0.4, k.cam.y - 15);
     this.left = k.n(40, 140, 320);
     this.burst = Math.round(this.left * 0.4);
     this.due = 0;
@@ -1970,7 +1976,7 @@ class Jellies extends Effect {
     const k = this.k;
     const spread = k.aimed ? 28 : 70;
     const top = Math.min(-2, k.cam.y + 6);
-    const bottom = Math.max(k.seabedY + 2, k.cam.y - 14);
+    const bottom = Math.max(k.floorY + 2, k.cam.y - 14);
     for (let i = 0; i < this.count; i++) {
       const o = i * 7;
       this.st[o] = k.cam.x + k.range(-spread, spread);
@@ -2099,6 +2105,7 @@ export class WorldEvents {
     this.halt();
     this.kit.map = map;
     this.kit.seabedY = -mapDepth(map);
+    this.kit.floorY = this.kit.seabedY;
     this.schedule.setMap(map.id);
     this.rebuild();
   }
@@ -2125,6 +2132,7 @@ export class WorldEvents {
     c.lightingEffects = ctx.lightingEffects;
     c.storm = ctx.storm;
     c.cloud = ctx.cloud;
+    c.floorY = ctx.floorY;
     this.kit.setContext(ctx);
     // Lighting effects switched off mid-show: the aurora or lightning goes at once.
     if (this.activeDef?.lightingEffect && ctx.lightingEffects === false) {
