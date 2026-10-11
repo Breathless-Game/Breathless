@@ -23,12 +23,10 @@ async function load(path) {
 
 const {
   MAX_AUTO_MINT_TRIES,
-  addBankedValue,
   bankEntry,
   bulkSellable,
   bulkSellableBelowEpic,
   migrateBank,
-  migrateUnlockProgress,
   needsConfirm,
   nextRetryAt,
   nextToMint,
@@ -206,37 +204,6 @@ test('"sell all" takes every sellable fish below epic, and never an epic, legend
     nftStep(bankEntry(fish('rare')), { type: 'sell' }),
   ];
   assert.deepEqual(bulkSellableBelowEpic(bank), [common, rare, uncommon]);
-});
-
-test('map unlock progress is lifetime banked value: selling never lowers it', () => {
-  // Old saves: the saved best was the high-water mark of a bank that only grew, i.e. the lifetime value.
-  assert.equal(migrateUnlockProgress(140, 140), 140);
-  assert.equal(migrateUnlockProgress(0, 90), 90, 'a bank older than map progress still counts');
-  assert.equal(migrateUnlockProgress(200, 50), 200, 'never drops to the current bank');
-  assert.equal(migrateUnlockProgress(Number.NaN, 12), 12);
-
-  let rand = 7;
-  const next = () => (rand = (rand * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
-  let lifetime = migrateUnlockProgress(30, 30);
-  let bank = [30];
-  const unlocked = (v) => [0, 150, 1000].filter((t) => v >= t).length;
-  let maps = unlocked(lifetime);
-  for (let step = 0; step < 500; step++) {
-    const before = lifetime;
-    if (next() < 0.5 || !bank.length) {
-      const added = Array.from({ length: 1 + Math.floor(next() * 6) }, () => Math.ceil(next() * 40));
-      bank.push(...added);
-      lifetime = addBankedValue(lifetime, added.reduce((s, v) => s + v, 0));
-    } else {
-      bank.splice(Math.floor(next() * bank.length), 1); // sold
-    }
-    lifetime = migrateUnlockProgress(lifetime, bank.reduce((s, v) => s + v, 0)); // a reload in between
-    assert.ok(lifetime >= before, 'progress never goes backwards');
-    assert.ok(unlocked(lifetime) >= maps, 'a map never re-locks');
-    maps = unlocked(lifetime);
-  }
-  assert.equal(maps, 3);
-  assert.equal(addBankedValue(10, -5), 10);
 });
 
 function fakeStorage(data = {}) {

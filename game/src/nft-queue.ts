@@ -34,7 +34,10 @@ export type Funds = 'unknown' | 'ok' | 'needs-sol' | 'offline';
 /** 'waiting': the fish number server did not answer, so mints wait for it. */
 export type Serials = 'ok' | 'waiting';
 
-const MIN_MINT_SOL = 0.02; // the Core asset rent and fees, with headroom
+// The Core asset rent (~0.004 SOL for a long URI) and fees, plus what record_catch costs in the same
+// transaction: the first Progress account (~0.0016 SOL rent) and 8 bytes (~0.00006 SOL) per fish.
+// Worst case under 0.006 SOL, so 0.02 leaves more than 3x headroom.
+const MIN_MINT_SOL = 0.02;
 const MIN_REPAIR_SOL = 0.01; // a metadata URI repair: one fee plus a little rent for the longer URI
 const POLL_MS = 60_000;
 const SERIAL_RETRY_MS = 15_000; // the number server is ours: it should be back soon
@@ -46,6 +49,11 @@ const MAX_SELL_BATCH = 40;
 export interface NftQueueHooks {
   /** Any status changed: redraw whatever shows it. */
   changed(): void;
+  /**
+   * A fish was minted. Co-signed into the market's collection (`trusted`), the same transaction
+   * recorded its value on the owner's lifetime banked value (player_state record_catch).
+   */
+  minted?(fish: BankedFish, trusted: boolean): void;
   /** Fish were sold (one batch) and have left the bank. */
   sold(sales: { fish: BankedFish; result: SellResult }[]): void;
 }
@@ -325,6 +333,7 @@ export class NftQueue {
           if (res.collection) f.trusted = true; // co-signed into the market's collection
 
           this.apply(f, { type: 'minted', assetId: res.asset, tx: res.signature });
+          this.hooks.minted?.(f, !!res.collection);
         } catch (e) {
           const msg = errorText(e);
           const limit = limitOf(e);

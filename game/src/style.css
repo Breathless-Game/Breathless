@@ -1534,6 +1534,16 @@ button.link {
   color: var(--danger);
 }
 
+/* A place the chain has not opened yet: its threshold and how far the lifetime value has come. */
+#wb-place-lock {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(214, 196, 160, 0.5);
+  border-radius: 12px;
+  background: rgba(60, 52, 40, 0.32);
+  line-height: 1.45;
+}
+
 .shark-danger {
   padding: 10px 14px;
   border-left: 3px solid var(--danger);
@@ -4362,13 +4372,15 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   margin-top: 8px;
 }
 
-#wb-inspect-paths {
+#wb-inspect-paths,
+#wb-inspect-parts {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
-#wb-inspect-path-list {
+#wb-inspect-path-list,
+#wb-inspect-part-list {
   display: grid;
   gap: 6px;
   margin-top: 6px;

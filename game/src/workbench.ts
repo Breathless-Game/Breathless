@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
-import { MAPS, MAP_ORDER, SHARK_WARNING, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, isUnlocked, lockProgress, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
 import { lang, onLangChange, pickName, t } from './i18n';
 import { SoftPaper } from './paper';
 import { Diver } from './diver';
@@ -758,13 +758,13 @@ export class Workbench {
     // as its clouds drift.
     const progress = this.hooks.progress();
     const drift = this.state === 'chart' && chartWeatherShows(snapshot) ? Math.floor(this.chartSecond * 4) : -1;
-    const key = [id, progress.selected, progress.bestValue, snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
+    const key = [id, progress.selected, progress.bestValue, String(progress.verified), snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
       .map((value) => typeof value === 'number' ? Math.round(value * 20) : value)
       .concat(drift)
       .join(':');
     if (key === this.chartWeatherKey && this.mapTex.image.width) return;
     this.chartWeatherKey = key;
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...progress, unlockAll: true }, true, snapshot, this.chartSecond, this.chartSeed);
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, progress, true, snapshot, this.chartSecond, this.chartSeed);
     this.mapTex.needsUpdate = true;
   }
 
@@ -1737,7 +1737,8 @@ export class Workbench {
    */
   private pickUpChart() {
     const progress = this.hooks.progress();
-    this.picked = progress.selected; // every place is open from the chart
+    // The place you last dived, if it is open; locked places can be looked at but not dived.
+    this.picked = isUnlocked(MAPS[progress.selected], progress) ? progress.selected : 'fjord';
     this.renderPins();
     this.chartEl.classList.remove('hidden', 'ready', 'revealing');
     // Measured from a steady camera, so it lands where the layout leaves room for it.
@@ -1827,17 +1828,18 @@ export class Workbench {
         const map = MAPS[id];
         const pin = document.createElement('button');
         pin.type = 'button';
-        pin.className = `wb-pin${id === this.picked ? ' picked' : ''}`;
+        const open = isUnlocked(map, this.hooks.progress());
+        pin.className = `wb-pin${open ? '' : ' locked'}${id === this.picked ? ' picked' : ''}`;
         pin.dataset.map = id; // placed over its spot on the sheet every frame (placePins)
         const dot = document.createElement('span');
         dot.className = 'wb-pin-dot';
-        dot.textContent = ROMAN[i];
+        dot.textContent = open ? ROMAN[i] : '🔒';
         const label = document.createElement('span');
         label.className = 'wb-pin-label';
         const name = document.createElement('b');
         name.textContent = pickName(map);
         const sub = document.createElement('small');
-        sub.textContent = mapDifficulty(map);
+        sub.textContent = open ? mapDifficulty(map) : t(`Bank ${map.unlockValue} value`, `入库价值 ${map.unlockValue}`);
         label.append(name, sub);
         pin.append(dot, label);
         pin.addEventListener('click', () => this.pickPlace(id));
@@ -1849,11 +1851,28 @@ export class Workbench {
 
   private pickPlace(id: MapId) {
     if (this.state !== 'chart') return;
-    // A second click on the chosen place dives.
-    if (this.picked === id) return this.dive();
+    // A second click on the chosen place dives (an open one).
+    if (this.picked === id) {
+      if (!isUnlocked(MAPS[id], this.hooks.progress())) return this.shakePin(id);
+      return this.dive();
+    }
     this.picked = id;
     for (const el of this.pinsEl.children) el.classList.toggle('picked', (el as HTMLElement).dataset.map === id);
     this.renderPlace();
+  }
+
+  /** Refresh the pins and the place panel: the chain read the lifetime value again (maps may have opened). */
+  progressChanged() {
+    if (this.state !== 'chart') return;
+    this.renderPins();
+  }
+
+  private shakePin(id: MapId) {
+    const pin = [...this.pinsEl.children].find((el) => (el as HTMLElement).dataset.map === id) as HTMLElement | undefined;
+    if (!pin) return;
+    pin.classList.remove('shake');
+    void pin.offsetWidth;
+    pin.classList.add('shake');
   }
 
   private openSynthesis() {
@@ -1929,7 +1948,15 @@ export class Workbench {
       ? t(`Ready: ${ready.join(', ')}`, `已备好：${ready.join('、')}`)
       : t('Nothing packed: you dive with the basics', '未装备：只带基础装备下潜');
     if (id) this.renderConditions(id);
-    ($('wb-dive') as HTMLButtonElement).disabled = !id;
+    const progress = this.hooks.progress();
+    const locked = !!id && !isUnlocked(MAPS[id], progress);
+    const lock = $('wb-place-lock');
+    lock.classList.toggle('hidden', !locked);
+    if (locked && id) {
+      const need = MAPS[id].unlockValue;
+      lock.textContent = `🔒 ${t(`Opens at ${need} lifetime banked value`, `累计入库价值达到 ${need} 开放`)} · ${lockProgress(progress)}`;
+    }
+    ($('wb-dive') as HTMLButtonElement).disabled = !id || locked;
     $('wb-return').classList.toggle('hidden', !this.hooks.canReturn?.());
   }
 
@@ -1957,6 +1984,7 @@ export class Workbench {
     const id = this.picked;
     const shot = this.previewBox.querySelector('canvas');
     if (!id || !shot || this.state !== 'chart') return;
+    if (!isUnlocked(MAPS[id], this.hooks.progress())) return this.shakePin(id); // the chain decides
     this.state = 'diving';
     const r = this.previewBox.getBoundingClientRect();
     const cover = document.createElement('div');

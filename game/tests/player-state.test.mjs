@@ -324,4 +324,10 @@ test('GAME_PROGRESS_RULES mirror upgrades.ts boat prices and ships.ts thresholds
   }
   const ships = await readFile(new URL('../src/ships.ts', import.meta.url), 'utf8');
   assert.deepEqual(ps.GAME_PROGRESS_RULES.shipThresholds, [...ships.matchAll(/threshold: (\d+)/g)].map((m) => BigInt(m[1])));
+  // maps.ts defaults (until the first read) are the deployed map thresholds, and a map opens only
+  // on a chain-read lifetime value, never on the cached one.
+  const maps = await readFile(new URL('../src/maps.ts', import.meta.url), 'utf8');
+  assert.deepEqual([...maps.matchAll(/unlockValue: (\d+),/g)].map((m) => BigInt(m[1])), ps.MAP_ORDER.map((id) => ps.GAME_PROGRESS_RULES.mapThresholds[id]));
+  assert.match(maps, /map\.unlockValue <= 0 \|\| \(progress\.verified && progress\.bestValue >= map\.unlockValue\)/);
+  assert.doesNotMatch(maps, /unlockAll/, 'no local switch opens every map');
 });

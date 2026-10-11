@@ -23,7 +23,11 @@ export interface MapDef {
   zoneCount: 1 | 2 | 3;
   /** Names shown on the depth gauge for the shelf zones; the gauge adds the Trench below them. */
   zoneLabels: readonly string[];
-  /** Total value of banked fish needed before this map opens. */
+  /**
+   * Lifetime banked value (player_state Progress.lifetime_value) needed before this map opens.
+   * The chain's ProgressConfig decides: setMapThresholds overwrites these defaults (the deployed
+   * values) on every read.
+   */
   unlockValue: number;
   blurb: string;
   sky: string;
@@ -96,7 +100,7 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 'Normal',
     zoneCount: 2,
     zoneLabels: ['Shallows', 'Sunken Forest'],
-    unlockValue: 0,
+    unlockValue: 150,
     blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees below.',
     sky: '#d6e6dc',
     nightSky: '#0a1620',
@@ -127,7 +131,7 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 'Hard',
     zoneCount: 3,
     zoneLabels: ['Shallows', 'Reef', 'Abyss'],
-    unlockValue: 0,
+    unlockValue: 1000,
     blurb: 'Open water under a storm front. Reef and abyss on the widest shelf.',
     sky: '#a8e3f5',
     nightSky: '#0b1430',
@@ -194,29 +198,36 @@ export function mapZoneLabel(label: string): string {
 
 export interface MapProgress {
   selected: MapId;
-  /** Highest total banked value ever reached, so selling fish later cannot re-lock a map. */
+  /**
+   * The lifetime banked value: the on-chain Progress.lifetime_value (record_catch adds each
+   * co-signed fish once). Saved only as a display cache; maps open on it only once `verified`.
+   */
   bestValue: number;
-  /** Demo switch: every map is open regardless of value. */
-  unlockAll: boolean;
+  /** bestValue came from this session's chain read for the connected wallet (never saved). */
+  verified: boolean;
 }
 
 const KEY = 'deepbreath.maps';
 
 export function loadMapProgress(): MapProgress {
-  const progress: MapProgress = { selected: 'fjord', bestValue: 0, unlockAll: false };
+  const progress: MapProgress = { selected: 'fjord', bestValue: 0, verified: false };
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey(KEY)) ?? '{}');
     if (saved.selected in MAPS) progress.selected = saved.selected;
     if (Number.isFinite(saved.bestValue)) progress.bestValue = saved.bestValue;
-    progress.unlockAll = saved.unlockAll === true;
   } catch {}
   return progress;
 }
 
 export function saveMapProgress(progress: MapProgress) {
   try {
-    localStorage.setItem(storageKey(KEY), JSON.stringify(progress));
+    localStorage.setItem(storageKey(KEY), JSON.stringify({ selected: progress.selected, bestValue: progress.bestValue }));
   } catch {}
+}
+
+/** The chain's map thresholds (ProgressConfig.map_thresholds), applied to MAPS. */
+export function setMapThresholds(thresholds: Record<MapId, number>) {
+  for (const id of MAP_ORDER) if (Number.isFinite(thresholds[id])) MAPS[id].unlockValue = thresholds[id];
 }
 
 /** What shark waters say before you dive there (the chart's place card and the one-time warning). */
@@ -246,6 +257,13 @@ export function bankValue(bank: readonly FishSpec[]): number {
   return bank.reduce((sum, fish) => sum + fishValue(fish), 0);
 }
 
+/** "you have N" under a locked map; "checking…" until the chain read for this wallet came back. */
+export function lockProgress(progress: MapProgress): string {
+  const have = Math.floor(progress.bestValue);
+  return progress.verified ? t(`you have ${have}`, `当前 ${have}`) : t(`checking the chain… (last seen ${have})`, `正在读取链上进度…（上次 ${have}）`);
+}
+
+/** Open: free from the start, or the chain-read lifetime value reached its threshold (a cached value never opens a map). */
 export function isUnlocked(map: MapDef, progress: MapProgress): boolean {
-  return progress.unlockAll || progress.bestValue >= map.unlockValue;
+  return map.unlockValue <= 0 || (progress.verified && progress.bestValue >= map.unlockValue);
 }
