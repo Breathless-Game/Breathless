@@ -3,7 +3,7 @@ import { guideArt, type GuideArt } from './guide-art';
 import { currentLesson, LESSONS, loadTutorial, recordLesson, saveTutorial, type LessonId } from './tutorial';
 import { lang, onLangChange, t } from './i18n';
 
-type ChapterId = 'prepare' | 'assembly' | 'gear' | 'dive' | 'return' | 'sonar';
+type ChapterId = 'prepare' | 'assembly' | 'gear' | 'synthesis' | 'dive' | 'return' | 'sonar';
 interface Chapter {
   id: ChapterId; tab: string; title: string; subtitle: string; art: GuideArt;
   caption: string; steps: readonly [string, string][]; note: string;
@@ -18,13 +18,16 @@ const CHAPTERS: readonly Chapter[] = [
   { id: 'gear', tab: '装备', title: '按任务，带合适的装备', subtitle: '03 / PACK LIGHT', art: 'gear', caption: '游得顺 · 返航有余地 · 看得清',
     steps: [['脚蹼', '改善普通游速与加速度；不会提高紧急上浮速度。'], ['应急气瓶', '只延长游戏里水下换气后的返航窗口。它不改变真实憋气能力。'], ['探照灯', '改善黑暗中的光距和亮度。1–6 快切装备，按住 Tab 打开轮盘，松开确认。']],
     note: '快捷键顺序：1 网 · 2 杆 · 3 线轮 · 4 脚蹼 · 5 气瓶 · 6 灯。未打包的装备不能切换。' },
-  { id: 'dive', tab: '下潜', title: '慢慢下潜，先去浅水练习', subtitle: '04 / YOUR FIRST FISH', art: 'dive', caption: 'HOLDING → 方向键 → Space',
+  { id: 'synthesis', tab: '合成', title: '先做材料，再升级模块', subtitle: '04 / SYNTHESIS STATION', art: 'bench', caption: '鱼鳞片 + 纤维 → 鱼饵 · 铁屑 + 晶体 → 护板',
+    steps: [['打开合成台', '在工作台点击半隐藏的绿色合成台；点击材料或拖进中央区域，配方刚好齐全时自动合成。'], ['合成两种成品', '潮汐鱼饵 = 鱼鳞片 ×2 + 珊瑚纤维 ×1 + 38 Pearl；复合护板 = 铁屑 ×3 + 深度晶体 ×1 + 珊瑚纤维 ×2 + 128 Pearl。'], ['升级模块', '先准备 1 个复合护板，再支付对应 Pearl：灯具 58/299、杆身 68/329、线轮 78/389、网具 89/499、脚蹼 99/549、气瓶 119/699、声纳 149/899（Lv2/Lv3）。']],
+    note: '物资库存按钱包保存；支付或链上扣款失败时材料、护板和等级都保持原样。鱼饵与护板是合成台产物，合成台设置不影响装配箱。' },
+  { id: 'dive', tab: '下潜', title: '慢慢下潜，先去浅水练习', subtitle: '05 / YOUR FIRST FISH', art: 'dive', caption: 'HOLDING → 方向键 → Space',
     steps: [['选择输入', '键盘 / 模拟模式：按住 Shift 表示 HOLDING。摄像头模式：以呼吸检测信号为准。'], ['向下游', 'WASD / 方向键移动；只有 HOLDING 才能从水面向下游。先在 3 米附近练习。'], ['找一条鱼', '靠近鱼，让鱼进入网口，再按 Space。错过时等网恢复后再试。']],
     note: '键盘模式无需真实憋气。打开这本书时游戏暂停；关闭后恢复，先确认呼吸状态再行动。' },
-  { id: 'return', tab: '返航', title: '到水面，才算带回收获', subtitle: '05 / COME HOME', art: 'return', caption: 'W / ↑ 上浮 → 自动存鱼 → C 收藏',
+  { id: 'return', tab: '返航', title: '到水面，才算带回收获', subtitle: '06 / COME HOME', art: 'return', caption: 'W / ↑ 上浮 → 自动存鱼 → C 收藏',
     steps: [['及时回头', '保持游戏中的 HOLDING，按 W / ↑ 上浮；到水面自动存鱼。不要等到网满才返航。'], ['紧急返航', '水下变成 BREATHING 会触发倒计时和自动上浮。错过窗口会 BLACKOUT，失去这次网里的鱼。'], ['收藏与升级', '按 C 查看存下的鱼。NFT 与交易需要额外网络和链上费用；卖鱼所得 Pearls 可用于工作台升级。']],
     note: '靠近船、到水面且本次曾潜到 3 米以下时，按 F 上船。Esc 也可回工作台。' },
-  { id: 'sonar', tab: '声纳', title: '沿着脉冲，找到返航路线', subtitle: '06 / FOLLOW THE SIGNAL', art: 'sonar', caption: '打包声纳 → 海图设颜色 → V 投放',
+  { id: 'sonar', tab: '声纳', title: '沿着脉冲，找到返航路线', subtitle: '07 / FOLLOW THE SIGNAL', art: 'sonar', caption: '打包声纳 → 海图设颜色 → V 投放',
     steps: [['准备信标', '把声纳放入托盘，出发前在海图旁设置颜色。'], ['投放声纳', '下潜中按 V 投放。缆绳与脉冲节点提供微光和路线提示。'], ['循光返航', '声纳不是空气补给，也不会延长憋气。结合深度和网内收获判断何时回头。']],
     note: '声纳可升级缆绳长度：10 / 17 / 26 米。它不占用 1–6 的快捷装备位。' },
 ];
