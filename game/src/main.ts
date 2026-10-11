@@ -1315,9 +1315,20 @@ function openHealthDesk() {
   if (onTitleOnly()) healthDesk.show();
 }
 
-/** AQUARIUM: a table comes up and the tank drops onto it. */
+/** AQUARIUM: a table comes up and the tank drops onto it (from the health desk too: that table sinks meanwhile). */
 function openAquarium() {
-  if (onTitleOnly()) aquarium.show();
+  if (leaveHealthDesk() || onTitleOnly()) aquarium.show();
+}
+
+/**
+ * Another fish clicked while on the health desk: it sinks while the next table
+ * rises (as the workbench does for SETTINGS). False if not there, or busy (the
+ * report held up, or the table still moving).
+ */
+function leaveHealthDesk() {
+  if (!healthDesk.visible || !healthDesk.atRest || aboard) return false;
+  healthDesk.leave();
+  return true;
 }
 
 /**
@@ -1647,6 +1658,7 @@ titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.
 /** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
   if (settingsDesk.visible || loginGate.visible) return;
+  if (healthDesk.visible && !leaveHealthDesk()) return; // the health desk sinks while this one rises
   if (workbench.visible) {
     if (!workbench.atRest) return;
     deskFromBench = true;

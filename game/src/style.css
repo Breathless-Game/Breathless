@@ -3943,3 +3943,35 @@ button:disabled {
   font-size: 22px;
   border-width: 2px;
 }
+
+/* The health report held up (health-desk.ts): over the blurred table and the title fish. */
+#hd-held {
+  position: fixed;
+  inset: 0;
+  z-index: 33;
+}
+
+#hd-held canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.hd-held-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.5);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+
+#hd-held.open .hd-held-bg {
+  opacity: 1;
+}
+
+#hd-held .table-hint {
+  z-index: 1;
+}

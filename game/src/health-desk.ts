@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RARITY } from './fish';
+import { SoftPaper } from './paper';
 import { TableScene, type TableHooks } from './table-scene';
 import { drawTraces, healthLines, loadTrips, mapNames, rarityCounts, secs, tripDate, type TripRecord } from './trip';
 
@@ -7,8 +8,18 @@ import { drawTraces, healthLines, loadTrips, mapNames, rarityCounts, secs, tripD
 // trip report laid out on it as a sheet of paper, and a bamboo jar of fortune
 // sticks in the far right corner, one stick per earlier trip. Hovering a stick
 // lifts it and shows that trip; clicking it lays that trip out on the paper.
+// The report is the same soft paper as the workbench's sea chart (paper.ts): it
+// wrinkles under the pointer, and clicking it picks it up, carried to the middle
+// of the screen over the blurred table, leaning toward the pointer; a click
+// anywhere (or Esc) puts it down again.
 
 const PAPER = { w: 5.9, d: 4.15, x: -1.1, z: 0.45, yaw: 0.04 };
+const REST_POS = new THREE.Vector3(PAPER.x, 0.005, PAPER.z);
+const REST_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -PAPER.yaw);
+const PICKUP_S = 0.7;
+const HELD_CURL = 0.45; // held up, the ends curl a little: it's paper (on the table they lie flat)
+const HELD_FILL = 0.76; // of the screen's width (or height), whichever is tighter, the held sheet fills
+const TILT = { x: 0.14, y: 0.2 }; // how far the held sheet leans toward the pointer, radians edge to edge
 const TEX_W = 1400;
 const TEX_H = Math.round((TEX_W * PAPER.d) / PAPER.w);
 const JAR = { x: 3.95, z: -0.35, r: 0.5, h: 1.15 };
@@ -24,8 +35,23 @@ interface Stick {
   lift: number;
 }
 
+const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+const easeOut = (u: number) => 1 - (1 - u) ** 3;
+
 export class HealthDesk extends TableScene {
   private paperTex: THREE.CanvasTexture;
+  private sheet: SoftPaper;
+  private paper = new THREE.Group(); // the sheet's pose: on the table, carried, or held up
+  private paperState: 'table' | 'lifting' | 'held' | 'dropping' = 'table';
+  private paperTween: { t: number; dur: number; fn: (u: number) => void; done: () => void } | null = null;
+  // Held up, the sheet is drawn on its own layer over the blurred table (like the workbench's chart).
+  private heldEl: HTMLElement;
+  private heldRenderer: THREE.WebGLRenderer;
+  private heldScene = new THREE.Scene();
+  private heldQ = new THREE.Quaternion();
+  private tilt = { x: 0, y: 0 };
+  private pointer = { x: 0.5, y: 0.5 };
+  private stirFrom: { x: number; z: number; t: number } | null = null;
   private sticks: Stick[] = [];
   private jar = new THREE.Group();
   private hovered: Stick | null = null;
@@ -41,12 +67,37 @@ export class HealthDesk extends TableScene {
     this.paperTex = new THREE.CanvasTexture(paperCanvas);
     this.paperTex.colorSpace = THREE.SRGBColorSpace;
     this.paperTex.anisotropy = 8;
-    const paper = new THREE.Mesh(new THREE.PlaneGeometry(PAPER.w, PAPER.d), new THREE.MeshStandardMaterial({ map: this.paperTex, roughness: 0.95 }));
-    paper.rotation.set(-Math.PI / 2, 0, PAPER.yaw);
-    paper.position.set(PAPER.x, 0.012, PAPER.z);
-    paper.receiveShadow = true;
-    this.scene.add(paper);
+    // Soft paper, lying flat (no fold: a report, not a folded chart).
+    this.sheet = new SoftPaper(PAPER.w, PAPER.d, new THREE.MeshStandardMaterial({ map: this.paperTex, roughness: 0.95, side: THREE.DoubleSide }));
+    this.sheet.fold = 0;
+    this.sheet.curl = 0;
+    this.sheet.reset();
+    this.sheet.mesh.castShadow = this.sheet.mesh.receiveShadow = true;
+    this.paper.add(this.sheet.mesh);
+    this.paper.position.copy(REST_POS);
+    this.paper.quaternion.copy(REST_Q);
+    this.scene.add(this.paper);
     this.buildJar();
+
+    this.heldEl = document.createElement('div');
+    this.heldEl.id = 'hd-held';
+    this.heldEl.className = 'hidden';
+    const heldBg = document.createElement('div');
+    heldBg.className = 'hd-held-bg';
+    const heldCanvas = document.createElement('canvas');
+    const heldHint = document.createElement('div');
+    heldHint.className = 'table-hint small';
+    heldHint.textContent = 'Click anywhere or press Esc to put it down';
+    this.heldEl.append(heldBg, heldCanvas, heldHint);
+    document.body.append(this.heldEl);
+    this.heldRenderer = new THREE.WebGLRenderer({ canvas: heldCanvas, antialias: true, alpha: true });
+    this.heldRenderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.heldRenderer.setClearColor(0x000000, 0);
+    this.heldScene.add(new THREE.HemisphereLight('#e6f6ff', '#4a3420', 1.35));
+    const key = new THREE.DirectionalLight('#fff1dc', 2.2);
+    key.position.set(-4, 10, 5);
+    this.heldScene.add(key);
+    this.heldEl.addEventListener('click', () => this.paperState === 'held' && this.putDown());
 
     this.tip = document.createElement('div');
     this.tip.id = 'health-tip';
@@ -61,9 +112,15 @@ export class HealthDesk extends TableScene {
     window.addEventListener('pointerup', (e) => this.onUp(e));
   }
 
-  /** Esc: back up to the title. */
+  /** Esc: put the held report down; from the bare table, back up to the title. */
   escape() {
-    this.leave();
+    if (this.paperState === 'held') this.putDown();
+    else if (this.paperState === 'table') this.leave();
+  }
+
+  /** Settled, and the report lying on the table (not held up or on its way). */
+  get atRest() {
+    return super.atRest && this.paperState === 'table';
   }
 
   protected onShow() {
@@ -75,6 +132,17 @@ export class HealthDesk extends TableScene {
   protected onHide() {
     this.hovered = null;
     this.tip.classList.add('hidden');
+    // Gone mid-pickup: the report goes straight back onto the table.
+    this.paperTween = null;
+    this.paperState = 'table';
+    this.scene.add(this.paper);
+    this.paper.position.copy(REST_POS);
+    this.paper.quaternion.copy(REST_Q);
+    this.sheet.curl = 0;
+    this.sheet.onTable = true;
+    this.sheet.reset();
+    this.heldEl.classList.add('hidden');
+    this.heldEl.classList.remove('open');
   }
 
   protected onFrame(dt: number) {
@@ -83,6 +151,121 @@ export class HealthDesk extends TableScene {
       s.lift += ((s === this.hovered ? 1 : 0) - s.lift) * k;
       s.mesh.position.set(s.base.x, s.base.y + s.lift * 0.45, s.base.z);
     }
+    const tw = this.paperTween;
+    if (tw) {
+      tw.t = Math.min(tw.dur, tw.t + dt);
+      tw.fn(tw.t / tw.dur);
+      if (tw.t >= tw.dur) {
+        this.paperTween = null;
+        tw.done();
+      }
+    }
+    if (this.paperState === 'held') {
+      // Held up, it leans a little toward the pointer.
+      const e = 1 - Math.exp(-dt * 4);
+      this.tilt.x += ((this.pointer.y - 0.5) * TILT.x - this.tilt.x) * e;
+      this.tilt.y += ((this.pointer.x - 0.5) * TILT.y - this.tilt.y) * e;
+      const lean = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.tilt.x, this.tilt.y, 0));
+      const cam = this.camera.quaternion;
+      this.paper.quaternion.copy(cam).multiply(lean).multiply(cam.clone().invert().multiply(this.heldQ));
+    }
+    this.sheet.update(dt);
+    if (!this.heldEl.classList.contains('hidden')) {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const size = this.heldRenderer.getSize(new THREE.Vector2());
+      if (size.x !== w || size.y !== h) {
+        this.heldRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.heldRenderer.setSize(w, h, false);
+      }
+      this.camera.updateMatrixWorld();
+      this.heldRenderer.render(this.heldScene, this.camera);
+    }
+  }
+
+  // ---- Picking the report up ---------------------------------------------
+
+  /**
+   * Picked up: lifted off the table, its ends curling a little, and carried to the
+   * middle of the screen square to the camera, onto the held layer over the blurred
+   * table (like the workbench's sea chart).
+   */
+  private pickUp() {
+    if (this.paperState !== 'table' || this.state !== 'idle') return;
+    this.paperState = 'lifting';
+    this.hovered = null;
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const to = this.heldPose();
+    this.heldQ.copy(to.q);
+    this.tilt = { x: 0, y: 0 };
+    this.heldScene.add(this.paper); // over the blurred table from here on
+    this.heldEl.classList.remove('hidden');
+    void this.heldEl.offsetWidth; // let the backdrop fade in from nothing
+    this.heldEl.classList.add('open');
+    this.sheet.onTable = false;
+    const p0 = this.paper.position.clone();
+    const q0 = this.paper.quaternion.clone();
+    this.paperTween = {
+      t: 0,
+      dur: PICKUP_S,
+      fn: (u) => {
+        const e = easeInOut(u);
+        this.paper.position.lerpVectors(p0, to.pos, e);
+        this.paper.position.y += Math.sin(u * Math.PI) * 0.6; // up off the table first
+        // It stays flat while it comes up, then turns to face us.
+        this.paper.quaternion.slerpQuaternions(q0, to.q, easeInOut(Math.max(0, (u - 0.15) / 0.85)));
+        this.sheet.curl = HELD_CURL * easeOut(u);
+      },
+      done: () => (this.paperState = 'held'),
+    };
+  }
+
+  /** Put down again: carried back and set on the table, where the air under it lifts the edges. */
+  private putDown() {
+    if (this.paperState !== 'held') return;
+    this.paperState = 'dropping';
+    this.heldEl.classList.remove('open');
+    const p0 = this.paper.position.clone();
+    const q0 = this.paper.quaternion.clone();
+    this.paperTween = {
+      t: 0,
+      dur: PICKUP_S * 0.85,
+      fn: (u) => {
+        const e = easeInOut(u);
+        this.paper.position.lerpVectors(p0, REST_POS, e);
+        this.paper.position.y += Math.sin(u * Math.PI) * 0.5;
+        this.paper.quaternion.slerpQuaternions(q0, REST_Q, easeInOut(Math.min(1, u / 0.85)));
+        this.sheet.curl = HELD_CURL * (1 - e);
+      },
+      done: () => {
+        this.scene.add(this.paper); // back on the table, in its light and shadows
+        this.heldEl.classList.add('hidden');
+        this.sheet.onTable = true;
+        this.sheet.knock(0, 0, 1.2, 2.5);
+        this.jolt(0.04);
+        this.paperState = 'table';
+      },
+    };
+  }
+
+  /**
+   * Where the sheet has to be to fill most of the screen: square to the camera (a
+   * plane parallel to the screen projects without distortion), centred, at the
+   * depth where its width is HELD_FILL of the screen's (or its height of the height's).
+   */
+  private heldPose() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const width = Math.min(w * HELD_FILL, h * HELD_FILL * (PAPER.w / PAPER.d));
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const depth = (PAPER.w * h) / (2 * tanHalf * width);
+    this.camera.updateMatrixWorld();
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    const pos = this.camera.position.clone().addScaledVector(forward, depth);
+    // The sheet lies in the table plane facing up; tip it up to face the camera.
+    const q = this.camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+    return { pos, q };
   }
 
   // ---- The jar ----------------------------------------------------------------
@@ -273,7 +456,7 @@ export class HealthDesk extends TableScene {
   // ---- Pointer ----------------------------------------------------------------
 
   private stickAt(e: PointerEvent): Stick | null {
-    if (!this.ours(e) || !this.sticks.length) return null;
+    if (this.paperState !== 'table' || !this.ours(e) || !this.sticks.length) return null;
     this.setRay(e);
     const hit = this.ray.intersectObjects(this.sticks.map((s) => s.mesh), true)[0];
     if (!hit) return null;
@@ -282,13 +465,30 @@ export class HealthDesk extends TableScene {
     return o ? this.sticks[o.userData.stick as number] : null;
   }
 
+  /** Where the pointer is on the report (its local x / z), on the table or held up; null if off it. */
+  private paperAt(e: PointerEvent): THREE.Vector3 | null {
+    const onTable = this.paperState === 'table' && this.ours(e);
+    if (!onTable && this.paperState !== 'held') return null;
+    this.setRay(e);
+    const hit = this.ray.intersectObject(this.sheet.mesh, false)[0];
+    return hit ? this.sheet.mesh.worldToLocal(hit.point.clone()) : null;
+  }
+
   private onMove(e: PointerEvent) {
     if (!this.visible) return;
-    const s = this.stickAt(e);
-    if (s !== this.hovered) {
-      this.hovered = s;
-      document.body.style.cursor = s ? 'pointer' : '';
+    this.pointer = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight };
+    // Moving over the paper wrinkles it there (paper.ts), not as a whole.
+    const at = this.paperAt(e);
+    const now = performance.now();
+    const last = this.stirFrom;
+    if (at && last && now - last.t < 100) {
+      const dt = Math.max(1, now - last.t) / 1000;
+      this.sheet.stir(at.x, at.z, (at.x - last.x) / dt, (at.z - last.z) / dt);
     }
+    this.stirFrom = at ? { x: at.x, z: at.z, t: now } : null;
+    const s = this.stickAt(e);
+    if (s !== this.hovered) this.hovered = s;
+    document.body.style.cursor = s || (at && this.paperState === 'table') ? 'pointer' : '';
     if (!s) {
       this.tip.classList.add('hidden');
       return;
@@ -308,7 +508,12 @@ export class HealthDesk extends TableScene {
 
   private onUp(e: PointerEvent) {
     const s = this.stickAt(e);
-    if (!s || s.record === this.shown) return;
+    if (!s) {
+      // A click on the report picks it up.
+      if (this.paperState === 'table' && this.paperAt(e)) this.pickUp();
+      return;
+    }
+    if (s.record === this.shown) return;
     // The paper on the table goes into the jar; the picked trip comes out onto the table.
     const all = [this.shown, ...this.sticks.map((x) => x.record)].filter((x): x is TripRecord => !!x && x !== s.record);
     all.sort((a, b) => b.at - a.at);
