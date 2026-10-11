@@ -15,7 +15,7 @@ import { storageKey } from './wallet';
 // to their own Favorites tank instead. This file runs the tanks, the favourites,
 // the bar and the fish's card; the table draws and swims them.
 
-export const TANK_SIZE = 50;
+export const TANK_SIZE = 10;
 const FAVORITES_KEY = 'favorites';
 
 export interface AquariumHooks {
