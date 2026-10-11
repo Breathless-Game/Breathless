@@ -6,6 +6,8 @@ import ts from 'typescript';
 // Stand-in for wallet.ts: equipment.ts only needs storageKey, and the real one pulls in Umi and Phantom.
 // It maps names to the pre-namespacing keys so the fixtures below keep their shape.
 const WALLET_STUB = `data:text/javascript;base64,${Buffer.from("export const storageKey = (name) => (name.startsWith('deepbreath.') ? name : 'deepbreath.' + name);").toString('base64')}`;
+const lampLightingCode = 'export const lampProfile=(level,path)=>{const tier=Math.max(1,Math.min(3,Math.floor(Number(level)||1)));const wide=path==="wideLamp";const profiles=wide?[[18,48,.65,2,.55,.12,.03],[24,60,1.03,2,.8,.2,.045],[32,74,1.25,2,.9,.24,.05]]:[[18,48,.65,2,.55,.12,.03],[33,74,.52,2,.3,.09,.018],[48,102,.43,2,.24,.075,.014]];const p=profiles[tier-1];return {distance:p[0],intensity:p[1],angle:p[2],decay:p[3],penumbra:p[4],scatter:p[5],extinction:p[6]};};';
+const LAMP_LIGHTING_STUB = `data:text/javascript;base64,${Buffer.from(lampLightingCode).toString('base64')}`;
 
 // Transpile market.ts and equipment.ts in memory to keep tests usable on Node 20.
 async function load(path) {
@@ -13,7 +15,9 @@ async function load(path) {
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   });
-  const code = outputText.replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`);
+  const code = outputText
+    .replace(/from ['"]\.\/wallet['"]/g, `from '${WALLET_STUB}'`)
+    .replace(/from ['"]\.\/lamp-lighting['"]/g, `from '${LAMP_LIGHTING_STUB}'`);
   return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
 }
 
@@ -32,6 +36,7 @@ const {
   nftStep,
   pearls,
   retryDelayMs,
+  sellBatches,
   sellQuote,
 } = await load('../src/market.ts');
 const equipment = await load('../src/equipment.ts');
@@ -327,4 +332,30 @@ test('Pearl amounts are pluralised', () => {
   assert.equal(pearls(1), '1 Pearl');
   assert.equal(pearls(0), '0 Pearls');
   assert.equal(pearls(12), '12 Pearls');
+});
+
+test('sellBatches: at most 24 fish and 2 transfers per /sell-batch request, every sale kept once', () => {
+  const sale = (n, tx) => ({ assetId: `fish${n}`, transferTx: tx });
+  const check = (sales, expectedRequests) => {
+    const out = sellBatches(sales, 24, 2);
+    for (const b of out) {
+      assert.ok(b.length >= 1 && b.length <= 24, `${b.length} fish`);
+      assert.ok(new Set(b.map((s) => s.transferTx)).size <= 2);
+    }
+    assert.deepEqual(out.flat().map((s) => s.assetId).sort(), sales.map((s) => s.assetId).sort());
+    assert.equal(out.length, expectedRequests);
+    return out;
+  };
+  // A fresh sale packs 20 fish per transfer, so 24 fish over 2 transfers is still one request.
+  const fresh = Array.from({ length: 24 }, (_, i) => sale(i, i < 20 ? 'T1' : 'T2'));
+  assert.deepEqual(check(fresh, 1)[0], fresh);
+  // 47 fish over 3 transfers (20/20/7).
+  check(Array.from({ length: 47 }, (_, i) => sale(i, `T${Math.floor(i / 20)}`)), 2);
+  // A resume that mixes a fresh 10-fish transfer with 5 older single-fish ones, interleaved.
+  const older = Array.from({ length: 5 }, (_, i) => sale(100 + i, `OLD${i}`));
+  const mixed = Array.from({ length: 10 }, (_, i) => sale(i, 'NEW')).flatMap((s, i) => (older[i] ? [s, older[i]] : [s]));
+  check(mixed, 3);
+  // Every fish its own transfer (handed over earlier, found by getSignaturesForAddress).
+  check(Array.from({ length: 7 }, (_, i) => sale(i, `S${i}`)), 4);
+  assert.deepEqual(sellBatches([], 24, 2), []);
 });

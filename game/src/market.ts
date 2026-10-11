@@ -153,6 +153,28 @@ export function nextToSell(bank: readonly BankedFish[]): BankedFish | null {
   return bank.find((f) => f.sellQueued && f.nft === 'minted' && !f.legacy) ?? null;
 }
 
+/**
+ * A banked fish that has not started settling: its NFT is only queued (never sent to mint, never
+ * failed a mint, no asset or transaction), and it is in no sale flow. Only such a fish can be taken
+ * back; anything minting, minted, failed or sale-pending is out of reach for good.
+ */
+export function unsettled(f: BankedFish): boolean {
+  return f.nft === 'pending' && !f.legacy && !f.sellQueued && !f.assetId && !f.mintTx && !f.mintTries;
+}
+
+/**
+ * What a shark bite takes from the bank: the fish banked during this dive (`thisDive`, by identity)
+ * that are still unsettled and that the NFT queue is not working on right now (`busy`: minting or
+ * selling it). Fish from earlier dives are never in `thisDive`, so they are never taken.
+ */
+export function biteForfeit(
+  bank: readonly BankedFish[],
+  thisDive: ReadonlySet<BankedFish>,
+  busy: (f: BankedFish) => boolean = () => false,
+): BankedFish[] {
+  return bank.filter((f) => thisDive.has(f) && unsettled(f) && !busy(f));
+}
+
 export type SellQuote =
   | { ok: true; pearls: number; mintFirst: boolean }
   | { ok: false; reason: 'paid-out' | 'minting' };
@@ -204,4 +226,35 @@ export function addBankedValue(lifetime: number, added: number): number {
 /** Errors that mean the burner wallet cannot pay (for the upload or the transaction). */
 export function isFundsError(message: string): boolean {
   return /insufficient|0x1\b|debit an account|not enough (balance|funds|sol)/i.test(message);
+}
+
+/**
+ * Split /sell-batch sales into requests the market accepts: at most `maxFish` fish and at most
+ * `maxTxs` different transfer transactions each (sensor/market-rules.mjs MAX_BATCH, MAX_BATCH_TXS).
+ * Fish moved by the same transfer stay together and keep their order; a resumed sale can mix many
+ * older transfers, which then simply take more requests.
+ */
+export function sellBatches<T extends { transferTx: string }>(sales: T[], maxFish: number, maxTxs: number): T[][] {
+  const byTx = new Map<string, T[]>();
+  for (const s of sales) {
+    const group = byTx.get(s.transferTx);
+    if (group) group.push(s);
+    else byTx.set(s.transferTx, [s]);
+  }
+  const out: T[][] = [];
+  let batch: T[] = [];
+  let txs = new Set<string>();
+  for (const [tx, group] of byTx) {
+    for (const s of group) {
+      if (batch.length >= maxFish || (!txs.has(tx) && txs.size >= maxTxs)) {
+        out.push(batch);
+        batch = [];
+        txs = new Set();
+      }
+      batch.push(s);
+      txs.add(tx);
+    }
+  }
+  if (batch.length) out.push(batch);
+  return out;
 }

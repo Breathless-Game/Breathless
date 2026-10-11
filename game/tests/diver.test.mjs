@@ -20,11 +20,14 @@ async function moduleUrl(file, dependencies = {}) {
 
 const gearUrl = await moduleUrl('gear');
 const fxUrl = await moduleUrl('fx');
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl }));
+const lampLightingUrl = await moduleUrl('lamp-lighting');
+const conceptUrl = await moduleUrl('diver-designs');
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './diver-designs': conceptUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
-const { Fish, ZONES, rollFish } = await import(await moduleUrl('fish', { './rng': rngUrl, './depth-odds': depthOddsUrl }));
+const marineUrl = await moduleUrl('marine');
+const { Fish, ZONES, rollFish } = await import(await moduleUrl('fish', { './rng': rngUrl, './depth-odds': depthOddsUrl, './marine': marineUrl }));
 
 function createDiver(quality = RENDER_QUALITY.high, y = -20) {
   const scene = new THREE.Scene();
@@ -153,7 +156,10 @@ test('surfacing fast punches white water up at the head; drifting up does not', 
     assert.equal(burst.length > 0, splashes, `climbing at ${speed} m/s`);
     if (!splashes) continue;
     const middle = burst.reduce((sum, position) => sum + position.x, 0) / burst.length;
-    assert.ok(middle > diver.pos.x + 0.2, 'the burst is at the head, not the fins');
+    const suitScale=diver.group.children[0].scale.x;
+    const headX=diver.pos.x+0.9*suitScale*Math.cos(diver.group.children[0].rotation.z);
+    const finsX=diver.pos.x-2*suitScale;
+    assert.ok(Math.abs(middle-headX)<Math.abs(middle-finsX), 'the burst is nearer the scaled head than the fins');
     assert.ok(burst.some(position => position.y > 0.3));
   }
 });
@@ -389,6 +395,18 @@ test('the headlamp remains attached to the rotating head in deep water', () => {
   const breath = diver.breathPoint.getWorldPosition(new THREE.Vector3());
   assert.ok(light.distanceTo(breath) < 0.5);
   assert.ok(diver.headlamp.intensity > 0);
+});
+
+test('headlamp keeps direct output and visible water scatter in sync', () => {
+  const { diver } = createDiver(RENDER_QUALITY.high, -24);
+  diver.setLampStats(48, 102, 0.43, 0.075, 2, 0.24, 0.014);
+  diver.setLampEnvironment(0, true);
+  diver.update(1 / 60, 0, 24);
+  const beam = diver.group.getObjectByName('diver-lamp-scatter');
+  assert.ok(beam, 'scatter cone is attached to the diver');
+  assert.ok(diver.headlamp.intensity > 0, 'direct spotlight is active at depth');
+  assert.ok(beam.material.opacity > 0, 'water scatter is visible with the direct beam');
+  assert.equal(diver.headlamp.decay, 2);
 });
 
 function createFish(seed = 42, zone = ZONES[1]) {
