@@ -7,6 +7,7 @@ import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
 import { WaterSurfaceMaterial } from './water';
 import { waterGeometry } from './water-geometry';
 import { WeatherCycle, type WeatherMode } from './weather';
+import { rogueProfile, type BoatPose } from './storm';
 import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
@@ -172,6 +173,12 @@ export class World {
    * storm's sheet lightning holds off and the two never flash together.
    */
   quietWeatherLightning = false;
+  /** How a capsize has left the boat, on top of its bobbing (see storm.ts). Null: upright. */
+  boatPose: BoatPose | null = null;
+  // A rogue wave: where its crest is, which way it travels and how tall it stands (0: none).
+  private rogueX = 0;
+  private rogueDir = 1;
+  private rogueHeight = 0;
   private lastDecorationTime = 0;
   readonly dayCycle = new DayCycle();
   readonly weather = new WeatherCycle();
@@ -236,6 +243,7 @@ export class World {
   setMap(map: MapDef) {
     this.map = map;
     this.seabedY = -mapDepth(map);
+    this.weather.setClimate(map.climate);
     waterColors = toPalette(map);
     // Apply each map's palette relative to the open-ocean reference while
     // preserving the continuous dawn/dusk colors and the weather transition.
@@ -981,8 +989,27 @@ export class World {
    */
   updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
     // Float on the sea clock even while the shipyard pauses gameplay physics.
-    this.boat.position.y = 0.25 + Math.sin(this.waveTime * 1.3) * 0.18 * this.swell() * this.map.waves;
-    this.boat.rotation.z = Math.sin(this.waveTime * 1.1) * 0.05 * this.swell() * this.map.waves;
+    // In ordinary weather the boat bobs gently. As a storm piles up the swell it rides the
+    // surface that is really under its keel (the water shader's waves), or the big seas
+    // would wash straight through the hull.
+    const sea = this.swell() * this.map.waves;
+    const riding = this.heavySea();
+    const pose = this.boatPose;
+    const x = pose?.surge ?? 0;
+    // A hull lying keel up does not ride the swell as freely.
+    const afloat = 1 - Math.min(1, (pose?.roll ?? 0) / Math.PI);
+    // A rogue wave lifts the boat and tips it down its face before anything else happens.
+    const ahead = (x - this.rogueX) * this.rogueDir;
+    const rogue = this.rogueHeight * rogueProfile(ahead);
+    const slope = (this.rogueHeight * rogueProfile(ahead + 0.5) - this.rogueHeight * rogueProfile(ahead - 0.5)) * this.rogueDir;
+    const pitch = Math.atan(Math.cos(x * 0.15 + this.waveTime * 1.3) * 0.0525 * sea);
+    this.boat.position.x = x;
+    this.boat.position.y = 0.25 + THREE.MathUtils.lerp(Math.sin(this.waveTime * 1.3) * 0.18 * sea, this.swellAt(x, 0), riding)
+      + rogue * 0.9 - (pose?.sink ?? 0);
+    this.boat.rotation.z = THREE.MathUtils.lerp(Math.sin(this.waveTime * 1.1) * 0.05 * sea, pitch, riding) * (0.35 + 0.65 * afloat)
+      + Math.atan(slope) * 1.3 * afloat + (pose?.pitch ?? 0);
+    this.boat.rotation.x = pose?.roll ?? 0;
+    this.boat.rotation.y = pose?.yaw ?? 0;
     this.lastSceneTime = time;
     this.lastCameraY = cameraY;
     this.lastCameraX = cameraX;
@@ -1065,7 +1092,8 @@ export class World {
     this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
     const waterMaterial = this.surface.material as WaterSurfaceMaterial;
-    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves);
+    // The shader applies the wind's lift itself; a storm on rough seas piles more on top.
+    waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves * (1 + weather.storm * this.map.stormSwell));
     waterMaterial.color.multiply(this.surfaceTint);
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
     if (this.kelp) {
@@ -1090,7 +1118,50 @@ export class World {
 
   /** How much the wind lifts the waves; the scenery's floats ride the same swell. */
   private swell() {
-    return 1 + this.weather.state.wind * 0.75;
+    const weather = this.weather.state;
+    return (1 + weather.wind * 0.75) * (1 + weather.storm * this.map.stormSwell);
+  }
+
+  /** 0 in ordinary weather to 1 once a storm has piled up the swell on a map with rough seas. */
+  private heavySea() {
+    return THREE.MathUtils.clamp(this.weather.state.storm * this.map.stormSwell * 2, 0, 1);
+  }
+
+  /** Height of the swell at world (x, z): the water shader's two waves, without any rogue wave. */
+  private swellAt(x: number, z: number) {
+    return (Math.sin(x * 0.15 + this.waveTime * 1.3) * 0.35 + Math.cos((z + 30) * 0.2 + this.waveTime * 0.9) * 0.25)
+      * this.swell() * this.map.waves;
+  }
+
+  /**
+   * How far (m) heavy seas lift or drop a swimmer at the surface at `x`: 0 in ordinary
+   * weather, where the swell is small enough to swim through as if it were flat.
+   */
+  heaveAt(x: number): number {
+    return this.heavySea() * this.swellAt(x, 0) + this.rogueHeight * rogueProfile((x - this.rogueX) * this.rogueDir);
+  }
+
+  /** World height of the water at (x, z) as it is drawn: the swell plus any rogue wave. */
+  surfaceAt(x: number, z: number): number {
+    // The rogue wave flattens out toward the camera, as in the water shader.
+    const nearCamera = 1 - THREE.MathUtils.smoothstep(z, 4, 16);
+    return this.swellAt(x, z) + this.rogueHeight * rogueProfile((x - this.rogueX) * this.rogueDir) * nearCamera;
+  }
+
+  /**
+   * How much higher than usual (m) the surface camera should ride so the crests stay below it:
+   * nothing in ordinary weather, over a metre in a storm on the open ocean.
+   */
+  get surfaceLift(): number {
+    return Math.max(0, 0.6 * this.swell() * this.map.waves - 0.75);
+  }
+
+  /** Draw a rogue wave with its crest at `x` (null: none), travelling `dir` (+1 or -1) and `height` m tall. */
+  setRogueWave(x: number | null, dir: number, height: number) {
+    this.rogueX = x ?? 0;
+    this.rogueDir = dir < 0 ? -1 : 1;
+    this.rogueHeight = x === null ? 0 : height;
+    (this.surface.material as WaterSurfaceMaterial).setRogueWave(this.rogueX, this.rogueHeight, this.rogueDir);
   }
 
   private updateDecorations(time: number, dt: number, cameraY: number) {
