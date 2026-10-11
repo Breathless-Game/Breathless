@@ -259,8 +259,17 @@ export class Hud {
     this.sharkFill.style.width = `${Math.round(Math.max(0.04, state.intensity) * 100)}%`;
   }
 
-  message(text: string, ms = 1800) {
+  /** A centered message; `link` adds a small clickable link under it (e.g. a devnet explorer tx). */
+  message(text: string, ms = 1800, link?: { href: string; label: string }) {
     this.centerMsg.textContent = text;
+    if (link) {
+      const a = document.createElement('a');
+      a.href = link.href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = link.label;
+      this.centerMsg.append(document.createElement('br'), a);
+    }
     this.centerMsg.classList.add('show');
     clearTimeout(this.msgTimer);
     this.msgTimer = window.setTimeout(() => this.centerMsg.classList.remove('show'), ms);
