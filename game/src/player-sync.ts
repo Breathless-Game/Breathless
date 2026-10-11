@@ -205,6 +205,8 @@ export type ChainPurchase = (
   | { v: 1; kind: 'craft'; recipe: RecipeDef['id']; crafted: number }
   | { v: 1; kind: 'food'; food: FishFoodId; keys: string[]; feeds: number }
   | { v: 1; kind: 'path'; slot: EquipmentSlot; path: string }
+  /** init_player / set_session / an owed shark_bite sent on their own before a purchase. */
+  | { v: 1; kind: 'setup' }
 ) & {
   /** An owed shark_bite rode in front of it: the levels before it are not evidence either way. */
   bite?: boolean;
@@ -241,21 +243,35 @@ export function purchaseVisible(what: ChainPurchase, player: PlayerStateAccount 
   }
 }
 
+export interface RecordStatus {
+  error: unknown;
+  commitment?: string | null;
+}
+export type Settlement = 'delivered' | 'dropped' | 'kept';
+
 /**
- * Split pending journal records: those the re-read accounts already show landed (`delivered`:
- * nothing to re-send or grant, the chain has it) and the rest, left to the signature lookup.
- * Records from before player_state (a bare PEARL burn) and ones carrying a shark bite are never
- * "visible" here.
+ * How one journaled payment settles. Its signature decides first: confirmed -> delivered (or
+ * dropped when it failed on chain). A transaction not found may still land until its blockhash
+ * expires, so until then it is kept (and purchases stay locked) whatever the accounts show:
+ * buy_upgrade, craft and feed add one, and another device can reach the same state meanwhile.
+ * Only once it can no longer land does the re-read state break the tie (it shows the purchase ->
+ * delivered, the status lookup missed it; else dropped). A record carrying a shark bite, a
+ * player setup and one from before player_state are never "visible".
  */
-export function settleByState<R extends { what: unknown }>(
-  records: readonly R[],
+export function settleRecord(
+  rec: { what: unknown; ts: number; lastValid?: number },
+  status: RecordStatus | null,
+  height: number | undefined,
+  now: number,
   player: PlayerStateAccount | null,
   aquarium: AquariumAccount | null,
-): { delivered: R[]; rest: R[] } {
-  const delivered: R[] = [];
-  const rest: R[] = [];
-  // A record carrying a shark bite is left to its signature: the bite resets levels, so a level
-  // the state shows may be from before it (an old Lv3 is not this Lv2 purchase landing).
-  for (const rec of records) (isChainPurchase(rec.what) && !rec.what.bite && purchaseVisible(rec.what, player, aquarium) ? delivered : rest).push(rec);
-  return { delivered, rest };
+  maxAgeMs: number,
+): Settlement {
+  if (status) {
+    if (status.commitment === 'processed') return 'kept'; // seen, not final yet
+    return status.error ? 'dropped' : 'delivered';
+  }
+  const expired = rec.lastValid !== undefined ? height !== undefined && height > rec.lastValid : now - rec.ts > maxAgeMs;
+  if (!expired) return 'kept';
+  return isChainPurchase(rec.what) && !rec.what.bite && purchaseVisible(rec.what, player, aquarium) ? 'delivered' : 'dropped';
 }

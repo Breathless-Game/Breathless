@@ -9,8 +9,8 @@
  *
  * Payment safety (payment-safety.ts) is kept: one owner payment at a time (paymentLock), every
  * confirmation is checked for an on-chain error, and a payment whose confirmation was lost stays
- * in the per-wallet journal until it is settled, first by re-reading the accounts (the state shows
- * it landed), then by its signature status. Nothing is ever re-sent.
+ * in the per-wallet journal (purchases locked) until its signature settles it, or its blockhash
+ * expired and the re-read accounts break the tie. Nothing is ever re-sent.
  *
  * The chain libraries load lazily (chain.ts), like the rest of the wallet code.
  */
@@ -25,12 +25,11 @@ import {
   PaymentInProgressError,
   paymentLock,
   PaymentPendingError,
+  PENDING_MAX_AGE_MS,
   PENDING_PURCHASES,
-  reconcilePending,
   takePending,
   TxFailedError,
   waitForSignature,
-  type PendingPurchase,
   type ReconcileReport,
   type SigVerdict,
   type StatusDeps,
@@ -53,7 +52,8 @@ import {
   type PlayerStateAccount,
   type PlayerStateConfig,
 } from './player-state';
-import { biteSettled, chainLevels, isChainPurchase, purchaseVisible, settleByState, type ChainPurchase } from './player-sync';
+import { biteSettled, chainLevels, isChainPurchase, purchaseVisible, settleRecord, type ChainPurchase } from './player-sync';
+import { sessionFailureFinal } from './player-state-errors';
 import type { UpgradeSlot } from './equipment';
 
 export interface PlayerChainSnapshot {
@@ -255,6 +255,9 @@ export async function recordSharkBite(): Promise<'sent' | 'deferred' | 'nothing'
 async function sendBiteWithSession(): Promise<'sent' | 'deferred' | 'nothing'> {
   try {
     return await paymentLock.run(async () => {
+      // A journaled purchase may carry this very bite, or have raised a level after it: a bite
+      // sent now could land after it and take that level back. Settle the journal first.
+      if (purchases.load().length) return 'deferred';
       const u = await umi();
       const flag = await resolveBiteInFlight(u);
       if (flag && flag !== 'owed') return 'deferred'; // the last one is still confirming
@@ -430,24 +433,37 @@ export function sendPlayerPurchase(plan: (ctx: OwnerTxContext) => PurchasePlan, 
     let record: ChainPurchase = pre.bite ? { ...what, bite: true } : what;
     const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
     if (pre.builder.items.length && builder.setFeePayer(owner).setBlockhash(blockhash).getTransactionSize(u) > TX_BYTE_BUDGET) {
-      // Too big together (a first feed over a full tank): set the player up first, then pay.
-      await sendTracked(u, owner, pre.builder, null, 0, 'Player setup');
-      if (pre.bite) setBiteFlag(null);
+      // Too big together (a first feed over a full tank): set the player up first, then pay. The
+      // setup is journaled too, so nothing else goes out while its outcome is unknown.
+      const setup: ChainPurchase = pre.bite ? { v: 1, kind: 'setup', bite: true } : { v: 1, kind: 'setup' };
+      await sendCarryingBite(u, owner, pre.builder, setup, 0, 'Player setup');
       builder = main;
       record = what;
     }
-    let signature: string;
-    try {
-      signature = await sendTracked(u, owner, builder, record, cost, label);
-    } catch (e) {
-      // The journaled record carries the bite now (re-armed if it turns out never to land).
-      if (e instanceof PaymentPendingError && record.bite) setBiteFlag(null);
-      throw e;
-    }
-    if (record.bite) setBiteFlag(null);
+    const signature = await sendCarryingBite(u, owner, builder, record, cost, label);
     await rereadUntilVisible(what);
     return signature;
   });
+}
+
+/**
+ * sendTracked for a transaction that may carry an owed shark bite. From the moment it is signed
+ * the bite flag names this signature (in flight, never 'owed'), so no other shark_bite can be
+ * sent while it may still land: one landing after it would take its purchase back. Landed ->
+ * settled; refused or failed -> owed again; unknown -> stays in flight until its signature (or
+ * the journal) settles it.
+ */
+async function sendCarryingBite(u: Umi, owner: Signer, builder: TransactionBuilder, what: ChainPurchase, cost: number, label: string): Promise<string> {
+  if (!what.bite) return sendTracked(u, owner, builder, what, cost, label);
+  let signature: string;
+  try {
+    signature = await sendTracked(u, owner, builder, what, cost, label, (sig, lastValid) => setBiteFlag({ sig, lastValid }));
+  } catch (e) {
+    if (!(e instanceof PaymentPendingError)) setBiteFlag('owed');
+    throw e;
+  }
+  setBiteFlag(null);
+  return signature;
 }
 
 /**
@@ -487,9 +503,9 @@ export async function sendSetPath(
       await rereadUntilVisible(what);
       return;
     } catch (e) {
-      // The program refused it (the owner would be refused too), another payment is running, or
-      // it may still land: never send a second one on top.
-      if (e instanceof TxFailedError || e instanceof PaymentInProgressError || e instanceof PaymentPendingError) throw e;
+      // The program refused it, in preflight or on chain (the owner would be refused too), another
+      // payment is running, or it may still land: never ask the wallet for a second one on top.
+      if (sessionFailureFinal(e)) throw e;
       console.warn('session-signed set_path did not go through; asking the wallet instead', e);
     }
   }
@@ -499,28 +515,43 @@ export async function sendSetPath(
 // ---- Lost confirmations ------------------------------------------------------------------
 
 /**
- * Settle this wallet's journaled payments (inside paymentLock): re-read the accounts and drop
- * every record whose effect they already show (delivered: the chain has it, nothing is granted or
- * re-sent); look the rest up by signature (landed -> delivered, failed or expired -> dropped,
- * unknown -> kept). A dropped purchase that carried an owed shark bite owes it again. Records from
- * before player_state (bare PEARL burns) are settled by status and only logged.
+ * Settle this wallet's journaled payments (inside paymentLock), signature first (settleRecord):
+ * landed -> delivered, failed -> dropped, not found -> kept until its blockhash expired, and only
+ * then the re-read accounts decide delivered or dropped. Nothing is granted or re-sent: the chain
+ * already has whatever landed. A bite riding in a record settles with it (landed -> settled, never
+ * landed -> owed again). Records from before player_state (bare PEARL burns) are only logged.
  */
 async function settlePending(u: Umi): Promise<ReconcileReport> {
-  const before = new Map(purchases.load().map((r) => [r.signature, r]));
+  const report: ReconcileReport = { delivered: [], dropped: [], kept: [] };
+  const records = purchases.load();
+  if (!records.length) return report;
+  const deps = statusDeps(u);
+  const statuses = await deps.statuses(records.map((r) => r.signature));
+  const height = await deps.blockHeight().catch(() => undefined);
+  // The accounts only break the tie for a record that can no longer land (settleRecord).
   const snap = await refreshPlayerChain();
-  const { delivered } = settleByState(purchases.load(), snap.player, snap.aquarium);
-  const byState = delivered.filter((rec) => takePending(purchases, rec.signature)).map((rec) => rec.signature);
-  const report = await reconcilePending(purchases, statusDeps(u), (rec: PendingPurchase) => {
-    if (!isChainPurchase(rec.what)) {
-      console.warn(`A PEARL burn from before on-chain player state (${rec.signature}) landed; its local grant is not applied any more`, rec);
+  const now = Date.now();
+  for (const [i, rec] of records.entries()) {
+    const verdict = settleRecord(rec, statuses[i] ?? null, height, now, snap.player, snap.aquarium, PENDING_MAX_AGE_MS);
+    if (verdict === 'kept') {
+      report.kept.push(rec.signature);
+      continue;
     }
-  });
-  for (const sig of report.dropped) {
-    const what = before.get(sig)?.what;
-    if (isChainPurchase(what) && what.bite && biteFlag() === null) setBiteFlag('owed');
+    // Re-read: the payment itself may have taken it meanwhile.
+    if (!takePending(purchases, rec.signature)) continue;
+    report[verdict].push(rec.signature);
+    const what = rec.what;
+    if (!isChainPurchase(what)) {
+      if (verdict === 'delivered') console.warn(`A PEARL burn from before on-chain player state (${rec.signature}) landed; its local grant is not applied any more`, rec);
+      continue;
+    }
+    if (!what.bite) continue;
+    const flag = biteFlag();
+    if (flag && flag !== 'owed' && flag.sig === rec.signature) setBiteFlag(verdict === 'delivered' ? null : 'owed');
+    else if (verdict === 'dropped' && flag === null) setBiteFlag('owed'); // the bite it carried never landed
   }
   if (report.delivered.length || report.dropped.length) await refreshPlayerChain().catch(() => {});
-  return { ...report, delivered: [...byState, ...report.delivered] };
+  return report;
 }
 
 /** Settle this wallet's journaled payments (see settlePending). Skipped (all kept) while a payment is in flight. */

@@ -848,7 +848,7 @@ async function syncPearls(earned = 0) {
 let chainRetryTimer = 0;
 /**
  * Login: read the player's accounts (retrying later on failure; purchases stay locked meanwhile),
- * then settle a shark bite owed from an earlier dive and payments whose confirmation was lost.
+ * then settle payments whose confirmation was lost and a shark bite owed from an earlier dive.
  */
 async function startPlayerChain(retryMs = 15_000) {
   window.clearTimeout(chainRetryTimer);
@@ -860,8 +860,10 @@ async function startPlayerChain(retryMs = 15_000) {
     chainRetryTimer = window.setTimeout(() => void startPlayerChain(Math.min(retryMs * 2, 120_000)), retryMs);
     return;
   }
-  await settleOwedBite();
+  // Lost confirmations first: a purchase among them may carry the owed bite (or have raised a
+  // level after it), and a bite re-sent before it settles could take that level back.
   await reconcilePurchases();
+  await settleOwedBite();
 }
 
 /** Set once this wallet's gear cache came from a chain read (older saves are test data). */

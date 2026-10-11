@@ -204,7 +204,7 @@ test('main.ts: every purchase is one player_state instruction, rendered from the
   const load = fn('function loadWalletProgress()', '\n}\n');
   assert.match(load, /void startPlayerChain\(\);/, 'chain read on wallet load');
   const start = fn('async function startPlayerChain(', '\n}\n');
-  assert.ok(start.indexOf('refreshPlayerChain()') < start.indexOf('settleOwedBite()'), 'read first, then the owed bite');
-  assert.ok(start.indexOf('settleOwedBite()') < start.indexOf('reconcilePurchases()'), 'then lost confirmations');
+  assert.ok(start.indexOf('refreshPlayerChain()') < start.indexOf('reconcilePurchases()'), 'read first, then lost confirmations');
+  assert.ok(start.indexOf('reconcilePurchases()') < start.indexOf('settleOwedBite()'), 'then the owed bite (a journaled purchase may carry it)');
   assert.match(src, /'Another payment is in progress', '另一笔付款正在进行'/);
 });

@@ -65,3 +65,14 @@ export function playerStateErrorName(e: unknown): PlayerStateErrorName | null {
   };
   return visit(e);
 }
+
+/**
+ * A session-signed free action (set_path) failed: is asking the owner's wallet instead useless?
+ * True when the program refused it (preflight or on chain: the owner would be refused too), when
+ * another payment is running, or when it may still land (never send a second one on top).
+ */
+export function sessionFailureFinal(e: unknown): boolean {
+  const name = (e as { name?: unknown } | null)?.name;
+  if (name === 'TxFailedError' || name === 'PaymentInProgressError' || name === 'PaymentPendingError') return true;
+  return playerStateErrorName(e) !== null;
+}

@@ -166,16 +166,32 @@ test('a lost confirmation is settled by the re-read accounts only on evidence it
   assert.equal(v({ v: 1, kind: 'food', food: 'krill', keys, feeds: 0 }, player(), null), false);
   assert.equal(v({ v: 1, kind: 'path', slot: 'rod', path: 'fast' }, player({ paths: { ...DEFAULT_PATHS, rod: 'fast' } }), null), true);
 
-  const records = [
-    { signature: 'landed', what: { v: 1, kind: 'upgrade', slot: 'net', level: 2 } },
-    { signature: 'unseen', what: { v: 1, kind: 'craft', recipe: 'bait', crafted: 0 } },
-    { signature: 'bite', what: { v: 1, kind: 'upgrade', slot: 'net', level: 2, bite: true } },
-    { signature: 'legacy', what: { kind: 'upgrade', slot: 'net', level: 2 } },
-  ];
-  const { delivered, rest } = sync.settleByState(records, player({ levels: { ...LV1, net: 3 } }), null);
-  assert.deepEqual(delivered.map((r) => r.signature), ['landed']);
-  assert.deepEqual(rest.map((r) => r.signature), ['unseen', 'bite', 'legacy'], 'bite-carrying and pre-player_state records go to the signature lookup');
-  assert.equal(sync.isChainPurchase(records[3].what), false);
+  assert.equal(sync.isChainPurchase({ kind: 'upgrade', slot: 'net', level: 2 }), false, 'pre-player_state record');
+});
+
+test('M1: a journaled payment settles by its signature first; the state only after its blockhash expired', () => {
+  const S = sync.settleRecord;
+  const MAX = 600_000;
+  const up = { what: { v: 1, kind: 'upgrade', slot: 'rod', level: 3 }, ts: 1_000, lastValid: 500 };
+  const reached = player({ levels: { ...LV1, rod: 3 } }); // another device got rod to Lv3 meanwhile
+  // Not found yet, blockhash still valid: kept (purchases stay locked) even though the state "shows" it.
+  assert.equal(S(up, null, 480, 2_000, reached, null, MAX), 'kept');
+  assert.equal(S(up, null, undefined, 2_000, reached, null, MAX), 'kept', 'unknown height is not expiry');
+  // Confirmed status decides, whatever the state shows.
+  assert.equal(S(up, { error: null, commitment: 'confirmed' }, 480, 2_000, player(), null, MAX), 'delivered');
+  assert.equal(S(up, { error: { InstructionError: [0, { Custom: 6009 }] }, commitment: 'confirmed' }, 480, 2_000, reached, null, MAX), 'dropped');
+  assert.equal(S(up, { error: null, commitment: 'processed' }, 600, 2_000, reached, null, MAX), 'kept', 'processed is not final');
+  // Expired and not found: it can no longer land; only now the state breaks the tie.
+  assert.equal(S(up, null, 501, 2_000, reached, null, MAX), 'delivered');
+  assert.equal(S(up, null, 501, 2_000, player(), null, MAX), 'dropped');
+  // A record carrying a shark bite, a setup, or one from before player_state is never "visible".
+  assert.equal(S({ ...up, what: { ...up.what, bite: true } }, null, 501, 2_000, reached, null, MAX), 'dropped');
+  assert.equal(S({ ...up, what: { v: 1, kind: 'setup' } }, null, 501, 2_000, reached, null, MAX), 'dropped');
+  assert.equal(S({ ...up, what: { kind: 'upgrade', slot: 'rod', level: 3 } }, null, 501, 2_000, reached, null, MAX), 'dropped');
+  // Without a stored blockhash expiry, age decides.
+  const legacy = { what: up.what, ts: 1_000 };
+  assert.equal(S(legacy, null, 999, 1_000 + MAX, reached, null, MAX), 'kept');
+  assert.equal(S(legacy, null, 999, 1_001 + MAX, reached, null, MAX), 'delivered');
 });
 
 test('program errors are recognised in every shape a failed send or confirmation takes', () => {
@@ -191,4 +207,16 @@ test('program errors are recognised in every shape a failed send or confirmation
   assert.equal(name(failed), 'InsufficientPearl');
   assert.equal(name(new Error('User rejected the request')), null);
   assert.equal(errors.PLAYER_STATE_ERRORS.length, 20);
+});
+
+test('L2: a session-signed set_path the program refused does not fall back to a wallet prompt', () => {
+  const final = errors.sessionFailureFinal;
+  // Preflight refusal: a plain Error with the simulation logs (neverBroadcast), not a TxFailedError.
+  assert.equal(final(Object.assign(new Error('Simulation failed'), { logs: ['Program log: AnchorError thrown. Error Code: PathLocked. Error Number: 6004.'] })), true);
+  assert.equal(final(Object.assign(new Error('x'), { name: 'TxFailedError', err: { InstructionError: [0, { Custom: 6004 }] } })), true);
+  assert.equal(final(Object.assign(new Error('x'), { name: 'PaymentPendingError' })), true, 'may still land');
+  assert.equal(final(Object.assign(new Error('x'), { name: 'PaymentInProgressError' })), true);
+  // The session key could not pay, or the RPC was down: the owner's wallet may still do it.
+  assert.equal(final(Object.assign(new Error('Attempt to debit an account but found no record of a prior credit.'), { logs: [] })), false);
+  assert.equal(final(new Error('fetch failed')), false);
 });
