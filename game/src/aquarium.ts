@@ -132,6 +132,7 @@ export class Aquarium {
   private stage = this.root.querySelector<HTMLElement>('.aq-stage')!;
   private bar = this.root.querySelector<HTMLElement>('.aq-bar')!;
   private canvas = $<HTMLCanvasElement>('aq-canvas');
+  private tankEl = this.canvas.parentElement!;
   private ctx = this.canvas.getContext('2d')!;
   private tabs = $('aq-tabs');
   private label = $('aq-label');
@@ -156,6 +157,11 @@ export class Aquarium {
   private tween: { t: number; dur: number; from: number; to: number } | null = null;
   private yaw = 0; // radians the tank is turned; + brings its right side toward you
   private yawTarget = 0;
+  // 0 is the normal eye-level view, 1 is a plan view looking down through the water.
+  // It eases between the two so a double-click feels like turning the tank over rather
+  // than snapping the fish and glass to a new projection.
+  private view = 0;
+  private viewTarget = 0;
   private aquariumState: AquariumState = { growth: {}, light: { color: DEFAULT_AQUARIUM_LIGHT } };
   private lightInput = $<HTMLInputElement>('aq-light');
   private feeding = false;
@@ -182,6 +188,14 @@ export class Aquarium {
     });
     this.canvas.addEventListener('pointerleave', () => (this.hover = null));
     this.canvas.addEventListener('click', (e) => this.pick(this.fishAt(e)));
+    this.tankEl.addEventListener('dblclick', (e) => {
+      // The info card sits above the canvas. Let a double-click anywhere on the tank
+      // switch views, but keep its buttons and links as normal controls.
+      if ((e.target as HTMLElement).closest('#aq-card, button, a, input')) return;
+      e.preventDefault();
+      this.viewTarget = this.viewTarget > 0.5 ? 0 : 1;
+      this.canvas.classList.toggle('top-view', this.viewTarget > 0.5);
+    });
     // The tank sways gently after the mouse, like a card tilting under it: the side
     // the mouse is on leans away a little.
     window.addEventListener('pointermove', (e) => {
@@ -275,6 +289,8 @@ export class Aquarium {
     if (this.open) return;
     if (this.state === 'closed') {
       this.yaw = this.yawTarget = 0;
+      this.view = this.viewTarget = 0;
+      this.canvas.classList.remove('top-view');
       this.favorites = loadFavorites(); // per wallet, so read fresh each time
       this.aquariumState = loadAquariumState(undefined, this.stateKey());
       this.lightInput.value = this.aquariumState.light.color;
@@ -494,14 +510,23 @@ export class Aquarium {
    * is at scale 1 and the back wall at BACK_SCALE, and turning swings the box
    * about its middle.
    */
-  private cam(x: number, z: number) {
+  private cam(x: number, z: number, view = this.view) {
     const f = (FRONT.x1 - FRONT.x0) * this.w;
     const depth = f * (1 / BACK_SCALE - 1);
     const X = (x - 0.5) * f;
     const Z = (z - 0.5) * depth;
     const c = Math.cos(this.yaw);
     const s = Math.sin(this.yaw);
-    return { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c, f };
+    const front = { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c, f };
+    if (view <= 0) return front;
+    // In plan view screen depth is the tank's vertical position. X remains the
+    // horizontal position so sorting still puts plants/fish nearest the glass first.
+    const top = { X: (x - 0.5) * f, d: 1 + (1 - z) * f * 0.5, f };
+    return {
+      X: lerp(front.X, top.X, view),
+      d: lerp(front.d, top.d, view),
+      f,
+    };
   }
 
   /**
@@ -510,16 +535,40 @@ export class Aquarium {
    * grows out of the canvas.
    */
   private proj(x: number, y: number, z: number) {
-    const { X, d, f } = this.cam(x, z);
-    const near = Math.min(this.cam(0, 0).d, this.cam(1, 0).d);
-    const s = (f / d) * Math.min(1, near / f);
-    const fy = lerp(FRONT.y0, FRONT.y1, y) * this.h;
-    const vy = VANISH_Y * this.h;
-    return { x: this.w / 2 + X * s, y: vy + (fy - vy) * s, s };
+    const f = (FRONT.x1 - FRONT.x0) * this.w;
+    const depth = f * (1 / BACK_SCALE - 1);
+    const X = (x - 0.5) * f;
+    const Z = (z - 0.5) * depth;
+    const c = Math.cos(this.yaw);
+    const s = Math.sin(this.yaw);
+    const frontCam = { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c };
+    // Use the unblended camera here: the front projection must keep its scale
+    // stable while the tank eases toward the overhead view.
+    const frontNear = Math.min(this.cam(0, 0, 0).d, this.cam(1, 0, 0).d);
+    const frontScale = (f / frontCam.d) * Math.min(1, frontNear / f);
+    const front = {
+      x: this.w / 2 + frontCam.X * frontScale,
+      y: VANISH_Y * this.h + (lerp(FRONT.y0, FRONT.y1, y) * this.h - VANISH_Y * this.h) * frontScale,
+      s: frontScale,
+    };
+    if (this.view <= 0) return front;
+
+    // A top-down projection uses z as screen depth and y as a small lift toward
+    // the viewer. This keeps the fish and plants readable while exposing the tank floor.
+    const topDepth = (FRONT.y1 - FRONT.y0) * this.h;
+    const topX = this.w * (FRONT.x0 + x * (FRONT.x1 - FRONT.x0));
+    const topY = this.h * (FRONT.y0 + (1 - z) * (FRONT.y1 - FRONT.y0)) + (0.5 - y) * topDepth * 0.18;
+    const top = { x: topX, y: topY, s: lerp(1.02, 0.86, clamp(y, 0, 1)) };
+    return {
+      x: lerp(front.x, top.x, this.view),
+      y: lerp(front.y, top.y, this.view),
+      s: lerp(front.s, top.s, this.view),
+    };
   }
 
   /** Whether a side wall (x = 0 or 1) faces the eye from outside, so it's in front of the fish. */
   private sideInFront(side: 0 | 1) {
+    if (this.view > 0.5) return false;
     const wall = this.cam(side, 0.5);
     const mid = this.cam(0.5, 0.5);
     // The eye is at the origin: is it on the wall's outward side?
@@ -723,6 +772,8 @@ export class Aquarium {
       this.foodPreview.renderer.render(this.foodPreview.scene, this.foodPreview.camera);
     }
     this.yaw += (this.yawTarget - this.yaw) * Math.min(1, dt * YAW_EASE);
+    this.view += (this.viewTarget - this.view) * Math.min(1, dt * 4.5);
+    if (Math.abs(this.viewTarget - this.view) < 0.001) this.view = this.viewTarget;
     this.slosh = Math.max(0, this.slosh - dt * 0.35);
     let budget = ICONS_PER_FRAME;
     for (const [f, s] of this.swimmers) {
