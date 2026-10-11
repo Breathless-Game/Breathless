@@ -196,7 +196,8 @@ test('main.ts: every Pearl purchase pays through payAndDeliver and delivers thro
   assert.match(pay, /\.spendPearls\(cost, purchase\)/);
   assert.match(pay, /deliverPurchase\(purchase, signature, false\)/);
   assert.match(src, /deliverPurchase\(rec\.what as Purchase, rec\.signature, true\)/, 'reconcile uses the same delivery');
-  assert.match(src, /function loadWalletProgress\(\)[\s\S]*?void reconcilePurchases\(\);\n\}/, 'settled on wallet load');
+  const load = src.slice(src.indexOf('function loadWalletProgress()'), src.indexOf('\n}\n', src.indexOf('function loadWalletProgress()')));
+  assert.match(load, /void reconcilePurchases\(\);/, 'settled on wallet load');
   // Synthesis: the craft is validated before the burn.
   const craft = src.slice(src.indexOf('async function synthCraft('), src.indexOf('async function synthUpgrade('));
   assert.ok(craft.indexOf('craftRecipe(synthesisState, id)') < craft.indexOf('spendSynthesisPearls('), 'craft checked before paying');

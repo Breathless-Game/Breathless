@@ -16,6 +16,7 @@
 // and for selling many fish with one wallet approval (server mode): POST /api/market/quote-batch
 // { seller, assetIds } and POST /api/market/sell-batch { seller, sales: [{ assetId, transferTx }] }.
 // GET /api/market/balance?owner=&session= reads PEARL + session SOL for the title badge (market-balance.mjs).
+// GET /api/market/fish?owner= lists the game's fish NFTs the wallet owns, re-derived (fish-owned.mjs).
 //
 // Secrets (gitignored, mode 600, Solana CLI format, never logged; only public keys are printed):
 //   program mode  MARKET_ORACLE_KEYPAIR, default <dir>/.market-oracle.json
@@ -26,7 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { keypairIdentity, publicKey } from '@metaplex-foundation/umi';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { mplCore } from '@metaplex-foundation/mpl-core';
+import { fetchAssetsByOwner, mplCore } from '@metaplex-foundation/mpl-core';
 import { findAssociatedTokenPda, mplToolbox } from '@metaplex-foundation/mpl-toolbox';
 import { mplTokenMetadata } from '@metaplex-foundation/mpl-token-metadata';
 import { HttpError, RateLimiter, isAddress } from './market-rules.mjs';
@@ -37,6 +38,7 @@ import { DEFAULT_LAYOUT, layoutFromIdl } from './fish-market.mjs';
 import { createProgramMode } from './market-program-mode.mjs';
 import { createServerMode } from './market-server-mode.mjs';
 import { createBalanceReader, parseBalanceQuery } from './market-balance.mjs';
+import { createOwnedFishReader, parseOwnedQuery } from './fish-owned.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IDL_PATH = path.join(REPO_ROOT, 'game/src/idl/fish_market.json');
@@ -131,8 +133,26 @@ export async function createMarket({
       findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(owner), tokenProgramId: publicKey(tokenProgram) })[0].toString(),
     mintInfo,
   });
-  /** A sale paid (or may have paid) the seller: their next balance read goes to the chain. */
-  const paidSeller = (body) => balances.invalidate(typeof body?.seller === 'string' ? body.seller : null);
+  // Owned fish (a wallet rebuilding its aquarium from the chain): one getProgramAccounts per read,
+  // cached a few seconds in memory. Attributes live on the asset itself, so no collection fetch.
+  const ownedLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 });
+  let collMemo = { at: 0, value: null };
+  async function fishCollection() {
+    const ttl = collMemo.value ? 60_000 : 5_000;
+    if (Date.now() - collMemo.at < ttl) return collMemo.value;
+    collMemo = { at: Date.now(), value: (await mode.info()).fishCollection ?? null };
+    return collMemo.value;
+  }
+  const ownedFish = createOwnedFishReader({
+    fetchOwned: (owner) => fetchAssetsByOwner(u, owner, { skipDerivePlugins: true }),
+    collection: fishCollection,
+  });
+  /** A sale paid (or may have paid) the seller: their next balance (and owned-fish) read goes to the chain. */
+  const paidSeller = (body) => {
+    const seller = typeof body?.seller === 'string' ? body.seller : null;
+    balances.invalidate(seller);
+    ownedFish.invalidate(seller);
+  };
 
   function send(res, status, obj) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -174,6 +194,10 @@ export async function createMarket({
       if (!balanceLimiter.allow(ip)) throw new HttpError(429, 'Too many balance reads, slow down');
       const q = parseBalanceQuery(url.searchParams);
       return balances.read({ ...q, fresh: q.fresh && freshLimiter.allow(ip) });
+    },
+    'GET /api/market/fish': (_req, ip, url) => {
+      if (!ownedLimiter.allow(ip)) throw new HttpError(429, 'Too many fish reads, slow down');
+      return ownedFish.read(parseOwnedQuery(url.searchParams));
     },
     'POST /api/market/quote': async (req) => mode.quote(await readJson(req)),
     'POST /api/market/sell': async (req) => {
