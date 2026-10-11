@@ -53,6 +53,22 @@ test('pixel ratio honors device ratio, quality cap, and the total pixel budget',
   assert.equal(renderPixelRatio(RENDER_QUALITY.low, 0, 0, 0), 1);
 });
 
+test('character particle budgets scale with quality', () => {
+  const low = RENDER_QUALITY.low;
+  const medium = RENDER_QUALITY.medium;
+  const high = RENDER_QUALITY.high;
+  assert.ok(low.bubbleLimit > 0);
+  assert.ok(low.bubbleLimit < medium.bubbleLimit);
+  assert.ok(medium.bubbleLimit < high.bubbleLimit);
+  assert.ok(low.bubbleEmitScale < medium.bubbleEmitScale);
+  assert.ok(medium.bubbleEmitScale < high.bubbleEmitScale);
+  assert.ok(low.bubbleHz < medium.bubbleHz);
+  assert.ok(medium.bubbleHz < high.bubbleHz);
+  assert.equal(low.bubbleSegments, 0);
+  assert.equal(medium.bubbleSegments, 0);
+  assert.equal(high.bubbleSegments, 1);
+});
+
 test('sustained slow rendering drops only one quality level after startup grace', () => {
   const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
   assert.deepEqual(runFrames(controller, 8), []);

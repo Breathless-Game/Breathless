@@ -56,15 +56,23 @@ export function renderPearlPng(size = 256) {
       raw[i + 3] = Math.round(255 * alpha);
     }
   }
+  return encodePng(size, size, raw, 6);
+}
+
+/**
+ * PNG from raw scanlines: each row is a filter byte (0) followed by the pixels.
+ * colorType 6 is RGBA (4 bytes per pixel), 2 is RGB (3 bytes per pixel). Also used by fish-png.mjs.
+ */
+export function encodePng(width, height, raw, colorType = 6) {
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(size, 0);
-  ihdr.writeUInt32BE(size, 4);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
+  ihdr[9] = colorType;
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
+    chunk('IDAT', deflateSync(raw, { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
