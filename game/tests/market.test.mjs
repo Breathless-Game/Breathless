@@ -29,6 +29,7 @@ const {
   nextToMint,
   nextToSell,
   nftStep,
+  pearls,
   retryDelayMs,
   sellQuote,
 } = await load('../src/market.ts');
@@ -301,4 +302,10 @@ test('migrateBank keeps a valid fish number and drops a broken one', () => {
   );
   assert.equal(changed, true);
   assert.equal(migrateBank([{ ...base, serial: 42 }]).changed, false);
+});
+
+test('Pearl amounts are pluralised', () => {
+  assert.equal(pearls(1), '1 Pearl');
+  assert.equal(pearls(0), '0 Pearls');
+  assert.equal(pearls(12), '12 Pearls');
 });

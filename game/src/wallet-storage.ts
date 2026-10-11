@@ -153,6 +153,9 @@ export function addressOfSecret(secret: Uint8Array): string {
 
 export const shortAddress = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
 
+/** An address on Solana Explorer (devnet). Pure, so UI can link an address without chain code. */
+export const explorerAddress = (a: string) => `https://explorer.solana.com/address/${encodeURIComponent(a)}?cluster=devnet`;
+
 // ---- Wallet picker ----------------------------------------------------------
 
 /** The game runs on Solana devnet, as Wallet Standard names the chain. */
