@@ -6,6 +6,7 @@ import { base58 } from '@metaplex-foundation/umi/serializers';
 import { zoneName } from './depth-odds';
 import { ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
+import { cosignInfo, cosignMint, makeSellable, mintRoute, type FishTrust } from './fish-cosign';
 import { fishImagePath, fishMetaPath, nftName, nftOrigin } from './nft-uri';
 import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
 
@@ -67,6 +68,8 @@ export interface MintResult {
   signature: string;
   image: string;
   uri: string;
+  /** The market's fish collection, when minted into it (co-signed): the fish is sellable as is. */
+  collection?: string;
 }
 
 /** The fish's metadata URI on our server. Depth and value are what the on-chain Attributes record. */
@@ -83,6 +86,22 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const image = NFT_ORIGIN + fishImagePath(spec);
 
   onStep?.('mint');
+  // The market only buys fish in its collection, and only it can admit one (fish-cosign.ts).
+  const info = await cosignInfo();
+  const route = mintRoute(info);
+  if (route === 'wait') throw new Error('The market is still creating its fish collection; minting resumes shortly');
+  if (route === 'cosign') {
+    const res = await cosignMint(u, {
+      info,
+      owner: ownerAddress(u),
+      session: sessionSigner(u),
+      fish: { id: spec.id, rarity: spec.rarity, species: spec.species, depth: depthM, value: catchValue },
+      name: nftName(spec),
+      uri,
+    });
+    return { ...res, image, uri };
+  }
+  // An older market (or program mode) without the collection: the session key mints on its own.
   const asset = generateSigner(u);
   // The session key pays and holds update authority; the player owns the fish.
   const session = sessionSigner(u);
@@ -144,4 +163,13 @@ export async function burnFish(assetId: string): Promise<string> {
   const asset = await fetchAsset(u, publicKey(assetId));
   const { signature } = await burn(u, { asset, authority: ownerSigner(u) }).sendAndConfirm(u);
   return base58.deserialize(signature)[0];
+}
+
+/**
+ * Make minted fish sellable: fish minted before the market's collection are moved into it (the
+ * market co-signs, the session key pays); fish this device cannot move are reported blocked.
+ */
+export async function makeFishSellable(assetIds: string[]): Promise<Map<string, FishTrust>> {
+  const u = getUmi();
+  return makeSellable(u, { info: await cosignInfo(), owner: ownerAddress(u), session: sessionSigner(u), assetIds });
 }
