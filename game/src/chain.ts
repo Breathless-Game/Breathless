@@ -2,8 +2,8 @@ import './polyfills';
 import {
   createGenericFile,
   generateSigner,
-  keypairIdentity,
   publicKey,
+  signerIdentity,
   sol,
   type Umi,
 } from '@metaplex-foundation/umi';
@@ -11,36 +11,29 @@ import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { burn, create, fetchAsset, mplCore } from '@metaplex-foundation/mpl-core';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { RARITY, fishValue, zoneForDepth, type FishSpec } from './fish';
-import { MAPS, type MapId } from './maps';
+import { zoneName } from './depth-odds';
+import { RARITY, ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
+import { MAPS, mapDepth, type MapId } from './maps';
 import { fishCard } from './portrait';
+import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
 
-// Everything here runs in the browser against Solana devnet. The player gets a
-// burner wallet stored in localStorage; it pays for the Irys upload and the
-// Metaplex Core mint, and owns the resulting fish NFTs.
+// Everything here runs in the browser against Solana devnet. The identity is
+// the player's session wallet (see wallet.ts): it pays for the Irys upload and
+// the Metaplex Core mint without a prompt. The fish NFTs belong to the Phantom owner.
 
 const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://api.devnet.solana.com';
-const WALLET_KEY = 'deepbreath.wallet';
 const SYMBOL = 'DIVE';
 
 let umi: Umi | null = null;
+let umiOwner: string | null = null;
 
-function getUmi(): Umi {
-  if (umi) return umi;
+export function getUmi(): Umi {
+  const owner = walletState().owner;
+  if (umi && umiOwner === owner) return umi;
   const u = createUmi(RPC, 'confirmed').use(mplCore()).use(irysUploader({ timeout: 60_000 }));
-  let secret: Uint8Array | null = null;
-  try {
-    const raw = localStorage.getItem(WALLET_KEY);
-    if (raw) secret = Uint8Array.from(JSON.parse(raw));
-  } catch {}
-  if (!secret) {
-    secret = u.eddsa.generateKeypair().secretKey;
-    try {
-      localStorage.setItem(WALLET_KEY, JSON.stringify(Array.from(secret)));
-    } catch {}
-  }
-  u.use(keypairIdentity(u.eddsa.createKeypairFromSecretKey(secret)));
+  u.use(signerIdentity(sessionSigner(u)));
   umi = u;
+  umiOwner = owner;
   return u;
 }
 
@@ -70,6 +63,15 @@ function dataUrlBytes(url: string): Uint8Array {
   return out;
 }
 
+/** The zone the HUD showed where the fish was caught: below the map's shelf that is the trench. */
+function zoneLabel(spec: FishSpec): string {
+  if (!spec.map || !(spec.map in MAPS)) return zoneName(spec.depthM);
+  const map = MAPS[spec.map as MapId];
+  if (spec.depthM >= mapDepth(map)) return 'The Trench';
+  // Just above the shelf (e.g. 18–20 m on the fjord) still counts as the last open zone.
+  return map.zoneLabels[Math.min(ZONES.indexOf(zoneForDepth(spec.depthM)), map.zoneLabels.length - 1)];
+}
+
 export type MintStep = 'upload-image' | 'upload-metadata' | 'mint';
 
 export interface MintResult {
@@ -82,6 +84,9 @@ export interface MintResult {
 export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): Promise<MintResult> {
   const u = getUmi();
   const rarity = RARITY[spec.rarity].label;
+  // Older bank entries may predate the cap; the market rejects anything deeper.
+  const depthM = recordedDepth(spec.depthM);
+  const catchValue = fishValue(spec);
 
   onStep?.('upload-image');
   const png = createGenericFile(dataUrlBytes(fishCard(spec)), `${spec.id}.png`, { contentType: 'image/png' });
@@ -91,18 +96,18 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   const traits: [string, string][] = [
     ['Rarity', rarity],
     ['Species', spec.species],
-    ['Zone', zoneForDepth(spec.depthM).name],
+    ['Zone', zoneLabel(spec)],
     ...(spec.map && spec.map in MAPS ? [['Map', MAPS[spec.map as MapId].name] as [string, string]] : []),
-    ['Depth (m)', String(spec.depthM)],
+    ['Depth (m)', String(depthM)],
     ['Length (cm)', String(spec.lengthCm)],
     ['Weight (kg)', String(spec.weightKg)],
-    ['Catch value', String(fishValue(spec))],
+    ['Catch value', String(catchValue)],
     ['Seed', spec.id],
   ];
   const uri = await u.uploader.uploadJson({
     name: spec.name,
     symbol: SYMBOL,
-    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${spec.depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
+    description: `${/^[aeiou]/i.test(rarity) ? 'An' : 'A'} ${rarity.toLowerCase()} ${spec.species} caught ${depthM} m down on a single held breath in Breathless. The art is a pure function of seed ${spec.id}.`,
     image,
     attributes: traits.map(([trait_type, value]) => ({ trait_type, value })),
     properties: { category: 'image', files: [{ uri: image, type: 'image/png' }] },
@@ -110,8 +115,14 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 
   onStep?.('mint');
   const asset = generateSigner(u);
+  // The session key pays and holds update authority; the player owns the fish.
+  const session = sessionSigner(u);
   const { signature } = await create(u, {
     asset,
+    owner: publicKey(ownerAddress(u)),
+    payer: session,
+    authority: session,
+    updateAuthority: session.publicKey,
     name: spec.name,
     uri,
     plugins: [
@@ -120,12 +131,16 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
         attributeList: [
           { key: 'rarity', value: spec.rarity },
           { key: 'species', value: spec.species },
-          { key: 'depth', value: String(spec.depthM) },
+          { key: 'depth', value: String(depthM) },
+          // The market pays this (bounded by rarity value x 6), so a sale pays what the collection showed.
+          { key: 'value', value: String(catchValue) },
           { key: 'seed', value: spec.id },
         ],
       },
     ],
-  }).sendAndConfirm(u);
+  })
+    .setFeePayer(session)
+    .sendAndConfirm(u);
 
   return { asset: asset.publicKey.toString(), signature: base58.deserialize(signature)[0], image, uri };
 }
@@ -134,6 +149,6 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
 export async function burnFish(assetId: string): Promise<string> {
   const u = getUmi();
   const asset = await fetchAsset(u, publicKey(assetId));
-  const { signature } = await burn(u, { asset }).sendAndConfirm(u);
+  const { signature } = await burn(u, { asset, authority: ownerSigner(u) }).sendAndConfirm(u);
   return base58.deserialize(signature)[0];
 }

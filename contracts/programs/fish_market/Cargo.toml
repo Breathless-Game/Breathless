@@ -1,0 +1,22 @@
+[package]
+name = "fish_market"
+version = "0.1.0"
+description = "Breathless fish market: burn a Metaplex Core fish, get PEARL"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "fish_market"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "=0.31.2", features = ["init-if-needed"] }
+anchor-spl = { version = "=0.31.2", features = ["token", "associated_token", "metadata"] }
+mpl-core = { version = "=0.11.2", features = ["anchor"] }

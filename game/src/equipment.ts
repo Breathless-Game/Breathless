@@ -2,8 +2,10 @@
  * Persistent equipment progression for the fishing net (the game's fishing
  * rod concept).  The module deliberately keeps progression state separate
  * from the Three.js mesh in `gear.ts`, so a visual rebuild cannot reset a
- * player's upgrades.
+ * player's upgrades.  Saves live under the connected wallet's storage keys.
  */
+
+import { storageKey } from './wallet';
 
 export type RodLevel = 1 | 2 | 3;
 export type EquipmentLevel = RodLevel;
@@ -97,7 +99,10 @@ export interface EquipmentState {
   finsLevel: EquipmentLevel;
   tankLevel: EquipmentLevel;
   lampLevel: EquipmentLevel;
+  /** On-chain PEARL, as last read with pearlBalance(): a cache for instant UI. */
   pearls: number;
+  /** Pearls earned locally before PEARL went on-chain. Spent before on-chain PEARL. */
+  legacyPearls: number;
   /**
    * One selected module path per slot. Older localStorage records omit this
    * field and are normalised to the balanced starting paths below.
@@ -178,6 +183,7 @@ const DEFAULT_STATE: EquipmentState = {
   tankLevel: 1,
   lampLevel: 1,
   pearls: 0,
+  legacyPearls: 0,
   paths: DEFAULT_EQUIPMENT_PATHS,
 };
 
@@ -339,6 +345,8 @@ function normalize(value: unknown): EquipmentState {
   const record = value as Record<string, unknown>;
   // `level` was used by an early prototype; retain it during migration.
   const net = validLevel(record.netLevel ?? record.rodLevel ?? record.level);
+  // Saves from before on-chain PEARL have no legacyPearls: every Pearl in them was earned locally.
+  const preChain = !('legacyPearls' in record);
   return {
     rodLevel: net,
     netLevel: net,
@@ -347,14 +355,15 @@ function normalize(value: unknown): EquipmentState {
     finsLevel: validLevel(record.finsLevel),
     tankLevel: validLevel(record.tankLevel),
     lampLevel: validLevel(record.lampLevel),
-    pearls: validPearls(record.pearls),
+    pearls: preChain ? 0 : validPearls(record.pearls),
+    legacyPearls: validPearls(preChain ? record.pearls : record.legacyPearls),
     paths: normalizePaths(record),
   };
 }
 
 function readNumber(storage: Storage, key: string): number | undefined {
   try {
-    const value = storage.getItem(key);
+    const value = storage.getItem(storageKey(key));
     if (value == null) return undefined;
     const parsed = JSON.parse(value) as unknown;
     const n = Number(parsed);
@@ -374,7 +383,7 @@ export function loadEquipment(): EquipmentState {
 
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+    raw = localStorage.getItem(storageKey(EQUIPMENT_STORAGE_KEY));
   } catch {
     return cloneDefault();
   }
@@ -410,7 +419,7 @@ export function saveEquipment(state: EquipmentState): void {
   const safe = normalize(state);
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(EQUIPMENT_STORAGE_KEY, JSON.stringify(safe));
+    localStorage.setItem(storageKey(EQUIPMENT_STORAGE_KEY), JSON.stringify(safe));
   } catch {
     // Private browsing/quota errors should not interrupt a dive.
   }
@@ -433,12 +442,29 @@ export function nextRodTier(input?: EquipmentInput): RodTier | null {
   return ROD_TIERS[level] ?? null;
 }
 
+/** Every Pearl the player can spend: legacy local Pearls plus cached on-chain PEARL. */
+export function totalPearls(state: EquipmentState): number {
+  return state.legacyPearls + state.pearls;
+}
+
+export interface UpgradePlan {
+  tier: RodTier;
+  /** Taken from the local legacy balance, which is spent first. */
+  fromLegacy: number;
+  /** Must be burned on-chain with spendPearls() before the tier applies. */
+  fromChain: number;
+}
+
 /**
- * Attempt to buy the next rod/net tier.  This is pure so callers can decide
- * when to persist the result; the returned state has the upgrade cost removed.
+ * Plan buying the next rod/net tier, or null when it is maxed out or
+ * unaffordable.  Pure: the caller spends the on-chain part, then applies it.
  */
-export function upgrade(state: EquipmentState): EquipmentState | null {
-  return upgradeSlot(state, 'net');
+export function planUpgrade(state: EquipmentState): UpgradePlan | null {
+  const current = normalize(state);
+  const tier = nextRodTier(current.rodLevel);
+  if (!tier || totalPearls(current) < tier.cost) return null;
+  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
+  return { tier, fromLegacy, fromChain: tier.cost - fromLegacy };
 }
 
 function slotLevel(state: EquipmentState, slot: EquipmentSlot): EquipmentLevel {
@@ -513,12 +539,41 @@ export function nextSlotTier(state: EquipmentState, slot: EquipmentSlot): SlotTi
   return SLOT_LEVELS[slot][level] ?? null;
 }
 
-/** Buy the next tier for one slot, preserving all other upgrade levels. */
-export function upgradeSlot(state: EquipmentState, slot: EquipmentSlot): EquipmentState | null {
+export interface SlotUpgradePlan {
+  slot: EquipmentSlot;
+  tier: SlotTier;
+  /** Taken from the local legacy balance, which is spent first. */
+  fromLegacy: number;
+  /** Must be burned on-chain with spendPearls() before the tier applies. */
+  fromChain: number;
+}
+
+/**
+ * Plan buying the next tier for one slot, or null when it is maxed out or
+ * unaffordable.  Same rule as planUpgrade(): legacy Pearls first, the rest on-chain.
+ */
+export function planSlotUpgrade(state: EquipmentState, slot: EquipmentSlot): SlotUpgradePlan | null {
   const current = normalize(state);
-  const next = nextSlotTier(current, slot);
-  if (!next || current.pearls < next.cost) return null;
-  return { ...withSlotLevel(current, slot, next.level), pearls: current.pearls - next.cost };
+  const tier = nextSlotTier(current, slot);
+  if (!tier || totalPearls(current) < tier.cost) return null;
+  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
+  return { slot, tier, fromLegacy, fromChain: tier.cost - fromLegacy };
+}
+
+/** Apply a slot plan once its on-chain part has been spent, preserving all other upgrade levels. */
+export function applySlotUpgrade(state: EquipmentState, plan: SlotUpgradePlan): EquipmentState {
+  const current = normalize(state);
+  return {
+    ...withSlotLevel(current, plan.slot, plan.tier.level),
+    legacyPearls: Math.max(0, current.legacyPearls - plan.fromLegacy),
+    pearls: Math.max(0, current.pearls - plan.fromChain),
+  };
+}
+
+/** Pure preview of buying the next tier for one slot (no on-chain spend happens here). */
+export function upgradeSlot(state: EquipmentState, slot: EquipmentSlot): EquipmentState | null {
+  const plan = planSlotUpgrade(state, slot);
+  return plan ? applySlotUpgrade(state, plan) : null;
 }
 
 function pathModifier(state: EquipmentState, slot: EquipmentSlot, level: EquipmentLevel): PathModifier {

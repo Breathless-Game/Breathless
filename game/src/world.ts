@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { disposeTree, flatMat, jitter } from './lowpoly';
+import { Batch, disposeTree, flatMat, jitter, paintFaces } from './lowpoly';
 import { MAPS, mapDepth, type MapDef, type MapId } from './maps';
-import { Rng } from './rng';
+import { Rng, hashString } from './rng';
 import { RENDER_QUALITY, type RenderQuality } from './render-quality';
 import { DayCycle, type LightingState, type TimeOfDay } from './daylight';
 import { WaterSurfaceMaterial } from './water';
@@ -11,9 +11,27 @@ import { RainEffect } from './rain';
 import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
-import { buildScenery, type Scenery } from './scenery';
+import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
 
 export const HALF_WIDTH = 70;
+/**
+ * Every map is a shelf at `seabedY` except a trench straight under the boat:
+ * |x| < TRENCH_HALF_WIDTH is open water all the way down.
+ */
+export const TRENCH_HALF_WIDTH = 14;
+
+// Inside the trench the diver and fish swim at z in [-5, 3]. No wall rock comes
+// nearer the middle than LANE_HALF_WIDTH anywhere in front of LANE_BACK; behind
+// the lane the walls may reach in to WALL_REACH so the edge looks ragged.
+const LANE_HALF_WIDTH = 13.5;
+const LANE_BACK = -5;
+const WALL_REACH = 11;
+/** Trench walls are built lazily in slices this tall around the camera. */
+const CHUNK_HEIGHT = 40;
+/** Below this depth (m) the walls carry glowing specks. */
+const GLOW_DEPTH = 120;
+const SEABED_WIDTH = HALF_WIDTH * 2 + 120;
+const SEABED_Z = -25;
 
 // Each map lays out its terrain from its own seed. The ocean keeps the seed the
 // single-sea version used, so its reef is where players remember it.
@@ -40,10 +58,87 @@ export function waterColorAt(depth: number, night = false): THREE.Color {
   return c;
 }
 
+/** Height of the sand above `seabedY` at world (x, z), before per-vertex noise. It rolls off at the trench edge. */
+function shelfHeight(x: number, z: number) {
+  const edge = Math.max(0, 1 - (Math.abs(x) - TRENCH_HALF_WIDTH) / 4);
+  return Math.sin(x * 0.08) * 2.2 + Math.cos((z - SEABED_Z) * 0.15 + x * 0.03) * 1.5 - edge * 1.5;
+}
+
+/** Re-roll x in [lo, hi] until the span [x + minX, x + maxX] sits on the shelf, clear of the trench. */
+function shelfX(rng: Rng, lo: number, hi: number, minX: number, maxX: number): number {
+  for (let tries = 0; tries < 64; tries++) {
+    const x = rng.range(lo, hi);
+    if (x + minX >= TRENCH_HALF_WIDTH || x + maxX <= -TRENCH_HALF_WIDTH) return x;
+  }
+  return TRENCH_HALF_WIDTH - minX;
+}
+
+/** A jittered, randomly turned rock with the turn baked in, so its bounding box is exact. */
+function rockGeometry(rng: Rng, r: number, detail: number, squash: number) {
+  const geo = jitter(new THREE.IcosahedronGeometry(r, detail), rng, r * 0.18);
+  geo.rotateX(rng.range(0, Math.PI * 2)).rotateY(rng.range(0, Math.PI * 2)).rotateZ(rng.range(0, Math.PI * 2));
+  geo.scale(1, squash, 1);
+  geo.computeBoundingBox();
+  return geo;
+}
+
+/**
+ * Slide a rock centred at (x, z) on wall `side` (-1 left, 1 right) out of the diver's lane:
+ * anything reaching in front of LANE_BACK stays outside |x| = LANE_HALF_WIDTH, the rest outside `reach`.
+ */
+function clearLane(x: number, z: number, box: THREE.Box3, side: -1 | 1, reach = WALL_REACH) {
+  const limit = z + box.max.z > LANE_BACK ? LANE_HALF_WIDTH : reach;
+  return side < 0 ? Math.min(x, -limit - box.max.x) : Math.max(x, limit - box.min.x);
+}
+
+const ABYSS_TINT = new THREE.Color('#1a2c44');
+
+/** The map's rock colour, darker and cooler the deeper it sits. */
+function wallTint(base: THREE.Color, depth: number, out: THREE.Color) {
+  const t = 1 - Math.exp(-Math.max(0, depth - 20) / 140);
+  return out.copy(base).lerp(ABYSS_TINT, 0.5 * t).multiplyScalar(1 - 0.55 * t);
+}
+
+/** Share of trench-wall rocks to build: all on high, fewer but larger ones on lower settings. */
+function wallDensity(quality: RenderQuality) {
+  return 0.45 + 0.55 * Math.min(1, quality.kelpCount / RENDER_QUALITY.high.kelpCount);
+}
+
+/** Underwater fog reach (m) once the camera is inside the trench: far enough that the side and back walls read as a slot in the rock. */
+const TRENCH_FOG_FAR = 50;
+/** Metres below the shelf over which the fog eases out to TRENCH_FOG_FAR. */
+const TRENCH_FOG_EASE = 10;
+
+/**
+ * Fog far distance for a camera `depth` m under water. Open water closes in from 70 m to 34 m
+ * by 60 m deep. The camera only drops below the shelf inside the trench (over the shelf it stays
+ * 9 m above the sand), and there the fog pulls back so the walls don't vanish into it.
+ */
+function underwaterFogFar(depth: number, shelfDepth: number) {
+  const open = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
+  const inTrench = THREE.MathUtils.smoothstep(depth, shelfDepth, shelfDepth + TRENCH_FOG_EASE);
+  return Math.max(open, THREE.MathUtils.lerp(open, TRENCH_FOG_FAR, inTrench));
+}
+
+/** Marine snow drifts in a band from 45 m below the camera to 35 m above it, never above the surface. */
+function snowBand(cameraY: number): [number, number] {
+  const hi = Math.min(-0.5, cameraY + 35);
+  return [Math.min(cameraY - 45, hi - 40), hi];
+}
+
 interface Kelp {
   root: THREE.Group;
   segments: THREE.Object3D[];
   phase: number;
+}
+
+/** One rock slot in a trench-wall chunk. `side` is -1/1 for the side walls, 0 for the back wall. */
+interface WallSlot {
+  side: -1 | 0 | 1;
+  x: number;
+  y: number;
+  z: number;
+  r: number;
 }
 
 export class World {
@@ -72,7 +167,17 @@ export class World {
   private waterBackground = new THREE.Color();
   // Everything on and near the bottom. Rebuilt when the map changes.
   private terrain = new THREE.Group();
+  // Trench walls below the shelf, in CHUNK_HEIGHT slices around the camera (see updateTrench).
+  // Kept out of `terrain` because every chunk shares the two materials below.
+  private trench = new THREE.Group();
+  private chunks = new Map<number, THREE.Group>();
+  private chunkCenter = NaN;
+  private wallDensity: number;
+  private wallMat = flatMat('#ffffff', { vertexColors: true });
+  private glowMat = new THREE.MeshBasicMaterial({ color: '#4ff5d2', vertexColors: true, fog: false });
   private scenery: Scenery | null = null;
+  // Reused on every tick so animating the shore allocates nothing.
+  private sceneryEnv: SceneryEnv = {};
   private daySkyTint: [number, number, number] = [1, 1, 1];
   private nightSkyTint: [number, number, number] = [1, 1, 1];
   private surfaceTint = new THREE.Color(1, 1, 1);
@@ -80,11 +185,12 @@ export class World {
   private lastCameraY = 1.5;
   private lastCameraX = 0;
   map: MapDef;
-  /** World y of the seabed for the current map (negative). */
+  /** World y of the shelf for the current map (negative). Inside the trench there is no floor. */
   seabedY: number;
 
   constructor(quality: RenderQuality = RENDER_QUALITY.high, map: MapDef = MAPS.ocean) {
     this.quality = quality;
+    this.wallDensity = wallDensity(quality);
     this.map = map;
     this.seabedY = -mapDepth(map);
     const rng = new Rng(20261010);
@@ -97,7 +203,7 @@ export class World {
     this.scene.add(this.hemi, this.sun);
     this.scene.add(this.rain, this.atmosphere, this.shafts.group);
 
-    this.scene.add(this.terrain);
+    this.scene.add(this.terrain, this.trench);
     this.snow = this.buildSnow(rng);
     this.surface = this.buildSurface();
     this.boat = this.buildBoat();
@@ -128,6 +234,8 @@ export class World {
     disposeTree(this.terrain);
     this.terrain.clear();
     this.kelps = [];
+    // Trench walls of the old map go; update() builds the new ones around the camera.
+    this.clearTrench();
     const rng = new Rng(TERRAIN_SEED[map.id]);
     this.buildSeabed(rng);
     this.buildRocks(rng);
@@ -135,45 +243,68 @@ export class World {
     if (map.life === 'logs') this.buildLogs(rng);
     this.buildKelp(rng);
 
-    // Marine snow was spread over the old depth; respread it over the new one.
+    // Marine snow lives in a band around the camera; respread it there.
+    const [lo, hi] = snowBand(this.lastCameraY);
     const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < snowPos.count; i++) snowPos.setY(i, rng.range(this.seabedY, -0.5));
+    for (let i = 0; i < snowPos.count; i++) snowPos.setY(i, rng.range(lo, hi));
     snowPos.needsUpdate = true;
 
     if (this.scenery) {
       this.scene.remove(this.scenery.group);
       disposeTree(this.scenery.group);
     }
-    this.scenery = buildScenery(map);
+    this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
     this.colorGrade.apply(this.scene);
     this.updateLighting(this.lastSceneTime, this.lastCameraY, this.lastCameraX);
   }
 
+  /** The shelf: two halves of sand with the trench open between them, and a broken lip on each edge. */
   private buildSeabed(rng: Rng) {
-    const geo = new THREE.PlaneGeometry(HALF_WIDTH * 2 + 120, 90, 80, 30);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const h = Math.sin(x * 0.08) * 2.2 + Math.cos(z * 0.15 + x * 0.03) * 1.5 + rng.range(-0.6, 0.6);
-      pos.setY(i, h);
-    }
-    const g = geo.toNonIndexed();
-    geo.dispose();
-    g.computeVertexNormals();
-    const colors: number[] = [];
+    const width = SEABED_WIDTH / 2 - TRENCH_HALF_WIDTH;
     const sand = new THREE.Color(this.map.sand);
-    for (let i = 0; i < g.attributes.position.count; i += 3) {
-      const c = sand.clone().multiplyScalar(rng.range(0.75, 1.05));
-      for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
+    for (const side of [-1, 1]) {
+      const cx = side * (TRENCH_HALF_WIDTH + width / 2);
+      const geo = new THREE.PlaneGeometry(width, 90, Math.round((80 * width) / SEABED_WIDTH), 30);
+      geo.rotateX(-Math.PI / 2);
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        pos.setY(i, shelfHeight(pos.getX(i) + cx, pos.getZ(i) + SEABED_Z) + rng.range(-0.6, 0.6));
+      }
+      const g = geo.toNonIndexed();
+      geo.dispose();
+      g.computeVertexNormals();
+      const colors: number[] = [];
+      for (let i = 0; i < g.attributes.position.count; i += 3) {
+        const c = sand.clone().multiplyScalar(rng.range(0.75, 1.05));
+        for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
+      }
+      g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      const mesh = new THREE.Mesh(g, flatMat('#ffffff', { vertexColors: true }));
+      mesh.position.set(cx, this.seabedY, SEABED_Z);
+      this.terrain.add(mesh);
     }
-    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    const mesh = new THREE.Mesh(g, flatMat('#ffffff', { vertexColors: true }));
-    mesh.position.set(0, this.seabedY, -25);
-    this.terrain.add(mesh);
+    this.buildLip(rng);
+  }
+
+  /** Half-sunk rocks along both edges of the trench mouth so the cut in the sand reads as broken rock. */
+  private buildLip(rng: Rng) {
+    const mats = this.map.rocks.map((c) => flatMat(c));
+    const batch = new Batch();
+    const span = 30;
+    const perSide = 7;
+    for (const side of [-1, 1] as const) {
+      for (let i = 0; i < perSide; i++) {
+        const r = rng.range(1.2, 2.6);
+        const z = -20 + ((i + rng.range(0.1, 0.9)) * span) / perSide;
+        const geo = rockGeometry(rng, r, 0, rng.range(0.55, 0.9));
+        const x = clearLane(side * (TRENCH_HALF_WIDTH + 0.5 + r * rng.range(0, 0.5)), z, geo.boundingBox!, side, 12.5);
+        const y = this.seabedY + shelfHeight(side * TRENCH_HALF_WIDTH, z) - r * rng.range(0.1, 0.4);
+        batch.add(geo, rng.pick(mats), x, y, z);
+      }
+    }
+    this.terrain.add(batch.build());
   }
 
   private buildRocks(rng: Rng) {
@@ -189,11 +320,11 @@ export class World {
       mesh.scale.y = rng.range(0.6, 1.3);
       this.terrain.add(mesh);
     }
-    // A few foreground boulders on the seabed.
+    // A few foreground boulders on the shelf, never hanging over the trench.
     for (let i = 0; i < 16; i++) {
       const r = rng.range(1.5, 4);
       const mesh = new THREE.Mesh(jitter(new THREE.IcosahedronGeometry(r, 0), rng, r * 0.2), flatMat(rng.pick(palette)));
-      mesh.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), this.seabedY + r * 0.4, rng.range(-6, 6));
+      mesh.position.set(shelfX(rng, -HALF_WIDTH, HALF_WIDTH, -r * 1.2, r * 1.2), this.seabedY + r * 0.4, rng.range(-6, 6));
       this.terrain.add(mesh);
     }
   }
@@ -222,10 +353,11 @@ export class World {
         const fan = new THREE.Mesh(new THREE.CircleGeometry(rng.range(0.9, 1.6), 6, 0, Math.PI), flatMat(color, { side: THREE.DoubleSide }));
         group.add(fan);
       }
-      // Coral lives mostly in the reef band.
+      // Coral lives mostly in the reef band. On the floor it keeps to the shelf.
       const onFloor = rng.next() < 0.45;
       const y = onFloor ? this.seabedY + 1 : -rng.range(16, 42);
-      group.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), y, onFloor ? rng.range(-12, 4) : rng.range(-16, -9));
+      const x = onFloor ? shelfX(rng, -HALF_WIDTH, HALF_WIDTH, -2, 2) : rng.range(-HALF_WIDTH, HALF_WIDTH);
+      group.position.set(x, y, onFloor ? rng.range(-12, 4) : rng.range(-16, -9));
       group.rotation.y = rng.range(0, Math.PI * 2);
       this.terrain.add(group);
     }
@@ -234,6 +366,7 @@ export class World {
   /** Heaven Lake's "sunken forest": drowned trunks on the bottom and rock shelves on the back wall. */
   private buildLogs(rng: Rng) {
     const bark = [flatMat('#4a3b2a'), flatMat('#5c4a36'), flatMat('#3a2e22')];
+    const box = new THREE.Box3();
     for (let i = 0; i < 30; i++) {
       const len = rng.range(6, 16);
       const r = rng.range(0.35, 0.9);
@@ -250,10 +383,12 @@ export class World {
         branch.translateY(bl / 2);
         log.add(branch);
       }
-      // Most lie fallen on the bottom; some still stand, leaning.
+      // Most lie fallen on the bottom; some still stand, leaning. All of them on the shelf.
       const standing = rng.next() < 0.3;
       log.rotation.set(rng.range(-0.2, 0.2), rng.range(0, 6), standing ? rng.range(-0.35, 0.35) : Math.PI / 2 + rng.range(-0.15, 0.15));
-      log.position.set(rng.range(-HALF_WIDTH, HALF_WIDTH), this.seabedY + (standing ? 0 : r), rng.range(-14, 4));
+      box.setFromObject(log);
+      const x = shelfX(rng, -HALF_WIDTH, HALF_WIDTH, box.min.x - 0.5, box.max.x + 0.5);
+      log.position.set(x, this.seabedY + (standing ? 0 : r), rng.range(-14, 4));
       this.terrain.add(log);
     }
     for (let i = 0; i < 16; i++) {
@@ -270,7 +405,7 @@ export class World {
     for (let i = 0; i < plants; i++) {
       const root = new THREE.Group();
       const z = rng.next() < 0.25 ? rng.range(4, 8) : rng.range(-14, -4);
-      root.position.set(rng.range(-HALF_WIDTH - 10, HALF_WIDTH + 10), this.seabedY + 0.5, z);
+      root.position.set(shelfX(rng, -HALF_WIDTH - 10, HALF_WIDTH + 10, -1.5, 1.5), this.seabedY + 0.5, z);
       const color = new THREE.Color().setHSL(rng.range(hue[0], hue[1]), 0.55, rng.range(0.22, 0.35));
       const mat = flatMat(color, { side: THREE.DoubleSide });
       const tall = rng.int(10, 26);
@@ -302,12 +437,126 @@ export class World {
     }
   }
 
+  /** Keep the wall chunk the camera is in plus one above and one below; drop the rest. */
+  private updateTrench(cameraY: number) {
+    const center = Math.max(0, Math.floor((this.seabedY - cameraY) / CHUNK_HEIGHT));
+    if (center === this.chunkCenter) return;
+    this.chunkCenter = center;
+    for (const [k, chunk] of this.chunks) {
+      if (Math.abs(k - center) <= 1) continue;
+      this.dropChunk(chunk);
+      this.chunks.delete(k);
+    }
+    for (let k = Math.max(0, center - 1); k <= center + 1; k++) {
+      if (this.chunks.has(k)) continue;
+      const chunk = this.buildWallChunk(k);
+      this.chunks.set(k, chunk);
+      this.trench.add(chunk);
+      // Chunks are built after setMap graded the scene; the shared wall materials only hook in once.
+      this.colorGrade.apply(chunk);
+    }
+  }
+
+  private clearTrench() {
+    for (const chunk of this.chunks.values()) this.dropChunk(chunk);
+    this.chunks.clear();
+    this.chunkCenter = NaN;
+  }
+
+  private dropChunk(chunk: THREE.Group) {
+    this.trench.remove(chunk);
+    // The materials are shared by every chunk; only the merged geometry belongs to this one.
+    chunk.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+  }
+
+  /**
+   * Slice k of the trench walls, spanning y in [seabedY - 40(k+1), seabedY - 40k].
+   * Same map and k always give the same rocks; lower quality only thins them out
+   * (and grows the survivors) without moving any.
+   */
+  private buildWallChunk(k: number): THREE.Group {
+    const rng = new Rng(hashString(`${this.map.id}:trench:${k}`));
+    const top = this.seabedY - k * CHUNK_HEIGHT;
+    const keep = this.wallDensity;
+    const grow = 1 / Math.sqrt(keep);
+    const palette = this.map.rocks.map((c) => new THREE.Color(c));
+
+    // Roll every slot so the random sequence is the same at every quality, then keep an even share.
+    const slots: (WallSlot & { seed: number })[] = [];
+    const layer = (count: number, roll: (i: number) => WallSlot) => {
+      for (let i = 0; i < count; i++) {
+        const slot = roll(i);
+        const seed = (rng.next() * 2 ** 32) >>> 0;
+        if (Math.floor((i + 1) * keep + 1e-9) > Math.floor(i * keep + 1e-9)) slots.push({ ...slot, seed });
+      }
+    };
+    const row = (i: number, rows: number) => top - ((i + rng.range(0.15, 0.85)) * CHUNK_HEIGHT) / rows;
+    for (const side of [-1, 1] as const) {
+      // Inner face: the rock the diver swims past, hugging the trench edge.
+      layer(16, (i) => ({ side, y: row(i, 16), x: side * rng.range(16, 21), z: rng.range(-10, 7), r: rng.range(3, 5) }));
+      // Bigger rock further out and further back fills the frame behind the inner face.
+      layer(8, (i) => ({ side, y: row(i, 8), x: side * rng.range(22, 30), z: rng.range(-30, -10), r: rng.range(5, 8) }));
+    }
+    // Back wall behind the play plane, three columns by four rows, so the trench reads as a slot in rock.
+    const column = (TRENCH_HALF_WIDTH * 2) / 3;
+    layer(12, (i) => ({
+      side: 0,
+      y: row(Math.floor(i / 3), 4),
+      x: -TRENCH_HALF_WIDTH + ((i % 3) + rng.range(0.1, 0.9)) * column,
+      z: rng.range(-24, -16),
+      r: rng.range(4.5, 7.5),
+    }));
+
+    const batch = new Batch();
+    const tint = new THREE.Color();
+    const shade = new THREE.Color();
+    for (const s of slots) {
+      const sub = new Rng(s.seed);
+      const geo = rockGeometry(sub, s.r * grow, sub.next() < 0.5 ? 0 : 1, sub.range(0.7, 1.15));
+      const box = geo.boundingBox!;
+      let { x, y, z } = s;
+      // The top slice stops at the shelf instead of poking up through the sand.
+      if (k === 0) y = Math.min(y, this.seabedY + 1 - box.max.y);
+      if (s.side === 0) z = Math.min(z, LANE_BACK - box.max.z);
+      else x = clearLane(x, z, box, s.side);
+      wallTint(sub.pick(palette), -y, tint);
+      // Faces darken toward the rock's underside.
+      paintFaces(geo, (h) => shade.copy(tint).multiplyScalar((0.78 + 0.22 * h) * sub.range(0.85, 1.05)));
+
+      // Bioluminescence: a few specks on the faces that look into the trench.
+      const depth = -y;
+      if (depth > GLOW_DEPTH && sub.next() < 0.4 * Math.min(1, (depth - GLOW_DEPTH) / 100)) {
+        const pos = geo.attributes.position;
+        const nrm = geo.attributes.normal;
+        let dots = sub.int(1, 2);
+        for (let t = 0; t < 12 && dots > 0; t++) {
+          const v = sub.int(0, pos.count - 1);
+          const facing = s.side === 0 ? nrm.getZ(v) : -s.side * nrm.getX(v);
+          if (facing < 0.35) continue;
+          const size = sub.range(0.06, 0.13);
+          const dx = x + pos.getX(v) + nrm.getX(v) * 0.04;
+          const dy = y + pos.getY(v) + nrm.getY(v) * 0.04;
+          const dz = z + pos.getZ(v) + nrm.getZ(v) * 0.04;
+          if (Math.abs(dx) - size < LANE_HALF_WIDTH && dz + size > LANE_BACK) continue;
+          const dot = new THREE.OctahedronGeometry(size);
+          const glow = sub.range(0.45, 1);
+          paintFaces(dot, () => shade.setScalar(glow));
+          batch.add(dot, this.glowMat, dx, dy, dz);
+          dots--;
+        }
+      }
+      batch.add(geo, this.wallMat, x, y, z);
+    }
+    return batch.build();
+  }
+
   private buildSnow(rng: Rng) {
     const n = 1400;
     const pos = new Float32Array(n * 3);
+    const [lo, hi] = snowBand(this.lastCameraY);
     for (let i = 0; i < n; i++) {
       pos[i * 3] = rng.range(-HALF_WIDTH - 20, HALF_WIDTH + 20);
-      pos[i * 3 + 1] = rng.range(this.seabedY, -0.5);
+      pos[i * 3 + 1] = rng.range(lo, hi);
       pos[i * 3 + 2] = rng.range(-18, 10);
     }
     const geo = new THREE.BufferGeometry();
@@ -336,6 +585,7 @@ export class World {
 
   setQuality(quality: RenderQuality) {
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
+    const detailChanged = this.quality.detail !== quality.detail;
     this.quality = quality;
     this.rain.setQuality(quality);
     this.shafts.setQuality(quality);
@@ -351,13 +601,30 @@ export class World {
       this.surface.geometry = this.surfaceGeometry();
       old.dispose();
     }
+    if (detailChanged && this.scenery) {
+      const { visible } = this.scenery.group;
+      this.scene.remove(this.scenery.group);
+      disposeTree(this.scenery.group);
+      this.scenery = buildScenery(this.map, quality.detail);
+      this.colorGrade.apply(this.scenery.group);
+      this.scenery.group.visible = visible;
+      this.updateScenery(this.lastDecorationTime, 0);
+      this.scene.add(this.scenery.group);
+      // The new shore's materials missed setMap's grading pass.
+      this.colorGrade.apply(this.scenery.group);
+    }
+    // Trench walls are thinned by quality; rebuild the live chunks only if that changed.
+    const density = wallDensity(quality);
+    if (density !== this.wallDensity) {
+      this.wallDensity = density;
+      this.clearTrench();
+    }
   }
 
   private buildBoat() {
     const boat = new THREE.Group();
 
     const hullMat = flatMat('#b8483e');
-    const hullDarkMat = flatMat('#742f37');
     const trimMat = flatMat('#f0bf72');
     const deckMat = flatMat('#d7bb88');
     const cabinMat = flatMat('#e9eee7');
@@ -372,36 +639,46 @@ export class World {
     // A side-profile extrusion gives the hull a readable pointed bow and a
     // deep keel, while keeping the same flat-shaded low-poly language.
     const hullShape = new THREE.Shape();
-    hullShape.moveTo(-3.35, 0.38);
-    hullShape.lineTo(2.05, 0.38);
-    hullShape.lineTo(3.45, 0.12);
+    hullShape.moveTo(-3.35, 0.64);
+    hullShape.lineTo(2.05, 0.64);
+    hullShape.lineTo(3.45, 0.64);
+    hullShape.lineTo(3.45, 0.28);
     hullShape.lineTo(2.62, -0.45);
     hullShape.lineTo(-2.38, -0.62);
     hullShape.lineTo(-3.45, -0.08);
     hullShape.closePath();
     const hullGeo = new THREE.ExtrudeGeometry(hullShape, { depth: 1.72, bevelEnabled: false, steps: 1 });
     hullGeo.translate(0, 0, -0.86);
-    const hull = new THREE.Mesh(hullGeo, hullMat);
+    const hull = new THREE.Mesh(new THREE.BufferGeometry().copy(hullGeo), [hullMat, deckMat]);
 
     const stripeShape = new THREE.Shape();
     stripeShape.moveTo(-3.2, -0.05);
-    stripeShape.lineTo(2.62, 0.0);
-    stripeShape.lineTo(2.35, -0.2);
+    stripeShape.lineTo(2.05, 0.0);
+    stripeShape.lineTo(2.05, -0.2);
     stripeShape.lineTo(-2.55, -0.28);
     stripeShape.closePath();
     const stripeGeo = new THREE.ExtrudeGeometry(stripeShape, { depth: 0.035, bevelEnabled: false });
     stripeGeo.translate(0, 0, 0.85);
     const stripe = new THREE.Mesh(stripeGeo, trimMat);
 
-    const keel = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.22, 1.05), hullDarkMat);
-    keel.position.set(-0.15, -0.53, 0);
-    keel.rotation.z = -0.035;
     const deck = new THREE.Mesh(new THREE.BoxGeometry(6.25, 0.18, 1.58), deckMat);
     deck.position.y = 0.55;
-    const bowDeck = new THREE.Mesh(new THREE.ConeGeometry(1.05, 1.4, 4), deckMat);
-    bowDeck.position.set(2.6, 0.61, 0);
-    bowDeck.rotation.z = Math.PI / 2;
-    bowDeck.scale.set(0.6, 1, 1);
+    // Add a shoulder ring so only the foredeck narrows, leaving the work area wide.
+    const foredeckShape = new THREE.Shape();
+    foredeckShape.moveTo(-3.125, -0.79);
+    foredeckShape.lineTo(2.12, -0.79);
+    foredeckShape.lineTo(2.85, -0.44);
+    foredeckShape.lineTo(3.38, -0.095);
+    foredeckShape.lineTo(3.38, 0.095);
+    foredeckShape.lineTo(2.85, 0.44);
+    foredeckShape.lineTo(2.12, 0.79);
+    foredeckShape.lineTo(-3.125, 0.79);
+    foredeckShape.closePath();
+    deck.geometry.dispose();
+    const foredeckGeo = new THREE.ExtrudeGeometry(foredeckShape, {depth: 0.18, bevelEnabled: false});
+    foredeckGeo.rotateX(Math.PI / 2);
+    foredeckGeo.translate(0, 0.09, 0);
+    deck.geometry.copy(foredeckGeo);
 
     const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.05, 1.35, 1.28), cabinMat);
     cabin.position.set(-0.82, 1.34, 0);
@@ -430,7 +707,13 @@ export class World {
 
     const railPosts = [-2.65, -2.0, 1.65, 2.32].map((x) => rod(new THREE.Vector3(x, 0.61, 0.64), new THREE.Vector3(x, 1.02, 0.64), 0.035, metalMat));
     const sideRail = rod(new THREE.Vector3(-2.65, 1.02, 0.64), new THREE.Vector3(2.32, 1.02, 0.64), 0.04, metalMat);
-    const bowRail = rod(new THREE.Vector3(2.32, 1.02, 0.64), new THREE.Vector3(3.18, 0.7, 0.48), 0.04, metalMat);
+    const bowRail = rod(new THREE.Vector3(2.32, 1.02, 0.64), new THREE.Vector3(3.3, 1.02, 0.07), 0.04, metalMat);
+    boat.add(rod(new THREE.Vector3(2.32, 1.02, -0.79), new THREE.Vector3(3.3, 1.02, -0.07), 0.04, metalMat));
+    boat.add(rod(new THREE.Vector3(3.3, 0.6, 0), new THREE.Vector3(3.3, 1.02, 0), 0.035, metalMat));
+    for (const sign of [-1, 1]) {
+      boat.add(rod(new THREE.Vector3(2.12, 0.61, sign * 0.79), new THREE.Vector3(2.85, 0.61, sign * 0.44), 0.05, trimMat));
+      boat.add(rod(new THREE.Vector3(2.85, 0.61, sign * 0.44), new THREE.Vector3(3.38, 0.61, sign * 0.095), 0.05, trimMat));
+    }
 
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 2.75, 6), woodMat);
     mast.position.set(2.3, 1.95, 0);
@@ -440,13 +723,7 @@ export class World {
     antenna.position.set(-0.84, 2.54, 0);
     const antennaTip = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), lampMat);
     antennaTip.position.set(-0.84, 2.96, 0);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.52), flatMat('#ffcc4d', { side: THREE.DoubleSide }));
-    flag.position.set(2.68, 3.04, 0);
-    flag.rotation.y = Math.PI / 2;
 
-    const searchLight = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.21, 0.18, 6), lampMat);
-    searchLight.position.set(0.13, 2.28, 0.1);
-    searchLight.rotation.z = Math.PI / 2;
     const engineVent = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.26, 0.72), metalMat);
     engineVent.position.set(-2.18, 0.78, 0);
     const ventSlat = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.78), trimMat);
@@ -466,19 +743,127 @@ export class World {
     crateBand.position.set(-2.55, 0.82, 0.15);
     const lifeRing = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.065, 5, 10), flatMat('#f2714b'));
     lifeRing.position.set(-1.92, 0.98, 0.9);
-    lifeRing.rotation.x = Math.PI / 2;
+    lifeRing.rotation.x = 0;
 
-    const bowLamp = new THREE.Mesh(new THREE.SphereGeometry(0.095, 6, 4), lampMat);
-    bowLamp.position.set(3.18, 0.74, 0.43);
     const sternLamp = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), redLampMat);
     sternLamp.position.set(-3.05, 0.74, 0.15);
     const propeller = new THREE.Mesh(new THREE.TorusGeometry(0.23, 0.045, 4, 8), metalMat);
     propeller.position.set(-2.72, -0.62, 0);
     propeller.rotation.y = Math.PI / 2;
 
-    boat.add(hull, stripe, keel, deck, bowDeck, cabin, cabinFront, cabinSide, cabinBackWindow, cabinFrontFrame, roof, roofTrim);
-    boat.add(...railPosts, sideRail, bowRail, mast, mastBrace, boom, antenna, antennaTip, flag);
-    boat.add(searchLight, engineVent, ventSlat, reel, reelDrum, reelArm, crate, crateBand, lifeRing, bowLamp, sternLamp, propeller);
+    boat.add(hull, stripe, cabin, cabinFront, cabinSide, cabinBackWindow, cabinFrontFrame, roof, roofTrim);
+    boat.add(...railPosts, sideRail, bowRail, mast, mastBrace, boom, antenna, antennaTip);
+    boat.add(engineVent, ventSlat, reel, reelDrum, reelArm, crate, crateBand, lifeRing, sternLamp, propeller);
+    // Shared cross sections make deck and underwater bow one continuous shell.
+    const sections = [
+      [-3.35, 0.79, -0.3], [-2.8, 0.79, -0.58],
+      [1.8, 0.79, -0.58], [2.35, 0.69, -0.43],
+      [2.85, 0.43, -0.18], [3.35, 0.035, 0.12],
+    ];
+    const rings = sections.map(([x, w, bottom]) => [
+      new THREE.Vector3(x, 0.64, -w),
+      new THREE.Vector3(x, bottom, -w * 0.57),
+      new THREE.Vector3(x, bottom, w * 0.57),
+      new THREE.Vector3(x, 0.64, w),
+    ]);
+    const vertices: number[] = [];
+    const refinedHullGeo = new THREE.BufferGeometry();
+    const triangle = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, material: number) => {
+      const start = vertices.length / 3;
+      vertices.push(...a.toArray(), ...b.toArray(), ...c.toArray());
+      refinedHullGeo.addGroup(start, 3, material);
+    };
+    for (let i = 0; i < rings.length - 1; i++) {
+      for (let j = 0; j < 4; j++) {
+        const k = (j + 1) % 4;
+        triangle(rings[i][j], rings[i + 1][j], rings[i][k], j === 3 ? 1 : 0);
+        triangle(rings[i][k], rings[i + 1][j], rings[i + 1][k], j === 3 ? 1 : 0);
+      }
+    }
+    triangle(rings[0][0], rings[0][1], rings[0][2], 0);
+    triangle(rings[0][0], rings[0][2], rings[0][3], 0);
+    const end = rings[rings.length - 1];
+    triangle(end[0], end[2], end[1], 0);
+    triangle(end[0], end[3], end[2], 0);
+    refinedHullGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    refinedHullGeo.computeVertexNormals();
+    hull.name = 'integrated-hull-and-deck';
+    hull.geometry.dispose();
+    hull.geometry = refinedHullGeo;
+    const rubberMat = flatMat('#263239');
+    const seamMat = flatMat('#9a784f');
+    const whiteMat = flatMat('#fff3da');
+    const detailBox = (size: number[], pos: number[], mat: THREE.Material, name: string) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat);
+      mesh.position.set(pos[0], pos[1], pos[2]);
+      mesh.name = name;
+      boat.add(mesh);
+      return mesh;
+    };
+    for (let x = -2.9; x < 2.7; x += 0.32) {
+      const plankWidth = 1.5 * (1 - 0.75 * THREE.MathUtils.clamp((x - 2.12) / 1.26, 0, 1));
+      detailBox([0.018, 0.014, plankWidth], [x, 0.648, 0], seamMat, 'deck-plank-seam');
+    }
+    for (const z of [-0.79, 0.79]) {
+      detailBox([5.25, 0.1, 0.09], [-0.505, 0.48, z], trimMat, 'gunwale-cap');
+      const rearStripe = stripe.clone();
+      if (z < 0) { rearStripe.position.z = -1.735; boat.add(rearStripe); }
+      for (const x of [-2.45, -1.65, 1.9]) {
+        const tire = new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.08, 8, 16), rubberMat);
+        tire.position.set(x, 0.2, z * 1.07);
+        boat.add(tire, rod(new THREE.Vector3(x, 0.6, z), new THREE.Vector3(x, 0.31, z * 1.07), 0.014, ropeMat));
+      }
+      if (z < 0) {
+        for (const x of [-2.65, -2.0, 1.65, 2.32]) boat.add(rod(new THREE.Vector3(x, 0.61, z), new THREE.Vector3(x, 1.02, z), 0.035, metalMat));
+        boat.add(rod(new THREE.Vector3(-2.65, 1.02, z), new THREE.Vector3(2.32, 1.02, z), 0.04, metalMat));
+      }
+      detailBox([0.46, 0.84, 0.025], [-1.56, 1.13, z > 0 ? 0.659 : -0.659], blueMat, 'cabin-door');
+      detailBox([0.075, 0.035, 0.04], [-1.39, 1.12, z > 0 ? 0.68 : -0.68], trimMat, 'door-handle');
+      for (const x of [-1.5, -0.4, 0.45]) {
+        detailBox([0.04, 0.53, 0.055], [x, 1.58, z > 0 ? 0.685 : -0.685], cabinMat, 'window-mullion');
+      }
+      detailBox([1.9, 0.045, 0.06], [-0.78, 1.33, z > 0 ? 0.68 : -0.68], trimMat, 'window-sill');
+    }
+    // Forward-facing windshield and navigation fittings.
+    detailBox([0.025, 0.48, 0.96], [0.219, 1.6, 0], glassMat, 'forward-windshield');
+    detailBox([0.055, 0.54, 0.045], [0.24, 1.6, 0], cabinMat, 'windshield-divider');
+    for (const x of [-2.9, 2.35]) {
+      detailBox([0.32, 0.08, 0.2], [x, 0.7, -0.32], metalMat, 'cleat-base');
+      boat.add(rod(new THREE.Vector3(x - 0.2, 0.81, -0.32), new THREE.Vector3(x + 0.2, 0.81, -0.32), 0.035, metalMat));
+    }
+    for (let i = 0; i < 5; i++) {
+      const coil = new THREE.Mesh(new THREE.TorusGeometry(0.13 + i * 0.028, 0.014, 6, 24), ropeMat);
+      coil.rotation.x = Math.PI / 2;
+      coil.position.set(2.35, 0.68, 0.18);
+      boat.add(coil);
+    }
+    for (let i = 0; i < 4; i++) detailBox([0.52, 0.025, 0.035], [-2.18, 0.71 + i * 0.055, 0.405], rubberMat, 'engine-vent-slat');
+    const exhaust = rod(new THREE.Vector3(-1.45, 2.16, -0.36), new THREE.Vector3(-1.45, 2.75, -0.36), 0.065, metalMat);
+    boat.add(exhaust);
+    detailBox([0.22, 0.05, 0.18], [-1.45, 2.78, -0.36], rubberMat, 'exhaust-cap');
+    boat.add(rod(new THREE.Vector3(2.3, 3.12, 0), new THREE.Vector3(0.8, 0.7, -0.6), 0.012, ropeMat));
+    boat.add(rod(new THREE.Vector3(2.3, 3.12, 0), new THREE.Vector3(3.0, 0.7, 0.5), 0.012, ropeMat));
+    detailBox([0.8, 0.045, 0.65], [0.95, 0.68, -0.24], metalMat, 'deck-hatch');
+    detailBox([0.18, 0.06, 0.045], [0.95, 0.73, -0.24], trimMat, 'hatch-handle');
+    for (const z of [-0.42, 0.42]) {
+      const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 16), metalMat);
+      flange.rotation.x = Math.PI / 2;
+      flange.position.set(1.45, 0.98, z);
+      boat.add(flange);
+    }
+    const ropeDrum = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.76, 16), ropeMat);
+    ropeDrum.rotation.x = Math.PI / 2;
+    ropeDrum.position.set(1.45, 0.98, 0);
+    boat.add(ropeDrum);
+    for (let i = 0; i < 3; i++) detailBox([0.76, 0.018, 0.018], [-2.55, 0.67 + i * 0.14, 0.512], seamMat, 'crate-board-seam');
+    const ringBands = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.069, 8, 8, Math.PI / 5), whiteMat);
+    for (let i = 0; i < 4; i++) {
+      const band = ringBands.clone();
+      band.position.copy(lifeRing.position);
+      band.position.z += 0.006;
+      band.rotation.z = i * Math.PI / 2;
+      boat.add(band);
+    }
     boat.position.set(0, 0.2, 0);
     this.scene.add(boat);
     return boat;
@@ -514,15 +899,22 @@ export class World {
   }
 
   update(time: number, cameraY: number, cameraX = 0) {
+    this.updateTrench(cameraY);
     const elapsed = time - this.lastDecorationTime;
-    if (elapsed + 1e-6 >= 1 / this.quality.decorationHz) {
-      this.updateDecorations(time, Math.min(elapsed, 0.25));
+    const tick = elapsed + 1e-6 >= 1 / this.quality.decorationHz;
+    if (tick) {
+      this.updateDecorations(time, Math.min(elapsed, 0.25), cameraY);
       this.lastDecorationTime = time;
     }
-    this.updateLighting(time, cameraY, cameraX);
+    this.updateLighting(time, cameraY, cameraX, tick ? Math.min(elapsed, 0.25) : null);
   }
 
-  updateLighting(time: number, cameraY: number, cameraX = 0) {
+  /**
+   * Sky, light, fog and water for this frame. `sceneryDt` moves the shoreline on by
+   * that many seconds; null (between decoration ticks) leaves it as it is, and 0
+   * (paused, or a fresh map) re-poses it so a changed setting still shows.
+   */
+  updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
     this.lastSceneTime = time;
     this.lastCameraY = cameraY;
     this.lastCameraX = cameraX;
@@ -567,7 +959,7 @@ export class World {
       this.scene.background = this.waterBackground;
       fog.color.copy(this.waterBackground);
       fog.near = 6;
-      fog.far = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
+      fog.far = underwaterFogFar(depth, -this.seabedY);
     }
     const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1);
     this.sun.color.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
@@ -580,7 +972,7 @@ export class World {
     if (this.scenery) {
       // Nothing above the water is visible once the camera is under it.
       this.scenery.group.visible = depth < 1;
-      if (this.scenery.group.visible) this.scenery.update(time, this.night, weather, this.lightingEffects);
+      if (sceneryDt !== null && this.scenery.group.visible) this.updateScenery(time, sceneryDt);
     }
     this.shafts.update(this.waveTime, lighting, weather, cameraY, this.lightingEffects);
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
@@ -590,11 +982,26 @@ export class World {
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
   }
 
-  private updateDecorations(time: number, dt: number) {
+  /** Animate the shore by `dt` seconds (0 re-poses it) in the current weather, light setting and swell. */
+  private updateScenery(time: number, dt: number) {
+    if (!this.scenery) return;
+    const env = this.sceneryEnv;
+    env.weather = this.weather.state;
+    env.lightingEffects = this.lightingEffects;
+    env.waveTime = this.waveTime;
+    env.swell = this.swell();
+    this.scenery.update(time, this.night, dt, env);
+  }
+
+  /** How much the wind lifts the waves; the scenery's floats ride the same swell. */
+  private swell() {
+    return 1 + this.weather.state.wind * 0.75;
+  }
+
+  private updateDecorations(time: number, dt: number, cameraY: number) {
     // Waves.
-    const wind = this.weather.state.wind;
     const waveTime = this.waveTime;
-    const swell = 1 + wind * 0.75;
+    const swell = this.swell();
     const waves = this.map.waves;
     this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
     this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
@@ -607,10 +1014,15 @@ export class World {
       });
     }
 
+    // Snow that falls out of the bottom of the camera's band re-enters at the top (80 m up
+    // when deep, less near the surface). Snow left above the band when the camera sinks
+    // fast wraps down the same way, so the band is never empty.
+    const [lo, hi] = snowBand(cameraY);
+    const span = hi - lo;
     const snowPos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < this.quality.snowCount; i++) {
       let y = snowPos.getY(i) - 0.24 * dt;
-      if (y < this.seabedY) y = -0.5;
+      if (y < lo || y > hi) y = lo + ((((y - lo) % span) + span) % span);
       snowPos.setY(i, y);
     }
     snowPos.addUpdateRange(0, this.quality.snowCount * 3);

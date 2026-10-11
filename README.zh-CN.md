@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+<p align="center"><img src="docs/showcase.gif" alt="屏息 Breathless：极光下的峡湾，潜水员憋着气下潜抓鱼" width="800"></p>
+
 > **用你真实的憋气来潜水抓鱼。** 摄像头通过 Presage 识别你是否在憋气，憋住气潜水员才能下潜；越深鱼越稀有；在水下一换气就必须马上浮上去，否则网里的鱼全丢。抓到的鱼可以铸造成 Solana NFT，玩家之间交易。游戏还会安静地记录每次憋气的时长和心率，你想看的时候一键生成健康报告。
 
 低多边形（low-poly）2.5D 风格，Three.js + TypeScript，前端为主，加一个本地 Node 传感器服务。
@@ -41,10 +43,10 @@
 ```
 
 - **憋气就是氧气瓶**：游戏没有氧气条，你的肺就是。
-- **贪心与风险**：深渊（38 m 以下）才有神话级鱼，但离水面越远，换气后越难赶回去。
+- **贪心与风险**：潜得越深，鱼越稀有、越值钱（神话级只在 50 m 以下出现，而海沟没有底），但离水面越远，换气后越难赶回去。
 - **夜晚**：自然循环入夜后，每条新生成的鱼稀有度掷两次取高的。`N` 可以渐变切换晨光 / 夜色。海怪风险还在待办里。
-- **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。
-- **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。入库鱼换算成 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
+- **收藏**（`C`）：入库的鱼会渲染成 512×512 的卡牌图，就是 NFT 的图片。卡图完全由鱼的 seed 决定，任何人都能重新渲染并核对。每条入库的鱼都会在后台自动铸成 NFT；点 **Sell** 把鱼卖成 Pearls（见第 7 节）。
+- **鱼竿升级**（`G`）：当前鱼竿在游戏里表现为手持渔网。卖鱼得到 Pearls，用 Pearls 解锁更大的网、更多容量和更远收网范围。
 
 ### 三张地图
 
@@ -53,18 +55,20 @@
 | | 峡湾 Fjord（挪威 / 冰岛） | 天池 Heaven Lake（张家界 / 长白山） | 汪洋 Open Ocean |
 | --- | --- | --- | --- |
 | 难度 | 休闲 | 普通 | 困难 |
-| 开放深度 | 0–18 m，只有 Shallows（海底在 20 m） | 0–38 m，Shallows + Sunken Forest（海底在 40 m） | 0–58 m，Shallows + Coral Reef + The Abyss（海底在 60 m） |
+| 大陆架上的区域 | 0–18 m，只有 Shallows | 0–38 m，Shallows + Sunken Forest | 0–60 m，Shallows + Coral Reef + The Abyss |
+| 大陆架（海底） | 20 m，往下是无底海沟 | 40 m，往下是无底海沟 | 62 m，往下是无底海沟 |
 | 水面以上 | 雪峰、松林岸、两间渔屋和一座栈桥、浮冰；夜里有极光，窗户亮灯 | 石柱、火山口边缘、湖边的亭子、飘动的雾（夜里更浓），夜里有一盏灯笼 | 带片状闪电的风暴锋面、海蚀柱、一座灯塔（夜里灯会转动） |
 | 水下 | 冷青色的水，灰色的砾石和岩石，海带，没有珊瑚 | 翡翠绿色的水，沉木和岩架，稀疏的水草 | 原来的珊瑚礁：珊瑚、海带、沙地 |
 | 海浪 | 汪洋的一半高 | 最平静 | 完整高度 |
 | 解锁 | 一开始就开放 | 累计入库鱼价值 150 | 累计入库鱼价值 1000 |
 
-- **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它沿用 Coral Reef 的掉率表，只有外观和深度计上的标签不同。鱼只在地图开放的区域里生成，右侧的深度计也只显示这些区域。
-- **解锁**：按入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。游戏会记住达到过的最高累计值，所以之后失去鱼也不会让地图重新上锁。某次下潜入库的鱼够开一张新图时，会有一条提示。
+- **海沟**：每张图的海底都是一块大陆架，船正下方有一条没有底的海沟。所有地图都不限深度；潜得越深，鱼越稀有、捕获价值越高（见第 7 节）。地图在大陆架上没有开放的区域（比如峡湾 18 m 以下）只能顺着海沟下去。
+- **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它就是 Coral Reef 的深度范围，只有外观和深度计上的标签不同；掉率只看深度。大陆架上只在地图开放的区域里放鱼，大陆架以下有一群海沟鱼跟着潜水员往下走。右侧的深度计先显示地图开放的区域，再从大陆架往下显示一段 Trench。
+- **解锁**：按历史上所有入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。卖鱼不会让它减少，所以地图不会重新上锁，进度也不会停滞。每张图都能顺着海沟潜到任意深度，所以解锁开放的是新场景和更深、更宽的大陆架，而不是更大的深度。某次下潜入库的鱼够开一张新图时，会有一条提示。
 - **演示开关**：地图卡片下面有一个勾选框 "Unlock all maps (demo)"，勾上后所有地图一次全部开放。它是给演示和测试用的。
-- **保存的进度**：选中的地图、最高累计价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
+- **保存的进度**：选中的地图、历史累计入库价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
 - **仍然只是设计，尚未实现**：夜间小怪（峡湾：野鹿、野熊；天池：野熊、巨人；汪洋：海浪、海怪）、各地图独立的白昼时段（峡湾白天 05:00–20:00）、由心率驱动的船上垂钓、船耐久，以及汪洋沉船后全部装备永久丢失。
-- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买也还没接上。
+- **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。这些模型还没有在游戏里显示或使用，用 Pearl 购买它们也还没接上。目前能玩的升级只有鱼竿 / 渔网等级（`G`，见第 7 节），它用的是自己的渔网模型。
 
 ### 比赛定位
 
@@ -149,7 +153,7 @@ npm run game       # 游戏，http://localhost:5173
 
 ### 自托管 / Self-hosting
 
-`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏和憋气传感器（WebSocket 在 `/sensor`），前面只需要一条隧道或一个反向代理。
+`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏、憋气传感器（WebSocket 在 `/sensor`）和 PEARL 市场（`/api/market`，见第 8 节），前面只需要一条隧道或一个反向代理。
 
 ```bash
 npm run setup      # 一次性：安装 sensor/ 和 game/ 的依赖
@@ -165,10 +169,15 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `MAX_LIVE_SESSIONS` | `1` | 同时使用 Presage 实时检测的玩家数。SDK 的原生状态是进程全局的，一个进程里跑不了两个会话；设成 `0` 关闭实时检测。超出上限的玩家会看到 "Server busy"，自动改用键盘玩。 |
 | `MAX_CONN_PER_IP` | `8` | 每个玩家 IP 可同时打开的传感器连接数（代理在本机时读 `CF-Connecting-IP` / `X-Forwarded-For`）。 |
 | `SENSOR_RECORD` | 关 | 设成 `1` 才把实时会话写进 `sensor/recordings/`。serve 模式默认关闭：陌生人的呼吸数据绝不落盘。（开发模式照旧录制。） |
+| `FISH_MARKET_PROGRAM_ID` | 空 | PEARL 市场模式：空 = 服务端模式，填 program id = 合约模式（第 8 节）。 |
+| `MARKET_DIR` | `sensor` | 市场的密钥和状态文件（`.market-*`）放在哪，相对仓库根目录。`deploy/deploy.sh` 从不覆盖或删除它们；记得备份。市场起不来时，游戏和传感器照常服务，`/api/market` 返回 503。 |
+| `SOLANA_RPC` | devnet | 市场用的 RPC（没设就用 `VITE_SOLANA_RPC`）。 |
 
 - **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
 - **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
-- **带宽。** 实时模式上传的是原始 640×480 RGBA 帧：每帧 1.23 MB，30 fps 时每个玩家约 37 MB/s（≈295 Mbit/s）上行。局域网没问题；走公网时大多数玩家传不了这么快，帧数会掉，低于约 15 fps 时 Presage 的波形会变差。键盘和模拟模式不发帧。
+- **带宽。** 实时模式把每一帧 640×480 画面压成 JPEG 上传，30 fps，**每个玩家约 3–6 Mbit/s 上行**（Chrome 质量 0.7：画面简单时每帧 16–20 kB，画面杂乱时 30–35 kB）。Presage 要约 25 fps 以上，低于约 15 fps 波形会变差，所以游戏优先保帧率、牺牲画质：目标每帧 25 kB（30 fps 即 6 Mbit/s），帧偏大或上行太慢导致跳帧时，JPEG 质量在 0.8 到 0.4 之间自动下调。约 5 Mbit/s 的上行在一般画面下能保持 30 fps；更慢就会跳帧。sensor 用 [sharp](https://sharp.pixelplumbing.com/)（libvips）解码：每帧约 2 ms，在独立线程上跑，比原始帧多占约 3% 的单核。键盘和模拟模式不发帧。
+  - 开发构建连本机 sensor 时仍默认发原始 RGBA（每帧 1.23 MB，30 fps 约 295 Mbit/s，只在同一台机器上用）。在页面 URL 后加 `?frames=raw` 或 `?frames=jpeg`（或构建时设置 `VITE_FRAME_FORMAT`）可以强制使用其中一种。
+  - 不用摄像头检查某个部署的上行链路：在玩家的网络里运行 `node sensor/stream-test.mjs wss://<你的域名>/sensor`，它会连续 20 秒发送合成的 JPEG 帧，打印上行速率、跳过的帧数和 Presage 接收的帧数（可选 `--raw`、`--fps`、`--quality`、`--image face.jpg`）。
 
 ---
 
@@ -187,12 +196,15 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `Esc` | 暂停菜单：继续、设置、回到主页面。先关闭打开的面板；在设置里按是返回上一层；校准时按直接回主页面 |
 | `Enter`（主页面） | 等于点 START 鱼 |
 
-**主页面**：进入时一根绳子（两端都在屏幕外）从左边荡出、挂到右边，然后几条鱼从上方掉下来，用鱼线挂在绳子上。按钮名字印在鱼身上。名字长（4 个字符以上）的鱼用头、尾两根鱼线横着挂；两根线像滑轮一样自动调长短，所以绳子倾斜的地方鱼和字也保持水平。点金色的 **START** 鱼（或按 Enter）：鱼线断开、鱼掉下去，进入工作台；紫色的 **SETTINGS** 鱼打开设置。鱼和绳子都能用鼠标拖、甩，划过时会被推开。系统开了"减少动态效果"时跳过入场动画。
+**主页面**：进入时一根绳子（两端都在屏幕外）从左边荡出、挂到右边，然后几条鱼从上方掉下来，用鱼线挂在绳子上。按钮名字印在鱼身上。名字长（4 个字符以上）的鱼用头、尾两根鱼线横着挂；两根线像滑轮一样自动调长短，所以绳子倾斜的地方鱼和字也保持水平。点金色的 **START** 鱼（或按 Enter）：镜头下移到工作台（绳子和鱼升到屏幕顶部，仍然可以拖）；紫色的 **SETTINGS** 鱼打开设置。鱼和绳子都能用鼠标拖、甩，划过时会被推开。系统开了"减少动态效果"时跳过入场动画。
 
-**工作台**（`workbench.ts`）：俯视的木桌，东西从上方落到桌上并互相碰撞（matter-js，无重力的桌面物理）。左上是 START 鱼，右上是三张地图卡（章节 I / II / III，背面朝上，地图的难度就是游戏难度），左下是配件（脚蹼、应急气瓶、头灯），右下是捕鱼器（鱼竿、渔网、鱼饵）。
-- 所有东西都能拖、甩。点一件装备：放大到屏幕中央、背景虚化、左边显示描述（目前是占位文字）；再点一下或按任意键，它就放进桌子中间的 PACK 圈（发绿光 = 已带上）；对已带上的再做一次会放回原来的角落。Esc 取消。
-- 点一张地图：卡片落到桌子中央，把带上的装备吸进去，然后翻到正面。点地图本身：把桌上所有东西都吸进去，卡片放大盖住屏幕，转场到这张地图，接着是开始卡片（摄像头 / 键盘 / 憋气测试）。点地图外面：把装备吐出来，翻回背面，回到右上角。
-- 未解锁的地图点了会抖一下并提示需要的价值；左下角有"解锁全部地图（演示）"开关。
+**工作台**（`workbench.ts`，海图在 `chart.ts`）：斜视角的木桌（2.5D，单独的 Three.js 场景），中间放着一张折起来的海图，右边是准备区（READY）。
+- 装备（脚蹼、应急气瓶、头灯、鱼竿、渔网、鱼饵）以 3D 模型从上方掉下来砸在桌上：会弹起、扬起一圈灰、镜头震一下，旁边的东西也会跳起来。物理是手写的：重力、桌面反弹、桌面上的圆形碰撞。
+- 鼠标移到装备上显示名字和效果。点一下放进右边的准备区（绿圈）；在准备区里再点一下就扔回桌上。也可以拖动（拖到准备区就算准备好）和甩出去。
+- 主页面的绳子在工作台上被拉紧，横在屏幕上方约五分之一高的位置，鱼线收短，鱼紧挨着挂在绳子下面，完全在桌子上方、不挡桌面，在桌面上投下柔和的影子。装备也可以放在海图上；点海图时，上面的东西会跳下来散在旁边。
+- 海图是一张模拟的纸（`paper.ts`，高度场）：它"记得"中间的折痕，纸的刚度会把褶皱慢慢抚平。在桌上它四边贴着桌面，只有中间的折痕微微隆起；压在海图上的装备会把那一块压平，旁边有东西砸下来时纸边会弹起再落回桌面。拿在手里时两端会微微卷起。鼠标在纸上移动时，只在鼠标附近压出褶皱，方向和移动方向垂直，停下后褶皱会慢慢抚平。被拿着移动时会因惯性稍微下垂，再恢复，不会像果冻一样抖。
+- 点海图：海图被拿起来、展平（两端仍然微微卷着），送到屏幕中央、浮在虚化的桌面上方，像拿在手里一样跟着鼠标轻微倾斜晃动，地点标记贴在纸上跟着动，上面有三个地点，每章一个（I 峡湾、II 天池、III 汪洋；地点的难度就是游戏难度）。每个地点都可以直接选，海图上不用解锁。选中一个地点时，桌子后面的世界会切换到那张地图，右边面板显示从下潜起点渲染的这张地图的预览图、介绍和已准备的装备，然后点 **Dive · 下潜**（或再点一次那个地点、或按 Enter）：预览图从面板扩散到全屏，下面的游戏画面正好是同一个视角，预览图再淡出，做到无缝衔接；接着是开始卡片（摄像头 / 键盘 / 憋气测试）。点海图外面或按 Esc 把它折回桌上。
+- 在空桌面上按 Esc，镜头移回主页面。
 - 带上的装备会传给游戏（`loadout`），但升级效果还没接进潜水玩法。
 
 **暂停的细节**：暂停时游戏玩法冻结，切走标签页也会自动暂停。在水下点"继续"会先倒数 3 秒，让玩家吸一口气再憋住，否则暂停时的换气会被直接判成"水下呼吸"。回到主页面会释放摄像头和 sensor 连接；网里有鱼时会先弹确认，鱼会丢失，但这次憋气仍然记进健康数据。
@@ -229,14 +241,15 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 
 **浏览器 → sensor**
 
-- **二进制帧**：12 字节头 + RGBA 像素，全部小端序。
+- **二进制帧**：12 字节头 + 图像，全部小端序。`game/src/frame-codec.ts` 负责写，`sensor/frames.mjs` 负责读；`game/tests/frame-protocol.test.mjs` 把两端放在一起测试。
   | 偏移 | 类型 | 含义 |
   | --- | --- | --- |
   | 0 | f64 | 时间戳（ms，必须单调递增；间隔超过 2 s 时 SDK 会重启） |
-  | 8 | u16 | 宽（640） |
+  | 8 | u16 | 第 0–11 位：宽（640）。第 12–15 位：格式，`0` = 原始 RGBA，`1` = JPEG |
   | 10 | u16 | 高（480） |
-  | 12… | u8[] | RGBA，宽 × 高 × 4 |
-  - 背压：浏览器在 `ws.bufferedAmount` 过大时跳过帧。
+  | 12… | u8[] | 原始：RGBA，宽 × 高 × 4。JPEG：一张宽 × 高的 JPEG 图像 |
+  - 格式 0 的宽字段和以前完全一样，所以原始帧与旧协议逐字节相同。sensor 把 JPEG 解码成 RGBA，交给 Presage 的数据和原始帧完全一致。解码一次只做一帧，另外最多有一帧排队；排队时又来新帧就替换掉旧的，所以服务器跟不上时丢帧，而不是无限排队。
+  - 背压：`ws.bufferedAmount` 超过 100 kB（JPEG）或 4 帧（原始）时浏览器跳过帧；JPEG 一次只编码一帧。
 - **JSON 命令**：`{ "t": "sim", "on": true }` 开关模拟；`{ "t": "simHold", "holding": true }` 设置模拟憋气。
 
 **sensor → 浏览器**（每 80 ms 一次）
@@ -255,7 +268,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 }
 ```
 
-错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。
+错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。`"code": "frames"` 表示 sensor 解不了 JPEG（没装 sharp）：游戏改发原始帧。
 
 ---
 
@@ -367,12 +380,12 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
     ├── index.html          HUD、标题卡、收藏面板、报告面板的 DOM
     ├── vite.config.ts      端口 5173；Node polyfills（Umi 和 Irys 需要）
     ├── asset-library.html  素材库的预览页，只在开发服务器上有（src/asset-library.ts）
-    ├── tests/              node --test：画质、昼夜与天气的单元测试
+    ├── tests/              node --test：画质、昼夜、天气与鱼经济的单元测试
     └── src/
         ├── main.ts         入口：场景、阶段机（menu/calibrating/play/blackout）、主循环、输入、入库
         ├── breath.ts       BreathSource：摄像头抓帧推送、WS 状态、键盘/模拟模式
         ├── breathtest.ts   标题页的 2.5 分钟憋气测试：按提示憋气和呼吸，自动打标注
-        ├── world.ts        按所选地图生成的水下地形（海底、礁石、珊瑚、海带）、光束、雪、水面、船；按深度变化雾和颜色；昼夜
+        ├── world.ts        按所选地图生成的水下地形（船下带海沟裂口的海底大陆架、无限延伸的海沟岩壁、礁石、珊瑚、海带）、光束、雪、水面、船；按深度变化雾和颜色；昼夜
         ├── daylight.ts     连续 24 小时光照模型、12 分钟自然循环、上午/下午/夜晚的平滑预览
         ├── sky.ts          大气天空、随时间移动的太阳/月亮与分层云层
         ├── color-grade.ts  场景材质共享的晨间、午后、夜间调色
@@ -381,7 +394,7 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── water-geometry.ts 稳定且无裂缝的三角网格及折面反光属性
         ├── weather.ts      自然天气轮换、晴/云/雨/风暴的平滑过渡
         ├── rain.ts         单次绘制的 GPU 雨丝，按画质限制雨量
-        ├── maps.ts         三张地图的定义（深度、解锁价值、配色）和保存的地图进度
+        ├── maps.ts         三张地图的定义（开放区域和大陆架深度、解锁价值、配色）和保存的地图进度
         ├── scenery.ts      每张地图水面以上的场景
         ├── lowpoly.ts      共用的低多边形工具：flat 材质、顶点抖动、按面上色、把静态部件按材质合并成一个网格的 batcher
         ├── mappicker.ts    开始卡片上的地图卡片
@@ -390,20 +403,26 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── equipment.ts    鱼竿等级、Pearl 余额、本地存档和升级规则
         ├── gear-panel.ts   鱼竿 / 渔网升级面板
         ├── upgrades.ts     升级表和每个升级等级的低多边形模型（还没有在游戏里显示）
-        ├── fish.ts         稀有度表、区域掉率、物种名、rollFish(seed)、鱼的网格、游动和逃跑 AI
+        ├── fish.ts         稀有度表、区域名、物种名、rollFish(seed, depth)、按深度的捕获价值、鱼的网格、游动和逃跑 AI
+        ├── depth-odds.ts   按深度的掉率（RARITY_BY_DEPTH）、zoneName(depth)；没有依赖，测试在 tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
         ├── hud.ts          呼吸面板和波形、深度计、紧急条、网格槽、入库数、toast
-        ├── vault.ts        收藏面板、钱包栏、Mint 按钮（懒加载 chain.ts）
+        ├── vault.ts        收藏面板：NFT 状态、Sell / Mint & sell、钱包栏
+        ├── market.ts       纯经济规则：NFT 状态机、旧存档迁移、卖价、累计解锁价值
+        ├── nft-queue.ts    后台铸造和卖鱼队列（懒加载 chain.ts 和 pearl.ts）
+        ├── pearl.ts        PEARL 客户端：余额、卖鱼、消费（服务端是 sensor/market.mjs）
         ├── chain.ts        Umi、临时钱包、空投、mintFish、burnFish
         ├── polyfills.ts    Buffer 和 global 全局变量
         ├── health.ts       HealthLog：每次潜水记录憋气时长、心率、恢复时间
         ├── report.ts       健康报告：指标卡、两张图、解读文字、存 PDF、删除数据
         ├── pause.ts        Esc 暂停菜单：继续（水下 3 秒倒数）、设置、回到主页面
         ├── title.ts        主页面：Verlet 绳子 + 鱼线挂鱼，鼠标拖拽和推动，START / SETTINGS 鱼是按钮
-        ├── workbench.ts    工作台：桌面物理（matter-js）、查看/打包装备、地图卡吸入/吐出/翻面/转场
+        ├── workbench.ts    工作台：2.5D 桌面场景、装备掉落物理、准备区、展开成三个地点的海图
+        ├── chart.ts        海图绘制（折起的地图贴图和展开后的海图）
         ├── settings.ts     玩家设置（画质、光照效果、天气、摄像头小窗、操作提示），存 localStorage
         ├── render-quality.ts  自动画质：按设备选初始档位，持续掉帧时降档
+        ├── showcase.ts     展示页（`/showcase.html`）：README 顶部 GIF 的场景，用的是游戏里的潜水员和鱼模型
         └── style.css       深色玻璃风 HUD
 ```
 
@@ -413,15 +432,34 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 17 个鱼种和鱼竿的图片、每个鱼种的参数，见[素材库](assets/README.zh-CN.md)。
 
-### 深度分区与掉率（`fish.ts` 中的 `ZONES`）
+### 深度分区与掉率（`depth-odds.ts` 中的 `RARITY_BY_DEPTH`）
 
-| 区域 | 深度 | 奖励倍率 | common | uncommon | rare | epic | legendary | mythic |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Shallows | 0–18 m | ×1.0 | 70 | 25 | 5 | – | – | – |
-| Coral Reef | 18–38 m | ×1.6 | 20 | 35 | 30 | 13 | 2 | – |
-| The Abyss | 38–58 m | ×2.5 | – | 10 | 30 | 35 | 19 | 6 |
+海没有底。每张图的海底都是一块大陆架（峡湾 20 m，天池 40 m，汪洋 62 m），船正下方有一条海沟一直往下。区域只是名字，不决定掉率：Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m 以下**。在具体地图上，深度计和 NFT 的 `Zone` 属性用这张图自己的区域标签，大陆架以下一律算 The Trench。掉率和捕获价值只看绝对深度：峡湾海沟里的 30 m 和汪洋珊瑚礁的 30 m 抽法完全一样。
 
-**捕获价值** = 稀有度的 `value`（见下表）× 所在区域的奖励倍率（`rewardMultiplier`），四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
+稀有度是抓到鱼时所在深度的平滑函数：下表是各锚点深度的百分比权重，锚点之间线性插值，350 m 以下保持不变。epic 只在 15 m 以下出现，legendary 在 30 m 以下，mythic 在 50 m 以下。锚点间距按实测游速约 7.75 m/s 设计：憋气 30 秒不抓鱼能下到约 115 m 再回来，60 秒约 230 m。
+
+| 深度 | common | uncommon | rare | epic | legendary | mythic |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 m | 90 | 9.5 | 0.5 | – | – | – |
+| 15 m | 80 | 17 | 3 | – | – | – |
+| 30 m | 68 | 24 | 7 | 1 | – | – |
+| 50 m | 58 | 28 | 10.5 | 3 | 0.5 | – |
+| 80 m | 48 | 31 | 14 | 5.5 | 1.3 | 0.2 |
+| 120 m | 39 | 32 | 18 | 8 | 2.4 | 0.6 |
+| 200 m | 30 | 30 | 22 | 12 | 4.5 | 1.5 |
+| 350 m+ | 22 | 26 | 25 | 16.5 | 7.5 | 3 |
+
+夜晚每条鱼掷两次稀有度，取更稀有的那次（`main.ts` 中的 `rollFor`）。
+
+按一网 6 条鱼算（Lv1 渔网；白天，期望条数 = 6 × P(legendary 或 mythic)）：80 m 是 6 × 1.5% = 0.09，大约每 11 网出 1 条 legendary 及以上；120 m 是 6 × 3.0% = 0.18，大约每 5.6 网 1 条。
+
+### 捕获价值（`fish.ts` 中的 `rewardMultiplierAt`）
+
+| 深度 | 0–18 m | 18–38 m | 38–60 m | 60 m 以下（The Trench） |
+| --- | --- | --- | --- | --- |
+| 奖励倍率 | ×1.0 | ×1.6 | ×2.5 | ×2.5，60 m 以下每深 50 m 加 1，最高 ×6（235 m 达到） |
+
+**捕获价值** = 稀有度的 `value`（见下表）× 这条鱼生成时所在深度的奖励倍率，四舍五入。同一条 rare 鱼，在浅水区值 10，在珊瑚礁值 16，在深渊值 25，在 110 m 值 35，235 m 以下值 60。它在提示、HUD 和收藏卡片上显示为 “pts”，收藏按它排序，铸造时写进 NFT 元数据的 `Catch value`，地图解锁也按它累计，卖鱼时也按它支付 Pearls。这次改动之前入库的鱼没有存这个值，按原来的稀有度 value 计算。
 
 ### 稀有度（`RARITY`）
 
@@ -438,7 +476,9 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 ### 主循环常数（`main.ts`）
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `FISH_PER_ZONE [16, 16, 12]`
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2`（换气后的剩余时间）· `EMERGENCY_LIFT 18`（紧急上浮力度）· `FISH_PER_ZONE [16, 16, 12]`（每个区域的鱼数，只放地图在大陆架上开放的区域）· `TRENCH_FISH 12`（海沟里跟着潜水员深度走的一群鱼，每条按它出生的深度抽稀有度）· `DEPTH_LIMIT Infinity`（每张图的海沟都没有底）
+
+网的容量和收网范围不再是 `main.ts` 里的常数，而是由下面装备的渔网等级决定。
 
 ### 鱼竿 / 渔网升级（`equipment.ts` 中的 `ROD_TIERS`）
 
@@ -450,7 +490,9 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | Lv2 | Reinforced Net | 8 | 2.8 m | 300 Pearls |
 | Lv3 | Abyssal Net | 10 | 3.2 m | 1200 Pearls |
 
-每条成功入库的鱼按捕获价值奖励 Pearls；黑屏丢网不奖励。升级状态保存在 `deepbreath.equipment`，不会删除或消费收藏鱼。
+**经济**：入库不给钱。每条入库的鱼进入 NFT 队列（`pending → minting → minted`，失败则为 `failed`，自动退避重试，也可以手动 Retry）。Pearls 只来自在收藏里**卖鱼**：NFT 被销毁，并按捕获价值支付 PEARL（一种 SPL token，见下文「PEARL coin」）。还没铸造的鱼显示 **Mint & sell**（市场只收 NFT），正在铸造的鱼暂时不能卖，epic 及以上稀有度要二次确认，"Sell all commons" 会逐条卖掉普通鱼。升级消耗（销毁）PEARL。黑屏丢网不奖励。规则在 `game/src/market.ts`，后台队列在 `game/src/nft-queue.ts`。
+
+**卖鱼功能之前的存档**：旧规则下入库的鱼已经在出水时付过 Pearls，所以标记为 legacy：显示 "Paid out"，不能卖，也不会自动铸造（保留手动 Mint 按钮）。已经赚到的 Pearls 变成本地的 legacy 余额，和 PEARL 合并显示，消费时先扣它。升级状态保存在 `deepbreath.equipment`。
 
 ![Rod and net upgrade preview](game/public/rod-upgrades-preview.png)
 
@@ -462,14 +504,29 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 - **钱包**：第一次打开收藏面板时，自动生成一个临时 keypair，存在 `localStorage['deepbreath.wallet']`。这是 devnet 专用的测试钱包，私钥就在浏览器里，**不要往里放任何主网资产**。
 - **充值**：面板上有 "Airdrop 1 SOL" 按钮，但公共 devnet 水龙头经常 429 限流。更可靠的办法是去 <https://faucet.solana.com>（GitHub 登录）给面板上显示的地址领币。
+- **铸造队列**（`nft-queue.ts`）：后台一次铸造一条，刷新页面后继续。钱包 SOL 不够时先试一次空投；水龙头拒绝的话，铸造暂停，收藏面板里提示 "needs devnet SOL"，之后每分钟或打开面板时再查一次余额。
 - **铸造流程**（`mintFish`）：
   1. `fishCard(spec)` 生成 PNG，用 `umi.uploader.upload` 传到 Irys devnet。
-  2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Depth / Length / Weight / Seed）。
-  3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / seed），方便以后的游戏逻辑直接在链上读稀有度。
+  2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Map / Depth / Length / Weight / Catch value / Seed）。
+  3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / value / seed），方便以后的游戏逻辑直接在链上读稀有度，市场也按收藏里显示的捕获价值付款。记录的深度是抓到鱼时的深度，最多记 1000 m（`fish.ts` 的 `MAX_RECORDED_DEPTH_M`）；HUD 仍显示真实深度。
   4. 资产地址写回 `FishSpec.assetId`，持久化到 bank。卡片会显示 "✓ On-chain"，链接到 Solana Explorer。
-- **销毁**（NFT 消耗）：`burnFish(assetId)` 已经写好，UI 还没接，会用在装备经济里。
+- **卖鱼**（NFT 消耗）：`pearl.ts` 的 `sellToMarket` 把 NFT 卖给 PEARL 市场，市场销毁它并按捕获价值支付 PEARL（见下文「PEARL coin」）。
 - **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
 - **为什么 Vite 要加 polyfill**：Umi 和 Irys 依赖 Node 的 `Buffer`、`stream`、`crypto`，所以 `vite.config.ts` 用了 `vite-plugin-node-polyfills`。
+
+### PEARL coin / 珍珠币
+
+游戏货币珍珠是 devnet 上真正的 SPL 代币 **PEARL**（decimals 0）。客户端是 `game/src/pearl.ts`（`pearlBalance`、`sellToMarket`、`spendPearls`），由 `wallet.ts` 里的 owner 钱包签名（现在是临时钱包，以后换成 Phantom）。服务端是 `sensor/market.mjs`，同源挂在 `/api/market/{info,quote,sell}`。市场启动时选定模式：
+
+- **合约模式**（设置了 `FISH_MARKET_PROGRAM_ID`）：PEARL 的 mint 归 Anchor 合约 `fish_market` 所有（PDA `pearl`）。一条 `sell_fish` 指令原子地烧掉鱼并给卖家铸 PEARL，同时强制执行 `config.max_value`。服务端只当**预言机**：`POST /api/market/quote` 检查卖家确实持有这条鱼、价值合理，然后返回一笔它已部分签名的 `sell_fish` 交易。玩家签名、发送，并支付手续费。
+- **服务端模式**（兜底）：市场钱包自己创建 PEARL mint 并持有铸币权。玩家把鱼转给市场钱包，`POST /api/market/sell` 在链上核验这笔转账，铸 PEARL，再烧掉鱼。`sensor/.market-state.json` 里的已售集合保证重试安全（不会重复付款）。
+- **消费**：两种模式下，`spendPearls` 都是从玩家的代币账户里烧掉 PEARL。
+- **定价**：价值取自鱼的链上 Attributes（`value`），所以卖出时付的正好是收藏里显示的「Sell · N Pearls」。没有这个属性的鱼按「稀有度价值 × 深度倍率」重算（`fish.ts` 的 `rewardMultiplierAt`，`sensor/market-rules.mjs` 里有一份镜像：×1 / 1.6 / 2.5，60 m 以下每深 50 m 加 1，最高 ×6）。超过「稀有度价值 × 6」或深于 1000 m（`MAX_DEPTH_M`，与游戏的 `MAX_RECORDED_DEPTH_M` 相等，测试会检查）的直接拒绝。
+- **信任模型**：这是 devnet 黑客松版本。鱼由客户端钱包铸造，所以谁都能铸一条「神话」拿来卖。稀有度上限（合约模式下再加 `max_value`）只限制单笔金额，PEARL 没有真实价值。服务端密钥（`sensor/.market-oracle.json` 或 `MARKET_ORACLE_KEYPAIR`，以及 `sensor/.market-keypair.json`）权限 600，已加入 gitignore。它们不打日志，也不放进 `VITE_*`。
+- **开发**：
+  - 在 `npm run dev` 旁边再跑 `npm run market`（端口 8795，可用 `MARKET_PORT` 改）。Vite 会把 `/api` 代理过去。`npm start` 自己就带市场（第 2 节「自托管」）。
+  - 启动时会打印公钥。服务端模式下如果 airdrop 被限流，去 <https://faucet.solana.com> 给它领币。
+  - 单元测试：`npm --prefix sensor test`。对着正在运行的市场在 devnet 上跑一遍卖鱼和消费：`npm --prefix sensor run market:e2e`。
 
 ---
 
@@ -506,12 +563,13 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 | key | 内容 |
 | --- | --- |
-| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value` 和地图 `map`，铸造后带 `assetId`） |
+| `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value`、地图 `map`、NFT 状态 `nft`，铸造后带 `assetId`，旧规则下已付过钱的鱼带 `legacy`） |
 | `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
-| `deepbreath.equipment` | 鱼竿等级和 Pearls 余额（`rodLevel`、`pearls`） |
+| `deepbreath.equipment` | 鱼竿等级、缓存的 PEARL 余额和本地 legacy Pearls（`rodLevel`、`pearls`、`legacyPearls`） |
+| `deepbreath.pearl.pending` | 已发出的 PEARL 卖单，超时后重试会接着走，不会从头再来 |
 | `deepbreath.settings` | 玩家设置：`quality`（auto / high / medium / low）、`lightingEffects`、`weather`（auto / clear / cloudy / rain / storm）、`showCamera`、`showHelp` |
-| `deepbreath.maps` | 地图进度：选中的地图、最高累计入库价值、演示开关 |
+| `deepbreath.maps` | 地图进度：选中的地图、历史累计入库价值（`bestValue`）、演示开关 |
 
 重置：在浏览器控制台执行 `localStorage.clear()`。
 
@@ -524,6 +582,14 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 - 标签页在后台时 `requestAnimationFrame` 会降到约 2 fps，可以用 `debugStep(2)` 直接模拟 2 秒。
 - sensor 的日志直接看运行 `npm run sensor` 的那个终端。Presage 的状态码和 ValidationCode 提示会翻译成 HUD 左上角的黄色 hint。
 - Presage 一直卡在 `starting`：检查 `.env` 里的 key，看浏览器是否真的在发帧（HUD 的 frames 计数），以及光线够不够。
+
+### 重新录制 README 顶部的 GIF
+
+先启动游戏（`npm run game`），再执行下面的命令。需要本机装有 Chrome 和 ffmpeg。脚本用无头 Chrome 逐帧渲染 `game/showcase.html`，输出到 `docs/showcase.gif`，首尾帧无缝循环。
+
+```bash
+npm run showcase:gif
+```
 
 ### 自动画质
 
@@ -588,7 +654,7 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 
 ### ✅ 已完成
 
-- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、3 个深度区）
+- 低多边形 2.5D 海底世界、潜水员、程序化生成的鱼（6 档稀有度、掉率按深度、3 个有名字的深度区加一条无底海沟）
 - 憋气才能下潜、水下换气后紧急上浮、黑屏丢鱼、出水入库
 - Presage 管线：浏览器抓帧 → sensor → SDK → 憋气检测；键盘和模拟两种兜底
 - NFT 卡图（由 seed 决定、可复现）、收藏面板
@@ -596,16 +662,17 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 - 健康报告（按需生成）
 - 自然昼夜循环、水面反光、可保存的光照效果开关
 - 自然天气与晴 / 云 / 雨 / 风暴预设，云层和雨量按画质调整
-- 三张地图（峡湾、天池、汪洋）：水面以上的场景、深度上限、开始卡片上的地图选择、按累计入库鱼价值解锁
+- 三张地图（峡湾、天池、汪洋）：水面以上的场景、每张图深度不同的海底大陆架和船下的无底海沟、开始卡片上的地图选择、按累计入库鱼价值解锁
 - 升级部件的低多边形模型（只有代码，还没有进游戏）
-- 鱼竿 / 渔网升级 MVP：三档容量和收网范围、Pearl 奖励、可见网圈缩放、本地持久化
+- 鱼竿 / 渔网升级 MVP：三档容量和收网范围、可见网圈缩放、本地持久化
+- 鱼经济：入库的鱼自动铸成 NFT，卖鱼时销毁 NFT 换 Pearls，地图进度按历史累计价值
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 
 - [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
 - [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
 - [ ] **完整装备经济**：在鱼竿 / 渔网升级 MVP 之外，用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯；装备有耐久度。低多边形模型已经有了，剩下的是在游戏里显示模型、购买和让效果生效
-- [ ] **NFT 消耗（sink）**：卖给市场换 Pearl、用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换。`burnFish` 已经写好
+- [ ] **更多 NFT 消耗（sink）**：卖鱼已完成；还剩用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换
 - [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
 - [ ] **三张地图的剩余部分**：每张图的夜间小怪和独立白昼时段、汪洋图的船耐久和沉船。设计见策划案第 6 节
 - [ ] **船上垂钓和心率玩法**：平静值决定咬钩速度和水下鱼的警觉距离；鱼竿、鱼饵、船的升级。设计见策划案第 4.2、6.3、7 节
@@ -623,7 +690,7 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 - **提 PR 前**：`npm --prefix game run build` 必须通过（strict TS，`noUnused` 已开启）。
 - **秘密**：`.env`、私钥、任何 API key 都不要进仓库。新的环境变量要同步加到 `.env.example`（只写变量名，不写值）。
 - **风格**：TypeScript strict；低多边形 + flat shading；颜色变量在 `style.css` 的 `:root`；注释只解释"为什么"。
-- **改参数**：玩法常数集中在 `main.ts` 顶部和 `fish.ts` 的 `RARITY` / `ZONES`，改了请在 PR 里说明。
+- **改参数**：玩法常数集中在 `main.ts` 顶部、`fish.ts` 的 `RARITY` / `ZONES`、`depth-odds.ts` 的 `RARITY_BY_DEPTH` 和 `maps.ts` 的 `MAPS`，改了请在 PR 里说明。
 - **README 有两份**：`README.md`（English）和 `README.zh-CN.md`（中文）。改其中一份时，请在同一个 PR 里把另一份也改了。
 
 ---
