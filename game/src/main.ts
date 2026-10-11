@@ -991,14 +991,22 @@ function workbenchConditions(id: MapId): WorkbenchConditions {
   const lighting = world.dayCycle.state;
   const weather = world.weather.state;
   const minute = Math.round(lighting.hour * 60) % (24 * 60);
+  const windKmh = Math.round(4 + weather.wind * 30);
+  const rainMmh = weather.rain * 18;
+  const fishing: WorkbenchConditions['fishing'] = weather.kind === 'storm' || windKmh >= 28 || rainMmh >= 12
+    ? { level: 'poor', label: '不建议捕鱼 · Fishing Not Advised', reason: '风雨较强，建议等待天气转好 · Rough conditions; wait for calmer weather.' }
+    : weather.kind === 'rain' || windKmh >= 18 || rainMmh >= 4
+      ? { level: 'caution', label: '谨慎捕鱼 · Fish with Caution', reason: '有风浪或降雨，留意水面变化 · Wind or rain; watch the water conditions.' }
+      : { level: 'good', label: '推荐捕鱼 · Good for Fishing', reason: '风雨较弱，适合出航探索 · Calm conditions for a fishing trip.' };
   const temperatureC = map.surfaceTempC
     + (lighting.daylight - 1) * 3
     - weather.cloud * 1.2
     - weather.rain * 0.8
     - weather.wind * 0.4;
   return {
-    time: `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`,
+    time: `${Math.floor(minute / 60) % 12 || 12} ${minute < 720 ? 'a.m.' : 'p.m.'}`,
     temperatureC: Math.round(temperatureC * 10) / 10,
+    fishing,
     weather: WEATHER_LABELS[weather.kind],
     wind: `${Math.round(4 + weather.wind * 30)} km/h`,
     rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,

@@ -66,6 +66,7 @@ export interface WorkbenchConditions {
   weather: string;
   wind: string;
   rain: string;
+  fishing: { level: 'good' | 'caution' | 'poor'; label: string; reason: string };
   weatherState: WeatherState;
 }
 
@@ -1779,6 +1780,9 @@ export class Workbench {
 
   private renderConditions(id: MapId) {
     const conditions = this.hooks.conditions(id);
+    $('wb-fishing-advice').dataset.level = conditions.fishing.level;
+    $('wb-fishing-label').textContent = conditions.fishing.label;
+    $('wb-fishing-reason').textContent = conditions.fishing.reason;
     $('wb-entry-time').textContent = conditions.time;
     $('wb-entry-temp').textContent = `${conditions.temperatureC > 0 ? '+' : ''}${conditions.temperatureC.toFixed(1)}°C`;
     $('wb-entry-weather').textContent = conditions.weather;

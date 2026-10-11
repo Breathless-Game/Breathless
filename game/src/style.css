@@ -1,5 +1,22 @@
 @import './scrollbar.css';
 
+.wb-fishing-advice {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  color: #23734f;
+  background: rgba(35, 115, 79, 0.08);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.wb-fishing-advice b::before { content: '● '; }
+.wb-fishing-advice span { font-size: 10px; opacity: 0.85; }
+.wb-fishing-advice[data-level="caution"] { color: #8a601b; background: rgba(178, 127, 34, 0.1); }
+.wb-fishing-advice[data-level="poor"] { color: #a13f35; background: rgba(161, 63, 53, 0.08); }
+
 :root {
   --ink: #eaf8ff;
   --muted: rgba(234, 248, 255, 0.6);
