@@ -407,6 +407,7 @@ export class Workbench {
     this.hooks.synthesisClose?.();
     this.held = null;
     this.press = null;
+    this.chartWeatherKey = '';
     this.paintMap();
     this.resize();
     // Levels bought (or a ship picked, or a wallet's save loaded) since the pieces were last built.
@@ -675,12 +676,13 @@ export class Workbench {
     const snapshot = weather ?? this.hooks.conditions(id).weatherState;
     // A canvas redraw is only needed when a visible weather bucket changes;
     // the live note can still update four times a second during a transition.
-    const key = [snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
+    const progress = this.hooks.progress();
+    const key = [id, progress.selected, progress.bestValue, snapshot.kind, snapshot.cloud, snapshot.rain, snapshot.wind, snapshot.storm]
       .map((value) => typeof value === 'number' ? Math.round(value * 20) : value)
       .join(':');
     if (key === this.chartWeatherKey && this.mapTex.image.width) return;
     this.chartWeatherKey = key;
-    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...this.hooks.progress(), unlockAll: true }, true, snapshot);
+    drawChart(this.mapTex.image as HTMLCanvasElement, 2, { ...progress, unlockAll: true }, true, snapshot);
     this.mapTex.needsUpdate = true;
   }
 
