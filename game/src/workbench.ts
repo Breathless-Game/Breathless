@@ -34,6 +34,8 @@ export interface WorkbenchHooks {
   owned(id: UpgradeId): number;
   /** The ready-room color for the deep sonar beacon. */
   sonarColor?(color: string): void;
+  synthesisOpen?(): void;
+  synthesisClose?(): void;
 }
 
 // The six dive-loadout slots plus the deployable deep sonar, and a model of the
@@ -117,7 +119,7 @@ const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
 
 type Mode = 'wait' | 'free' | 'held' | 'moving' | 'ready';
-type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect';
+type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect' | 'synth';
 
 interface Piece {
   id: UpgradeId;
@@ -198,6 +200,10 @@ export class Workbench {
   private mapHover = 0;
   private slotRings: THREE.Mesh[] = [];
   private dust: { mesh: THREE.Mesh; t: number }[] = [];
+  private synthesisRig = new THREE.Group();
+  private synthesisCrates: THREE.Group[] = [];
+  private synthesisHit!: THREE.Mesh;
+  private synthesisLift = -0.65;
 
   private state: State = 'closed';
   private placed = false; // pieces have landed at least once
@@ -208,10 +214,10 @@ export class Workbench {
   private last = 0;
   private raf = 0;
   private tweens: Tween[] = [];
-  private press: { piece: Piece | null; map: boolean; x: number; y: number; t: number } | null = null;
+  private press: { piece: Piece | null; map: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
   private held: Piece | null = null;
   private holdTarget = new THREE.Vector3();
-  private hovered: Piece | 'map' | null = null;
+  private hovered: Piece | 'map' | 'synth' | null = null;
   private picked: MapId | null = null;
   private inspector: GearInspector;
 
@@ -308,6 +314,11 @@ export class Workbench {
     this.sheet.curl = 0; // lying on the table, its edges rest on the tabletop
     this.sheet.reset();
     this.tweens = [];
+    this.synthesisLift = -0.65;
+    this.synthesisRig.position.y = this.synthesisLift;
+    this.synthesisCrates[0]?.position.set(-1.18, 0.56, 0.05);
+    this.synthesisCrates[1]?.position.set(1.18, 0.56, 0.05);
+    this.hooks.synthesisClose?.();
     this.held = null;
     this.press = null;
     this.paintMap();
@@ -338,6 +349,7 @@ export class Workbench {
 
   hide() {
     this.inspector.close();
+    this.hooks.synthesisClose?.();
     this.state = 'closed';
     cancelAnimationFrame(this.raf);
     this.root.classList.add('hidden');
@@ -351,6 +363,7 @@ export class Workbench {
   escape() {
     if (this.state === 'inspect') this.inspector.close();
     else if (this.state === 'chart') this.closeChart();
+    else if (this.state === 'synth') this.closeSynthesis();
     else if (this.state === 'idle') this.leave();
   }
 
@@ -423,6 +436,40 @@ export class Workbench {
       s.add(ring);
       this.slotRings.push(ring);
     }
+
+    // A half-hidden military-green metal station rises from behind the desk.
+    // Flat faces and chunky hardware keep it in the same low-poly language.
+    const metal = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.82, metalness: 0.55, flatShading: true });
+    const green = metal('#46543c');
+    const edge = metal('#263128');
+    const crateMat = metal('#151a1b');
+    const crateEdge = metal('#56605c');
+    this.synthesisRig.position.set(0, this.synthesisLift, TABLE.z1 + 0.32);
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.28, 0.95), green);
+    plinth.position.y = 0.16;
+    this.synthesisRig.add(plinth);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.25, 0.12), edge);
+    back.position.set(0, 0.72, -0.36);
+    this.synthesisRig.add(back);
+    const stationTop = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.12, 0.72), green);
+    stationTop.position.set(0, 0.55, 0.03);
+    this.synthesisRig.add(stationTop);
+    for (const sideSign of [-1, 1]) {
+      const crate = new THREE.Group();
+      crate.position.set(sideSign * 1.18, 0.56, 0.05);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.75, 0.82), crateMat);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.1, 0.9), crateEdge);
+      rim.position.y = 0.42;
+      crate.add(body, rim);
+      crate.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
+      this.synthesisCrates.push(crate);
+      this.synthesisRig.add(crate);
+    }
+    this.synthesisHit = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.45, 1.1), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }));
+    this.synthesisHit.position.set(0, 0.56, 0.05);
+    this.synthesisRig.add(this.synthesisHit);
+    this.synthesisRig.traverse((o) => { if (o instanceof THREE.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
+    s.add(this.synthesisRig);
   }
 
   /** The folded sea chart: a soft sheet (paper.ts) lying on the table. */
@@ -983,13 +1030,16 @@ export class Workbench {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1), this.camera);
   }
 
-  private pick(e: PointerEvent): Piece | 'map' | null {
+  private pick(e: PointerEvent): Piece | 'map' | 'synth' | null {
     this.setRay(e);
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
     if (this.map.visible) targets.push(this.mapMesh);
+    if (this.synthesisRig.visible) targets.push(this.synthesisHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
-    return hit.object === this.mapMesh ? 'map' : (this.pieces.find((p) => p.hit === hit.object) ?? null);
+    if (hit.object === this.mapMesh) return 'map';
+    if (hit.object === this.synthesisHit) return 'synth';
+    return this.pieces.find((p) => p.hit === hit.object) ?? null;
   }
 
   /** Our clicks land on a bare canvas (the title's, which sits under ours); not on menus or buttons. */
@@ -1001,7 +1051,7 @@ export class Workbench {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
     if (this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
-    this.press = { piece: hit && hit !== 'map' ? hit : null, map: hit === 'map', x: e.clientX, y: e.clientY, t: performance.now() };
+    this.press = { piece: hit && hit !== 'map' && hit !== 'synth' ? hit : null, map: hit === 'map', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
@@ -1085,6 +1135,7 @@ export class Workbench {
     const click = Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS;
     if (!click) return;
     if (press.map) this.openChart();
+    else if (press.synth) this.openSynthesis();
     else if (press.piece) {
       this.setHover(null, e);
       this.inspect(press.piece);
@@ -1100,7 +1151,7 @@ export class Workbench {
     this.inspector.show(p.def, { x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
   }
 
-  private setHover(hit: Piece | 'map' | null, e: PointerEvent) {
+  private setHover(hit: Piece | 'map' | 'synth' | null, e: PointerEvent) {
     this.hovered = hit;
     document.body.style.cursor = hit ? 'pointer' : '';
     if (!hit) {
@@ -1110,6 +1161,8 @@ export class Workbench {
     const lines =
       hit === 'map'
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
+        : hit === 'synth'
+          ? ['Field workbench · 合成工作台', 'Military steel · 物资箱', 'Click to raise and open']
         : [
             `${hit.def.name} · ${hit.def.nameZh}`,
             hit.def.effects[0],
@@ -1271,6 +1324,38 @@ export class Workbench {
     this.picked = id;
     for (const el of this.pinsEl.children) el.classList.toggle('picked', (el as HTMLElement).dataset.map === id);
     this.renderPlace();
+  }
+
+  private openSynthesis() {
+    if (this.state !== 'idle') return;
+    this.state = 'synth';
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const fromY = this.synthesisLift;
+    const fromL = this.synthesisCrates[0]?.position.x ?? -1.18;
+    const fromR = this.synthesisCrates[1]?.position.x ?? 1.18;
+    this.tween(0.85, (u) => {
+      const e = easeOut(u);
+      this.synthesisLift = lerp(fromY, 0, e);
+      this.synthesisRig.position.y = this.synthesisLift;
+      this.synthesisCrates[0]?.position.set(lerp(fromL, -1.75, e), 0.56, 0.05);
+      this.synthesisCrates[1]?.position.set(lerp(fromR, 1.75, e), 0.56, 0.05);
+    }, () => this.hooks.synthesisOpen?.());
+  }
+
+  private closeSynthesis() {
+    if (this.state !== 'synth') return;
+    this.hooks.synthesisClose?.();
+    const fromY = this.synthesisLift;
+    const fromL = this.synthesisCrates[0]?.position.x ?? -1.75;
+    const fromR = this.synthesisCrates[1]?.position.x ?? 1.75;
+    this.tween(0.5, (u) => {
+      const e = easeInOut(u);
+      this.synthesisLift = lerp(fromY, -0.65, e);
+      this.synthesisRig.position.y = this.synthesisLift;
+      this.synthesisCrates[0]?.position.set(lerp(fromL, -1.18, e), 0.56, 0.05);
+      this.synthesisCrates[1]?.position.set(lerp(fromR, 1.18, e), 0.56, 0.05);
+    }, () => { this.state = 'idle'; });
   }
 
   /** The panel beside the chart: a live view of the place itself, what it is, what you carry, and Dive. */
