@@ -21,13 +21,13 @@ The following GitHub sources were read for this work. The project code was writt
 | | Low | Medium | High |
 | --- | ---: | ---: | ---: |
 | Maximum plants | 16 | 40 | 72 |
-| Ribbon vertices per plant | 54 | 81 | 108 |
-| Legacy strap vertices per plant | 77 | 89 | 101 |
-| Broad frond vertices per plant | 102 | 123 | 204 |
+| Ribbon vertices per plant | 120 | 192 | 264 |
+| Legacy strap vertices per plant | 198 | 222 | 246 |
+| Broad frond vertices per plant | 336 | 360 | 384 |
 | Water plant draw calls | 1 | 1 | 1 |
 | Rock detail | Main outcrops | + companions | + small talus |
 
-Heaven Lake has at most 38 plants. The high-tier fields have 8,978 / 4,746 / 8,765 vertices for Fjord / Heaven Lake / Open Ocean. Thin forms allow denser growth with fewer vertices than the former all-broad-frond field. Trench density is independent of plant count, so increasing vegetation does not change the existing wall layout. Rock bodies use 44 triangles at low detail and about 88–92 with chipped corners. Static outcrops are batched into one material draw. Kelp updates shader uniforms each frame; it does not upload vertices, rebuild normals or update hundreds of hierarchical segment transforms. A frozen game clock holds its pose while paused. Quality or map changes dispose the old buffers and materials. These budgets do not claim measured frame rates on specific weak hardware.
+Heaven Lake has at most 38 plants. The high-tier fields have 20,196 / 10,668 / 19,902 vertices for Fjord / Heaven Lake / Open Ocean. Each triangle owns its three color vertices so adjacent blade planes keep hard pigment edges; the single field remains one draw. Thin forms allow denser growth with fewer vertices than the former all-broad-frond field. Trench density is independent of plant count, so increasing vegetation does not change the existing wall layout. Rock bodies use 44 triangles at low detail and about 88–92 with chipped corners. Static outcrops are batched into one material draw. Kelp updates shader uniforms each frame; it does not upload vertices, rebuild normals or update hundreds of hierarchical segment transforms. A frozen game clock holds its pose while paused. Quality or map changes dispose the old buffers and materials. These budgets do not claim measured frame rates on specific weak hardware.
 
 ## Validation
 
