@@ -200,4 +200,14 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     this.color.copy(this.dayWater).lerp(this.nightWater, lighting.nightMix);
     this.opacity = THREE.MathUtils.lerp(0.30, 0.78, uniforms.uWaterAbove.value);
   }
+
+  /**
+   * Let the water mirror a glow in the sky (the aurora). Call after `update`, which resets the
+   * sky colours; `amount` is 0..1. The zenith takes more of it than the horizon.
+   */
+  reflectGlow(color: THREE.Color, amount: number): void {
+    if (amount <= 0) return;
+    this.waterUniforms.uWaterSky.value.lerp(color, Math.min(1, amount) * 0.45);
+    this.waterUniforms.uWaterHorizon.value.lerp(color, Math.min(1, amount) * 0.28);
+  }
 }
