@@ -47,3 +47,14 @@ test('portrait: never caches an icon drawn on a lost context, and rebuilds the r
   const get = portrait.slice(portrait.indexOf('function getRenderer('));
   assert.match(get, /if \(contextLost\(renderer\)\) dropRenderer\(\)/, 'lost renderer is replaced');
 });
+
+test('tables and the held health report make their WebGL context on first use, not at startup', () => {
+  const table = read('table-scene.ts');
+  const ctor = body(table, '  constructor(');
+  assert.doesNotMatch(ctor, /WebGLRenderer|this\.renderer/, 'no context in the TableScene constructor');
+  assert.match(table, /protected get renderer\(\)[\s\S]*if \(!this\.gl\) \{[\s\S]*new THREE\.WebGLRenderer/, 'made once, on first use');
+  const desk = read('health-desk.ts');
+  assert.equal(desk.match(/new THREE\.WebGLRenderer\(/g)?.length, 1, 'one held renderer site');
+  assert.doesNotMatch(body(desk, '  constructor('), /WebGLRenderer|heldGl\(\)/, 'not made with the desk');
+  assert.match(body(desk, 'private heldGl('), /if \(!this\.heldRenderer\) \{[\s\S]*new THREE\.WebGLRenderer/, 'made once');
+});

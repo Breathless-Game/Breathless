@@ -54,6 +54,10 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { SynthesisPanel } from './synthesis-panel';
 import { canCraft, loadSynthesis, saveSynthesis, setSynthesisCosts, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
+import { isAction, keysFor, openControls } from './controls';
+import { clearTrips, Trip, TripReport } from './trip';
+import { TankTable } from './aquarium-tank';
+import { HealthDesk } from './health-desk';
 import type { LessonId } from './tutorial';
 import { initI18n, onLangChange, pickName, t } from './i18n';
 import { PaymentInProgressError, PaymentPendingError } from './payment-safety';
@@ -741,11 +745,16 @@ const chainFish = new ChainFishSync({
     nftQueue.kick(); // newly listed older fish still get their collection check
   },
 });
-const aquarium = new Aquarium(bank, {
-  pan(u) {
-    aquariumPan = u;
+// The aquarium and the health desk each come up on a table like the workbench's (table-scene.ts).
+// Over the aquarium the title's rope and fish ride all the way up off the screen (lift), out of the tank's way.
+const aquariumTable = new TankTable({
+  pan: (u, y) => {
+    setTablePan('aquarium', u, y);
     titleScreen.setLift(u);
   },
+});
+const aquarium = new Aquarium(bank, {
+  table: aquariumTable,
   buyFood: buyAquariumFood,
   chainGrowth() {
     const snap = playerChain();
@@ -766,9 +775,19 @@ const aquarium = new Aquarium(bank, {
     vault.toggle(false);
   },
 });
+const healthDesk = new HealthDesk({ pan: (u, y) => setTablePan('health', u, y) });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
-const report = new Report(health);
+// One trip: the first dive off the title to the main menu again (trip.ts); its report at the end.
+const trip = new Trip();
+const tripReport = new TripReport();
+// Deleting health data takes the trip reports too (their pulse and breathing traces), stored and in progress.
+const report = new Report(health, () => {
+  clearTrips();
+  trip.reset();
+  if (tripReport.open) tripReport.close();
+  healthDesk.forget();
+});
 const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => void selectEquipmentPath(slot, path));
 gear.setLock(() => chainBlocked());
 gear.render(equipment);
@@ -1226,6 +1245,8 @@ function nextSlotLabel(slot: UpgradeSlot) {
 }
 
 // ---- Input --------------------------------------------------------------
+// Keys are looked up by action (controls.ts), so they can be changed in Settings.
+// `keys` holds the physical keys (codes) held down, for swimming.
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
   if(skinPicker.open)return;
@@ -1239,19 +1260,25 @@ window.addEventListener('keydown', (e) => {
     onEscape();
     return;
   }
-  // Tab is a hold-to-open radial wheel. Number keys and Q/E are instant
-  // quick-slot shortcuts; consume them before movement/catch handling.
+  // The bag key flips the hotbar between your gear and your bag of fish (it no longer
+  // opens the wheel). Number keys and prev/next gear are instant quick-slot shortcuts;
+  // the wheel consumes them before movement/catch handling.
+  if (isAction('bag', e) && phase === 'play' && !paused) {
+    e.preventDefault();
+    if (!e.repeat) hud.toggleBag();
+    return;
+  }
   if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !settingsDesk.visible && !loginGate.visible && !pauseMenu.open && !aquarium.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !settingsDesk.visible && !healthDesk.visible && !loginGate.visible && !pauseMenu.open && !aquarium.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
   }
-  keys.add(e.key.toLowerCase());
+  keys.add(e.code);
   // Not on the workbench: the report would pop up over the table and the chart.
-  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible && !aquarium.open) report.toggle();
-  if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
+  if (isAction('report', e) && phase !== 'calibrating' && !workbench.visible && !aquarium.open && !healthDesk.visible) report.toggle();
+  if (isAction('upgrades', e) && phase !== 'play' && phase !== 'calibrating') {
     e.preventDefault();
     gear.toggle();
     if (gear.open) void syncPearls();
@@ -1259,28 +1286,28 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (phase !== 'play') return;
-  if (e.code === 'Space') {
+  if (isAction('catch', e)) {
     e.preventDefault();
     tryCatch();
-  } else if (e.key.toLowerCase() === 'c') {
+  } else if (isAction('collection', e)) {
     vault.toggle();
     if (vault.open) fieldGuide?.mark('collection');
     if (vault.open) void syncPearls();
-  } else if (e.key.toLowerCase() === 'g') {
+  } else if (isAction('upgrades', e)) {
     gear.toggle();
     if (gear.open) void syncPearls();
-  } else if (e.key.toLowerCase() === 'f' && canBoard()) {
+  } else if (isAction('board', e) && canBoard()) {
     climbAboard();
-  } else if (e.key.toLowerCase() === 'n') {
+  } else if (isAction('night', e)) {
     const nightSelected = world.dayCycle.mode === 'night'
       || (world.dayCycle.mode === 'cycle' && world.night);
     setTimeOfDay(nightSelected ? 'morning' : 'night');
-  } else if (e.key.toLowerCase() === 'v') {
+  } else if (isAction('sonar', e)) {
     deploySonar();
-  } else if (e.key.toLowerCase() === 'k') {
+  } else if (isAction('breathInput', e)) {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
-  } else if (e.key.toLowerCase() === 'f' && !e.repeat) {
+  } else if (isAction('board', e) && !e.repeat) {
     // Every heave is a press of its own: holding the key down does nothing.
     heaveBoat();
   }
@@ -1401,7 +1428,7 @@ function resetSonar() {
 }
 window.addEventListener('keyup', (e) => {
   if (loadoutWheel.handleKeyUp(e)) return;
-  keys.delete(e.key.toLowerCase());
+  keys.delete(e.code);
 });
 document.getElementById('collection-close')!.addEventListener('click', () => vault.toggle(false));
 document.getElementById('gear-open')!.addEventListener('click', () => {
@@ -1409,8 +1436,9 @@ document.getElementById('gear-open')!.addEventListener('click', () => {
   void syncPearls();
 });
 document.getElementById('report-btn')!.addEventListener('click', () => report.toggle(true));
+document.getElementById('set-controls')!.addEventListener('click', openControls);
 
-function axis(neg: string[], pos: string[]) {
+function axis(neg: readonly string[], pos: readonly string[]) {
   return (pos.some((k) => keys.has(k)) ? 1 : 0) - (neg.some((k) => keys.has(k)) ? 1 : 0);
 }
 
@@ -1442,6 +1470,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
+  trip.catch(caught);
   fieldGuide?.mark('catch');
   hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
@@ -1459,6 +1488,7 @@ function bankNet() {
   if (!net.length) return;
   const entries = net.map(bankEntry);
   bank.push(...entries);
+  trip.bank(entries.length);
   // Into the Collection now, minted in the background; until minting starts a shark bite can still take it back.
   for (const entry of entries) diveBanked.add(entry);
   saveBank();
@@ -1566,6 +1596,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  trip.start(world.map.id); // the first dive starts a trip; later ones (another map) join it
   diver.group.visible = true;
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
@@ -1700,7 +1731,7 @@ window.addEventListener('keydown',e=>{
   if(e.repeat)return;
   clearSkinHold();startSkinProgress('keyboard');
 },true);
-window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('e');}},true);
+window.addEventListener('keyup',e=>{if(e.code==='KeyE'&&skinHoldMode==='keyboard'){clearSkinHold();keys.delete('KeyE');}},true);
 window.addEventListener('pointermove',e=>{if(e.pointerId===skinPointer&&Math.hypot(e.clientX-skinX,e.clientY-skinY)>14)clearSkinHold();},true);
 window.addEventListener('pointerup',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
 window.addEventListener('pointercancel',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
@@ -1728,6 +1759,7 @@ let resetDayClock = false;
  */
 function pause() {
   if (phase !== 'play' || paused) return;
+  keys.clear();
   loadoutWheel.closeWheel(false);
   climbAboard();
 }
@@ -1814,9 +1846,63 @@ function startFish() {
   else if (workbench.visible) {
     if (workbench.atRest) workbench.escape(); // pans back up to the title
   } else if (settingsDesk.visible) {
-    deskFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
+    tableFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
     settingsDesk.escape();
+  } else if (healthDesk.visible) {
+    if (!healthDesk.atRest) return;
+    tableFromBench = false;
+    healthDesk.escape();
   } else openWorkbench();
+}
+
+// Switching tables. AQUARIUM, HEALTH and SETTINGS work from any table: the one up sinks
+// while the next rises. A table opened over the workbench (on the title's or aboard
+// mid-dive) brings the workbench back when it's left, so Esc then still dives on.
+let tableFromBench = false;
+let skipReturn = false; // the table sinking now is being swapped for another, not left
+
+/** Sinks whatever table is up (false: one is busy moving, or held). True if there was none, too. */
+function swapFrom(): boolean {
+  if (loginGate.visible) return false;
+  if (workbench.visible) {
+    if (!workbench.atRest) return false;
+    tableFromBench = true;
+    workbench.leave();
+  } else if (healthDesk.visible) {
+    if (!healthDesk.atRest) return false;
+    skipReturn = true;
+    healthDesk.leave();
+  } else if (settingsDesk.visible) {
+    skipReturn = true;
+    settingsDesk.escape();
+  }
+  return true;
+}
+
+/** A table opened over the workbench is left: the workbench comes back up as it sinks. */
+function backToBench() {
+  if (skipReturn) {
+    skipReturn = false;
+    return;
+  }
+  if (!tableFromBench) return;
+  tableFromBench = false;
+  workbench.show(false, true);
+}
+
+/** HEALTH: a table comes up with the latest trip report on it, and the jar of earlier ones. */
+function openHealthDesk() {
+  if (healthDesk.visible || aquarium.open) return;
+  if (swapFrom()) healthDesk.show();
+}
+
+/** AQUARIUM: a table comes up and the tank drops onto it. */
+function openAquarium() {
+  if (aquarium.open) return;
+  if (!swapFrom()) return;
+  aquarium.show();
+  void syncPearls(); // the feeder's PEARL balance
+  void chainFish.run(); // fish from the wallet's NFTs this browser hasn't seen
 }
 
 /**
@@ -1829,8 +1915,9 @@ function labelStartFish(pan: number) {
 }
 
 function onEscape() {
+  if (tripReport.open) tripReport.close();
   // The shark cards first: Esc on the warning is its Back, on the bite report its OK.
-  if (!sharkWarn.classList.contains('hidden')) closeSharkWarning(false);
+  else if (!sharkWarn.classList.contains('hidden')) closeSharkWarning(false);
   else if (!sharkBitten.classList.contains('hidden')) sharkBitten.classList.add('hidden');
   else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
@@ -1840,6 +1927,7 @@ function onEscape() {
   else if (gear.open) gear.toggle(false);
   else if (loginGate.visible) showTitle(false);
   else if (settingsDesk.visible) settingsDesk.escape();
+  else if (healthDesk.visible) healthDesk.escape();
   // Aboard, Esc from the bare table goes back into the water, not to the title.
   else if (aboard && phase === 'menu' && workbench.atRest) backToWater();
   else if (workbench.visible && phase === 'menu') workbench.escape();
@@ -1898,6 +1986,9 @@ function goToMenu() {
     showBiteReport(biteLoss);
     biteLoss = null;
   }
+  // Back at the main menu: the trip's over. Its report comes up over the title.
+  const record = trip.end(health.dives);
+  if (record) tripReport.show(record);
 }
 
 function applySettings(s: Settings) {
@@ -1940,19 +2031,66 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 }, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); onGearChange(); }, scene, root => world.colorGrade.apply(root));
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
-  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => { aquarium.show(); void syncPearls(); void chainFish.run(); } },
-  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
-  // The field guide is a book on the right side of the workbench. Keep the title
-  // rope for the three primary destinations so utility controls don't become fish.
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.25, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.42, label: 'AQUARIUM', onClick: openAquarium },
+  { seed: 0x5eed04, rarity: 'rare', species: 'Ember Triggerfish', hue: 352, sat: 0.72, light: 0.55, at: 0.59, label: 'HEALTH', onClick: openHealthDesk },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.76, label: 'SETTINGS', onClick: openSettingsDesk },
 ]);
+// The second rope, behind the main one and higher, pulled tighter: the field guide and
+// the tutorial. Its fish hang in the gaps between the main rope's, clear of them. It
+// follows the main rope's show / hide, and on its way to any table (or the aquarium)
+// it rides straight up off the screen.
+const backRope = new TitleScreen(
+  document.querySelector('#title-back .title-rope') as HTMLCanvasElement,
+  [
+    { seed: 0x5eed05, rarity: 'uncommon', species: 'Silver Snapper', hue: 150, sat: 0.55, light: 0.55, at: 0.335, label: 'GUIDE', onClick: () => fieldGuide?.toggle() },
+    { seed: 0x5eed06, rarity: 'rare', species: 'Ghost Angelfish', hue: 42, sat: 0.35, light: 0.7, at: 0.675, label: 'TUTORIAL', onClick: () => fieldGuide?.toggleTour() },
+  ],
+  { ropeY: 0.04, slack: 1.01, taut: true, sag: 0.05, lineScale: 0.25, sizeScale: 0.62, underneath: { cursorOn: document.getElementById('title-canvas')! } },
+);
+{
+  const front = { show: titleScreen.show.bind(titleScreen), hide: titleScreen.hide.bind(titleScreen), setPan: titleScreen.setPan.bind(titleScreen), setLift: titleScreen.setLift.bind(titleScreen) };
+  let pan = 0;
+  let lift = 0;
+  const away = () => backRope.setLift(Math.max(pan, lift));
+  titleScreen.show = (mode) => {
+    front.show(mode);
+    backRope.show(mode);
+    away();
+  };
+  titleScreen.hide = () => {
+    front.hide();
+    backRope.hide();
+  };
+  titleScreen.setPan = (u, tableY) => {
+    front.setPan(u, tableY);
+    pan = u;
+    away();
+  };
+  titleScreen.setLift = (u) => {
+    front.setLift(u);
+    lift = u;
+    away();
+  };
+}
+// The trip report, put away, flies into the HEALTH fish (that's where the reports are kept).
+const HEALTH_FISH = 2;
+tripReport.target = () => titleScreen.fishCenter(HEALTH_FISH);
+tripReport.swallowed = () => titleScreen.bump(HEALTH_FISH, 60);
 // The fish are built with their English names (which also fixes how each one hangs); the carved names follow the UI language.
 const TITLE_LABELS: readonly (readonly [number, string, string])[] = [
   [1, 'AQUARIUM', '鱼缸'],
-  [2, 'SETTINGS', '设置'],
+  [2, 'HEALTH', '健康'],
+  [3, 'SETTINGS', '设置'],
+];
+/** The back rope's fish. */
+const BACK_LABELS: readonly (readonly [number, string, string])[] = [
+  [0, 'GUIDE', '手册'],
+  [1, 'TUTORIAL', '新手引导'],
 ];
 function labelTitleFish() {
   for (const [i, en, zh] of TITLE_LABELS) titleScreen.setLabel(i, t(en, zh));
+  for (const [i, en, zh] of BACK_LABELS) backRope.setLabel(i, t(en, zh));
 }
 labelTitleFish();
 onLangChange(() => {
@@ -1967,25 +2105,32 @@ let loadout: UpgradeId[] = [];
 // How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
 const BENCH_CAMERA_DROP = 1.4;
 let benchPan = 0;
-let aquariumPan = 0; // the aquarium pans the same way
 
-// The workbench and the settings desk each report their own pan. Switching from
-// one to the other, one sinks while the other rises: the camera, the title's rope
-// and the START fish follow whichever is further in.
-const tablePan = { bench: 0, desk: 0 };
-const tableY = { bench: 0, desk: 0 };
-let deskFromBench = false; // the settings desk was opened from the workbench, and goes back to it
+// Each table (the workbench, the settings desk, the health desk, the aquarium's)
+// reports its own pan. Switching from one to another, one sinks while the other
+// rises: the camera, the title's rope and the START fish follow whichever is
+// further in, and mid-swap (two tables up) they hold still.
+type TableId = 'bench' | 'desk' | 'health' | 'aquarium';
+const tablePan: Record<TableId, number> = { bench: 0, desk: 0, health: 0, aquarium: 0 };
+const tableY: Record<TableId, number> = { bench: 0, desk: 0, health: 0, aquarium: 0 };
 
-function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
+function tableUp(which: TableId) {
+  return which === 'bench' ? workbench.visible : which === 'desk' ? settingsDesk.visible : which === 'health' ? healthDesk.visible : aquariumTable.visible;
+}
+
+function setTablePan(which: TableId, u: number, y: number) {
   tablePan[which] = u;
   tableY[which] = y;
-  const bench = workbench.visible ? tablePan.bench : 0;
-  const desk = settingsDesk.visible ? tablePan.desk : 0;
-  const top = bench >= desk ? 'bench' : 'desk';
-  // Mid-swap (both tables up) the rope and the sea stay where they are: only the tables move.
-  benchPan = workbench.visible && settingsDesk.visible ? 1 : Math.max(bench, desk);
-  titleScreen.setPan(benchPan, tableY[top]);
-  labelStartFish(benchPan);
+  const up = (Object.keys(tablePan) as TableId[]).filter(tableUp);
+  const top = up.reduce<TableId>((a, b) => (tablePan[b] > tablePan[a] ? b : a), which);
+  // The sea camera sinks for any table.
+  benchPan = up.length > 1 ? 1 : up.length ? tablePan[up[0]] : 0;
+  // The title's rope hangs over the table, except the aquarium's: there it's lifted off the
+  // screen instead (titleScreen.setLift), and a table pan would pull its ends back down.
+  const hung: TableId[] = up.filter((t) => t !== 'aquarium');
+  const titlePan = hung.length > 1 ? 1 : hung.length ? tablePan[hung[0]] : 0;
+  titleScreen.setPan(titlePan, tableY[hung.includes(top) ? top : (hung[0] ?? top)]);
+  labelStartFish(titlePan);
 }
 
 const synthPanel = new SynthesisPanel({
@@ -1999,6 +2144,9 @@ const synthPanel = new SynthesisPanel({
 
 const workbench = new Workbench({
   progress: () => mapProgress,
+  // Aboard mid-trip, the chart can sail home: the trip ends (its report), then the title.
+  canReturn: () => aboard != null,
+  returnHome: () => aboardToTitle(),
   pan(u, tableY) {
     setTablePan('bench', u, tableY);
     // Leaving the boat, the fish rise away off the top while the table sinks.
@@ -2134,7 +2282,9 @@ function showTitle(intro: boolean) {
   loginGate.hide();
   workbench.hide();
   settingsDesk.hide();
-  deskFromBench = false;
+  healthDesk.hide();
+  tableFromBench = false;
+  skipReturn = false;
   benchPan = 0;
   titleScreen.setPan(0);
   labelStartFish(0);
@@ -2168,26 +2318,20 @@ const settingsDesk = new SettingsDesk({
     deskView.yaw = yaw;
     deskView.pitch = pitch;
   },
-  leaving() {
-    // Opened from the workbench: that table comes back up as this one sinks.
-    if (!deskFromBench) return;
-    deskFromBench = false;
-    workbench.show(false, true);
-  },
+  openControls,
+  // Opened from the workbench: that table comes back up as this one sinks.
+  leaving: () => backToBench(),
 });
 // The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
-titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
+titleScreen.blocked = backRope.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
 /** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
-  if (settingsDesk.visible || loginGate.visible) return;
-  if (workbench.visible) {
-    if (!workbench.atRest) return;
-    deskFromBench = true;
-    workbench.leave(); // the workbench sinks while the settings desk rises
-  }
-  settingsDesk.show();
+  if (settingsDesk.visible || aquarium.open) return;
+  if (swapFrom()) settingsDesk.show(); // the table up sinks while this one rises
 }
+
+healthDesk.onLeave = aquariumTable.onLeave = () => backToBench();
 
 function openWorkbench() {
   if (workbench.visible || settingsDesk.visible || loginGate.visible) return;
@@ -2379,6 +2523,7 @@ function update(dt: number, time: number) {
   const playing = phase === 'play';
   nowMs = time * 1000;
   health.tick(nowMs, s, depth, underwater && playing);
+  trip.sample(s);
 
   // Mid-jump off the bow, the jump moves the diver: no swimming, no water physics yet.
   const flying = diver.jumping || diver.seated;
@@ -2395,8 +2540,8 @@ function update(dt: number, time: number) {
     if (s.holding && !lastHolding && !underwater) hud.message(t('Diving…', '下潜中…'), 800);
     lastHolding = s.holding;
 
-    let ax = axis(['arrowleft', 'a'], ['arrowright', 'd']);
-    let ay = axis(['arrowdown', 's'], ['arrowup', 'w']);
+    let ax = axis(keysFor('left'), keysFor('right'));
+    let ay = axis(keysFor('down'), keysFor('up'));
     if (!underwater && !s.holding && ay < 0) {
       ay = 0;
       if (Math.random() < 0.02) hud.message(t('Hold your breath to dive', '屏住呼吸即可下潜'), 900);
@@ -2485,7 +2630,7 @@ function update(dt: number, time: number) {
   }
 
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
-  cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
+  cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
   camera.position.sub(shakeOffset);
   // The settings desk's camera leans in over a plaque: the sea camera moves and turns
   // with it, so it reads as the camera moving rather than the table sliding over a
@@ -2529,6 +2674,8 @@ function update(dt: number, time: number) {
   camera.position.add(shakeOffset);
 
   hud.setBreath(s, outOfAir);
+  hud.placeBreath(overDiversHead());
+  hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
@@ -2578,6 +2725,18 @@ function swimPhysics(dt: number, s: BreathState) {
       }
     }
   }
+}
+
+const HEAD_TAG_Y = 1.3; // the breath tag floats this far above the diver's middle
+const headTag = new THREE.Vector3();
+
+/** Where the breath tag goes: just above the diver's head on screen, or null if that's off screen. */
+function overDiversHead(): { x: number; y: number } | null {
+  camera.updateMatrixWorld();
+  headTag.copy(diver.pos).setY(diver.pos.y + HEAD_TAG_Y).project(camera);
+  if (headTag.z > 1 || Math.abs(headTag.x) > 1.1 || Math.abs(headTag.y) > 1.1) return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  return { x: r.left + ((headTag.x + 1) / 2) * r.width, y: r.top + ((1 - headTag.y) / 2) * r.height };
 }
 
 /**
@@ -2651,6 +2810,9 @@ function frame() {
     world.updateLighting(time, camera.position.y, camera.position.x);
   }
   updateTimeLabel();
+  // The corner 手册 / 新手引导 buttons: on the title the rope's GUIDE and TUTORIAL fish stand in for them.
+  // Outside update() so a pause does not leave them stale; showLauncher only touches the DOM on a change.
+  fieldGuide?.showLauncher(!titleScreen.visible);
   if (previewOn) renderPreview(); // before the main view, which is what the canvas then shows
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -2659,6 +2821,10 @@ frame();
 
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
+  backRope,
+  healthDesk,
+  aquarium,
+  aquariumTable,
   workbench,
   equipment,
   shipyard,

@@ -1,5 +1,6 @@
 import type { DiveRecord, HealthLog } from './health';
 import { lang, onLangChange, t } from './i18n';
+import { hasHealthData } from './wallet-storage';
 
 // The health report is built only when the player presses the button. It reads
 // the dive log, works out a handful of wellness numbers, and draws two charts.
@@ -28,7 +29,7 @@ const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.l
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)} ${t('s', '秒')}`;
 const nonNull = <T,>(xs: (T | null)[]) => xs.filter((x): x is T => x != null);
 
-interface Stats {
+export interface Stats {
   n: number;
   vitals: DiveRecord[];
   best: DiveRecord;
@@ -47,7 +48,7 @@ interface Stats {
   sharkDives: number;
 }
 
-function compute(dives: DiveRecord[]): Stats {
+export function compute(dives: DiveRecord[]): Stats {
   // A shark chase drives the pulse up: those dives say nothing about rest, the dive reflex or recovery.
   const steady = dives.filter((d) => !d.shark);
   const vitals = steady.filter((d) => d.pulse.length >= 3 && d.restPulse != null);
@@ -245,10 +246,16 @@ function drawPulse(el: HTMLCanvasElement, d: DiveRecord) {
   ctx.fillText(t(`seconds underwater (0 – ${tMax.toFixed(0)} s)`, `水下秒数（0 – ${tMax.toFixed(0)} 秒）`), w / 2, h - 4);
 }
 
+/** The wellness-only line under every health figure: this report, the trip report and the health desk. */
+export function wellnessDisclaimer() {
+  return t('Wellness insights only, from camera-based Presage SmartSpectra estimates. Not a medical device and not medical advice. Never practice breath holds in or near water, and stop if you feel dizzy or light-headed.', '仅为健康参考，基于摄像头的 Presage SmartSpectra 估算。不是医疗设备，也不构成医疗建议。切勿在水中或水边练习屏息，感到头晕或眩晕时请立即停止。');
+}
+
 export class Report {
   private panel = $('report');
 
-  constructor(private log: HealthLog) {
+  /** `deleted`: after the player deleted their health data here (the trips go with it). */
+  constructor(private log: HealthLog, private deleted: () => void = () => {}) {
     onLangChange(() => {
       if (this.open) this.render();
     });
@@ -278,7 +285,9 @@ export class Report {
         </div>
       </div>`;
     if (!dives.length) {
-      this.panel.innerHTML = `${head}<p class="report-empty">${t('No dives recorded yet. Hold your breath, dive, and come back.', '还没有下潜记录。屏住呼吸，潜一次，再回来看看。')}</p>`;
+      this.panel.innerHTML = `${head}<p class="report-empty">${t('No dives recorded yet. Hold your breath, dive, and come back.', '还没有下潜记录。屏住呼吸，潜一次，再回来看看。')}</p>${
+        hasHealthData() ? `<button id="report-delete" class="link small">${t('Delete my health data', '删除我的健康数据')}</button>` : ''
+      }`;
       this.wire();
       return;
     }
@@ -315,7 +324,7 @@ export class Report {
       <section class="insights"><b class="small">${t('What this means', '这意味着什么')}</b><ul>${insights(s)
         .map((line) => `<li>${line}</li>`)
         .join('')}</ul></section>
-      <p class="disclaimer small">${t('Wellness insights only, from camera-based Presage SmartSpectra estimates. Not a medical device and not medical advice. Never practice breath holds in or near water, and stop if you feel dizzy or light-headed.', '仅为健康参考，基于摄像头的 Presage SmartSpectra 估算。不是医疗设备，也不构成医疗建议。切勿在水中或水边练习屏息，感到头晕或眩晕时请立即停止。')}</p>
+      <p class="disclaimer small">${wellnessDisclaimer()}</p>
       <button id="report-delete" class="link small">${t('Delete my health data', '删除我的健康数据')}</button>`;
     this.wire();
     drawHolds($('chart-holds') as HTMLCanvasElement, dives, s.best.holdMs);
@@ -328,6 +337,7 @@ export class Report {
     document.getElementById('report-delete')?.addEventListener('click', () => {
       if (!confirm(t('Delete all recorded dives and vitals from this device?', '删除本设备上所有已记录的下潜和体征数据？'))) return;
       this.log.clear();
+      this.deleted();
       this.render();
     });
   }

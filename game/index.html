@@ -66,12 +66,20 @@
             <div id="active-gear-hint" class="small"></div>
           </section>
 
-          <section id="net" class="panel">
-            <div class="small muted" data-zh="渔网">NET</div>
-            <div id="net-slots"></div>
-          </section>
         </div>
 
+        <!-- Bottom centre: the gear you carry (1–6), or with Tab your bag of caught fish. -->
+        <section id="hotbar" class="panel">
+          <div class="hotbar-tabs small">
+            <span id="hotbar-tab-gear" class="on" data-zh="装备">GEAR</span>
+            <span id="hotbar-tab-bag"><span data-zh="鱼篓">BAG</span> <span id="hotbar-bag-count"></span></span>
+            <span class="hotbar-key"><b>Tab</b> <span data-zh="切换">switch</span></span>
+          </div>
+          <div id="hotbar-gear"></div>
+          <div id="net" class="hidden">
+            <div id="net-slots"></div>
+          </div>
+        </section>
         <div id="help" data-zh-html="← → ↑ ↓ 游动 · &lt;b&gt;空格&lt;/b&gt; 捕捞 · &lt;b&gt;1–6&lt;/b&gt; 快速换装 · 按住 &lt;b&gt;Tab&lt;/b&gt; 轮盘 · &lt;b&gt;B&lt;/b&gt; 图鉴 · &lt;b&gt;C&lt;/b&gt; 收藏 · &lt;b&gt;G&lt;/b&gt; 升级 · &lt;b&gt;N&lt;/b&gt; 夜晚 · &lt;b&gt;K&lt;/b&gt; 呼吸输入 · &lt;b&gt;F&lt;/b&gt;（连按）翻正船 · &lt;b&gt;Esc&lt;/b&gt; 船与工作台">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>B</b> field guide · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> boat &amp; table</div>
 
         <section id="bank" class="panel">
@@ -94,6 +102,12 @@
     </div>
 
     <div id="title-screen" class="boot">
+      <!-- The second rope, further back and higher (GUIDE, TUTORIAL): drawn under the main one, which passes it the clicks it lets through. -->
+      <div id="title-back" class="hidden">
+        <canvas class="title-rope"></canvas>
+        <canvas class="title-fish3d"></canvas>
+        <div class="title-name"></div>
+      </div>
       <canvas id="title-canvas"></canvas>
       <!-- The hanging fish as 3D models, over the rope; clicks go through to the canvas below. -->
       <canvas id="title-fish3d"></canvas>
@@ -183,6 +197,8 @@
           </div>
           <footer id="wb-place-foot">
             <button id="wb-dive" class="primary" data-zh="下潜">Dive</button>
+            <!-- Aboard mid-trip only: sail home, ending the trip (the trip report, then the title). -->
+            <button id="wb-return" class="hidden" data-zh="返航">Return to port</button>
           </footer>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl" data-zh="点击海图外或按 Esc 收起">Click outside the chart or press Esc to fold it</div>
@@ -357,7 +373,9 @@
             </select>
           </label>
           <label class="setting"><span data-zh="摄像头画面">Camera preview</span><input type="checkbox" id="set-camera" /></label>
-          <label class="setting"><span data-zh="操作提示">Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <!-- The on-screen key hint is gone (the keys are in Controls); pause.ts still wires the box. -->
+          <label class="setting hidden"><span data-zh="操作提示">Controls hint</span><input type="checkbox" id="set-help" /></label>
+          <div class="setting"><span data-zh="操作">Controls</span><button type="button" id="set-controls" class="mini" data-zh="查看 / 修改按键">View / change keys</button></div>
           <label class="setting">
             <span data-zh="语言">Language</span>
             <select id="set-lang">

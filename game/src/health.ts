@@ -1,5 +1,6 @@
 import type { BreathMode, BreathState } from './breath';
 import { storageKey } from './wallet';
+import { clearAllHealthData } from './wallet-storage';
 
 // Quietly records every dive: how long you held your breath, how your heart
 // rate moved while you did, and how fast it came back afterwards. Nothing is
@@ -132,6 +133,7 @@ export class HealthLog {
     try {
       localStorage.removeItem(storageKey(KEY));
     } catch {}
+    clearAllHealthData(); // every wallet's records on this device, and the legacy unscoped ones
   }
 
   /** Swap in the connected wallet's records. */

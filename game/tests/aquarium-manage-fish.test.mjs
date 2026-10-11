@@ -45,7 +45,7 @@ test('manage fish: C closes the Collection over the tank, handled once in the aq
   assert.match(handler, /if \(!e\.repeat\) this\.manageFish\(\)/);
   assert.match(handler, /tag === 'INPUT' \|\| tag === 'TEXTAREA' \|\| tag === 'SELECT'/);
   // main.ts's own C handler only runs during play, so it never double-handles this key.
-  assert.ok(main.indexOf("if (phase !== 'play') return;") < main.indexOf("e.key.toLowerCase() === 'c') {\n    vault.toggle();"));
+  assert.ok(main.indexOf("if (phase !== 'play') return;") < main.indexOf("isAction('collection', e)) {\n    vault.toggle();"));
 });
 
 test('title screen: aquarium fish is labelled 鱼缸, not 图鉴', () => {
