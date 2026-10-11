@@ -161,6 +161,12 @@ const seedOf = (rng: Rng) => rng.int(1, 0x7fffffff);
 export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout {
   const { trench } = shelf.bounds;
   const rng = new Rng(options.seed);
+  // Nothing stands past the edge of the sand, however far the diver may swim.
+  const edge = shelf.bounds.outer - 3;
+  const within = (reach: number) => Math.min(reach, edge);
+  // Outcrops, rubble, groves and meadows are counted per metre of shelf, so a wider map is as busy as a narrow one.
+  const span = within(options.reach + 4) - (trench + 5);
+  const perSide = (metresEach: number) => Math.max(1, Math.round(span / metresEach));
   const ground = (x: number, z: number) => shelf.heightAt(x, z);
   /** A rock resting on the sand with its lower part buried. */
   const settle = (x: number, z: number, r: number, squash: number, tier: 1 | 2 | 3, sink: number): RockSlot =>
@@ -170,10 +176,11 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
   const outcrops: RockSlot[] = [];
   const anchors: RockSlot[] = [];
   for (const side of [-1, 1]) {
-    for (let tries = 0, placed = 0; placed < 5 && tries < 80; tries++) {
+    const wanted = perSide(11);
+    for (let tries = 0, placed = 0; placed < wanted && tries < wanted * 16; tries++) {
       const front = rng.next() < 0.35;
       const r = front ? rng.range(1.7, 2.8) : rng.range(2.4, 4.4);
-      const x = side * rng.range(trench + 5 + r, options.reach + 4);
+      const x = side * rng.range(trench + 5 + r, within(options.reach + 4) - r);
       const z = front ? rng.range(5.5, 8.5) : rng.range(LANE[0] - 8, LANE[0] - 1.5 - r * 0.6);
       if (anchors.some((a) => Math.hypot(a.x - x, (a.z - z) * 0.6) < 12)) continue;
       const anchor = settle(x, z, r, rng.range(0.6, 0.9), 1, 0.33);
@@ -208,7 +215,7 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
   const bases: RockSlot[] = [];
   const headroom = Math.max(4, options.depth - 10);
   for (const side of [-1, 1]) {
-    for (let x = trench + 6 + rng.range(0, 5); x < options.reach + 24; x += rng.range(8, 13)) {
+    for (let x = trench + 6 + rng.range(0, 5); x < within(options.reach + 24) - 9; x += rng.range(8, 13)) {
       const z = rng.range(-35, -17);
       let r = rng.range(4.5, 8.5);
       let rock = settle(side * x, z, r, rng.range(0.7, 1.05), 1, 0.3);
@@ -232,10 +239,11 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
       }
     }
     // Lower boulders between the stacks close the wall's foot.
-    for (let i = 0; i < 9; i++) {
+    const rubble = perSide(6);
+    for (let i = 0; i < rubble; i++) {
       const r = rng.range(2, 4.5);
-      const x = side * rng.range(trench + 3 + r, options.reach + 22);
-      stacks.push(settle(x, rng.range(-30, -14 - r * 0.5), r, rng.range(0.6, 0.95), i < 5 ? 1 : 2, 0.3));
+      const x = side * rng.range(trench + 3 + r, within(options.reach + 22) - r);
+      stacks.push(settle(x, rng.range(-30, -14 - r * 0.5), r, rng.range(0.6, 0.95), i % 9 < 5 ? 1 : 2, 0.3));
     }
   }
 
@@ -243,16 +251,17 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
   const big = [...outcrops, ...bases].filter((rock) => rock.r >= 1);
   const inRock = (x: number, z: number, margin: number) =>
     big.some((rock) => Math.hypot(rock.x - x, rock.z - z) < rock.r * 0.8 + margin);
-  const onShelf = (x: number) => Math.abs(x) >= trench + 3 && Math.abs(x) <= options.reach + 14;
+  const onShelf = (x: number) => Math.abs(x) >= trench + 3 && Math.abs(x) <= within(options.reach + 14);
   const rooted = (x: number, z: number, vigor: number): PlantSlot =>
     ({ x, y: ground(x, z) - 0.15, z, seed: seedOf(rng), vigor });
 
   // Kelp holds on to rock: groves stand around the outcrops, plus a few on open ground between them.
   const groves = anchors.map((a) => ({ x: a.x, z: a.z, r: a.r }));
   for (const side of [-1, 1]) {
-    for (let i = 0; i < 2; i++) {
+    const open = perSide(27);
+    for (let i = 0; i < open; i++) {
       for (let tries = 0; tries < 30; tries++) {
-        const x = side * rng.range(trench + 6, options.reach + 10);
+        const x = side * rng.range(trench + 6, within(options.reach + 10));
         if (groves.some((g) => Math.abs(g.x - x) < 9)) continue;
         groves.push({ x, z: rng.range(BACK_BED[0] + 2, BACK_BED[1] - 2), r: 1.2 });
         break;
@@ -260,7 +269,7 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
     }
   }
   const canopy: PlantSlot[] = [];
-  for (let round = 0; canopy.length < options.canopy && round < 40; round++) {
+  for (let round = 0; canopy.length < options.canopy && round < 60; round++) {
     // Visiting every grove once per round makes any prefix a thinner forest, not a missing corner.
     for (const grove of groves) {
       if (canopy.length >= options.canopy) break;
@@ -284,8 +293,9 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
 
   // Seagrass grows in meadows on open sand; the other low plants keep to the rocks.
   const meadows: { x: number; z: number; r: number }[] = [];
-  for (let tries = 0; meadows.length < 10 && tries < 200; tries++) {
-    const x = (rng.next() < 0.5 ? -1 : 1) * rng.range(trench + 5, options.reach + 8);
+  const patches = perSide(11) * 2;
+  for (let tries = 0; meadows.length < patches && tries < patches * 20; tries++) {
+    const x = (rng.next() < 0.5 ? -1 : 1) * rng.range(trench + 5, within(options.reach + 8));
     const z = rng.range(-12, 6.5);
     if (inRock(x, z, 2.5) || meadows.some((m) => Math.hypot(m.x - x, m.z - z) < 9)) continue;
     meadows.push({ x, z, r: rng.range(2.4, 4.2) });
