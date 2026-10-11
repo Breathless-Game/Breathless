@@ -304,6 +304,7 @@ export class Workbench {
   private synthesisLift = -0.65;
   private synthesisCrafting = false;
   private synthesisPieceVisibility: boolean[] = [];
+  private synthesisFigureVisibility: boolean | null = null;
 
   private state: State = 'closed';
   private placed = false; // pieces have landed at least once
@@ -1517,9 +1518,10 @@ export class Workbench {
   }
 
   private restoreWorkbenchPieces() {
-    if (!this.synthesisPieceVisibility.length) return;
-    this.pieces.forEach((p, i) => { p.obj.visible = this.synthesisPieceVisibility[i] ?? p.obj.visible; });
+    if (this.synthesisPieceVisibility.length) this.pieces.forEach((p, i) => { p.obj.visible = this.synthesisPieceVisibility[i] ?? p.obj.visible; });
+    if (this.synthesisFigureVisibility !== null) this.figure.visible = this.synthesisFigureVisibility;
     this.synthesisPieceVisibility = [];
+    this.synthesisFigureVisibility = null;
     this.map.visible = true;
   }
 
@@ -1586,6 +1588,8 @@ export class Workbench {
     this.map.visible = false;
     this.synthesisPieceVisibility = this.pieces.map((p) => p.obj.visible);
     this.pieces.forEach((p) => { p.obj.visible = false; });
+    this.synthesisFigureVisibility = this.figure.visible;
+    this.figure.visible = false;
     this.resetSynthesisVisuals();
     const fromY = this.synthesisLift;
     const fromL = this.synthesisCrates[0]?.position.x ?? -3.48;
