@@ -23,9 +23,18 @@ export const ROGUE = {
   strike: 3.5,
   /** The wave carries the capsizing boat this far (m) along with it. */
   carry: 5,
-  /** Seconds the boat takes to go over, and to come back when righted. */
+  /** Seconds the boat takes to go over. */
   rollSeconds: 1.6,
-  rightSeconds: 1.8,
+  /**
+   * Righting it is hard work: each press of F heaves it this share of the way up, and it
+   * slumps back this share per second. Fewer than two presses a second gets nowhere;
+   * a steady five a second takes about four seconds and twenty presses.
+   */
+  heave: 0.085,
+  slump: 0.16,
+  /** Heaving alone brings it this share of the way round; past that it tips and falls upright in `rightSeconds`. */
+  tip: 0.8,
+  rightSeconds: 0.7,
   /** To right the boat the diver must be within this far of it (m, along x) and no deeper than this (m). */
   reach: 9,
   depth: 3,
@@ -69,9 +78,15 @@ export class RogueWaves {
   dir: 1 | -1 = 1;
   /** The boat is over (or going over, or being righted). No fish can be banked meanwhile. */
   capsized = false;
-  /** 0 upright to 1 keel up. */
+  /** 0 upright to 1 keel up. It stays at 1 while the boat lies capsized, however far it has been heaved. */
   roll = 0;
+  /** How far the diver has heaved it back up, 0 to 1. At 1 it tips and rights itself. */
+  effort = 0;
   private righting = false;
+  /** 0 to 1 through the final fall upright. */
+  private back = 0;
+  /** The lurch of the last heave, 1 fading to 0. */
+  private jolt = 0;
   private wait: number | null = null;
   /** Seconds since the boat came to rest keel up: it rocks for a while. */
   private rest = 0;
@@ -86,7 +101,10 @@ export class RogueWaves {
     this.x = null;
     this.capsized = false;
     this.roll = 0;
+    this.effort = 0;
     this.righting = false;
+    this.back = 0;
+    this.jolt = 0;
     this.wait = null;
     this.rest = 0;
   }
@@ -101,28 +119,33 @@ export class RogueWaves {
   /**
    * How the capsize has left the boat. Going over, it is flung past keel-up and comes
    * back, its bow kicks, it slews round and the wave carries it along; then it rocks
-   * to rest. Righting brings all of it back. The same object is returned every call.
+   * to rest. Each heave brings it part of the way back with a lurch, and if the
+   * heaving stops it slumps over again. The same object is returned every call.
    */
   get pose(): BoatPose {
     const p = this.roll;
     const lie = this.lie;
-    if (this.righting) {
-      const back = p * p * (3 - 2 * p);
-      lie.roll = Math.PI * back;
-      lie.pitch = 0.18 * Math.sin(Math.PI * p) * this.thrown;
-      lie.yaw = 0.42 * this.thrown * back;
-      lie.surge = ROGUE.carry * this.thrown * back;
-      lie.sink = 0.3 * back;
+    if (p < 1 && !this.righting) {
+      // Going over. Overshoots by a tenth and settles exactly keel up. (An upright boat is exactly upright.)
+      const over = p === 0 ? 0 : 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);
+      lie.roll = Math.PI * over;
+      lie.pitch = -this.thrown * 0.55 * Math.sin(Math.PI * Math.min(1, p * 1.25)) * (1 - 0.5 * p);
+      lie.yaw = 0.42 * this.thrown * p * p * (3 - 2 * p);
+      lie.surge = ROGUE.carry * this.thrown * (1 - Math.pow(1 - p, 2));
+      lie.sink = 0.3 * Math.min(1, over);
       return lie;
     }
-    // Overshoots by a tenth and settles exactly keel up. (An upright boat is exactly upright.)
-    const over = p === 0 ? 0 : 1 + 2.70158 * Math.pow(p - 1, 3) + 1.70158 * Math.pow(p - 1, 2);
-    const rock = Math.exp(-this.rest / 1.6);
-    lie.roll = Math.PI * (over + (p === 1 ? 0.06 * rock * Math.sin(this.rest * 3.6) : 0));
-    lie.pitch = -this.thrown * (0.55 * Math.sin(Math.PI * Math.min(1, p * 1.25)) * (1 - 0.5 * p) + (p === 1 ? 0.05 * rock * Math.sin(this.rest * 2.7) : 0));
-    lie.yaw = 0.42 * this.thrown * p * p * (3 - 2 * p);
-    lie.surge = ROGUE.carry * this.thrown * (1 - Math.pow(1 - p, 2));
-    lie.sink = 0.3 * Math.min(1, over);
+    // Keel up, heaved some of the way back, or falling upright: `stay` is how far over it still lies.
+    const lifted = this.effort * this.effort * (3 - 2 * this.effort);
+    const fall = this.back * this.back * (3 - 2 * this.back);
+    const stay = this.righting ? (1 - ROGUE.tip) * (1 - fall) : 1 - ROGUE.tip * lifted;
+    const rock = this.righting ? 0 : Math.exp(-this.rest / 1.6) * (1 - lifted);
+    lie.roll = Math.PI * (stay + 0.06 * rock * Math.sin(this.rest * 3.6)) - 0.16 * this.jolt * stay;
+    lie.pitch = -this.thrown * 0.05 * rock * Math.sin(this.rest * 2.7) + 0.05 * this.jolt * stay
+      + (this.righting ? 0.14 * Math.sin(Math.PI * this.back) * this.thrown : 0);
+    lie.yaw = 0.42 * this.thrown * stay;
+    lie.surge = ROGUE.carry * this.thrown * stay;
+    lie.sink = 0.3 * stay;
     return lie;
   }
 
@@ -135,17 +158,25 @@ export class RogueWaves {
     let event: StormEvent | null = null;
     // The boat turns over fast and comes back slower.
     if (this.capsized) {
+      this.jolt = Math.max(0, this.jolt - dt * 5);
       if (this.righting) {
-        this.roll = Math.max(0, this.roll - dt / ROGUE.rightSeconds);
-        if (this.roll === 0) {
+        // Past the tipping point it falls upright by itself.
+        this.back = Math.min(1, this.back + dt / ROGUE.rightSeconds);
+        if (this.back === 1) {
           this.capsized = false;
           this.righting = false;
+          this.roll = 0;
+          this.effort = 0;
+          this.back = 0;
+          this.jolt = 0;
           event = 'righted';
         }
       } else if (this.roll < 1) {
         this.roll = Math.min(1, this.roll + dt / ROGUE.rollSeconds);
       } else {
         this.rest += dt;
+        // Left alone, it slumps back over.
+        this.effort = Math.max(0, this.effort - ROGUE.slump * dt);
       }
     }
 
@@ -180,10 +211,19 @@ export class RogueWaves {
     return event;
   }
 
-  /** Start turning a capsized boat back over. False if there is nothing to right, or it is already coming back. */
-  right(): boolean {
-    if (!this.capsized || this.righting) return false;
-    this.righting = true;
+  /**
+   * One heave on the capsized boat (one press of F): it comes a little way up with a lurch.
+   * Enough of them in quick succession tip it past the point where it rights itself.
+   * False if there is nothing to heave on: upright, still going over, or already falling back.
+   */
+  heave(): boolean {
+    if (!this.capsized || this.righting || this.roll < 1) return false;
+    this.effort = Math.min(1, this.effort + ROGUE.heave);
+    this.jolt = 1;
+    if (this.effort === 1) {
+      this.righting = true;
+      this.back = 0;
+    }
     return true;
   }
 

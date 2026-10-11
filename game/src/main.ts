@@ -455,19 +455,38 @@ function capsize() {
     loss.gear ? `your ${nextSlotLabel(loss.gear).toLowerCase()}` : '',
   ].filter(Boolean).join(' and ');
   hud.message(lost ? `CAPSIZED · lost ${lost}` : 'CAPSIZED', 3200);
-  hud.setAlert('Boat capsized · swim to it and right it', 'F');
   stormShake = 0.7;
   capsizeHintAt = time + 5;
 }
 
-/** F: heave the boat back over, from the surface beside it. */
-function rightBoat() {
+/** Can the diver get a hand on the capsized boat? */
+const atBoat = () => stormSea.capsized && canRight(diver.pos.x - stormSea.boatX, -diver.pos.y);
+/** What the HUD last showed about the capsized boat: nothing, "swim to it", or the key to mash. */
+let boatPrompt: 'none' | 'far' | 'mash' = 'none';
+
+/** One press of F: one heave on the boat, from the surface beside it. It takes many, quickly. */
+function heaveBoat() {
   if (!stormSea.capsized) return;
-  if (!canRight(diver.pos.x - stormSea.boatX, -diver.pos.y)) {
+  if (!atBoat()) {
     hud.message('Surface beside the boat to right it', 1600);
     return;
   }
-  if (stormSea.right()) hud.message('Heave! Righting the boat…', ROGUE.rightSeconds * 1000);
+  if (!stormSea.heave()) return;
+  hud.punchMash();
+  // Water slaps off the hull with every heave.
+  stormFx.burst(stormSea.boatX, world.surfaceAt(stormSea.boatX, 0), 0.5, 9, 0, 3.4);
+  stormShake = Math.max(stormShake, 0.09);
+}
+
+/** Show what to do about the boat: swim to it while far, mash F in the middle of the screen once beside it. */
+function promptForBoat() {
+  const prompt = !stormSea.capsized ? 'none' : atBoat() ? 'mash' : 'far';
+  if (prompt !== boatPrompt) {
+    boatPrompt = prompt;
+    hud.setAlert(prompt === 'far' ? 'Boat capsized · surface beside it to right it' : null);
+    if (prompt !== 'mash') hud.setMash(null);
+  }
+  if (prompt === 'mash') hud.setMash(stormSea.effort);
 }
 
 /** Calm water and an upright boat: a new dive, or back on the menu. */
@@ -478,7 +497,7 @@ function calmSea() {
   stormShake = 0;
   world.boatPose = null;
   world.setRogueWave(null, 1, 0);
-  hud.setAlert(null);
+  promptForBoat();
 }
 
 function loadBank(): BankedFish[] {
@@ -671,8 +690,9 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'k') {
     const order = breathModes();
     setBreathMode(order[(order.indexOf(breath.state.mode) + 1) % order.length]);
-  } else if (e.key.toLowerCase() === 'f') {
-    rightBoat();
+  } else if (e.key.toLowerCase() === 'f' && !e.repeat) {
+    // Every heave is a press of its own: holding the key down does nothing.
+    heaveBoat();
   }
 });
 
@@ -1350,9 +1370,12 @@ function update(dt: number, time: number) {
   if (stormEvent === 'wave') hud.message('A rogue wave is bearing down on the boat!', 2600);
   else if (stormEvent === 'capsize') capsize();
   else if (stormEvent === 'righted') {
-    hud.setAlert(null);
+    // It comes down on its keel with a crash.
+    stormFx.burst(stormSea.boatX, world.surfaceAt(0, 0), 0, 90, 0, 8);
+    stormShake = Math.max(stormShake, 0.35);
     hud.message('Boat righted', 1600);
   }
+  promptForBoat();
   // The sea shudders as the wave closes in, and jolts when it hits.
   if (stormSea.x !== null && !stormSea.capsized) stormShake = Math.max(stormShake, 0.12 * (stormSea.height / ROGUE.height) * Math.exp(-Math.abs(stormSea.x - diver.pos.x) / 25));
   stormShake = Math.max(0, stormShake - dt * 0.55);

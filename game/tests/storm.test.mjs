@@ -111,25 +111,108 @@ test('the wave passes on and fades; the next ones leave a capsized boat as it is
   for (const gap of gaps) assert.ok(gap > crossing + ROGUE.gap[0] - 1 && gap < crossing + ROGUE.gap[1] + 1);
 });
 
-test('righting takes a moment, and then the boat can bank and be capsized again', () => {
-  const sea = new RogueWaves(dice());
-  assert.equal(sea.right(), false, 'nothing to right on an upright boat');
+/** A capsized boat, lying keel up and at rest. */
+function capsizedBoat(seed = 7) {
+  const sea = new RogueWaves(dice(seed));
   sea.x = -ROGUE.strike - 1;
   sea.dir = 1;
   assert.equal(sea.tick(0.2, 1, true), 'capsize');
-  run(sea, 2, 0);
-  assert.equal(sea.right(), true);
-  assert.equal(sea.right(), false, 'already coming back');
-  const events = run(sea, ROGUE.rightSeconds + 0.1, 0);
+  return sea;
+}
+
+/** Mash F at `rate` presses a second for up to `seconds`. Returns how many presses it took to right the boat, or null. */
+function mash(sea, rate, seconds) {
+  let presses = 0, due = 0;
+  for (let t = 0; t < seconds; t += DT) {
+    due += rate * DT;
+    while (due >= 1) {
+      due -= 1;
+      if (sea.heave()) presses++;
+    }
+    if (sea.tick(DT, 0, true) === 'righted') return presses;
+  }
+  return null;
+}
+const DT = 1 / 60;
+
+test('one press does not right the boat: it takes many, quickly', () => {
+  const upright = new RogueWaves(dice());
+  assert.equal(upright.heave(), false, 'nothing to heave on an upright boat');
+  const going = capsizedBoat();
+  assert.equal(going.heave(), false, 'nor while it is still going over');
+  assert.equal(going.effort, 0);
+
+  const sea = capsizedBoat();
+  run(sea, 3, 0);
+  const keelUp = sea.pose.roll;
+  assert.equal(sea.heave(), true);
+  assert.equal(sea.capsized, true, 'still over after one heave');
+  assert.ok(Math.abs(sea.effort - ROGUE.heave) < 1e-9);
+  assert.ok(sea.pose.roll < keelUp, 'but it lurches up a little');
+
+  // A steady five presses a second: about twenty presses and four seconds.
+  const steady = capsizedBoat();
+  run(steady, 3, 0);
+  const presses = mash(steady, 5, 20);
+  assert.ok(presses >= 14 && presses <= 26, `many presses (${presses})`);
+  assert.equal(steady.capsized, false);
+  assert.equal(steady.roll, 0);
+  assert.equal(steady.effort, 0);
+  assert.equal(steady.boatX, 0, 'back where it was moored');
+  for (const part of Object.values(steady.pose)) assert.equal(Math.abs(part), 0);
+
+  // Faster is quicker, and never fewer presses than the heaves alone need.
+  const fast = capsizedBoat();
+  run(fast, 3, 0);
+  const quick = mash(fast, 9, 20);
+  assert.ok(quick >= Math.ceil(1 / ROGUE.heave) && quick <= presses);
+});
+
+test('a slow hand gets nowhere, and a boat left alone slumps back', () => {
+  const slow = capsizedBoat();
+  run(slow, 3, 0);
+  assert.equal(mash(slow, 1.5, 30), null, 'under two presses a second never rights it');
+  assert.equal(slow.capsized, true);
+  assert.ok(slow.effort < 0.2);
+
+  const sea = capsizedBoat();
+  run(sea, 3, 0);
+  for (let i = 0; i < 8; i++) sea.heave();
+  const held = sea.effort;
+  assert.ok(held > 0.6 && held < 1);
+  const lifted = sea.pose.roll;
+  assert.ok(lifted < Math.PI * 0.75, 'well up on its side');
+  run(sea, 1, 0);
+  assert.ok(sea.effort < held - ROGUE.slump * 0.9 && sea.effort > 0);
+  assert.ok(sea.pose.roll > lifted, 'coming back down');
+  run(sea, 10, 0);
+  assert.equal(sea.effort, 0);
+  assert.ok(Math.abs(sea.pose.roll - Math.PI) < 0.02, 'keel up again');
+  assert.equal(sea.capsized, true);
+});
+
+test('past the tipping point it falls upright by itself, and can be capsized again', () => {
+  const sea = capsizedBoat();
+  run(sea, 3, 0);
+  let roll = Infinity;
+  for (let i = 0; i < Math.ceil(1 / ROGUE.heave); i++) assert.equal(sea.heave(), true);
+  assert.equal(sea.heave(), false, 'no more heaving once it is falling');
+  // Its roll only ever decreases from here, with no further presses.
+  const events = [];
+  for (let t = 0; t < ROGUE.rightSeconds + 0.1; t += DT) {
+    const event = sea.tick(DT, 0, true);
+    if (event) events.push(event);
+    if (sea.capsized) {
+      assert.ok(sea.pose.roll <= roll + 0.2, 'no jump back over');
+      roll = sea.pose.roll;
+    }
+  }
   assert.deepEqual(events, ['righted']);
   assert.equal(sea.capsized, false);
-  assert.equal(sea.roll, 0);
-  assert.equal(sea.boatX, 0, 'back where it was moored');
-  for (const part of Object.values(sea.pose)) assert.equal(Math.abs(part), 0);
   sea.x = -ROGUE.strike - 1;
   assert.equal(sea.tick(0.2, 1, true), 'capsize');
   sea.reset();
-  assert.deepEqual([sea.x, sea.capsized, sea.roll], [null, false, 0]);
+  assert.deepEqual([sea.x, sea.capsized, sea.roll, sea.effort], [null, false, 0, 0]);
 });
 
 test('the boat is righted from the surface beside it', () => {
