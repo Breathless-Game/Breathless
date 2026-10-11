@@ -18,7 +18,7 @@ function dice(seed = 7) {
 }
 const DT = 1 / 30;
 
-test('a faster heart means more worked-up sharks, and more of them', () => {
+test('a faster heart means more worked-up sharks, with population set by day and night', () => {
   assert.equal(sharkIntensity(SHARK.rest, SHARK.rest), 0);
   assert.equal(sharkIntensity(SHARK.rest + SHARK.calm, SHARK.rest), 0, 'a few beats above rest go unnoticed');
   assert.equal(sharkIntensity(SHARK.rest + SHARK.frenzy, SHARK.rest), 1);
@@ -33,7 +33,10 @@ test('a faster heart means more worked-up sharks, and more of them', () => {
   }
   // The same pulse is calmer for someone whose resting pulse is higher.
   assert.ok(sharkIntensity(95, 80) < sharkIntensity(95, 60));
-  assert.deepEqual([0, 0.44, 0.45, 0.79, 0.8, 1].map(sharkCount), [1, 1, 2, 2, 3, 3]);
+  assert.equal(sharkCount(false, () => 0), 1);
+  assert.equal(sharkCount(false, () => 0.999), 2);
+  assert.equal(sharkCount(true, () => 0), 2);
+  assert.equal(sharkCount(true, () => 0.999), 4);
 });
 
 test('a bite takes one fish at a calm pulse and up to three in a frenzy, never more than the net holds', () => {
@@ -59,7 +62,7 @@ test('without a sensor the pulse follows how hard the diver swims', () => {
   for (let t = 0; t < 6; t += DT) pulse.tick(DT, 0);
   assert.ok(pulse.bpm < sprint - 10 && pulse.bpm > SHARK.rest + 5, 'it calms down slower than it rose');
   for (let t = 0; t < 60; t += DT) pulse.tick(DT, 0.25);
-  assert.ok(sharkIntensity(pulse.bpm) < SHARK.second, 'drifting slowly keeps it to one shark');
+  assert.ok(sharkIntensity(pulse.bpm) < 0.3, 'drifting slowly keeps the sharks calm');
 });
 
 test('the resting pulse is learned at the surface only', () => {
@@ -133,35 +136,55 @@ test('a calm pulse is only noticed close up; a racing one from far off', () => {
   assert.equal(noticed(1, SHARK.sense + SHARK.senseGain + 2), false);
 });
 
-test('the pack comes at night, grows with the pulse, thins when it calms and leaves at dawn', () => {
+test('day/night population stays in its range, independently of pulse; dawn reduces it', () => {
   const pack = new SharkPack(dice(11));
   const prey = { x: 0, y: -25 };
   const events = [];
   const seen = [];
-  const run = (seconds, intensity, out) => {
+  const run = (seconds, intensity, out, night) => {
     for (let t = 0; t < seconds; t += DT) {
-      pack.tick(DT, prey, intensity, out, -62, events);
+      pack.tick(DT, prey, intensity, out, -62, events, night);
       seen.push(...events);
+      assert.ok(pack.sharks.length <= 4, 'at most four colliders, including departures');
     }
   };
-  run(30, 1, false);
-  assert.equal(pack.sharks.length, 0, 'none by day, or with the mode off');
-  run(8, 0, true);
-  assert.equal(pack.sharks.length, 1);
-  assert.equal(seen.filter((e) => e === 'arrive').length, 1, 'announced once');
-  const first = pack.sharks[0];
-  assert.ok(Math.abs(first.x) < SHARK.arrive[1] + 1, 'it arrives from out of sight');
-  run(40, 1, true);
-  assert.equal(pack.sharks.filter((s) => s.mode !== 'leave').length, 3);
+  const hunting = () => pack.sharks.filter(s => s.mode !== 'leave').length;
+  run(30, 1, false, false);
+  assert.equal(pack.sharks.length, 0, 'disabled by day');
+  run(30, 1, false, true);
+  assert.equal(pack.sharks.length, 0, 'disabled at night');
+  run(8, 0, true, false);
+  assert.ok(hunting() >= 1 && hunting() <= 2, 'one or two in the morning');
+  assert.equal(seen.filter(e => e === 'arrive').length, 1);
+  run(40, 1, true, false);
+  assert.ok(hunting() >= 1 && hunting() <= 2, 'pulse does not add sharks by day');
   assert.ok(seen.includes('charge') && seen.includes('bite'));
-  assert.equal(seen.filter((e) => e === 'arrive').length, 1);
-  run(4, 0, true);
-  assert.equal(pack.sharks.filter((s) => s.mode !== 'leave').length, 1, 'two lose interest');
-  run(40, 0, true);
-  assert.equal(pack.sharks.length, 1, 'and are gone');
-  run(40, 0, false);
-  assert.equal(pack.sharks.length, 0, 'dawn');
-  pack.tick(DT, prey, 1, true, -62, events);
+  run(15, 0, true, true);
+  assert.ok(hunting() >= 2 && hunting() <= 4, 'two to four at night, even with a calm pulse');
+  run(20, 1, true, true);
+  assert.ok(hunting() >= 2 && hunting() <= 4, 'never a fifth in a frenzy');
+  run(DT, 0, true, false);
+  assert.ok(hunting() >= 1 && hunting() <= 2, 'dawn returns to the day range');
+  run(40, 0, true, false);
+  assert.ok(pack.sharks.length >= 1 && pack.sharks.length <= 2);
+  run(40, 0, false, false);
+  assert.equal(pack.sharks.length, 0, 'the setting still dismisses every shark');
+  pack.tick(DT, prey, 1, true, -62, events, true);
   pack.reset();
   assert.equal(pack.sharks.length, 0);
+});
+
+test('rapid day/night and on/off changes never create an invisible fifth shark', () => {
+  const pack = new SharkPack(dice(19));
+  const prey = { x: 0, y: -25 };
+  const events = [];
+  for (let i = 0; i < 3000; i++) {
+    const night = Math.floor(i / 47) % 2 === 0;
+    const out = Math.floor(i / 53) % 2 === 0;
+    pack.tick(DT, prey, 1, out, -62, events, night);
+    assert.ok(pack.sharks.length <= 4);
+    const active = pack.sharks.filter(s => s.mode !== 'leave').length;
+    if (out) assert.ok(active <= (night ? 4 : 2));
+    else assert.equal(active, 0);
+  }
 });

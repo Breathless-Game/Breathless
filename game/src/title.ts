@@ -81,7 +81,7 @@ const SIDEWAYS_CHARS = 4; // names this long hang their fish level, on two lines
 const LEVEL_RATE = 0.006; // how fast a sideways fish's lines even out its tilt
 const MIN_LINE_SEG = 2;
 const ROPE_SLACK = 1.015; // rope length over its span: a shallow, fairly taut sag
-const ROPE_Y = 0.07; // anchor height, fraction of the screen
+const ROPE_Y = 0.045;// anchor height, fraction of the screen
 const LINE_SEGS = 5;
 const SWING_S = 1.15;
 const FIRST_DROP_S = 1.35;
@@ -167,6 +167,9 @@ export class TitleScreen {
     window.addEventListener('pointerup', (e) => this.onUp(e));
     window.addEventListener('resize', () => this.running && this.build(false));
   }
+
+  /** A modal (the Aquarium) is up over the scene: the pointer is not ours. */
+  blocked: () => boolean = () => false;
 
   get visible() {
     return this.running;
@@ -289,8 +292,11 @@ export class TitleScreen {
     this.acc = 0;
 
     const unit = Math.min(this.w, this.h);
+    // No longer than the gap to the nearest neighbour allows, so a full rope still fits the screen.
+    const ats = this.fish.map((f) => f.def.at).sort((a, b) => a - b);
+    const gap = Math.min(Infinity, ...ats.slice(1).map((a, i) => a - ats[i])) * span;
     this.fish.forEach((f, k) => {
-      f.len = f.sideways ? Math.max(150, Math.min(260, unit * 0.3)) : Math.max(70, Math.min(155, unit * 0.16));
+      f.len = f.sideways ? Math.max(150, Math.min(260, unit * 0.3, gap * 0.72)) : Math.max(70, Math.min(155, unit * 0.16));
       // Sideways fish are deep-bodied: hang them low enough that their fins clear the rope.
       f.lineLen = f.sideways ? Math.max(this.h * 0.12, f.len * 0.42) : this.h * (0.05 + 0.03 * ((k * 7) % 3));
       f.dropped = false;
@@ -538,6 +544,7 @@ export class TitleScreen {
   }
 
   private onDown(e: PointerEvent) {
+    if (this.blocked()) return;
     this.trackPointer(e);
     const { x, y } = this.at(e);
     const hit = this.fishAt(x, y);
@@ -555,6 +562,10 @@ export class TitleScreen {
 
   private onMove(e: PointerEvent) {
     if (!this.running) return;
+    if (this.blocked()) {
+      if (!this.held) this.hovered = null;
+      return;
+    }
     this.trackPointer(e);
     if (this.held) {
       e.preventDefault(); // carrying a fish: no table tips underneath
@@ -582,6 +593,10 @@ export class TitleScreen {
 
   private onUp(e: PointerEvent) {
     if (!this.running) return;
+    if (this.blocked() && !this.held) {
+      this.press = null;
+      return;
+    }
     this.trackPointer(e);
     if (this.held) {
       // Let go with the pointer's velocity, so fish can be thrown.

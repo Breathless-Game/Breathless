@@ -1,0 +1,378 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { HttpError, MAX_BATCH, MAX_BATCH_TXS, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
+import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
+
+// Server mode's batch sale, driven with a fake chain: one transaction moving several fish, the
+// same transaction replayed, fish that are not in it, the wrong seller, and concurrent duplicates.
+
+const SELLER = 'Se11er111111111111111111111111111111111111';
+const OTHER = 'Stranger11111111111111111111111111111111111';
+const MARKET = 'Market11111111111111111111111111111111111';
+const fish = (n) => `Fish${String(n).replace(/0/g, 'z')}`.padEnd(43, '1');
+const [A, B, C, D] = [1, 2, 3, 4].map(fish);
+const sig = (n) => String(n).repeat(88);
+const TX = sig(5);
+const TX_OTHER = sig(6);
+
+/**
+ * A confirmed transaction in umi's shape. `signers` sign it (the first pays); each move is a Core
+ * TransferV1 { asset, authority } to `to`, with the collection, authority (when omitted) and the
+ * optional accounts filled with Core's program id as umi does.
+ */
+function transferTx({ signers = [SELLER], moves, to = MARKET, err = null }) {
+  const accounts = [...signers, to, MPL_CORE_PROGRAM];
+  const at = (k) => {
+    if (!accounts.includes(k)) accounts.push(k);
+    return accounts.indexOf(k);
+  };
+  const core = at(MPL_CORE_PROGRAM);
+  const instructions = moves.map(({ asset, authority }) => ({
+    programIndex: core,
+    accountIndexes: [at(asset), core, 0, authority ? at(authority) : core, at(to), core, core],
+    data: Uint8Array.of(14, 0),
+  }));
+  return { message: { header: { numRequiredSignatures: signers.length }, accounts, instructions }, meta: { err, loadedAddresses: { writable: [], readonly: [] } } };
+}
+
+const attrs = (rarity, value) => [
+  { key: 'rarity', value: rarity },
+  { key: 'depth', value: '5' },
+  { key: 'value', value: String(value) },
+];
+
+/** A fake market: the chain (transactions, asset owners), the ledger and every payment made. */
+function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0 } = {}) {
+  const ledger = new SoldLedger();
+  const payments = [];
+  const burns = [];
+  let fetches = 0;
+  let paySeq = 0;
+  const desk = createSaleDesk({
+    ledger,
+    market: MARKET,
+    ensureMint: async () => 'PearlMint',
+    fetchTransfer: async (s) => {
+      fetches++;
+      return txs[s] ?? null;
+    },
+    loadMarketAsset: async (id) => (id in owners ? { owner: owners[id], attributes: { attributeList: attrs('common', values[id] ?? 1) } } : null),
+    resolvePending: async (id) => (ledger.get(id).payTx ? 'paid' : 'unpaid'),
+    pay: async (id, mint, seller, pearls) => {
+      ledger.payPending(id, `pay-${++paySeq}`, 100);
+      if (payDelayMs) await new Promise((r) => setTimeout(r, payDelayMs));
+      payments.push({ id, seller, pearls });
+      ledger.paid(id);
+    },
+    burnSold: async (id) => {
+      burns.push(id);
+      ledger.burned(id, `burn-${id}`);
+    },
+  });
+  return { desk, ledger, payments, burns, fetches: () => fetches };
+}
+
+const batch = (sales, seller = SELLER) => ({ seller, sales: sales.map(([assetId, transferTx = TX]) => ({ assetId, transferTx })) });
+const paidTo = (payments) => Object.fromEntries(payments.map((p) => [p.id, p.pearls]));
+
+test('one transaction moving three fish: each fish is paid once, at its own on-chain value', async () => {
+  const m = setup({
+    txs: { [TX]: transferTx({ moves: [{ asset: A }, { asset: B }, { asset: C }] }) },
+    owners: { [A]: MARKET, [B]: MARKET, [C]: MARKET },
+    values: { [A]: 1, [B]: 2, [C]: 3 },
+  });
+  const { results } = await m.desk.sellBatch(batch([[A], [B], [C]]));
+  assert.deepEqual(
+    results.map((r) => [r.assetId, r.pearls, r.extra[0]]),
+    [
+      [A, 1, TX],
+      [B, 2, TX],
+      [C, 3, TX],
+    ],
+  );
+  assert.deepEqual(paidTo(m.payments), { [A]: 1, [B]: 2, [C]: 3 });
+  assert.equal(m.payments.length, 3);
+  assert.ok(m.payments.every((p) => p.seller === SELLER));
+  assert.equal(new Set(results.map((r) => r.tx)).size, 3, 'a pay transaction per fish');
+  assert.deepEqual(m.burns.sort(), [A, B, C].sort());
+  assert.equal(m.fetches(), 1, 'the shared transfer is fetched once per batch');
+});
+
+test('a price in the request is ignored: the market pays the on-chain value', async () => {
+  const m = setup({ txs: { [TX]: transferTx({ moves: [{ asset: A }] }) }, owners: { [A]: MARKET }, values: { [A]: 2 } });
+  const body = batch([[A]]);
+  body.sales[0].pearls = 9999;
+  body.pearls = 9999;
+  const { results } = await m.desk.sellBatch(body);
+  assert.equal(results[0].pearls, 2);
+  assert.deepEqual(paidTo(m.payments), { [A]: 2 });
+});
+
+test('replaying the same transaction (batch or single /sell) returns the stored results and pays nothing more', async () => {
+  const m = setup({
+    txs: { [TX]: transferTx({ moves: [{ asset: A }, { asset: B }] }) },
+    owners: { [A]: MARKET, [B]: MARKET },
+  });
+  const first = await m.desk.sellBatch(batch([[A], [B]]));
+  const again = await m.desk.sellBatch(batch([[A], [B]]));
+  assert.deepEqual(again, first);
+  const single = await m.desk.sell({ assetId: B, seller: SELLER, transferTx: TX });
+  assert.deepEqual({ assetId: B, ...single }, first.results[1]);
+  assert.equal(m.payments.length, 2);
+});
+
+test('a fish that is not in the named transaction is refused, and the rest of the batch still sells', async () => {
+  const m = setup({
+    txs: { [TX]: transferTx({ moves: [{ asset: A }, { asset: B }] }) },
+    // D is even owned by the market (sold in some other transaction), but TX did not move it.
+    owners: { [A]: MARKET, [B]: MARKET, [D]: MARKET },
+  });
+  const { results } = await m.desk.sellBatch(batch([[A], [D], [B]]));
+  assert.equal(results[0].pearls, 1);
+  assert.equal(results[1].status, 400);
+  assert.match(results[1].error, /not a transfer of this asset/);
+  assert.equal(results[2].pearls, 1);
+  assert.deepEqual(Object.keys(paidTo(m.payments)).sort(), [A, B].sort());
+  assert.equal(m.ledger.get(D), null, 'nothing is recorded for the refused fish');
+});
+
+test('a transfer to someone else, a failed transfer, or a missing one never pays', async () => {
+  const m = setup({
+    txs: {
+      [TX]: transferTx({ moves: [{ asset: A }], to: OTHER }),
+      [TX_OTHER]: transferTx({ moves: [{ asset: B }], err: { InstructionError: [0, 'x'] } }),
+    },
+    owners: { [A]: MARKET, [B]: MARKET, [C]: MARKET },
+  });
+  const { results } = await m.desk.sellBatch(batch([[A, TX], [B, TX_OTHER]]));
+  assert.match(results[0].error, /not a transfer of this asset/);
+  assert.match(results[1].error, /failed on-chain/);
+  const missing = await m.desk.sellBatch(batch([[C, sig(7)]]));
+  assert.match(missing.results[0].error, /not found/);
+  assert.equal(m.payments.length, 0);
+});
+
+test('the wrong seller: someone who did not sign, or a co-signer who did not own the fish, is refused', async () => {
+  const m = setup({
+    txs: {
+      [TX]: transferTx({ moves: [{ asset: A }, { asset: B }] }),
+      // OTHER paid the fee and signed, but SELLER was the authority that let C go.
+      [TX_OTHER]: transferTx({ signers: [OTHER, SELLER], moves: [{ asset: C, authority: SELLER }] }),
+    },
+    owners: { [A]: MARKET, [B]: MARKET, [C]: MARKET },
+  });
+  const stranger = await m.desk.sellBatch(batch([[A], [B]], OTHER));
+  assert.ok(stranger.results.every((r) => r.status === 400 && /not signed by the seller/.test(r.error)));
+  const coSigner = await m.desk.sellBatch(batch([[C, TX_OTHER]], OTHER));
+  assert.equal(coSigner.results[0].status, 400);
+  assert.match(coSigner.results[0].error, /seller did not transfer this fish/);
+  assert.equal(m.payments.length, 0);
+  // The real owner can still sell all three.
+  const owner = await m.desk.sellBatch(batch([[A], [B], [C, TX_OTHER]]));
+  assert.ok(owner.results.every((r) => r.pearls === 1));
+  // And once sold, another wallet is told so.
+  const late = await m.desk.sellBatch(batch([[A]], OTHER));
+  assert.equal(late.results[0].status, 409);
+  assert.equal(m.payments.length, 3);
+});
+
+test('the market must own the fish now, even when the transaction moved it', async () => {
+  const m = setup({ txs: { [TX]: transferTx({ moves: [{ asset: A }] }) }, owners: { [A]: SELLER } });
+  const { results } = await m.desk.sellBatch(batch([[A]]));
+  assert.match(results[0].error, /does not own this fish/);
+  assert.equal(m.payments.length, 0);
+});
+
+test('concurrent duplicate requests (batches and singles, overlapping) pay every fish exactly once', async () => {
+  const m = setup({
+    txs: { [TX]: transferTx({ moves: [{ asset: A }, { asset: B }, { asset: C }] }) },
+    owners: { [A]: MARKET, [B]: MARKET, [C]: MARKET },
+    values: { [A]: 1, [B]: 2, [C]: 3 },
+    payDelayMs: 15,
+  });
+  const runs = await Promise.all([
+    m.desk.sellBatch(batch([[A], [B], [C]])),
+    m.desk.sellBatch(batch([[C], [B], [A]])),
+    m.desk.sellBatch(batch([[B], [C]])),
+    m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX }).then((r) => ({ results: [{ assetId: A, ...r }] })),
+    m.desk.sell({ assetId: C, seller: SELLER, transferTx: TX }).then((r) => ({ results: [{ assetId: C, ...r }] })),
+  ]);
+  assert.equal(m.payments.length, 3);
+  assert.deepEqual(paidTo(m.payments), { [A]: 1, [B]: 2, [C]: 3 });
+  // Every request saw the same, successful result for each fish.
+  const byFish = new Map();
+  for (const { results } of runs) {
+    for (const r of results) {
+      assert.equal(r.error, undefined, `${r.assetId}: ${r.error}`);
+      if (byFish.has(r.assetId)) assert.deepEqual(r, byFish.get(r.assetId));
+      else byFish.set(r.assetId, r);
+    }
+  }
+  assert.equal(byFish.size, 3);
+});
+
+test('a payment that fails for one fish leaves the others paid, and a retry pays only that fish', async () => {
+  const m = setup({
+    txs: { [TX]: transferTx({ moves: [{ asset: A }, { asset: B }] }) },
+    owners: { [A]: MARKET, [B]: MARKET },
+  });
+  let failB = true;
+  // Swap in a pay that drops B's first payment (rejected in preflight).
+  const ledger = m.ledger;
+  const payments = [];
+  const desk = createSaleDesk({
+    ledger,
+    market: MARKET,
+    ensureMint: async () => 'PearlMint',
+    fetchTransfer: async () => transferTx({ moves: [{ asset: A }, { asset: B }] }),
+    loadMarketAsset: async () => ({ owner: MARKET, attributes: { attributeList: attrs('common', 1) } }),
+    resolvePending: async (id) => (ledger.get(id).payTx ? 'paid' : 'unpaid'),
+    pay: async (id, mint, seller, pearls) => {
+      if (id === B && failB) {
+        failB = false;
+        throw new Error('blockhash not found');
+      }
+      ledger.payPending(id, `pay-${id}`, 1);
+      payments.push(id);
+      ledger.paid(id);
+    },
+    burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+  });
+  const first = await desk.sellBatch(batch([[A], [B]]));
+  assert.equal(first.results[0].pearls, 1);
+  assert.equal(first.results[1].status, 500);
+  assert.equal(ledger.plan(B, SELLER), 'resume');
+  const second = await desk.sellBatch(batch([[A], [B]]));
+  assert.ok(second.results.every((r) => r.pearls === 1));
+  assert.deepEqual(payments, [A, B]);
+});
+
+test('batch bodies: non-empty, at most MAX_BATCH, no fish twice, well-formed ids and signatures', () => {
+  assert.deepEqual(parseSellBatchBody(batch([[A], [B]])), batch([[A], [B]]));
+  assert.throws(() => parseSellBatchBody(null), /JSON object/);
+  assert.throws(() => parseSellBatchBody({ seller: SELLER, sales: [] }), /non-empty/);
+  assert.throws(() => parseSellBatchBody(batch([[A], [A]])), /twice/);
+  assert.throws(() => parseSellBatchBody(batch([[A, 'abc']])), /transferTx/);
+  assert.throws(() => parseSellBatchBody(batch([['not base58 0OIl']])), /assetId/);
+  assert.throws(() => parseSellBatchBody({ ...batch([[A]]), seller: 7 }), /seller/);
+  const many = Array.from({ length: MAX_BATCH + 1 }, (_, i) => [fish(i + 10)]);
+  assert.throws(() => parseSellBatchBody(batch(many)), /At most/);
+  assert.equal(parseSellBatchBody(batch(many.slice(0, MAX_BATCH))).sales.length, MAX_BATCH);
+  assert.deepEqual(parseQuoteBatchBody({ seller: SELLER, assetIds: [A, B] }), { seller: SELLER, assetIds: [A, B] });
+  assert.throws(() => parseQuoteBatchBody({ seller: SELLER, assetIds: [A, A] }), /twice/);
+  assert.throws(() => parseQuoteBatchBody({ seller: SELLER, assetIds: 'A' }), /non-empty array/);
+});
+
+test('quoteMany answers per fish and keeps the order', async () => {
+  const quote = async ({ assetId }) => {
+    if (assetId === B) throw new HttpError(410, 'gone');
+    return { pearls: assetId === A ? 1 : 3 };
+  };
+  const { quotes } = await quoteMany({ seller: SELLER, assetIds: [A, B, C] }, quote);
+  assert.deepEqual(quotes, [
+    { assetId: A, pearls: 1 },
+    { assetId: B, status: 410, error: 'gone' },
+    { assetId: C, pearls: 3 },
+  ]);
+});
+
+test('withLock runs same-key calls one after another, other keys in parallel, and survives a failure', async () => {
+  const locks = new Map();
+  const log = [];
+  const job = (key, name, ms, fail = false) =>
+    withLock(locks, key, async () => {
+      log.push(`start ${name}`);
+      await new Promise((r) => setTimeout(r, ms));
+      log.push(`end ${name}`);
+      if (fail) throw new Error(name);
+      return name;
+    });
+  const results = await Promise.allSettled([job('a', 'a1', 20, true), job('a', 'a2', 5), job('b', 'b1', 5)]);
+  assert.deepEqual(
+    results.map((r) => r.status),
+    ['rejected', 'fulfilled', 'fulfilled'],
+  );
+  assert.ok(log.indexOf('end a1') < log.indexOf('start a2'), 'a2 waits for a1');
+  assert.ok(log.indexOf('start b1') < log.indexOf('end a1'), 'b1 does not wait for a1');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(locks.size, 0);
+});
+
+test('rate limiter: a batch can cost more than one hit', () => {
+  const rl = new RateLimiter({ limit: 5, windowMs: 1000 });
+  assert.equal(rl.allow('a', 0), true);
+  assert.equal(rl.allow('a', 1, 4), true);
+  assert.equal(rl.allow('a', 2), false);
+});
+
+// ---- RPC amplification: a batch names at most MAX_BATCH_TXS transfers, each fetched (polled) once.
+
+/**
+ * A desk whose fetchTransfer is the real poll() over a fake getTransaction that counts its calls:
+ * a known transfer is "not found" for its first `lagPolls` calls (still confirming), an unknown one forever.
+ */
+function pollingSetup({ txs = {}, owners = {}, lagPolls = 0 } = {}) {
+  const ledger = new SoldLedger();
+  const rpcCalls = new Map();
+  const getTransaction = async (s) => {
+    const n = (rpcCalls.get(s) ?? 0) + 1;
+    rpcCalls.set(s, n);
+    return s in txs && n > lagPolls ? txs[s] : null;
+  };
+  const payments = [];
+  const desk = createSaleDesk({
+    ledger,
+    market: MARKET,
+    ensureMint: async () => 'PearlMint',
+    fetchTransfer: (s) => poll(() => getTransaction(s), (t) => t !== null, 6, 0),
+    loadMarketAsset: async (id) => (id in owners ? { owner: owners[id], attributes: { attributeList: attrs('common', 1) } } : null),
+    resolvePending: async (id) => (ledger.get(id).payTx ? 'paid' : 'unpaid'),
+    pay: async (id) => {
+      ledger.payPending(id, `pay-${id}`, 100);
+      payments.push(id);
+      ledger.paid(id);
+    },
+    burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+  });
+  const total = () => [...rpcCalls.values()].reduce((a, b) => a + b, 0);
+  return { desk, payments, rpcCalls, total };
+}
+
+const twentyFour = Array.from({ length: MAX_BATCH }, (_, i) => fish(i + 10));
+const fakeSig = (i) => String(i + 1).replace(/0/g, 'z').padStart(88, '9');
+
+test('sell-batch: 3 distinct transferTx in one request is a 400, before any RPC', async () => {
+  const m = pollingSetup();
+  const body = batch([[A, TX], [B, TX_OTHER], [C, sig(7)]]);
+  const is400 = (e) => e instanceof HttpError && e.status === 400 && /At most 2 different transferTx/.test(e.message);
+  assert.equal(MAX_BATCH_TXS, 2);
+  assert.throws(() => parseSellBatchBody(body), is400);
+  await assert.rejects(m.desk.sellBatch(body), is400);
+  // The reviewer's case: 24 fish over 24 made-up signatures (was ~144 RPCs) is refused the same way.
+  await assert.rejects(m.desk.sellBatch(batch(twentyFour.map((id, i) => [id, fakeSig(i)]))), is400);
+  assert.equal(m.total(), 0, 'no transfer was looked up');
+});
+
+test('sell-batch: 24 fish over 2 transfers sell, and each transfer is polled once for the whole batch', async () => {
+  const [first, second] = [twentyFour.slice(0, 20), twentyFour.slice(20)]; // the client packs 20 fish per transfer
+  const m = pollingSetup({
+    txs: {
+      [TX]: transferTx({ moves: first.map((asset) => ({ asset })) }),
+      [TX_OTHER]: transferTx({ moves: second.map((asset) => ({ asset })) }),
+    },
+    owners: Object.fromEntries(twentyFour.map((id) => [id, MARKET])),
+    lagPolls: 2, // each transfer is "not found" twice before it shows up
+  });
+  const { results } = await m.desk.sellBatch(batch(twentyFour.map((id, i) => [id, i < 20 ? TX : TX_OTHER])));
+  assert.ok(results.every((r) => r.pearls === 1), JSON.stringify(results.find((r) => r.error)));
+  assert.equal(m.payments.length, MAX_BATCH);
+  assert.deepEqual(Object.fromEntries(m.rpcCalls), { [TX]: 3, [TX_OTHER]: 3 }, 'one poll sequence per transfer, not per fish');
+});
+
+test('sell-batch: 24 fish naming 2 made-up transfers cost 2 poll sequences (12 RPCs), not 24', async () => {
+  const m = pollingSetup();
+  const { results } = await m.desk.sellBatch(batch(twentyFour.map((id, i) => [id, i % 2 ? TX : TX_OTHER])));
+  assert.ok(results.every((r) => r.status === 400 && /not found/.test(r.error)));
+  assert.equal(m.total(), 12);
+  assert.equal(m.payments.length, 0);
+});

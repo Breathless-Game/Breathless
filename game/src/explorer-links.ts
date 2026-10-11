@@ -4,3 +4,7 @@
 /** Helius Orb: the wallet's NFTs on devnet. The owner wallet holds the fish, not the session key. */
 export const orbNfts = (address: string) =>
   `https://orbmarkets.io/address/${encodeURIComponent(address)}/portfolio?cluster=devnet&tab=nfts`;
+
+/** Metaplex Core explorer: one minted fish (its asset address) on devnet. */
+export const coreAsset = (assetId: string) =>
+  `https://core.metaplex.com/explorer/${encodeURIComponent(assetId)}?env=devnet`;

@@ -1,7 +1,7 @@
 import * as T from 'three';
 import { storageKey } from './wallet';
 import './ships.css';
-const SHIP_INTROS_EN = [
+export const SHIP_INTROS_EN = [
   'A red-hulled starter with a blue roof, basic fishing gear and safety equipment for your first voyage.',
   'A light, open fishing boat. Bring your gear and begin exploring with your first deep breath.',
   'A canopy and twin-rod setup support longer fishing trips and coastal collecting.',
@@ -33,6 +33,18 @@ export class Shipyard {
   private waterFrame = 0;
   get open() { return !this.root.hidden; }
   get bonus() { return SHIPS[this.index]; }
+  /** The ship sailed now, and a fresh copy of its model (null until the models load), e.g. for the workbench. */
+  get shipIndex() { return this.index; }
+  shipModel(): T.Object3D | null { return this.models[this.index]?.clone() ?? null; }
+  /** A fresh copy of any ship's model (null until the models load), e.g. for the workbench's inspector. */
+  modelAt(i: number): T.Object3D | null { return this.models[i]?.clone() ?? null; }
+  /** Sail ship i if its banked-value threshold is reached: saved, put on the boat, bonus applied. */
+  equip(i: number): boolean {
+    if (!SHIPS[i] || this.progress() < SHIPS[i].threshold || !this.models.length) return false;
+    this.index = this.selected = i; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {}
+    this.apply(); this.onEquip();
+    return true;
+  }
   constructor(private boat: T.Group, private progress: () => number, private onToggle: (open: boolean) => void, private onEquip: () => void, private gameScene: T.Scene, private applyColorGrade: (root: T.Object3D) => void) {
     this.root.className = 'shipyard'; this.root.hidden = true;
     this.root.setAttribute('role', 'dialog'); this.root.setAttribute('aria-modal', 'true'); this.root.setAttribute('aria-label', '船只升级 Shipyard');
@@ -42,10 +54,7 @@ export class Shipyard {
       if (!button) return;
       if (button.dataset.close !== undefined) this.close();
       if (button.dataset.ship !== undefined) { this.selected = Number(button.dataset.ship); this.draw(); this.root.querySelector<HTMLButtonElement>(`[data-ship="${this.selected}"]`)?.focus(); }
-      if (button.dataset.equip !== undefined && this.progress() >= SHIPS[this.selected].threshold) {
-        this.index = this.selected; try { localStorage.setItem(storageKey('ship-v2'), String(this.index)); } catch {}
-        this.apply(); this.onEquip(); this.draw();
-      }
+      if (button.dataset.equip !== undefined && this.equip(this.selected)) this.draw();
     });
     this.root.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); this.close(); return; }
@@ -70,7 +79,7 @@ export class Shipyard {
         model.scale.multiplyScalar((6 + level * .8) / length);
         this.applyColorGrade(model);
       });
-      this.makeThumbnails(); this.reload();
+      this.makeThumbnails(); this.reload(); this.onEquip(); // the loaded ship's bonus and model are live now
     } catch { this.closed = true; if (this.open) this.draw(); }
   }
   reload() {
@@ -82,9 +91,14 @@ export class Shipyard {
     this.index = Number.isInteger(saved) && saved >= 0 && saved < SHIPS.length && this.progress() >= SHIPS[saved].threshold ? saved : 0;
     this.selected = this.index; this.apply(); if (this.open) this.draw();
   }
+  private shown: T.Object3D | null = null;
   private apply() {
     if (!this.models.length) return;
-    this.boat.clear(); const model = this.models[this.index].clone();
+    // Swap only the ship model: the boat also carries the diver's bow seat and its lights.
+    if (this.shown) this.boat.remove(this.shown);
+    else this.boat.children.filter((c) => c instanceof T.Mesh || (c instanceof T.Group && !c.userData.keep)).forEach((c) => this.boat.remove(c));
+    const model = this.models[this.index].clone();
+    this.shown = model;
     const bounds = new T.Box3().setFromObject(model); const centre = bounds.getCenter(new T.Vector3());
     // Preserve actual progression in vessel sizes and the world's wave animation.
     model.position.x -= centre.x; model.position.z -= centre.z;

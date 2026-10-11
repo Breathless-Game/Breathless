@@ -72,7 +72,7 @@
           </section>
         </div>
 
-        <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> menu</div>
+        <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>B</b> field guide · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> boat &amp; table</div>
 
         <section id="bank" class="panel">
           <div class="small muted">BANKED</div>
@@ -115,6 +115,10 @@
           <button id="aq-prev" class="mini" title="Previous tank (←)">‹</button>
           <div id="aq-tabs"></div>
           <button id="aq-next" class="mini" title="Next tank (→)">›</button>
+          <label class="aq-light-control" title="Aquarium ambience / 鱼缸氛围灯">
+            <span class="small">灯光</span>
+            <input id="aq-light" type="color" value="#42e8d2" aria-label="Aquarium ambience light color" />
+          </label>
           <button id="aq-close" class="mini" title="Back to the title (Esc)">×</button>
         </div>
         <div class="aq-tank">
@@ -127,7 +131,7 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Click gear for a closer look · drag it to the tray · click the hidden green station to synthesize · click the map to dive · Esc back</div>
+      <div id="wb-hint" class="small">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the hidden green station to synthesize · click the map to dive · Esc back</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
@@ -145,18 +149,18 @@
           <div id="wb-place-title"></div>
           <div id="wb-place-sub" class="small"></div>
           <p id="wb-place-text"></p>
-          <div id="wb-place-gear" class="small muted"></div>
-          <section id="wb-sonar-config" aria-label="Deep sonar settings">
-            <div class="wb-sonar-heading">
-              <span>深潜声纳 · DEEP SONAR</span>
-              <span id="wb-sonar-length" class="small muted">10 m cable</span>
+          <section id="wb-place-conditions" class="wb-weather-card" aria-label="Entry conditions">
+            <div class="wb-weather-title">FIELD NOTES · 入场记录</div>
+            <div class="wb-weather-grid">
+              <span>Entry time · 进入时间</span><b id="wb-entry-time">--:--</b>
+              <span>Surface temp · 水温</span><b id="wb-entry-temp">--°C</b>
+              <span>Weather · 天气</span><b id="wb-entry-weather">—</b>
+              <span>Wind · 风</span><b id="wb-entry-wind">—</b>
+              <span>Rain · 雨</span><b id="wb-entry-rain">—</b>
             </div>
-            <label class="wb-sonar-color">
-              <span class="small">Beacon color · 信标颜色</span>
-              <input id="wb-sonar-color" type="color" value="#42e8d2" aria-label="Deep sonar beacon color" />
-            </label>
-            <p class="wb-sonar-note">Set before diving · weak light + quick guidance</p>
+            <div class="wb-weather-note">Configure beacon on Sonar · 在声纳装备上设置信标</div>
           </section>
+          <div id="wb-place-gear" class="small muted"></div>
           <button id="wb-dive" class="primary">Dive · 下潜</button>
         </aside>
         <div id="wb-chart-hint" class="small wb-ctl">Click outside the chart or press Esc to fold it</div>
@@ -183,6 +187,10 @@
           <div id="wb-inspect-level" class="small"></div>
           <p id="wb-inspect-effect"></p>
           <ul id="wb-inspect-levels" class="small"></ul>
+          <label id="wb-inspect-sonar-color" class="wb-inspect-sonar-color hidden">
+            <span>Beacon color · 信标颜色</span>
+            <input id="wb-inspect-sonar-input" type="color" value="#42e8d2" aria-label="Deep sonar beacon color" />
+          </label>
           <button id="wb-inspect-ready"></button>
         </aside>
         <div id="wb-inspect-stage">
@@ -195,11 +203,17 @@
           </div>
         </div>
         <aside id="wb-inspect-up" class="card">
-          <div class="small muted">UPGRADE · 升级</div>
+          <div id="wb-inspect-up-kind" class="small muted">UPGRADE · 升级</div>
           <h3 id="wb-inspect-up-title"></h3>
           <p id="wb-inspect-up-effect"></p>
           <div id="wb-inspect-up-price"></div>
           <button id="wb-inspect-buy" disabled></button>
+          <div id="wb-inspect-pearls" class="small muted"></div>
+          <!-- From Lv2 each piece runs one of two branches (equipment.ts EQUIPMENT_PATHS); switching is free. -->
+          <div id="wb-inspect-paths" class="hidden">
+            <div class="small muted">BRANCH · 分支</div>
+            <div id="wb-inspect-path-list"></div>
+          </div>
         </aside>
         <div id="wb-inspect-hint" class="small">← → or swipe to switch levels · Esc or click outside to put it down</div>
         <button id="wb-inspect-close" class="mini" title="Put it down (Esc)">×</button>
@@ -262,17 +276,17 @@
 
     <div id="shark-ask" class="hidden">
       <div class="card">
-        <h2>Sharks hunt here at night</h2>
-        <p>They home in on your heartbeat. The faster it beats, the more of them come, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
+        <h2>One shark by day. Two at night.</h2>
+        <p>They home in on your heartbeat. The faster it beats, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
         <ul>
-          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of twice and keeps the best.</li>
+          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of the usual one by day or two at night and keeps the best.</li>
           <li><b>No heart-rate reading.</b> Dives with sharks in the water are left out of the heart-rate figures in your health report: a chase is not a resting measurement. Breath-hold times still count.</li>
         </ul>
         <div class="menu-buttons">
           <button id="shark-yes" class="primary">Dive with sharks</button>
           <button id="shark-no">No sharks</button>
         </div>
-        <p class="small muted">Change it any time: Esc → Settings → Sharks at night.</p>
+        <p class="small muted">Change it any time: Esc → Settings → Sharks.</p>
       </div>
     </div>
 
@@ -325,7 +339,7 @@
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
           <label class="setting">
-            <span>Sharks at night (Open Ocean)</span>
+            <span>Sharks (Open Ocean)</span>
             <select id="set-sharks">
               <option value="ask">Ask before a dive</option>
               <option value="on">On</option>
@@ -357,14 +371,25 @@
 
     <div id="collection" class="hidden">
       <div class="collection-head">
-        <div>
+        <div class="collection-title">
           <h2>Collection</h2>
-          <div id="wallet" class="small"></div>
-          <div id="market-bar" class="small"></div>
+          <span id="collection-count" class="collection-count"></span>
         </div>
-        <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
-        <button id="collection-close">Close (C)</button>
+        <button id="collection-close" class="mini collection-close" title="Close (C)">Close <kbd>C</kbd></button>
       </div>
+      <!-- The two devnet wallets: the player's (owns the fish, signs sales) and the game's (pays mint fees). -->
+      <div class="wallet-cards">
+        <section class="wallet-card">
+          <div class="wallet-card-label">Your wallet</div>
+          <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
+        </section>
+        <section class="wallet-card">
+          <div class="wallet-card-label">Game wallet · pays mint fees</div>
+          <div id="wallet" class="small"></div>
+        </section>
+      </div>
+      <div id="collection-notice" role="status"></div>
+      <div id="market-bar" class="small"></div>
       <div id="collection-grid"></div>
     </div>
 

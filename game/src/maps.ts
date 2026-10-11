@@ -15,6 +15,8 @@ export interface MapDef {
   name: string;
   nameZh: string;
   place: string;
+  /** Typical surface temperature in °C at midday; the workbench briefing adds weather variation. */
+  surfaceTempC: number;
   difficulty: 'Casual' | 'Normal' | 'Hard';
   /** How many depth zones the shelf spans, counted down from the surface. */
   zoneCount: 1 | 2 | 3;
@@ -37,7 +39,7 @@ export interface MapDef {
    * only bring wind and rain). Above 0, rogue waves can capsize the boat (see storm.ts).
    */
   stormSwell: number;
-  /** Sharks hunt here at night, if the player has opted in (see shark.ts). */
+  /** One to two sharks hunt here by day, two to four at night, if opted in (see shark.ts). */
   sharks: boolean;
   /** Water colour by depth in metres. */
   water: readonly (readonly [number, string])[];
@@ -55,6 +57,7 @@ export const MAPS: Record<MapId, MapDef> = {
     name: 'Fjord',
     nameZh: '峡湾',
     place: 'Norway / Iceland',
+    surfaceTempC: 7,
     difficulty: 'Casual',
     zoneCount: 1,
     zoneLabels: ['Shallows'],
@@ -85,6 +88,7 @@ export const MAPS: Record<MapId, MapDef> = {
     name: 'Heaven Lake',
     nameZh: '天池',
     place: 'Zhangjiajie / Changbai',
+    surfaceTempC: 14,
     difficulty: 'Normal',
     zoneCount: 2,
     zoneLabels: ['Shallows', 'Sunken Forest'],
@@ -115,6 +119,7 @@ export const MAPS: Record<MapId, MapDef> = {
     name: 'Open Ocean',
     nameZh: '汪洋',
     place: 'The deep sea',
+    surfaceTempC: 22,
     difficulty: 'Hard',
     zoneCount: 3,
     zoneLabels: ['Shallows', 'Reef', 'Abyss'],

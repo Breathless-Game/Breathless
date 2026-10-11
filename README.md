@@ -61,7 +61,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
 | Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
-| Sharks | None | None | At night, if you opt in: they hunt by your heart rate, and fish are rarer |
+| Sharks | None | None | One or two by day, two to four at night if you opt in; hunt by your heart rate; rarer fish |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
 - **The trench**: on every map the seabed is a shelf, and under the boat a trench drops away with no bottom. There is no depth limit on any map; the deeper you go, the rarer the fish and the higher their catch value (section 7). The zones a map does not open on its shelf (e.g. below 18 m on the Fjord) are only reachable down the trench.
@@ -198,6 +198,8 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `F` | Mash it to heave a capsized boat upright, from the surface beside it (Open Ocean storms) |
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
+
+`B` opens and closes the illustrated field guide and first-dive tutorial. The six notebook chapters cover workbench assembly, loadout, diving, catching, surfacing and deep sonar. The first visit offers an optional step-by-step tour; its choice and completed lessons are saved locally. Opening the book pauses the dive, and `Esc` or `B` closes it.
 
 **Main menu**: when it opens, a rope (both ends off-screen) swings out from the left and hooks onto the right, then a few fish drop from above and hang from the rope on fishing lines. The button names are printed on the fish's bodies. A fish with a long name (4+ characters) hangs level on two lines, at the head and the tail, and the two lines even out like a pulley so the name stays level even where the rope slopes. Clicking the golden **START** fish (or pressing Enter) pans the camera down to the workbench (the rope and its fish ride up to the top of the screen and stay live); the purple **SETTINGS** fish opens settings. You can drag and fling the fish and the rope with the mouse, and they are pushed aside when the pointer sweeps past them. The entrance animation is skipped when the system has "reduce motion" turned on.
 
@@ -399,7 +401,7 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
         ├── water.ts        GPU waves, facet color and the faceted road of sun / moon glitter
         ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
-        ├── shark.ts        sharks on Open Ocean nights: how the pulse sets their number, senses, speed and bite; their swimming (pure rules)
+        ├── shark.ts        sharks on Open Ocean: day/night population; pulse sets senses, speed and bite; their swimming (pure rules)
         ├── shark-fx.ts     the low-poly shark model and how it turns, leans and sweeps its tail
         ├── storm.ts        rough seas: when rogue waves form, the wave's shape, the capsize and how the boat lies, what is lost (pure rules)
         ├── storm-fx.ts     what a rogue wave looks like: foam on the crest, spray, the burst on impact, cargo and fish overboard
@@ -670,24 +672,24 @@ Plants sway in the vertex shader. A slow wave of current crosses the bed, so nei
 
 - `npm --prefix game test` checks that every rock rests on sand or rock, plants root on the drawn sand clear of the trench, any quality prefix is spread over the shelf, faces are single-colored, roots never move and stems never stretch.
 
-### Sharks (Open Ocean nights)
+### Sharks (Open Ocean)
 
-The first time a dive starts on the Open Ocean the game asks whether you want sharks, and says what it costs and what it pays. The answer is saved; Esc → Settings → "Sharks at night" changes it (On / Off / Ask before a dive).
+The first time a dive starts on the Open Ocean the game asks whether you want sharks, and says what it costs and what it pays. The answer is saved; Esc → Settings → "Sharks" changes it (On / Off / Ask before a dive).
 
-With sharks on, they come out at night during a dive and hunt by your heartbeat:
+With sharks on, one or two hunt during daytime dives (morning and afternoon), and two to four at night. The group size is picked once for each day/night period, independently of your pulse; hunting intensity does:
 
-| Your pulse above rest | Sharks | Notice you from | Charge at | A bite takes |
-| --- | --- | --- | --- | --- |
-| Up to 4 bpm | 1 | 9 m | 4.6 m/s | 1 fish |
-| About 23 bpm | 2 | 20 m | 7.3 m/s | 2 fish |
-| 42 bpm or more | 3 | 31 m | 10 m/s | 3 fish |
+| Your pulse above rest | Notice you from | Charge at | A bite takes |
+| --- | --- | --- | --- |
+| Up to 4 bpm | 9 m | 4.6 m/s | 1 fish |
+| About 23 bpm | 20 m | 7.3 m/s | 2 fish |
+| 42 bpm or more | 31 m | 10 m/s | 3 fish |
 
-Everything in between scales smoothly; the second shark joins at 45% and the third at 80% of the way. The diver swims about 7.5 m/s, so a calm diver can outswim a charge and a frightened one cannot. A charge that has not caught you in 6 s is broken off and the shark keeps away for about 5 s (2 s in a frenzy); after a bite it keeps away for 9 s (4 s). Sharks do not follow you within 3.5 m of the surface. A bite tears fish out of the net (never banked fish) and knocks you aside; with an empty net it only rams you. Sharks flush from cold blue to dull red and grow a little as your pulse rises. At dawn, or when your pulse calms, they swim off.
+Hunting intensity scales smoothly between these values. The diver swims about 7.5 m/s, so a calm diver can outswim a charge and a frightened one cannot. A charge that has not caught you in 6 s is broken off and the shark keeps away for about 5 s (2 s in a frenzy); after a bite it keeps away for 9 s (4 s). Sharks do not follow you within 3.5 m of the surface. A bite tears fish out of the net (never banked fish) and knocks you aside; with an empty net it only rams you. Their faceted skin responds to sunlight, moonlight and the diver’s headlamp, with moving caustics that fade at depth and at night. Each charging shark gradually warms its eyes, exposes its teeth and jaw, and sweeps its tail harder; nearby sharks keep their own state. At dawn the group returns to the daytime range. Climbing aboard immediately clears the sharks, so the boat is a safe zone. Disabling sharks dismisses them all.
 
 - **The pulse** is Presage's heart rate, compared with your own resting pulse, learned while you float at the surface. In keyboard mode there is no sensor, so the game estimates a pulse from how hard you swim (shown as `♥ ~80`): drifting slowly past a shark keeps it low.
-- **What it pays**: while sharks are out, every newly spawned fish rolls its rarity three times instead of the night's two and keeps the best.
+- **What it pays**: while sharks are out, every newly spawned fish rolls its rarity three times instead of the usual one by day or two at night and keeps the best.
 - **What it costs**: those dives are left out of the heart-rate figures in the health report (section 9).
-- `npm --prefix game test` covers the pulse scale, pack size, bites, the chase a calm diver wins and a frightened one loses, the safe surface and the pack leaving at dawn.
+- `npm --prefix game test` covers the pulse scale, pack size, bites, the chase a calm diver wins and a frightened one loses, the safe surface and day/night transitions, rapid setting changes and departure when disabled.
 - In the console, `sharkPack.sharks` lists them.
 
 ### Rough seas (Open Ocean)
@@ -706,6 +708,8 @@ To right it, surface within 9 m of the boat (where the wave left it). A large `F
 - In the console, `world.setWeather('storm')` on the Open Ocean brings the waves; `stormSea.x = -40` puts one four seconds from the boat.
 
 ### Weather
+
+On clear Fjord nights, the aurora has fine drifting rays, a soft green lower edge and a fading violet crown. Its folds and light are animated on the GPU without per-frame geometry uploads or extra draw calls. Clouds dim it, and the Lighting effects switch hides both the aurora and its water reflection. Preview an aurora surge in `events-lab.html` with the `aurora` button.
 
 Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Storm, and saves the choice. Natural weather starts clear and cycles through clear → cloudy → rain → storm → rain → cloudy → clear every 9 minutes. Manual changes and returns to natural weather blend over about 5 seconds. The HUD shows the current weather. This is an in-game cycle, with no real-world location or weather service.
 

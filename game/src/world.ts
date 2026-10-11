@@ -187,7 +187,9 @@ export class World {
   private lastDecorationTime = 0;
   // A whole day in three minutes, starting at a random hour each visit.
   readonly dayCycle = new DayCycle(DAY_SECONDS, Math.random() * 24);
-  readonly weather = new WeatherCycle();
+  // Each visit begins at a different point in the nine-minute weather front;
+  // the front remains smooth and frame-rate independent once it starts.
+  readonly weather = new WeatherCycle(Math.random() * 540);
   readonly rain = new RainEffect();
   private weatherTime = 0;
   private cloudTime = 0;

@@ -960,7 +960,8 @@ button.link {
   position: absolute;
   left: 0;
   right: 0;
-  top: 66%;
+  /* Under the fish, but never so low the second hint runs off a short screen. */
+  top: min(58%, calc(100% - 300px));
   text-align: center;
   pointer-events: none;
   text-shadow: 0 6px 30px rgba(0, 0, 0, 0.55);
@@ -1321,49 +1322,53 @@ button.link {
   margin-bottom: 14px;
 }
 
-#wb-sonar-config {
-  margin: 0 0 14px;
+#wb-place-conditions {
+  margin: 12px 0 14px;
+}
+
+.wb-weather-card {
   padding: 11px 12px 10px;
-  border: 1px solid rgba(119, 239, 214, 0.3);
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(50, 164, 153, 0.13), rgba(20, 58, 76, 0.16));
+  border: 1px solid rgba(91, 58, 28, 0.42);
+  border-radius: 6px 9px 5px 8px;
+  background: rgba(255, 246, 222, 0.88);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32), 2px 3px 0 rgba(91, 58, 28, 0.12);
+  color: #5b3a1c;
+  transform: rotate(-0.25deg);
 }
 
-.wb-sonar-heading,
-.wb-sonar-color {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.wb-sonar-heading {
-  color: #9df7e4;
+.wb-weather-title {
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(91, 58, 28, 0.4);
+  font-family: Georgia, serif;
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.07em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
-.wb-sonar-color {
-  margin-top: 9px;
-  color: var(--ink);
-}
-
-#wb-sonar-color {
-  width: 38px;
-  height: 24px;
-  padding: 2px;
-  border: 1px solid rgba(157, 247, 228, 0.55);
-  border-radius: 6px;
-  background: rgba(3, 26, 34, 0.85);
-  cursor: pointer;
-}
-
-.wb-sonar-note {
-  margin: 7px 0 0;
-  color: rgba(214, 246, 244, 0.62);
+.wb-weather-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  margin-top: 8px;
+  font-family: Georgia, serif;
   font-size: 11px;
+  line-height: 1.25;
+}
+
+.wb-weather-grid b {
+  color: #1f8a62;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.wb-weather-note {
+  margin: 9px 0 0;
+  padding-top: 7px;
+  border-top: 1px dotted rgba(91, 58, 28, 0.32);
+  font-family: Georgia, serif;
+  font-size: 10px;
   line-height: 1.35;
+  opacity: 0.75;
 }
 
 #wb-dive {
@@ -1462,12 +1467,14 @@ a.button.primary {
 .wallet-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .wallet-addr {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.95em;
   font-variant-numeric: tabular-nums;
-  color: var(--muted);
+  color: var(--ink);
 }
 
 /* ---- pause menu ---- */
@@ -1563,16 +1570,236 @@ button.danger {
   background: rgba(3, 12, 24, 0.97);
   border: 1px solid var(--line);
   border-radius: 20px;
-  padding: 20px 24px;
+  padding: 20px 24px 24px;
   overflow: auto;
+  overflow-x: hidden;
 }
 
+/* Title row: "Collection", the count, and a compact close button. */
 .collection-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 
+.collection-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+#collection h2 {
+  margin: 0;
+}
+
+.collection-count {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+button.collection-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+kbd {
+  font: 600 11px/1 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+
+/* The two wallets, side by side: each a labelled card. */
+.wallet-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.wallet-card {
+  min-width: 0;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.wallet-card-label {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wallet-card-empty {
+  color: var(--muted);
+}
+
+#wallet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 13px;
+}
+
+.game-wallet-info,
+.game-wallet-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.game-wallet-info .wallet-addr {
+  text-decoration: none;
+}
+
+.game-wallet-info .wallet-addr:hover {
+  text-decoration: underline;
+}
+
+.game-wallet-balance {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-wallet-balance.low {
+  color: var(--gold);
+  background: rgba(255, 204, 77, 0.1);
+}
+
+#wallet .note {
+  width: 100%;
+  color: var(--gold);
+  font-size: 12px;
+}
+
+button.mini {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+button.ghost {
+  background: transparent;
+}
+
+button.ghost:hover,
+button.ghost:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* The mint queue's notice: an icon, a line, a detail, maybe an action. */
+#collection-notice:empty,
+#market-bar:empty {
+  display: none;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.notice-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notice-warn {
+  border-color: rgba(255, 204, 77, 0.35);
+  background: rgba(255, 204, 77, 0.07);
+}
+
+.notice-warn .notice-icon {
+  background: var(--gold);
+  color: #2a1d00;
+}
+
+.notice-info,
+.notice-busy {
+  border-color: rgba(106, 184, 255, 0.3);
+  background: rgba(106, 184, 255, 0.06);
+}
+
+.notice-info .notice-icon {
+  background: var(--breathe);
+  color: #04121f;
+  font-family: Georgia, serif;
+  font-style: italic;
+}
+
+.notice-busy .notice-icon {
+  border: 2px solid rgba(106, 184, 255, 0.3);
+  border-top-color: var(--breathe);
+  animation: wallet-spin 0.8s linear infinite;
+}
+
+/* Bulk actions and the last sale, in their own row. */
+#market-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+#market-bar .sale {
+  color: var(--hold);
+}
+
+#market-bar a,
+#collection-grid a {
+  color: var(--breathe);
+}
+
+/* Cards: the art, then where/value, the status pill, and the actions pinned to the bottom. */
 #collection-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -1580,7 +1807,15 @@ button.danger {
   margin-top: 16px;
 }
 
+#collection-grid .collection-empty {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
 #collection-grid figure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   margin: 0;
 }
 
@@ -1591,9 +1826,190 @@ button.danger {
 }
 
 #collection-grid figcaption {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 8px;
+  margin-top: 8px;
   font-size: 12px;
   color: var(--muted);
-  margin-top: 6px;
+}
+
+.card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-value {
+  color: var(--ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+
+/* A fish's number (#0042): dimmed and monospace, in the collection and on toasts. */
+.serial {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  opacity: 0.6;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pill::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+#collection-grid .pill-ok {
+  color: var(--hold);
+  background: rgba(62, 240, 168, 0.1);
+  border-color: rgba(62, 240, 168, 0.3);
+  text-decoration: none;
+}
+
+#collection-grid .pill-ok:hover {
+  border-color: var(--hold);
+}
+
+.pill-busy {
+  color: var(--breathe);
+  background: rgba(106, 184, 255, 0.1);
+  border-color: rgba(106, 184, 255, 0.3);
+}
+
+.pill-busy::before {
+  animation: pill-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes pill-pulse {
+  to {
+    opacity: 0.25;
+  }
+}
+
+.pill-info {
+  color: var(--breathe);
+  background: rgba(106, 184, 255, 0.08);
+}
+
+.pill-warn {
+  color: var(--gold);
+  background: rgba(255, 204, 77, 0.1);
+  border-color: rgba(255, 204, 77, 0.28);
+}
+
+.pill-err {
+  color: var(--danger);
+  background: rgba(255, 77, 94, 0.1);
+  border-color: rgba(255, 77, 94, 0.3);
+}
+
+.pill-muted {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#collection-grid .err {
+  color: var(--danger);
+  /* Addresses and signatures have no break points: let them break anywhere, inside the card. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+#collection-grid .explorer,
+#collection .wallet-explorer {
+  font-size: 12px;
+  color: var(--breathe);
+  text-decoration: none;
+}
+
+#collection-grid .explorer:hover,
+#collection .wallet-explorer:hover {
+  text-decoration: underline;
+}
+
+#collection .wallet-orb {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+#collection .wallet-orb:hover,
+#collection .wallet-orb:focus-visible {
+  text-decoration: underline;
+}
+
+#collection-grid .paid {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+#collection-grid .sell-confirm,
+#collection-grid .sell-queued,
+#market-bar .sell-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 560px) {
+  #collection {
+    inset: 8px;
+    padding: 16px 14px 18px;
+    border-radius: 16px;
+  }
+  .wallet-cards {
+    grid-template-columns: 1fr;
+  }
+  #collection-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-busy .notice-icon,
+  .pill-busy::before {
+    animation: none;
+  }
 }
 
 /* Narrower than a wide net + bank + help: help drops to its own row and the
@@ -1634,127 +2050,6 @@ button.danger {
   h1 {
     font-size: 40px;
   }
-}
-
-#collection h2 {
-  margin: 0 0 4px;
-}
-
-#wallet {
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-#wallet a,
-#collection-grid a {
-  color: var(--breathe);
-}
-
-#wallet .note {
-  color: var(--gold);
-}
-
-button.mini {
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: 8px;
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-#collection-grid figcaption {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-/* A fish's number (#0042): dimmed and monospace, in the collection and on toasts. */
-.serial {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.92em;
-  opacity: 0.6;
-}
-
-#collection-grid .onchain {
-  font-weight: 800;
-  color: var(--hold);
-  text-decoration: none;
-}
-
-#collection-grid .err {
-  width: 100%;
-  color: var(--danger);
-}
-
-#collection-grid .explorer,
-#wallet .explorer {
-  font-size: 12px;
-  text-decoration: none;
-}
-
-#collection-grid .explorer:hover,
-#wallet .explorer:hover {
-  text-decoration: underline;
-}
-
-#market-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin-top: 6px;
-  color: var(--muted);
-}
-
-#market-bar:empty {
-  display: none;
-}
-
-#market-bar .paused {
-  color: var(--gold);
-}
-
-#market-bar .sale {
-  color: var(--hold);
-}
-
-#market-bar a {
-  color: var(--breathe);
-}
-
-#collection-grid .nft-row {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-#collection-grid .nft-status.busy {
-  color: var(--breathe);
-}
-
-#collection-grid .nft-status.failed {
-  color: var(--danger);
-}
-
-#collection-grid .paid {
-  opacity: 0.7;
-  font-style: italic;
-}
-
-#collection-grid .sell-confirm {
-  display: flex;
-  gap: 6px;
 }
 
 /* ---- gear workshop ---- */
@@ -2359,7 +2654,19 @@ button:disabled {
   padding: 16px;
 }
 
+/* The scene behind blurs and darkens as the tank comes up (--aq-bg: 0..1, set by aquarium.ts). */
+#aquarium::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.45);
+  backdrop-filter: blur(8px);
+  opacity: var(--aq-bg, 0);
+  pointer-events: none;
+}
+
 .aq-stage {
+  position: relative; /* above the blurred backdrop */
   width: min(1100px, 100%, calc((100vh - 120px) * 1.75));
   display: flex;
   flex-direction: column;
@@ -2422,6 +2729,27 @@ button:disabled {
   color: #2a1d00;
 }
 
+.aq-light-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(4, 18, 30, 0.55);
+  color: var(--muted);
+}
+
+.aq-light-control input {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
 .aq-tank {
   position: relative;
 }
@@ -2458,6 +2786,7 @@ button:disabled {
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(8px);
+  flex-wrap: wrap;
 }
 
 #aq-card img {
@@ -2475,6 +2804,107 @@ button:disabled {
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+#aq-card > .aq-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.aq-chain {
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.aq-chain:hover,
+.aq-chain:focus-visible {
+  color: var(--ink);
+  opacity: 1;
+  text-decoration: underline;
+}
+
+@media (max-width: 560px) {
+  #aq-card > .aq-actions {
+    width: 84px;
+  }
+
+  .aq-chain {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+    font-size: 10px;
+  }
+
+  #aq-card {
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  #aq-card img {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+.aq-growth {
+  color: var(--hold);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.aq-food-panel {
+  display: grid;
+  grid-template-columns: 68px minmax(150px, 1fr);
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 5px;
+}
+
+.aq-food-model {
+  width: 68px;
+  height: 68px;
+  grid-row: span 2;
+  border-radius: 10px;
+  background: rgba(8, 30, 42, 0.65);
+}
+
+.aq-food-select {
+  min-width: 0;
+  max-width: 190px;
+  padding: 4px 6px;
+  color: var(--ink);
+  background: rgba(2, 13, 23, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.aq-food-effect {
+  max-width: 220px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+#aq-card .aq-feed {
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .aq-food-panel {
+    grid-template-columns: 52px minmax(120px, 1fr);
+  }
+
+  .aq-food-model {
+    width: 52px;
+    height: 52px;
+  }
 }
 
 /* ---- gear inspector (workbench) ---- */
@@ -2568,6 +2998,32 @@ button:disabled {
 
 #wb-inspect-levels li.locked::after {
   content: ' 🔒';
+}
+
+.wb-inspect-sonar-color {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0 14px;
+  padding: 9px 10px;
+  border: 1px solid rgba(91, 58, 28, 0.32);
+  border-radius: 7px 9px 6px 8px;
+  background: rgba(255, 246, 222, 0.78);
+  color: #5b3a1c;
+  font-family: Georgia, serif;
+  font-size: 12px;
+  transform: rotate(0.2deg);
+}
+
+.wb-inspect-sonar-color input {
+  width: 38px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid rgba(91, 58, 28, 0.5);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.58);
+  cursor: pointer;
 }
 
 #wb-inspect-up-price {
@@ -2704,46 +3160,63 @@ button:disabled {
   text-align: center;
 }
 
-/* ---- wallet: log out (pause menu, collection, title chip) ---- */
-.wallet-pause {
-  justify-content: center;
-  flex-wrap: wrap;
-  margin: 4px 0 6px;
-  font-size: 13px;
-}
-
-.wallet-collection {
-  margin-left: auto;
-  margin-right: 12px;
-  font-size: 13px;
-}
-
-/* The status lines beside it can run long (waiting for fish numbers): the row keeps its width. */
-.wallet-collection:not(.wallet-confirming) {
-  flex-shrink: 0;
-}
-
+/* ---- wallet: account chip (title), log out rows (pause menu, settings, collection) ---- */
 .wallet-row .wallet-addr,
 .wallet-row button {
   white-space: nowrap;
 }
 
-.wallet-chip {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 3;
-  max-width: calc(100vw - 32px);
-  padding: 6px 6px 6px 12px;
+.wallet-row .wallet-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  flex: none;
+  display: block;
+}
+
+/* Inline Log out: a quiet ghost button that turns red on intent. */
+.wallet-row > button.wallet-logout {
+  margin-left: 2px;
+  padding: 5px 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.wallet-row > button.wallet-logout:hover,
+.wallet-row > button.wallet-logout:focus-visible {
+  border-color: rgba(255, 77, 94, 0.45);
+  background: rgba(255, 77, 94, 0.12);
+  color: #ffb3ba;
+}
+
+.wallet-pause {
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 10px auto 6px;
+  padding: 4px 4px 4px 10px;
+  width: fit-content;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--panel);
-  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.04);
   font-size: 13px;
 }
 
-.wallet-chip.wallet-confirming {
+.wallet-pause.wallet-confirming {
+  padding: 8px 10px;
   border-radius: 14px;
+  width: auto;
+}
+
+.wallet-collection {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  font-size: 13px;
+}
+
+.wallet-collection button.wallet-logout {
+  margin-left: auto;
 }
 
 .wallet-row .wallet-question {
@@ -2756,17 +3229,213 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-.wallet-row button.wallet-logout:hover,
-.wallet-row button.wallet-logout:focus-visible {
-  border-color: var(--danger);
-  color: #fff;
+/* The title chip: logo + address, opening a small account menu. */
+.wallet-chip {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  max-width: calc(100vw - 32px);
+  font-size: 13px;
 }
 
-.wallet-row .wallet-logo {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  flex: none;
+.wallet-chip.wallet-confirming {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(4, 18, 34, 0.86);
+  backdrop-filter: blur(10px);
+}
+
+/* PEARL balance: a pill in the chip's style, to the chip's left. "…" while reading, "—" when unavailable. */
+.wallet-chip .pearl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  cursor: default;
+}
+
+.pearl-badge .pearl-glyph {
+  color: var(--breathe);
+}
+
+.pearl-badge .pearl-amount {
+  min-width: 1ch;
+  text-align: right;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.pearl-badge .pearl-unit {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.pearl-badge[data-state='loading'] .pearl-amount,
+.pearl-badge[data-state='unavailable'] .pearl-amount {
+  color: var(--muted);
+}
+
+@media (max-width: 400px) {
+  .wallet-chip {
+    gap: 6px;
+  }
+  .wallet-chip .pearl-badge {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+  .pearl-badge .pearl-unit {
+    font-size: 10px;
+  }
+}
+
+.wallet-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.wallet-trigger:hover,
+.wallet-trigger:focus-visible,
+.wallet-menu-open .wallet-trigger {
+  border-color: rgba(160, 230, 255, 0.4);
+  background: rgba(4, 18, 34, 0.8);
+}
+
+.wallet-trigger:focus-visible,
+.wallet-menu-item:focus-visible {
+  outline: 2px solid var(--breathe);
+  outline-offset: 2px;
+}
+
+.wallet-trigger .wallet-addr,
+.wallet-menu-addr {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.wallet-caret {
+  width: 6px;
+  height: 6px;
+  margin: -3px 2px 0 0;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+}
+
+.wallet-menu-open .wallet-caret {
+  margin-top: 3px;
+  transform: rotate(-135deg);
+}
+
+.wallet-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(4, 16, 30, 0.96);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+
+.wallet-menu[hidden] {
+  display: none;
+}
+
+.wallet-menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.wallet-menu-name {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wallet-menu-item {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.wallet-menu-item:hover,
+.wallet-menu-item:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.wallet-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+
+.wallet-menu-item.wallet-menu-danger {
+  color: #ff8a95;
+}
+
+.wallet-menu-item.wallet-menu-danger:hover,
+.wallet-menu-item.wallet-menu-danger:focus-visible {
+  background: rgba(255, 77, 94, 0.14);
+  color: #ffb3ba;
+}
+
+/* The fallback copy's off-screen selection (login.ts). */
+.wallet-copy-buffer {
+  position: fixed;
+  top: 0;
+  left: -9999px;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wallet-trigger,
+  .wallet-caret {
+    transition: none;
+  }
 }
 
 /* ---- wallet picker (login gate) ---- */
@@ -2923,4 +3592,76 @@ button:disabled {
   .wallet-spinner {
     animation-duration: 2.4s;
   }
+}
+
+/* Inspector: Pearls on hand, and the two branches a piece can run from Lv2 (inspect.ts). */
+#wb-inspect-pearls {
+  margin-top: 8px;
+}
+
+#wb-inspect-paths {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+#wb-inspect-path-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.wb-path {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.wb-path small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.wb-path.on {
+  border-color: var(--hold);
+  background: rgba(62, 240, 168, 0.12);
+}
+
+.wb-path.on small {
+  color: var(--hold);
+}
+/* Ship mode (the boat): the intro is a paragraph, not a one-line effect. */
+/* Dressing the diver figure: each piece of gear is a row to click (on / off). */
+#wb-inspect.diver #wb-inspect-levels li {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+#wb-inspect.diver #wb-inspect-levels li:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+#wb-inspect.diver #wb-inspect-levels li.on {
+  border-color: rgba(62, 240, 168, 0.55);
+  background: rgba(62, 240, 168, 0.1);
+}
+#wb-inspect.diver #wb-inspect-levels li.locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+#wb-inspect.diver #wb-inspect-levels li.locked::after {
+  content: '';
+}
+
+#wb-inspect.ships #wb-inspect-effect,
+#wb-inspect.diver #wb-inspect-effect {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--muted);
 }

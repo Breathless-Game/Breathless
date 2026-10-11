@@ -489,6 +489,11 @@ function slotLevel(state: EquipmentState, slot: UpgradeSlot): EquipmentLevel {
   return validLevel(value);
 }
 
+/** The level owned of a slot (1 = the starting gear), for the workbench and its inspector. */
+export function ownedLevel(state: EquipmentState, slot: UpgradeSlot): EquipmentLevel {
+  return slotLevel(normalize(state), slot);
+}
+
 function withSlotLevel(state: EquipmentState, slot: UpgradeSlot, level: EquipmentLevel): EquipmentState {
   const next = { ...state };
   if (slot === 'net') {

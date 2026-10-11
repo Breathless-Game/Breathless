@@ -6,6 +6,11 @@ import type { FishSpec, Rarity } from './fish';
 //                                      └→ failed → retried with backoff, or by hand
 // Banking pays nothing; Pearls come only from selling a minted fish to the market.
 
+/** A Pearl amount as text, pluralised: "1 Pearl", "0 Pearls", "12 Pearls". */
+export function pearls(n: number): string {
+  return `${n} ${n === 1 ? 'Pearl' : 'Pearls'}`;
+}
+
 export type NftStatus = 'pending' | 'minting' | 'minted' | 'failed';
 
 /** A fish in the bank (`deepbreath.bank`), with its NFT and sale state. */
@@ -174,6 +179,11 @@ export function bulkSellable(bank: readonly BankedFish[], rarity: Rarity): Banke
   return bank.filter((f) => f.rarity === rarity && !f.sellQueued && sellQuote(f, () => 0).ok);
 }
 
+/** Fish "Sell all" would queue now: every sellable fish except the ones that ask first (epic and rarer). */
+export function bulkSellableBelowEpic(bank: readonly BankedFish[]): BankedFish[] {
+  return bank.filter((f) => !needsConfirm(f.rarity) && !f.sellQueued && sellQuote(f, () => 0).ok);
+}
+
 // ---- Map unlock progress -------------------------------------------------
 // Maps unlock by the lifetime value of every fish ever banked. Selling never lowers it.
 
@@ -194,4 +204,35 @@ export function addBankedValue(lifetime: number, added: number): number {
 /** Errors that mean the burner wallet cannot pay (for the upload or the transaction). */
 export function isFundsError(message: string): boolean {
   return /insufficient|0x1\b|debit an account|not enough (balance|funds|sol)/i.test(message);
+}
+
+/**
+ * Split /sell-batch sales into requests the market accepts: at most `maxFish` fish and at most
+ * `maxTxs` different transfer transactions each (sensor/market-rules.mjs MAX_BATCH, MAX_BATCH_TXS).
+ * Fish moved by the same transfer stay together and keep their order; a resumed sale can mix many
+ * older transfers, which then simply take more requests.
+ */
+export function sellBatches<T extends { transferTx: string }>(sales: T[], maxFish: number, maxTxs: number): T[][] {
+  const byTx = new Map<string, T[]>();
+  for (const s of sales) {
+    const group = byTx.get(s.transferTx);
+    if (group) group.push(s);
+    else byTx.set(s.transferTx, [s]);
+  }
+  const out: T[][] = [];
+  let batch: T[] = [];
+  let txs = new Set<string>();
+  for (const [tx, group] of byTx) {
+    for (const s of group) {
+      if (batch.length >= maxFish || (!txs.has(tx) && txs.size >= maxTxs)) {
+        out.push(batch);
+        batch = [];
+        txs = new Set();
+      }
+      batch.push(s);
+      txs.add(tx);
+    }
+  }
+  if (batch.length) out.push(batch);
+  return out;
 }
