@@ -11,11 +11,12 @@
 
 import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
-import { MAPS, MAP_ORDER, SHARK_WARNING, mapDepth, type MapId, type MapProgress } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, mapDepth, mapPlace, mapBlurb, mapDifficulty, mapZoneLabel, type MapId, type MapProgress } from './maps';
+import { lang, onLangChange, pickName, t } from './i18n';
 import { SoftPaper } from './paper';
 import { Diver } from './diver';
 import { GearInspector, type ShipHooks } from './inspect';
-import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { UPGRADES, buildUpgradeModel, upgradeName, upgradeEffect, type UpgradeDef, type UpgradeId } from './upgrades';
 import type { WeatherState } from './weather';
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig } from './sonar-config';
@@ -275,6 +276,14 @@ export class Workbench {
   private figureHover = 0;
 
   constructor(private hooks: WorkbenchHooks) {
+    // A language switch: the open chart's panel and its painted labels redraw in the new one.
+    onLangChange(() => {
+      this.chartWeatherKey = '';
+      if (this.state === 'chart') {
+        this.renderPins();
+        this.renderPlace();
+      }
+    });
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
@@ -1542,15 +1551,23 @@ export class Workbench {
     }
     const lines =
       hit === 'map'
-        ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
+        ? [t('Sea chart', '海图'), t('Three places, one per chapter', '三处海域，每章一处'), t('Click to open', '点击打开')]
         : hit === 'figure'
-        ? ['Your diver · 潜水员', `Wearing ${this.packed.length} / ${SLOTS.length} · saved for next time`, 'Click to dress · drop gear on the tray to put it on']
+        ? [
+            t('Your diver', '潜水员'),
+            t(`Wearing ${this.packed.length} / ${SLOTS.length} · saved for next time`, `已装备 ${this.packed.length} / ${SLOTS.length} · 下次沿用`),
+            t('Click to dress · drop gear on the tray to put it on', '点击更衣 · 把装备放到托盘上即可穿戴'),
+          ]
         : hit === 'synth'
-        ? ['Field workbench · 合成工作台', 'Military steel · 物资箱', 'Click to raise and open']
+        ? [t('Field workbench', '合成工作台'), t('Military steel', '军用钢板'), t('Click to raise and open', '点击升起并打开')]
         : [
-            `${hit.def.name} · ${hit.def.nameZh}`,
-            hit.id === 'boat' ? 'Your ship · 当前船只 — click to see the ships' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
-            hit.mode === 'ready' ? 'Ready · click for a closer look' : hit.def.group === 'dive' ? 'Click for a closer look · drag to the tray' : 'Click to upgrade the boat',
+            upgradeName(hit.def),
+            hit.id === 'boat' ? t('Your ship · click to see the ships', '当前船只 · 点击查看船只') : `Lv ${hit.key} · ${upgradeEffect(hit.def, hit.key)}`,
+            hit.mode === 'ready'
+              ? t('Ready · click for a closer look', '已就绪 · 点击细看')
+              : hit.def.group === 'dive'
+              ? t('Click for a closer look · drag to the tray', '点击细看 · 拖到托盘上')
+              : t('Click to upgrade the boat', '点击升级船只'),
           ];
     this.tip.replaceChildren(
       ...lines.map((text, i) => {
@@ -1690,9 +1707,9 @@ export class Workbench {
         const label = document.createElement('span');
         label.className = 'wb-pin-label';
         const name = document.createElement('b');
-        name.textContent = `${map.name} · ${map.nameZh}`;
+        name.textContent = pickName(map);
         const sub = document.createElement('small');
-        sub.textContent = map.difficulty;
+        sub.textContent = mapDifficulty(map);
         label.append(name, sub);
         pin.append(dot, label);
         pin.addEventListener('click', () => this.pickPlace(id));
@@ -1751,28 +1768,38 @@ export class Workbench {
     if (!id) {
       this.previewBox.replaceChildren();
       this.hooks.preview(null);
-      $('wb-place-title').textContent = 'Where to? · 去哪儿？';
-      $('wb-place-sub').textContent = 'Pick a place on the chart';
+      $('wb-place-title').textContent = t('Where to?', '去哪儿？');
+      $('wb-place-sub').textContent = t('Pick a place on the chart', '在海图上选一处');
       $('wb-place-text').textContent = '';
       $('wb-place-warn').classList.add('hidden');
     } else {
       const map = MAPS[id];
       // A live view; turning it on also turns the world behind the table to that place, ready for the dive.
       this.previewBox.replaceChildren(this.hooks.preview(id)!);
-      $('wb-place-title').textContent = `${map.name} · ${map.nameZh}`;
-      $('wb-place-sub').textContent = `Chapter ${ROMAN[MAP_ORDER.indexOf(id)]} · ${map.difficulty} · Shelf ${mapDepth(map)} m · Trench ∞ · ${map.place}`;
-      $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
+      const roman = ROMAN[MAP_ORDER.indexOf(id)];
+      const zones = map.zoneLabels.map((z) => mapZoneLabel(z));
+      $('wb-place-title').textContent = pickName(map);
+      $('wb-place-sub').textContent = t(
+        `Chapter ${roman} · ${mapDifficulty(map)} · Shelf ${mapDepth(map)} m · Trench ∞ · ${mapPlace(map)}`,
+        `第${roman}章 · ${mapDifficulty(map)} · 浅海 ${mapDepth(map)} m · 海沟 ∞ · ${mapPlace(map)}`,
+      );
+      $('wb-place-text').textContent = t(
+        `${mapBlurb(map)} Zones: ${zones.join(', ')}, then the Trench with no bottom.`,
+        `${mapBlurb(map)} 区域：${zones.join('、')}，再往下是深不见底的海沟。`,
+      );
       // Shark waters say what a bite costs every time the place is picked, before Dive.
       const warn = $('wb-place-warn');
       warn.classList.toggle('hidden', !map.sharks);
       if (map.sharks) {
         const en = document.createElement('b');
-        en.textContent = SHARK_WARNING.en;
-        warn.replaceChildren(en, document.createElement('br'), SHARK_WARNING.zh);
+        en.textContent = SHARK_WARNING[lang()];
+        warn.replaceChildren(en);
       }
     }
-    const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
-    $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'Nothing packed: you dive with the basics';
+    const ready = this.packed.map((g) => upgradeName(UPGRADES.find((u) => u.id === g)!));
+    $('wb-place-gear').textContent = ready.length
+      ? t(`Ready: ${ready.join(', ')}`, `已备好：${ready.join('、')}`)
+      : t('Nothing packed: you dive with the basics', '未装备：只带基础装备下潜');
     if (id) this.renderConditions(id);
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
   }
@@ -1895,6 +1922,6 @@ function drawTray(w: number, d: number): HTMLCanvasElement {
   c.fillStyle = 'rgba(18, 47, 39, 0.82)';
   c.fillRect(16, cv.height - 43, cv.width - 32, 33);
   c.fillStyle = 'rgba(255, 240, 210, 0.86)';
-  c.fillText('READY · 准备区', cv.width / 2, cv.height - 16);
+  c.fillText(t('READY', '准备区'), cv.width / 2, cv.height - 16);
   return cv;
 }
