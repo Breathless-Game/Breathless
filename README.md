@@ -386,11 +386,15 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── breath.ts       BreathSource: captures and pushes camera frames, WS state, keyboard/sim modes
         ├── breathtest.ts   the 2.5-minute breath test on the title screen: prompts holds and breathing, labels them automatically
         ├── world.ts        underwater terrain built from the selected map (seabed shelf with the trench gap under the boat, endless trench walls, rocks, coral, kelp), light rays, snow, water surface, boat; fog and color by depth; day and night
+        ├── seabed-layout.ts the sand as a height grid, and where each map's rock outcrops, stacked back wall, kelp groves and seagrass meadows stand on it
+        ├── kelp.ts         the four plants (giant kelp, seagrass, broad-leaved kelp, sea fern) as one flat-shaded mesh
+        ├── kelp-motion.ts  how plants move: current, swell, leaf flutter, the diver's wake (shared by the shader and the tests)
+        ├── flora.ts        what grows on each map and in which colors; how leaf color changes with depth
         ├── daylight.ts     continuous 24-hour lighting, 12-minute natural cycle, smooth morning / afternoon / night previews
         ├── sky.ts          atmospheric sky, time-driven sun / moon and layered clouds
         ├── color-grade.ts  shared morning / afternoon / night color balance in scene materials
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
-        ├── water.ts        GPU waves, facet color and polygonal sun / moon reflection patches
+        ├── water.ts        GPU waves, facet color and the faceted road of sun / moon glitter
         ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
@@ -509,8 +513,8 @@ The fishing rod is the diver's hand net. Upgrades change only the gear; they nev
 - **Funding**: the panel has an "Airdrop 1 SOL" button, but the public devnet faucet often answers with a 429 rate limit. It is more reliable to go to <https://faucet.solana.com> (GitHub login) and request SOL for the address shown in the panel.
 - **Mint queue** (`nft-queue.ts`): one mint at a time in the background, resumed on page load. When the wallet has too little SOL it tries one airdrop; if the faucet refuses, minting pauses with a "needs devnet SOL" note in the collection and checks the balance again every minute or when the panel opens.
 - **Mint flow** (`mintFish`):
-  1. `fishCard(spec)` renders a PNG, which `umi.uploader.upload` uploads to Irys devnet.
-  2. `uploadJson` uploads the metadata: name, symbol `DIVE`, description, image, attributes (Rarity / Species / Zone / Map / Depth / Length / Weight / Catch value / Seed).
+  1. Nothing is uploaded. The URI points at our own server: `game/src/nft-uri.ts` encodes the fish (seed, rarity, depth, value, size, colours, zone, name) into `<origin>/api/nft/meta/v1/….json`, and `sensor/nft-meta.mjs` generates the Metaplex JSON (name, symbol `DIVE`, description, image, attributes: Rarity / Species / Zone / Depth / Length / Weight / Catch value / Seed) and a 512×512 PNG of the same low-poly fish (`sensor/fish-png.mjs`) from the path alone, so it survives restarts with no database. The origin is `VITE_NFT_ORIGIN` if set, else the page's own https origin, else `https://breathless.gotclass.xyz`; never localhost. On the server, `PUBLIC_ORIGIN` (optional) fixes the origin of the JSON's image URL, which otherwise follows the request's Host. (Fish minted earlier pointed at Irys devnet, whose gateway now redirects in a loop; on the next page load `NftQueue` re-points those at our host with mpl-core `update`, signed by the session key.)
+  2. The collection panel links every minted fish and the Phantom wallet to Solana Explorer ("View on Explorer ↗"), which always works even when a wallet hides devnet collectibles.
   3. mpl-core's `create` mints a Core asset with an on-chain **Attributes plugin** (rarity / species / depth / value / seed), so later game logic can read the rarity straight from the chain and the market pays the catch value the collection shows. The recorded depth is the catch depth, capped at 1000 m (`MAX_RECORDED_DEPTH_M` in `fish.ts`); the HUD still shows the real depth.
   4. The asset address is written back to `FishSpec.assetId` and saved in the bank. The card shows "✓ On-chain" and links to Solana Explorer.
 - **Sell** (NFT sink): `sellToMarket` in `pearl.ts` sells the NFT to the PEARL market, which burns it and pays its catch value in PEARL (see "PEARL coin" below).
@@ -604,11 +608,12 @@ The game picks the starting quality from the CPU logical core count and the devi
 | --- | --- | --- | --- |
 | DPR cap | 1 | 1.5 | 2 |
 | Render pixel budget | 1280 × 720 | 1920 × 1080 | 3840 × 2160 |
-| Kelp / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| Tall kelp per 140 m of shelf / light rays / particles | 12 / 4 / 300 | 30 / 8 / 700 | 55 / 14 / 1400 |
+| Low plants per tall kelp | 1.5 (Heaven Lake 2) | same | same |
 | Water surface segments | 44 × 8 | 88 × 16 | 132 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
 | Water triangles | 704 | 2816 | 6336 |
-| Reflection detail | Polygon patches | + secondary colored facets | + bright tips |
+| Sun / moon glitter | Same road, a little wider to read on the coarse facets | Same road | Same road, widest glints |
 | Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
@@ -618,7 +623,7 @@ The game picks the starting quality from the CPU logical core count and the devi
 
 A large screen may use a DPR below 1 to stay within the pixel budget; the HUD still uses the browser's native resolution. After a start-up grace period, two consecutive 3-second windows that average below 45 FPS lower the quality by one level. A drop is followed by a 6-second cooldown, and within one session the quality only goes down, never up. Hidden tabs and isolated long stalls are not counted, but a sustained very low frame rate still triggers a drop.
 
-Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver body, fish, breath and lighting; bubble particles use the quality-specific physics update cap above. The headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all, and hidden kelp is removed from the scene to avoid matrix updates.
+Antialiasing is off when the game starts at low. A drop during play keeps the antialiasing setting the WebGL context was created with, so the context does not have to be rebuilt in the middle of a game. Throttling the decorations does not change the per-frame updates of the diver body, fish, breath and lighting; bubble particles use the quality-specific physics update cap above. The headlamp, day and night, fog color and NFT card resolution are kept. Light rays that cannot be seen at night or in deep water are not rendered at all. Every plant on the seabed is part of one mesh that sways in the vertex shader, so a lower level only rebuilds that mesh with fewer plants; the plants that remain keep their place and shape.
 
 Diver bubbles spawn from the mask and snorkel anchor, rise with buoyancy and horizontal drag, and fade out before their lifetime ends. Low and medium quality use the low-poly bubble mesh with smaller particle budgets; high quality uses the subdivided mesh and full burst size. Switching quality trims excess live bubbles and rebinds the remaining meshes before releasing the old shared geometry.
 
@@ -635,7 +640,7 @@ Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Ni
 
 Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
 
-The sea keeps a low-poly silhouette: slightly irregular triangles have separate blue-green facet colors and flat normals. Sun and moon reflections appear as short angular wedges and trapezoids, arranged along a path toward the visible source. Low quality retains this shape; medium adds another family of colored facets and high adds sparse bright tips. Waves run in the vertex shader, eliminating per-frame water vertex uploads and CPU normal rebuilding. Shared corners remain watertight. The existing water draw handles the reflections without a reflection camera or extra scene render; boats and fish do not have live mirror reflections.
+The sea keeps a low-poly silhouette: slightly irregular triangles have separate blue-green facet colors and flat normals. Sun and moon reflections are a road of glitter under the visible source, made of angular wedges and trapezoids. A facet lights up when its slope would mirror the light into the camera, and sea-surface slopes are spread like a Gaussian (Cox and Munk) that widens with wind. So the road is solid in the middle and breaks into scattered glints at its edges, brightens toward the horizon where water mirrors more, takes the color of the sun or moon, and widens in a storm. Each glint is a bright core inside a dimmer band of the same shape, added to the facet's own shading. Facets leaning toward the camera in front of a low light glow faintly green. Every quality level draws the same road. Waves run in the vertex shader, eliminating per-frame water vertex uploads and CPU normal rebuilding. Shared corners remain watertight. The existing water draw handles the reflections without a reflection camera or extra scene render; boats and fish do not have live mirror reflections.
 
 Large luminous sun and moon discs use warm gold and cool silver-blue layered halos. Low keeps the core and primary halos; higher settings add softer transitions. Clouds attenuate their light before compositing so a thick storm can hide the bright core. No fullscreen bloom pass or render target is allocated. Their compressed elevation keeps the enlarged discs within the side-on camera at noon.
 
@@ -645,6 +650,16 @@ Morning highlights are gently warm, afternoon highlights become golden, and nigh
 
 - `npm --prefix game test` also covers the day cycle, midnight and color continuity, manual blends, pauses, returning to the cycle, and watertight water geometry at every quality level.
 - Inspect `world.dayCycle.hour` / `world.dayCycle.mode` in the console, or preview lighting with `setTimeOfDay('afternoon')`.
+
+### Seabed, rocks and kelp
+
+Everything on the shelf rests on something. The sand is a height grid; rocks and plants are placed by reading the same triangles the sand is drawn with. On the near shelf, rocks form outcrops: one part-buried boulder, two or three rocks leaning on it and scree around it, with open sand between outcrops and no boulder in the lane the diver swims in. Along the back, rock is piled on rock from the bottom up, so the wall has tall stacks but nothing hangs in open water. Coral grows on the wall's rocks and on the sand; Heaven Lake's ledges jut out of its stacks.
+
+Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 5 m short of the surface (about 15 m on the Fjord, 35 m on Heaven Lake, 48 m on the Open Ocean). It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Outcrops, groves and meadows are counted per metre of shelf and laid out to the farthest edge a map can open (200 m each way), so the forest is as dense at the ends as under the boat. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
+
+Plants sway in the vertex shader. A slow wave of current crosses the bed, so neighbors move one after another; tall kelp bends into an S and its tips trace loops; leaf tips flutter; the swell that rocks the boat moves the upper water back and forth; wind makes all of it stronger. Plants within 4.5 m of the diver bend away and trail in the direction of the swim.
+
+- `npm --prefix game test` checks that every rock rests on sand or rock, plants root on the drawn sand clear of the trench, any quality prefix is spread over the shelf, faces are single-colored, roots never move and stems never stretch.
 
 ### Weather
 

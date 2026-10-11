@@ -9,8 +9,8 @@
 //   node index.mjs                 live Presage mode (dev: ws://<host>:8787, next to Vite)
 //   node index.mjs --sim           no camera, synthetic breathing (hold via the game's debug key)
 //   node index.mjs --serve <dir>   production: serves the built game from <dir>, the sensor
-//                                  at /sensor and the PEARL market at /api/market on one
-//                                  port (PORT, default 8794)
+//                                  at /sensor, the PEARL market at /api/market and the fish
+//                                  NFT metadata at /api/nft on one port (PORT, default 8794)
 
 import { config } from 'dotenv';
 import { mkdirSync } from 'node:fs';
@@ -31,6 +31,7 @@ import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector } from './breath-detector.mjs';
 import { loadJpegDecoder } from './decode.mjs';
 import { FrameFormat, LatestFrameDecoder, parseFrame } from './frames.mjs';
+import { createNftHandler } from './nft-meta.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
 import { staticHandler } from './static.mjs';
 
@@ -511,6 +512,9 @@ if (SERVE) {
   const perIp = new Map();
   const serveStatic = staticHandler(SERVE_DIR);
   void startMarket();
+  // Fish NFT metadata and art, generated from the URL (nft-meta.mjs). PUBLIC_ORIGIN overrides the
+  // origin its JSON points at; by default that is the request's Host.
+  const nft = createNftHandler({ log });
   const server = createServer(async (req, res) => {
     try {
       let pathname = '';
@@ -518,6 +522,7 @@ if (SERVE) {
         pathname = new URL(req.url ?? '/', 'http://x').pathname;
       } catch {} // the static handler answers 400
       if (pathname.startsWith('/api/')) {
+        if (await nft(req, res)) return;
         if (market && (await market.handle(req, res))) return;
         // Never fall through to the index.html fallback: the game would read that as a market answer.
         if (pathname.startsWith('/api/market/')) return sendJson(res, 503, { error: marketDown });
@@ -560,7 +565,7 @@ if (SERVE) {
     process.exit(1);
   });
   server.listen(PORT, HOST, () => {
-    log(`serving ${SERVE_DIR} on http://${HOST}:${PORT}, sensor at /sensor (${mode}), PEARL market at /api/market`);
+    log(`serving ${SERVE_DIR} on http://${HOST}:${PORT}, sensor at /sensor (${mode}), PEARL market at /api/market, NFT metadata at /api/nft`);
     log(`recordings ${RECORD ? 'ON (SENSOR_RECORD=1): sensor/recordings/' : 'off'}`);
   });
 } else {
