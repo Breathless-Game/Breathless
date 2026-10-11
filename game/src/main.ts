@@ -1438,10 +1438,24 @@ window.addEventListener('keydown', (e) => {
 });
 
 function breathModes(): BreathMode[] {
-  return breath.video.srcObject ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
+  // liveWanted: the camera was lost or the sensor stayed busy; K tries the camera again.
+  return breath.video.srcObject || breath.liveWanted ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
+}
+
+async function reconnectCamera() {
+  hud.message(t('Reconnecting the camera…', '正在重新连接摄像头…'));
+  try {
+    await breath.startLive();
+    hud.message(t('Camera reconnected', '摄像头已重新连接'));
+  } catch (err) {
+    console.error(err);
+    breath.setMode('keyboard');
+    hud.message(t('Camera unavailable: using keyboard', '摄像头不可用：改用键盘'));
+  }
 }
 
 function setBreathMode(mode: BreathMode) {
+  if (mode === 'presage' && !breath.video.srcObject) return void reconnectCamera();
   breath.setMode(mode);
   const names: Record<BreathMode, readonly [string, string]> = { presage: ['presage', '摄像头'], sim: ['sim', '模拟'], keyboard: ['keyboard', '键盘'] };
   const [en, zh] = names[mode] ?? [mode, mode];
@@ -1806,7 +1820,8 @@ function updateCalibration() {
   } else if (!s.connected) {
     calibStep.textContent = t('Connecting to breath sensor…', '正在连接呼吸传感器…');
     calibSub.textContent = import.meta.env.DEV ? t('Start it with: npm run sensor', '启动方式：npm run sensor') : t('Reconnecting…', '重新连接中…');
-  } else if (!s.trace.length) {
+  } else if (!s.trace.length || (!s.calibrated && breath.seededBaseline)) {
+    // With a remembered baseline there is nothing to learn: just Presage warming up.
     calibStep.textContent = t('Presage is warming up…', 'Presage 预热中…');
     calibSub.textContent = s.hint || t('Sit still, face and chest in view', '坐稳，让脸和胸口留在画面里');
   } else if (!s.calibrated) {
@@ -1828,6 +1843,20 @@ function updateCalibration() {
 
 // ---- Pause menu ---------------------------------------------------------
 const camWrap = document.getElementById('cam-wrap')!;
+// The bubble shows only while there is a camera: one lost mid-dive (or a sensor that stays
+// busy) drops to the keyboard, and an empty black box reads as a broken camera.
+let hadCamera = false;
+breath.onChange((s) => {
+  const has = Boolean(breath.video.srcObject);
+  if (has === hadCamera) return;
+  hadCamera = has;
+  if (has) {
+    if (phase === 'play' || phase === 'calibrating') camWrap.style.visibility = 'visible';
+  } else if (breath.liveWanted) {
+    camWrap.style.visibility = 'hidden';
+    if (phase === 'play' && s.error) hud.message(s.error, 6000);
+  }
+});
 let paused = false;
 let trialSkinActive=false;
 const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
