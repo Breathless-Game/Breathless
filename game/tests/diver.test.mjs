@@ -401,8 +401,9 @@ test('the underwater headlamp volume fades at its edge and far end', () => {
   const { diver } = createDiver(RENDER_QUALITY.high, -40);
   const volume = diver.headlamp.getObjectByName('diver-headlamp-volume');
   assert.ok(volume, 'the headlamp has a visible volume');
-  assert.equal(volume.geometry.parameters.radialSegments, 24);
-  assert.equal(volume.geometry.parameters.heightSegments, 12);
+  assert.equal(volume.geometry.type, 'SphereGeometry');
+  assert.equal(volume.geometry.parameters.widthSegments, 32);
+  assert.equal(volume.geometry.parameters.heightSegments, 16);
   assert.equal(volume.material.type, 'ShaderMaterial');
   assert.match(volume.material.fragmentShader, /farFade/);
   simulate(diver, 0.2);

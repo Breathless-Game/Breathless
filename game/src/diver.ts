@@ -218,15 +218,10 @@ export class Diver {
     this.headlamp.position.set(1.4, 0.2, 0.6);
     this.headlamp.target.position.set(4.5, 0.05, 0.6);
     // Three.js lights illuminate surfaces but do not show a beam in the water.
-    // Use a finely tessellated volume with a shader fade instead of an opaque
-    // frustum: its edge dissolves radially and its far end disappears before
-    // the geometry ends, so the light reads as suspended water rather than a
-    // cone with a cut-off cap.
-    const beamGeometry = new THREE.CylinderGeometry(2.25, 0.1, 9, 24, 12, true);
-    beamGeometry.rotateZ(-Math.PI / 2);
-    // The cone is a child of the lamp (whose local x is 1.4), so start its
-    // narrow end at the lamp rather than leaving a floating gap in front.
-    beamGeometry.translate(4.5, 0.08, 0);
+    // Use a stretched, rounded volume with a shader fade instead of a frustum:
+    // its silhouette has no straight triangular sides or cut-off cap, while
+    // the real SpotLight still provides the directional illumination.
+    const beamGeometry = new THREE.SphereGeometry(1, 32, 16);
     this.headlampBeamMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uColor: { value: new THREE.Color('#e6f4e9') },
@@ -234,30 +229,29 @@ export class Diver {
       },
       vertexShader: /* glsl */`
         varying float vAlong;
-        varying float vRadius;
+        varying vec3 vNormalView;
+        varying vec3 vViewDirection;
         void main() {
-          // The geometry is already rotated so local +X is the beam direction.
-          vAlong = clamp(position.x / 9.0, 0.0, 1.0);
-          float radius = mix(0.1, 2.25, vAlong);
-          vRadius = length(vec2(position.y - 0.08, position.z)) / max(radius, 0.001);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vAlong = clamp(position.x * 0.5 + 0.5, 0.0, 1.0);
+          vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+          vNormalView = normalize(normalMatrix * normal);
+          vViewDirection = normalize(-viewPosition.xyz);
+          gl_Position = projectionMatrix * viewPosition;
         }
       `,
       fragmentShader: /* glsl */`
         uniform vec3 uColor;
         uniform float uIntensity;
         varying float vAlong;
-        varying float vRadius;
+        varying vec3 vNormalView;
+        varying vec3 vViewDirection;
         void main() {
-          float nearFade = smoothstep(0.0, 0.10, vAlong);
-          float farFade = 1.0 - smoothstep(0.56, 0.98, vAlong);
-          // The mesh is a thin volumetric shell, so keep a soft residual at
-          // its silhouette while the interior receives a slightly stronger
-          // contribution. The important visual fade is at the near and far
-          // ends, where a solid cone would otherwise reveal a hard cap.
-          float edgeFade = 0.78 + 0.22 * (1.0 - smoothstep(0.62, 1.0, vRadius));
-          float core = 0.70 + 0.30 * (1.0 - smoothstep(0.0, 1.0, vRadius));
-          float alpha = uIntensity * nearFade * farFade * edgeFade * core;
+          float facing = max(dot(normalize(vNormalView), normalize(vViewDirection)), 0.0);
+          float softEdge = smoothstep(0.0, 0.82, facing);
+          float nearFade = smoothstep(0.0, 0.18, vAlong);
+          float farFade = 1.0 - smoothstep(0.54, 1.0, vAlong);
+          float roundedCore = 0.52 + 0.48 * (1.0 - smoothstep(0.0, 1.0, abs(vAlong * 2.0 - 1.0)));
+          float alpha = uIntensity * nearFade * farFade * softEdge * roundedCore * 0.44;
           if (alpha < 0.002) discard;
           gl_FragColor = vec4(uColor, alpha);
         }
@@ -269,6 +263,8 @@ export class Diver {
     });
     this.headlampBeam = new THREE.Mesh(beamGeometry, this.headlampBeamMaterial);
     this.headlampBeam.name = 'diver-headlamp-volume';
+    this.headlampBeam.position.set(4.5, 0.08, 0);
+    this.headlampBeam.scale.set(4.5, 1.25, 1.25);
     this.headlampBeam.renderOrder = 2;
     this.headlamp.add(this.headlampBeam);
     this.body.add(this.headlamp, this.headlamp.target);
