@@ -1,3 +1,5 @@
+@import './scrollbar.css';
+
 :root {
   --ink: #eaf8ff;
   --muted: rgba(234, 248, 255, 0.6);
@@ -1166,6 +1168,8 @@ a.button.primary {
   place-items: center;
   background: rgba(2, 8, 18, 0.6);
   padding: 16px;
+  /* Settings run taller than a short phone screen: scroll rather than cut off Back. */
+  overflow-y: auto;
 }
 
 #pause .card {
@@ -1204,17 +1208,9 @@ button.danger {
   cursor: pointer;
 }
 
-.setting select {
-  font: inherit;
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 8px;
-}
-
-.setting select option {
-  background: #04121f;
+/* On a narrow screen the dropdown's value is cut short (…) before the setting's name wraps. */
+.setting > span:first-child {
+  flex-shrink: 0;
 }
 
 .setting input[type='checkbox'] {
@@ -1420,6 +1416,9 @@ button:disabled {
   box-shadow: 0 18px 70px rgba(0, 0, 0, 0.45), 0 0 40px rgba(62, 240, 168, 0.08);
   max-height: calc(100vh - 24px);
   overflow-y: auto;
+  /* One scroll area, not two nested ones: the slot grid takes the height the rest leaves. */
+  display: flex;
+  flex-direction: column;
 }
 
 .gear-slots {
@@ -1427,9 +1426,19 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 16px;
-  max-height: min(52vh, 520px);
+  /* Shrinks to fit the panel and scrolls inside it; the module and upgrade cards stay in view. */
+  flex: 0 1 auto;
+  min-height: 0;
   overflow: auto;
   padding-right: 3px;
+}
+
+/* Too short or narrow for a useful slot list beside the cards: the panel scrolls as a whole instead. */
+@media (max-height: 700px), (max-width: 640px) {
+  .gear-slots {
+    flex-shrink: 0;
+    overflow: visible;
+  }
 }
 
 .gear-slot-card {
@@ -1569,7 +1578,6 @@ button:disabled {
 @media (max-width: 640px) {
   .gear-slots {
     grid-template-columns: 1fr;
-    max-height: 48vh;
   }
 }
 
