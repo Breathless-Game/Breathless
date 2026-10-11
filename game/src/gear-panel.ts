@@ -7,7 +7,7 @@ import {
   nextSlotTier,
   pathTier,
   slotTier,
-  totalPearls,
+  spendablePearls,
   upgradeSlot,
   type EquipmentSlot,
   type EquipmentPathId,
@@ -386,14 +386,12 @@ export class GearPanel {
     const current = slotTier(state, ui.slot);
     const next = nextSlotTier(state, ui.slot);
     const stats = deriveStats(state);
-    const pearls = totalPearls(state);
+    const pearls = spendablePearls(state);
     const currentText = tierText(current, ui.slot, this.language);
     this.icon.textContent = ui.icon;
     this.level.textContent = `${this.language === 'zh' ? ui.titleZh : ui.titleEn} · Lv${current.level} · ${currentText.name}`;
     this.effect.textContent = ui.slot === 'sonar' ? currentText.effect : statSummary(stats, ui.slot, this.language);
-    this.pearls.textContent = this.language === 'zh'
-      ? `${pearlText(pearls)}${state.legacyPearls ? `（${state.legacyPearls} legacy，优先消耗）` : ''} · ${copy.selectedPearls}`
-      : `${pearlText(pearls)}${state.legacyPearls ? ` (${state.legacyPearls} legacy, spent first)` : ''} · ${copy.selectedPearls}`;
+    this.pearls.textContent = `${pearlText(pearls)} · ${copy.selectedPearls}`;
 
     if (!next) {
       this.progress.max = 1;
@@ -545,7 +543,7 @@ export class GearPanel {
         button.textContent = copy.max;
         button.disabled = true;
       } else {
-        const missing = Math.max(0, next.cost - totalPearls(state));
+        const missing = Math.max(0, next.cost - spendablePearls(state));
         nextLine.textContent = `${copy.nextLevel}: ${nextText!.name} · ${nextText!.effect}`;
         button.textContent = this.busy ? copy.spending : missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} · ${next.cost} ◇`;
         button.disabled = this.busy || missing > 0;
