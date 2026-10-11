@@ -94,6 +94,11 @@ export class WeatherCycle {
   private transitionFrom: WeatherState | null = null;
   private transitionSecond = 0;
 
+  constructor(startSecond = 0) {
+    this.cycleSecond = Number.isFinite(startSecond) ? ((startSecond % 540) + 540) % 540 : 0;
+    this.currentState = sampleWeather(this.cycleSecond, CLIMATES[this.currentClimate]);
+  }
+
   get mode(): WeatherMode {
     return this.currentMode;
   }
