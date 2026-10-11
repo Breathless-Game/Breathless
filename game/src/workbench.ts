@@ -22,7 +22,6 @@ import { chartWeatherShows, type WeatherState } from './weather';
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
-import { synthesisCost } from './synthesis';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -118,6 +117,11 @@ const FIGURE_H = 1.25; // standing height, table units: its head stays under the
 const MAP_AT = new THREE.Vector3(0.4, 0, 0.1);
 // The guide lives on the clear right side of the bench, beside the chart.
 const GUIDE_AT = new THREE.Vector3(1.15, 0.08, 1.75);
+// Where the synthesis case stands. Stowed, it is behind the table's back edge (z = -2.7), clear
+// of the chart, the boat, the tray and the diver; opened, it slides forward so its mat lies on
+// the middle of the table.
+const SYNTH_STOW_Z = -3.55;
+const SYNTH_OPEN_Z = -1.72;
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
@@ -171,49 +175,6 @@ const DROP_GAP_S = 0.15;
 
 const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
-
-const SYNTH_PAD = { x0: -2.15, x1: 2.15, z0: -1.55, z1: 0.72 };
-// Where the synthesis case stands. Stowed, it is behind the table's back edge (z = -2.7), clear
-// of the chart, the boat, the tray and the diver; opened, it slides forward so its mat lies on
-// the middle of the table.
-const SYNTH_STOW_Z = -3.55;
-const SYNTH_OPEN_Z = -1.72;
-const SYNTH_SLOTS: [number, number][] = [[-0.78, -0.42], [0.78, -0.42]];
-
-type SynthMaterialId = 'scale' | 'fiber' | 'scrap' | 'crystal';
-interface SynthMaterialDef {
-  id: SynthMaterialId;
-  name: string;
-  nameZh: string;
-  color: string;
-  side: 'left' | 'right';
-  level: number;
-  effect: number;
-}
-
-const SYNTH_MATERIALS: readonly SynthMaterialDef[] = [
-  { id: 'scale', name: 'Fish scale', nameZh: '鱼鳞片', color: '#d88b55', side: 'left', level: 1, effect: 0.1 },
-  { id: 'fiber', name: 'Coral fiber', nameZh: '珊瑚纤维', color: '#dbb56e', side: 'left', level: 1, effect: 0.2 },
-  { id: 'scrap', name: 'Iron scrap', nameZh: '铁屑', color: '#758088', side: 'right', level: 2, effect: 0.4 },
-  { id: 'crystal', name: 'Depth crystal', nameZh: '深度晶体', color: '#54c4c8', side: 'right', level: 2, effect: 0.7 },
-];
-
-interface SynthMaterial {
-  def: SynthMaterialDef;
-  obj: THREE.Group;
-  hit: THREE.Mesh;
-  home: THREE.Vector3;
-  pos: THREE.Vector3;
-  slot: -1 | 0 | 1;
-  mode: 'hidden' | 'home' | 'held' | 'moving' | 'placed';
-  hover: number;
-}
-
-type SynthRecipe = 'bait' | 'plate';
-const recipeFor = (a: SynthMaterialId, b: SynthMaterialId): SynthRecipe | null => {
-  const pair = [a, b].sort().join('+');
-  return pair === 'fiber+scale' ? 'bait' : pair === 'crystal+scrap' ? 'plate' : null;
-};
 
 type Mode = 'wait' | 'free' | 'held' | 'moving' | 'ready';
 type State = 'closed' | 'idle' | 'opening' | 'guide' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect' | 'synth';
@@ -278,9 +239,6 @@ export class Workbench {
   private pinsEl = $('wb-pins');
   private placeEl = $('wb-place');
   private previewBox = $('wb-place-preview');
-  private synthHud = $('wb-synth-hud');
-  private synthStatus = $('wb-synth-status');
-  private synthCost = $('wb-synth-cost');
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -309,15 +267,9 @@ export class Workbench {
   private dust: { mesh: THREE.Mesh; t: number }[] = [];
   private synthesisRig = new THREE.Group();
   private synthesisCrates: THREE.Group[] = [];
-  private synthesisLids: THREE.Group[] = [];
   private synthesisHit!: THREE.Mesh;
-  private synthesisPadMat!: THREE.MeshStandardMaterial;
-  private synthesisPulse: THREE.Mesh | null = null;
-  private synthesisResult: THREE.Group | null = null;
-  private synthesisMaterials: SynthMaterial[] = [];
-  private synthesisSlots: [SynthMaterial | null, SynthMaterial | null] = [null, null];
   private synthesisLift = -0.65;
-  private synthesisCrafting = false;
+  private synthesisLids: THREE.Group[] = [];
   private synthesisPieceVisibility: boolean[] = [];
   private synthesisFigureVisibility: boolean | null = null;
 
@@ -330,11 +282,10 @@ export class Workbench {
   private last = 0;
   private raf = 0;
   private tweens: Tween[] = [];
-  private press: { piece: Piece | null; material: SynthMaterial | null; map: boolean; figure: boolean; guide: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
+  private press: { piece: Piece | null; map: boolean; figure: boolean; guide: boolean; synth: boolean; x: number; y: number; t: number } | null = null;
   private held: Piece | null = null;
-  private heldMaterial: SynthMaterial | null = null;
   private holdTarget = new THREE.Vector3();
-  private hovered: Piece | SynthMaterial | 'map' | 'figure' | 'guide' | 'synth' | null = null;
+  private hovered: Piece | 'map' | 'figure' | 'guide' | 'synth' | null = null;
   private picked: MapId | null = null;
   private inspector: GearInspector;
   // The diver figure on its stand (not a piece: it never moves). It wears what's in the tray.
@@ -375,7 +326,6 @@ export class Workbench {
     this.mapMat = new THREE.MeshStandardMaterial({ map: this.mapTex, roughness: 0.92, side: THREE.DoubleSide, emissive: '#ffcc4d', emissiveIntensity: 0 });
     this.sheet = new SoftPaper(MAP_W, MAP_D, this.mapMat);
     this.mapMesh = this.buildMap();
-    this.buildSynthesisMaterials();
 
     this.chartRenderer = new THREE.WebGLRenderer({ canvas: $<HTMLCanvasElement>('wb-chart-gl'), antialias: true, alpha: true });
     this.chartRenderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -481,7 +431,6 @@ export class Workbench {
     this.chartEl.classList.add('hidden');
     this.chartEl.classList.remove('open', 'ready', 'revealing');
     this.tip.classList.add('hidden');
-    this.synthHud.classList.add('hidden');
     this.scene.add(this.map); // back on the table, out of the chart layer
     this.map.visible = true;
     this.map.position.copy(MAP_AT);
@@ -496,16 +445,15 @@ export class Workbench {
     this.guide.rotation.set(-0.04, -0.12, 0);
     this.guide.scale.setScalar(1);
     this.tweens = [];
-    this.resetSynthesisVisuals();
     this.synthesisLift = -0.65;
     this.synthesisRig.position.set(0, this.synthesisLift, SYNTH_STOW_Z);
     this.synthesisCrates[0]?.position.set(-3.48, 0.55, 0.05);
     this.synthesisCrates[1]?.position.set(3.48, 0.55, 0.05);
     this.synthesisLids[0]?.rotation.set(0, 0, 0);
     this.synthesisLids[1]?.rotation.set(0, 0, 0);
+    this.restoreWorkbenchPieces();
     this.hooks.synthesisClose?.();
     this.held = null;
-    this.heldMaterial = null;
     this.press = null;
     this.chartWeatherKey = '';
     this.paintMap();
@@ -540,8 +488,6 @@ export class Workbench {
 
   hide() {
     this.inspector.close();
-    this.resetSynthesisVisuals();
-    this.restoreWorkbenchPieces();
     this.hooks.synthesisClose?.();
     this.state = 'closed';
     cancelAnimationFrame(this.raf);
@@ -549,13 +495,13 @@ export class Workbench {
     this.ui.classList.add('hidden');
     this.chartEl.classList.add('hidden');
     this.tip.classList.add('hidden');
-    this.synthHud.classList.add('hidden');
     this.guideOpen = 0;
     this.guideReturning = false;
     this.guideLift = 0;
     this.guide.position.copy(GUIDE_AT);
     this.guide.rotation.set(-0.04, -0.12, 0);
     this.guide.scale.setScalar(1);
+    this.restoreWorkbenchPieces();
     document.body.style.cursor = '';
   }
 
@@ -691,7 +637,6 @@ export class Workbench {
     const pad = new THREE.Mesh(new THREE.BoxGeometry(4.35, 0.1, 2.28), new THREE.MeshStandardMaterial({ color: '#9b9e9a', roughness: 0.92, flatShading: true }));
     pad.position.set(0, 0.075, 1.25);
     pad.receiveShadow = true;
-    this.synthesisPadMat = pad.material as THREE.MeshStandardMaterial;
     this.synthesisRig.add(pad);
     for (const x of [-1.08, 0, 1.08]) {
       const seam = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.014, 2.05), new THREE.MeshBasicMaterial({ color: '#5f625f' }));
@@ -952,37 +897,6 @@ export class Workbench {
       hover: 0,
       tray: 1,
     };
-  }
-
-  private buildSynthesisMaterials() {
-    const home: Record<SynthMaterialId, [number, number]> = {
-      scale: [-3.82, -1.82],
-      fiber: [-3.23, -1.48],
-      scrap: [3.23, -1.48],
-      crystal: [3.82, -1.82],
-    };
-    for (const def of SYNTH_MATERIALS) {
-      const obj = new THREE.Group();
-      let shape: THREE.Mesh;
-      if (def.id === 'crystal') shape = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0), new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.35, metalness: 0.2, flatShading: true }));
-      else if (def.id === 'scale') shape = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 0), new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.5, metalness: 0.1, flatShading: true }));
-      else if (def.id === 'fiber') shape = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.14, 0.58, 6), new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.75, flatShading: true }));
-      else shape = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.18, 0.38), new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.84, metalness: 0.55, flatShading: true }));
-      shape.castShadow = shape.receiveShadow = true;
-      if (def.id === 'fiber') shape.rotation.z = Math.PI / 2;
-      obj.add(shape);
-      const accent = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.08), new THREE.MeshBasicMaterial({ color: '#f4e5b5' }));
-      accent.position.set(0.18, 0.2, 0.08);
-      obj.add(accent);
-      const hit = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.58, 0.72), new THREE.MeshBasicMaterial({ visible: false }));
-      obj.add(hit);
-      const [x, z] = home[def.id];
-      const at = new THREE.Vector3(x, 0.82, z);
-      const material: SynthMaterial = { def, obj, hit, home: at.clone(), pos: at.clone(), slot: -1, mode: 'hidden', hover: 0 };
-      obj.visible = false;
-      this.scene.add(obj);
-      this.synthesisMaterials.push(material);
-    }
   }
 
   /**
@@ -1255,14 +1169,6 @@ export class Workbench {
       // Set down a little smaller in the tray, so neighbours don't overlap.
       p.tray = lerp(p.tray, p.slot >= 0 ? TRAY_SCALE : 1, 1 - Math.exp(-dt * 8));
       p.obj.scale.setScalar(p.tray * (1 + p.hover * 0.08));
-    }
-    for (const m of this.synthesisMaterials) {
-      m.hover = lerp(m.hover, this.hovered === m ? 1 : 0, 1 - Math.exp(-dt * 14));
-      if (!m.obj.visible) continue;
-      m.obj.position.copy(m.pos);
-      m.obj.position.y += m.hover * 0.14;
-      m.obj.scale.setScalar(1 + m.hover * 0.15);
-      if (m.mode === 'home') m.obj.rotation.y += dt * 0.35;
     }
     this.mapHover = lerp(this.mapHover, this.hovered === 'map' ? 1 : 0, 1 - Math.exp(-dt * 12));
     // Carrying a piece over the tray lights the ring it will drop into.
@@ -1597,254 +1503,27 @@ export class Workbench {
     return v.x > TRAY.x0 && v.x < TRAY.x1 && v.z > TRAY.z0 && v.z < TRAY.z1;
   }
 
-  private inSynthesisPad(v: THREE.Vector3) {
-    return v.x > SYNTH_PAD.x0 && v.x < SYNTH_PAD.x1 && v.z > SYNTH_PAD.z0 && v.z < SYNTH_PAD.z1;
-  }
-
-  private restoreWorkbenchPieces() {
-    if (this.synthesisPieceVisibility.length) this.pieces.forEach((p, i) => { p.obj.visible = this.synthesisPieceVisibility[i] ?? p.obj.visible; });
-    if (this.synthesisFigureVisibility !== null) this.figure.visible = this.synthesisFigureVisibility;
-    this.synthesisPieceVisibility = [];
-    this.synthesisFigureVisibility = null;
-    this.map.visible = true;
-  }
-
-  private resetSynthesisVisuals() {
-    this.synthesisCrafting = false;
-    this.synthesisSlots = [null, null];
-    this.heldMaterial = null;
-    this.synthesisMaterials.forEach((m) => {
-      m.mode = 'hidden';
-      m.slot = -1;
-      m.pos.copy(m.home);
-      m.obj.position.copy(m.pos);
-      m.obj.rotation.set(0, 0, 0);
-      m.obj.scale.setScalar(1);
-      m.obj.visible = false;
-    });
-    if (this.synthesisPulse) {
-      this.scene.remove(this.synthesisPulse);
-      this.synthesisPulse.geometry.dispose();
-      (this.synthesisPulse.material as THREE.Material).dispose();
-      this.synthesisPulse = null;
-    }
-    if (this.synthesisResult) {
-      this.scene.remove(this.synthesisResult);
-      this.synthesisResult.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry.dispose();
-          (Array.isArray(o.material) ? o.material : [o.material]).forEach((mat) => mat.dispose());
-        }
-      });
-      this.synthesisResult = null;
-    }
-    this.synthHud.classList.add('hidden');
-  }
-
-  private showSynthesisMaterials() {
-    this.synthesisMaterials.forEach((m) => {
-      m.mode = 'home';
-      m.slot = -1;
-      m.pos.copy(m.home);
-      m.obj.position.copy(m.pos);
-      m.obj.visible = true;
-    });
-    this.synthesisSlots = [null, null];
-    this.synthesisCrafting = false;
-    this.synthHud.classList.remove('hidden');
-    this.updateSynthesisHud('从左右物资箱拖入中央工作垫');
-  }
-
-  private updateSynthesisHud(message?: string) {
-    if (message) this.synthStatus.textContent = message;
-    const selected = this.synthesisSlots.filter((m): m is SynthMaterial => !!m);
-    const cost = selected.length === 2
-      ? (recipeFor(selected[0].def.id, selected[1].def.id) === 'bait' ? 38 : recipeFor(selected[0].def.id, selected[1].def.id) === 'plate' ? 128 : synthesisCost(selected.reduce((sum, m) => sum + m.def.level, 0), selected.reduce((sum, m) => sum + m.def.effect, 0)))
-      : 0;
-    this.synthCost.textContent = selected.length ? `${cost} TOKENS · ${selected.length}/2` : '0 TOKENS · 0/2';
-  }
-
-  private openSynthesis() {
-    if (this.state !== 'idle') return;
-    this.state = 'opening';
-    this.tip.classList.add('hidden');
-    document.body.style.cursor = '';
-    this.map.visible = false;
-    this.synthesisPieceVisibility = this.pieces.map((p) => p.obj.visible);
-    this.pieces.forEach((p) => { p.obj.visible = false; });
-    this.synthesisFigureVisibility = this.figure.visible;
-    this.figure.visible = false;
-    this.resetSynthesisVisuals();
-    const fromY = this.synthesisLift;
-    const fromZ = this.synthesisRig.position.z;
-    const fromL = this.synthesisCrates[0]?.position.x ?? -3.48;
-    const fromR = this.synthesisCrates[1]?.position.x ?? 3.48;
-    this.tween(0.85, (u) => {
-      const e = easeOut(u);
-      this.synthesisLift = lerp(fromY, 0, e);
-      this.synthesisRig.position.set(0, this.synthesisLift, lerp(fromZ, SYNTH_OPEN_Z, e));
-      this.synthesisCrates[0]?.position.set(lerp(fromL, -3.48, e), 0.55, 0.05);
-      this.synthesisCrates[1]?.position.set(lerp(fromR, 3.48, e), 0.55, 0.05);
-      this.synthesisLids[0]?.rotation.set(-0.72 * e, 0, 0);
-      this.synthesisLids[1]?.rotation.set(0.72 * e, 0, 0);
-    }, () => {
-      this.state = 'synth';
-      this.showSynthesisMaterials();
-    });
-  }
-
-  private closeSynthesis() {
-    if (this.state !== 'synth') return;
-    this.state = 'closing';
-    this.resetSynthesisVisuals();
-    const fromY = this.synthesisLift;
-    const fromZ = this.synthesisRig.position.z;
-    this.tween(0.55, (u) => {
-      const e = easeInOut(u);
-      this.synthesisLift = lerp(fromY, -0.65, e);
-      this.synthesisRig.position.set(0, this.synthesisLift, lerp(fromZ, SYNTH_STOW_Z, e));
-      this.synthesisLids[0]?.rotation.set(-0.72 * (1 - e), 0, 0);
-      this.synthesisLids[1]?.rotation.set(0.72 * (1 - e), 0, 0);
-    }, () => {
-      this.restoreWorkbenchPieces();
-      this.state = 'idle';
-    });
-  }
-
-  private placeMaterial(material: SynthMaterial) {
-    if (this.synthesisCrafting || (material.mode !== 'home' && material.mode !== 'held')) return;
-    if (this.synthesisSlots.some((m) => m?.def.id === material.def.id)) {
-      this.updateSynthesisHud('同类材料已放入工作垫');
-      this.returnMaterial(material);
-      return;
-    }
-    const slot = this.synthesisSlots.findIndex((m) => !m) as 0 | 1;
-    if (slot < 0) {
-      this.updateSynthesisHud('中央工作垫已满');
-      this.returnMaterial(material);
-      return;
-    }
-    material.slot = slot;
-    material.mode = 'moving';
-    const from = material.pos.clone();
-    const [x, z] = SYNTH_SLOTS[slot];
-    const to = new THREE.Vector3(x, 0.34, z);
-    this.tween(0.34, (u) => {
-      const e = easeInOut(u);
-      material.pos.lerpVectors(from, to, e);
-      material.pos.y += Math.sin(Math.PI * u) * 0.45;
-      material.obj.rotation.y += 0.14;
-    }, () => {
-      material.pos.copy(to);
-      material.mode = 'placed';
-      this.synthesisSlots[slot] = material;
-      this.updateSynthesisHud('再放入一件材料，中央会自动合成');
-      if (this.synthesisSlots[0] && this.synthesisSlots[1]) this.startSynthesisCraft();
-    });
-  }
-
-  private returnMaterial(material: SynthMaterial) {
-    material.mode = 'moving';
-    const from = material.pos.clone();
-    this.tween(0.3, (u) => material.pos.lerpVectors(from, material.home, easeInOut(u)), () => {
-      material.pos.copy(material.home);
-      material.slot = -1;
-      material.mode = 'home';
-    });
-  }
-
-  private startSynthesisCraft() {
-    const first = this.synthesisSlots[0];
-    const second = this.synthesisSlots[1];
-    if (!first || !second || this.synthesisCrafting) return;
-    const recipe = recipeFor(first.def.id, second.def.id);
-    if (!recipe) {
-      this.updateSynthesisHud('配方不匹配，材料正在退回物资箱');
-      const selected = [first, second];
-      this.synthesisSlots = [null, null];
-      selected.forEach((m) => {
-        const from = m.pos.clone();
-        this.tween(0.45, (u) => m.pos.lerpVectors(from, m.home, easeInOut(u)), () => { m.pos.copy(m.home); m.slot = -1; m.mode = 'home'; });
-      });
-      return;
-    }
-    this.synthesisCrafting = true;
-    this.updateSynthesisHud(recipe === 'bait' ? '合成中 · 潮汐鱼饵' : '合成中 · 复合护板');
-    const selected = [first, second];
-    const pulse = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.52, 24), new THREE.MeshBasicMaterial({ color: recipe === 'bait' ? '#edbb70' : '#6ce0df', transparent: true, opacity: 0.85, depthWrite: false }));
-    pulse.rotation.x = -Math.PI / 2;
-    pulse.position.set(0, 0.18, -0.42);
-    this.synthesisPulse = pulse;
-    this.scene.add(pulse);
-    const centre = new THREE.Vector3(0, 0.45, -0.42);
-    this.tween(0.86, (u) => {
-      const e = easeInOut(u);
-      selected.forEach((m, i) => {
-        m.pos.lerp(centre, e);
-        m.obj.scale.setScalar(1 + Math.sin(u * Math.PI) * 0.35);
-        m.obj.rotation.y += (i ? -1 : 1) * 0.35;
-      });
-      pulse.scale.setScalar(0.7 + e * 2.2);
-      (pulse.material as THREE.MeshBasicMaterial).opacity = 0.85 * (1 - e * 0.65);
-      this.synthesisPadMat.emissive.set(recipe === 'bait' ? '#8a5720' : '#28666b');
-      this.synthesisPadMat.emissiveIntensity = 0.05 + e * 0.28;
-    }, () => {
-      selected.forEach((m) => { m.mode = 'hidden'; m.slot = -1; m.obj.visible = false; });
-      this.synthesisSlots = [null, null];
-      this.makeSynthesisResult(recipe);
-      this.synthesisCrafting = false;
-      this.synthesisPadMat.emissiveIntensity = 0.08;
-    });
-  }
-
-  private makeSynthesisResult(recipe: SynthRecipe) {
-    const result = new THREE.Group();
-    const material = new THREE.MeshStandardMaterial({ color: recipe === 'bait' ? '#e2a660' : '#75b9bf', roughness: 0.5, metalness: recipe === 'plate' ? 0.5 : 0.08, flatShading: true, emissive: recipe === 'bait' ? '#6f3f1b' : '#245e63', emissiveIntensity: 0.3 });
-    const mesh = recipe === 'bait'
-      ? new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 1), material)
-      : new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.16, 0.58), material);
-    mesh.castShadow = mesh.receiveShadow = true;
-    result.add(mesh);
-    result.position.set(0, 0.4, -0.42);
-    result.scale.setScalar(0.05);
-    this.synthesisResult = result;
-    this.scene.add(result);
-    const label = recipe === 'bait' ? `${t('Tide bait complete', '潮汐鱼饵完成')} · 38 TOKENS` : `${t('Composite plate complete', '复合护板完成')} · 128 TOKENS`;
-    this.updateSynthesisHud(label);
-    this.tween(0.55, (u) => {
-      const e = easeOut(u);
-      result.scale.setScalar(0.05 + e * 0.95);
-      result.position.y = 0.4 + Math.sin(Math.PI * e) * 0.35;
-      result.rotation.y += 0.12;
-    });
-  }
-
   // ---- Pointer ----------------------------------------------------------
 
   private setRay(e: PointerEvent) {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1), this.camera);
   }
 
-  private pick(e: PointerEvent): Piece | SynthMaterial | 'map' | 'figure' | 'guide' | 'synth' | null {
+  private pick(e: PointerEvent): Piece | 'map' | 'figure' | 'guide' | 'synth' | null {
     this.setRay(e);
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
-    targets.push(...this.synthesisMaterials.filter((m) => m.obj.visible && m.mode !== 'moving').map((m) => m.hit));
     if (this.map.visible) targets.push(this.mapMesh);
-    // The diver is put away while the synthesis case is open; its stand is where a crate opens.
+    // The diver is put away while the synthesis case is open.
     if (this.figure.visible) targets.push(this.figureHit);
     targets.push(this.guideHit);
-    // The case is only something to click while it is stowed. Open, the clicks belong to the
-    // materials in its crates and on its mat.
+    // The case is only something to click while it is stowed.
     if (this.synthesisRig.visible && this.state === 'idle') targets.push(this.synthesisHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
     if (hit.object === this.figureHit) return 'figure';
     if (hit.object === this.guideHit) return 'guide';
     if (hit.object === this.synthesisHit) return 'synth';
-    if (hit.object === this.mapMesh) return 'map';
-    return this.synthesisMaterials.find((m) => m.hit === hit.object)
-      ?? this.pieces.find((p) => p.hit === hit.object)
-      ?? null;
+    return hit.object === this.mapMesh ? 'map' : (this.pieces.find((p) => p.hit === hit.object) ?? null);
   }
 
   /** Our clicks land on a bare canvas (the title's, which sits under ours); not on menus or buttons. */
@@ -1857,11 +1536,10 @@ export class Workbench {
 
   private onDown(e: PointerEvent) {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
-    if (this.blocked() || (this.state !== 'idle' && this.state !== 'synth') || !this.ours(e) || e.defaultPrevented) return;
+    if (this.blocked() || this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
-    const material = hit && typeof hit !== 'string' && 'home' in hit ? hit : null;
-    const piece = hit && typeof hit !== 'string' && !('home' in hit) ? hit : null;
-    this.press = { piece, material, map: hit === 'map', guide: hit === 'guide', figure: hit === 'figure', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
+    const piece = hit && !['map', 'figure', 'guide', 'synth'].includes(hit as string) ? hit as Piece : null;
+    this.press = { piece, map: hit === 'map', guide: hit === 'guide', figure: hit === 'figure', synth: hit === 'synth', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
@@ -1876,14 +1554,6 @@ export class Workbench {
       this.ray.ray.intersectPlane(new THREE.Plane(UP, -HOLD_Y), this.holdTarget);
       this.holdTarget.x = THREE.MathUtils.clamp(this.holdTarget.x, TABLE.x0 + 0.4, TABLE.x1 - 0.4);
       this.holdTarget.z = THREE.MathUtils.clamp(this.holdTarget.z, TABLE.z0 + 0.3, TABLE.z1 - 0.3);
-      return;
-    }
-    if (this.heldMaterial) {
-      this.setRay(e);
-      this.ray.ray.intersectPlane(new THREE.Plane(UP, -HOLD_Y), this.holdTarget);
-      this.holdTarget.x = THREE.MathUtils.clamp(this.holdTarget.x, TABLE.x0 + 0.4, TABLE.x1 - 0.4);
-      this.holdTarget.z = THREE.MathUtils.clamp(this.holdTarget.z, TABLE.z0 + 0.3, TABLE.z1 - 0.3);
-      this.heldMaterial.pos.copy(this.holdTarget);
       return;
     }
     const press = this.press;
@@ -1903,18 +1573,7 @@ export class Workbench {
       this.onMove(e);
       return;
     }
-    if (press?.material && Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_MOVE_PX) {
-      const material = press.material;
-      material.mode = 'held';
-      this.heldMaterial = material;
-      this.press = null;
-      this.hovered = null;
-      this.tip.classList.add('hidden');
-      document.body.style.cursor = 'grabbing';
-      this.onMove(e);
-      return;
-    }
-    if ((this.state !== 'idle' && this.state !== 'synth') || !this.ours(e) || e.defaultPrevented) {
+    if (this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) {
       this.setHover(null, e);
       return;
     }
@@ -1968,30 +1627,21 @@ export class Workbench {
       }
       return;
     }
-    if (this.heldMaterial) {
-      const material = this.heldMaterial;
-      this.heldMaterial = null;
-      document.body.style.cursor = '';
-      material.mode = 'home';
-      if (this.inSynthesisPad(material.pos)) this.placeMaterial(material);
-      else this.returnMaterial(material);
-      return;
-    }
     const press = this.press;
     this.press = null;
-    if (!press || (this.state !== 'idle' && this.state !== 'synth')) return;
+    if (!press || this.state !== 'idle') return;
     const click = Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS;
     if (!click) return;
     if (press.guide) this.pickUpGuide();
     else if (press.map) this.openChart();
+    else if (press.synth) this.openSynthesis();
     else if (press.figure) {
       this.setHover(null, e);
       this.inspectDiver();
     } else if (press.piece) {
       this.setHover(null, e);
       this.inspect(press.piece);
-    } else if (press.synth) this.openSynthesis();
-    else if (press.material && this.state === 'synth') this.placeMaterial(press.material);
+    }
   }
 
   /** A closer look: the piece is held up in the middle of the screen, out of where it lies. */
@@ -2015,7 +1665,7 @@ export class Workbench {
     this.inspector.showDiver({ x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
   }
 
-  private setHover(hit: Piece | SynthMaterial | 'map' | 'figure' | 'guide' | 'synth' | null, e: PointerEvent) {
+  private setHover(hit: Piece | 'map' | 'figure' | 'guide' | 'synth' | null, e: PointerEvent) {
     this.hovered = hit;
     document.body.style.cursor = hit ? 'pointer' : '';
     if (!hit) {
@@ -2035,8 +1685,6 @@ export class Workbench {
           ]
         : hit === 'synth'
         ? [t('Field workbench', '合成工作台'), t('Military steel', '军用钢板'), t('Click to raise and open', '点击升起并打开')]
-        : 'home' in hit
-        ? [hit.def.nameZh, t('Drag to the centre mat', '拖到中央工作垫'), t('Click or drag to place', '点击或拖拽放置')]
         : [
             upgradeName(hit.def),
             hit.id === 'boat' ? t('Your ship · click to see the ships', '当前船只 · 点击查看船只') : `Lv ${hit.key} · ${upgradeEffect(hit.def, hit.key)}`,
@@ -2243,6 +1891,62 @@ export class Workbench {
     this.picked = id;
     for (const el of this.pinsEl.children) el.classList.toggle('picked', (el as HTMLElement).dataset.map === id);
     this.renderPlace();
+  }
+
+  private restoreWorkbenchPieces() {
+    if (this.synthesisPieceVisibility.length) this.pieces.forEach((p, i) => { p.obj.visible = this.synthesisPieceVisibility[i] ?? p.obj.visible; });
+    if (this.synthesisFigureVisibility !== null) this.figure.visible = this.synthesisFigureVisibility;
+    this.synthesisPieceVisibility = [];
+    this.synthesisFigureVisibility = null;
+    this.map.visible = true;
+    this.guide.visible = true;
+  }
+
+  private openSynthesis() {
+    if (this.state !== 'idle') return;
+    this.state = 'opening';
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    this.map.visible = false;
+    this.guide.visible = false;
+    this.synthesisPieceVisibility = this.pieces.map((p) => p.obj.visible);
+    this.pieces.forEach((p) => { p.obj.visible = false; });
+    this.synthesisFigureVisibility = this.figure.visible;
+    this.figure.visible = false;
+    const fromY = this.synthesisLift;
+    const fromZ = this.synthesisRig.position.z;
+    const fromL = this.synthesisCrates[0]?.position.x ?? -3.48;
+    const fromR = this.synthesisCrates[1]?.position.x ?? 3.48;
+    this.tween(0.85, (u) => {
+      const e = easeOut(u);
+      this.synthesisLift = lerp(fromY, 0, e);
+      this.synthesisRig.position.set(0, this.synthesisLift, lerp(fromZ, SYNTH_OPEN_Z, e));
+      this.synthesisCrates[0]?.position.set(lerp(fromL, -3.48, e), 0.55, 0.05);
+      this.synthesisCrates[1]?.position.set(lerp(fromR, 3.48, e), 0.55, 0.05);
+      this.synthesisLids[0]?.rotation.set(-0.72 * e, 0, 0);
+      this.synthesisLids[1]?.rotation.set(0.72 * e, 0, 0);
+    }, () => {
+      this.state = 'synth';
+      this.hooks.synthesisOpen?.();
+    });
+  }
+
+  private closeSynthesis() {
+    if (this.state !== 'synth') return;
+    this.hooks.synthesisClose?.();
+    this.state = 'closing';
+    const fromY = this.synthesisLift;
+    const fromZ = this.synthesisRig.position.z;
+    this.tween(0.55, (u) => {
+      const e = easeInOut(u);
+      this.synthesisLift = lerp(fromY, -0.65, e);
+      this.synthesisRig.position.set(0, this.synthesisLift, lerp(fromZ, SYNTH_STOW_Z, e));
+      this.synthesisLids[0]?.rotation.set(-0.72 * (1 - e), 0, 0);
+      this.synthesisLids[1]?.rotation.set(0.72 * (1 - e), 0, 0);
+    }, () => {
+      this.restoreWorkbenchPieces();
+      this.state = 'idle';
+    });
   }
 
   /** The panel beside the chart: a live view of the place itself, what it is, what you carry, and Dive. */
