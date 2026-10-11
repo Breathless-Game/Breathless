@@ -48,6 +48,7 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { FieldGuide } from './field-guide';
 import { isAction, keysFor, openControls } from './controls';
 import { Trip, TripReport } from './trip';
+import { setLang } from './i18n';
 import { TankTable } from './aquarium-tank';
 import { HealthDesk } from './health-desk';
 import type { LessonId } from './tutorial';
@@ -70,6 +71,7 @@ const TRENCH_FISH = 12;
 // ---- Setup --------------------------------------------------------------
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
 const settings = loadSettings();
+setLang(settings.language); // before anything paints its text
 const renderQuality = new AdaptiveQuality({
   cores: navigator.hardwareConcurrency,
   memoryGB: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
@@ -1429,6 +1431,7 @@ function goToMenu() {
 }
 
 function applySettings(s: Settings) {
+  setLang(s.language);
   renderQuality.setMode(s.quality);
   diver.setQuality(renderQuality.settings);
   world.setLightingEffects(s.lightingEffects);

@@ -131,7 +131,7 @@ export class HealthDesk extends TableScene {
     const heldCanvas = document.createElement('canvas');
     const heldHint = document.createElement('div');
     heldHint.className = 'table-hint small';
-    heldHint.textContent = 'Click anywhere or press Esc to put it down';
+    heldHint.textContent = 'Click anywhere or press Esc to put it down · 点击任意处或按 Esc 放下';
     this.heldEl.append(heldBg, heldCanvas, heldHint);
     document.body.append(this.heldEl);
     this.heldRenderer = new THREE.WebGLRenderer({ canvas: heldCanvas, antialias: true, alpha: true });
@@ -148,7 +148,7 @@ export class HealthDesk extends TableScene {
     this.tip.className = 'hidden';
     this.hint = document.createElement('div');
     this.hint.className = 'table-hint small';
-    this.hint.textContent = 'Click the report to pick it up · hover a rolled report in the jar, click to swap it in · Esc back';
+    this.hint.textContent = 'Click the report to pick it up, hover a rolled report in the jar and click to swap it in, Esc back · 点击报告拿起，悬停筒里的卷轴查看、点击换出，Esc 返回';
     this.root.append(this.hint);
     document.body.append(this.tip); // over the title layer: the card mustn't hide behind a hanging fish
 

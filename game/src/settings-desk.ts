@@ -4,6 +4,7 @@ import type { Settings } from './settings';
 import { onWalletChange, walletState } from './wallet';
 import { shortAddress } from './wallet-storage';
 import { drawPlanks } from './workbench';
+import { onLang, pair } from './i18n';
 
 // Settings from the title screen, on a table like the workbench's: the SETTINGS
 // fish pans the camera down onto it, and wooden plaques drop onto the tabletop.
@@ -152,7 +153,7 @@ export class SettingsDesk {
     const hint = document.createElement('div');
     hint.id = 'desk-hint';
     hint.className = 'small';
-    hint.textContent = 'Click an option or a switch · Esc back';
+    hint.textContent = 'Click an option or a switch, Esc back · 点击选项或开关，Esc 返回';
     this.root.append(canvas, hint);
     document.body.append(this.root);
 
@@ -169,6 +170,7 @@ export class SettingsDesk {
     window.addEventListener('pointerup', (e) => this.onUp(e));
     window.addEventListener('resize', () => this.visible && this.resize());
     onWalletChange(() => this.paintAll());
+    onLang(() => this.paintAll()); // the plaques in the new language at once
   }
 
   get visible() {
@@ -300,7 +302,7 @@ export class SettingsDesk {
       ],
       [{ kind: 'toggle', title: ['LIGHTING EFFECTS', '光影特效'], get: () => s().lightingEffects, set: (v) => h.change({ lightingEffects: v }) }, -3.4, 0.55, 3.1, 1.1],
       [{ kind: 'toggle', title: ['CAMERA PREVIEW', '摄像头画面'], get: () => s().showCamera, set: (v) => h.change({ showCamera: v }) }, 0, 0.55, 3.1, 1.1],
-      [{ kind: 'action', title: ['CONTROLS', '操作'], line: () => 'Click to see or change keys', act: () => h.openControls?.() }, 3.4, 0.55, 3.1, 1.1],
+      [{ kind: 'action', title: ['CONTROLS', '操作'], line: () => 'Click to see or change keys · 点击查看或修改按键', act: () => h.openControls?.() }, 3.4, 0.55, 3.1, 1.1],
       [
         {
           kind: 'action',
@@ -308,7 +310,17 @@ export class SettingsDesk {
           line: () => '← Back · 返回',
           act: () => this.leave(),
         },
-        -2.3, 1.95, 3.3, 0.85,
+        -3.4, 1.95, 3.1, 0.85,
+      ],
+      [
+        {
+          kind: 'select',
+          title: ['LANGUAGE', '语言'],
+          options: [['en', 'English', 'English'], ['zh', '中文', '中文']],
+          get: () => s().language,
+          set: (v) => h.change({ language: v as Settings['language'] }),
+        },
+        0, 1.95, 3.1, 1.0,
       ],
       [
         {
@@ -316,11 +328,11 @@ export class SettingsDesk {
           title: ['PHANTOM WALLET', '钱包'],
           line: () => {
             const w = walletState();
-            return w.owner ? `${shortAddress(w.owner)} · click to disconnect` : 'Not connected · click to connect';
+            return w.owner ? `${shortAddress(w.owner)} · ${pair('click to disconnect', '点击断开')}` : pair('Not connected · click to connect', '未连接 · 点击连接');
           },
           act: () => (walletState().owner ? h.logOut() : h.connectWallet()),
         },
-        2.3, 1.95, 3.3, 0.85,
+        3.4, 1.95, 3.1, 0.85,
       ],
     ];
     specs.forEach(([spec, x, z, w, d], i) => this.plaques.push(this.buildPlaque(spec, new THREE.Vector3(x, BOARD_H / 2, z), w, d, ((i * 37) % 7 - 3) * 0.012)));
@@ -430,6 +442,9 @@ export class SettingsDesk {
     c.strokeRect(16, 16, W - 32, H - 32);
 
     const spec = p.spec;
+    // One language (Settings → Language): its title alone where the plaque had English then Chinese.
+    const tEn = pair(spec.title[0], spec.title[1]);
+    const tZh = '';
     const pad = 44;
     c.textBaseline = 'alphabetic';
     c.textAlign = 'left';
@@ -439,15 +454,15 @@ export class SettingsDesk {
       let size = H * 0.21;
       c.font = `900 ${size}px Inter, system-ui, sans-serif`;
       c.letterSpacing = '0.08em';
-      const w = c.measureText(spec.title[0]).width;
+      const w = c.measureText(tEn).width;
       if (w > room) size *= room / w;
       c.font = `900 ${size.toFixed(1)}px Inter, system-ui, sans-serif`;
       c.fillStyle = INK;
-      c.fillText(spec.title[0], pad, H * 0.34);
+      c.fillText(tEn, pad, H * 0.34);
       c.letterSpacing = '0px';
       c.font = `700 ${Math.round(H * 0.15)}px system-ui, sans-serif`;
       c.fillStyle = INK_SOFT;
-      c.fillText(spec.title[1], pad, H * 0.56);
+      c.fillText(tZh, pad, H * 0.56);
       const on = spec.get();
       c.fillStyle = on ? '#1f7a52' : '#8a3a2a';
       c.font = `900 ${Math.round(H * 0.22)}px Inter, system-ui, sans-serif`;
@@ -464,10 +479,10 @@ export class SettingsDesk {
       const [en, zh] = titleFonts();
       c.font = en;
       c.letterSpacing = '0.08em';
-      const a = c.measureText(spec.title[0]).width;
+      const a = c.measureText(tEn).width;
       c.font = zh;
       c.letterSpacing = '0px';
-      return a + size * 0.3 + c.measureText(spec.title[1]).width;
+      return a + size * 0.3 + c.measureText(tZh).width;
     };
     const tw0 = titleWidth();
     if (tw0 > room) size *= room / tw0;
@@ -475,12 +490,12 @@ export class SettingsDesk {
     c.fillStyle = INK;
     c.font = enFont;
     c.letterSpacing = '0.08em';
-    c.fillText(spec.title[0], pad, titleY);
-    const tw = c.measureText(spec.title[0]).width;
+    c.fillText(tEn, pad, titleY);
+    const tw = c.measureText(tEn).width;
     c.letterSpacing = '0px';
     c.font = zhFont;
     c.fillStyle = INK_SOFT;
-    c.fillText(spec.title[1], pad + tw + size * 0.3, titleY);
+    c.fillText(tZh, pad + tw + size * 0.3, titleY);
 
     if (spec.kind === 'select') {
       const cur = spec.get();
@@ -489,7 +504,7 @@ export class SettingsDesk {
       const slot = ((p.w - 0.5) / n) * TEX_PX * 0.9;
       let optSize = H * 0.13;
       c.font = `900 ${optSize}px Inter, system-ui, sans-serif`;
-      const widest = Math.max(...spec.options.map(([, en]) => c.measureText(en).width));
+      const widest = Math.max(...spec.options.map(([, en, zh]) => c.measureText(pair(en, zh)).width));
       if (widest > slot) optSize *= slot / widest;
       spec.options.forEach(([v, en, zh], i) => {
         const x = ((this.slotX(p, i) + p.w / 2) / p.w) * W;
@@ -497,9 +512,7 @@ export class SettingsDesk {
         c.textAlign = 'center';
         c.fillStyle = on ? INK : INK_SOFT;
         c.font = `${on ? 900 : 600} ${optSize.toFixed(1)}px Inter, system-ui, sans-serif`;
-        c.fillText(en, x, H * 0.55);
-        c.font = `${on ? 800 : 500} ${Math.round(H * 0.1)}px system-ui, sans-serif`;
-        c.fillText(zh, x, H * 0.68);
+        c.fillText(pair(en, zh), x, H * 0.6);
       });
     } else {
       c.textAlign = 'left';
