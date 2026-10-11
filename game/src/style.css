@@ -3335,3 +3335,43 @@ button:disabled {
     animation-duration: 2.4s;
   }
 }
+
+/* Inspector: Pearls on hand, and the two branches a piece can run from Lv2 (inspect.ts). */
+#wb-inspect-pearls {
+  margin-top: 8px;
+}
+
+#wb-inspect-paths {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+#wb-inspect-path-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.wb-path {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.wb-path small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.wb-path.on {
+  border-color: var(--hold);
+  background: rgba(62, 240, 168, 0.12);
+}
+
+.wb-path.on small {
+  color: var(--hold);
+}
