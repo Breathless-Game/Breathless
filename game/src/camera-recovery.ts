@@ -78,11 +78,27 @@ export function detectorReady(msg: { calibrated?: unknown; warm?: unknown }): bo
   return msg.calibrated === true && msg.warm !== false;
 }
 
+/** The sensor accepts a seed in this range and silently ignores anything else. */
+export const SEED_MIN = 0.001;
+export const SEED_MAX = 1000;
+
+/** Whether a reported baseline is worth remembering and sending back as a seed. */
+export function usableBaseline(baseline: unknown): baseline is number {
+  return typeof baseline === 'number' && Number.isFinite(baseline) && baseline >= SEED_MIN && baseline <= SEED_MAX;
+}
+
 /**
- * The breathing baseline this page last saw, sent to a new detector so the player doesn't
- * relearn it (kept in memory only: a refresh relearns). null for anything not a usable number.
+ * The breathing baseline this page last saw, sent to a new sensor connection so the player
+ * doesn't relearn it (kept in memory only: a refresh relearns). null when there is none.
  */
-export function seedMessage(baseline: number | null): { t: 'seed'; type: 'seed'; baseline: number } | null {
-  if (typeof baseline !== 'number' || !Number.isFinite(baseline)) return null;
-  return { t: 'seed', type: 'seed', baseline };
+export function seedMessage(baseline: number | null): { t: 'seed'; baseline: number } | null {
+  return usableBaseline(baseline) ? { t: 'seed', baseline } : null;
+}
+
+/**
+ * Presage mode with no usable signal (socket down, or the detector can't fire a hold yet):
+ * underwater that must not count as breathing.
+ */
+export function sensorNotReady(s: { mode: string; connected: boolean; calibrated: boolean }): boolean {
+  return s.mode === 'presage' && (!s.connected || !s.calibrated);
 }

@@ -18,6 +18,7 @@ import {
   recovering,
   seedMessage,
   sensorSilent,
+  usableBaseline,
 } from './camera-recovery';
 
 export type BreathMode = 'presage' | 'sim' | 'keyboard';
@@ -412,7 +413,8 @@ export class BreathSource {
         }
       }
       // Remembered for the page's lifetime (never stored): the next detector is seeded with it.
-      if (msg.source === 'presage' && typeof msg.baseline === 'number' && Number.isFinite(msg.baseline)) {
+      // Never from sim mode (the sensor reports null there anyway).
+      if (this.state.mode === 'presage' && msg.source === 'presage' && usableBaseline(msg.baseline)) {
         this.baseline = msg.baseline;
       }
       this.state.calibrated = detectorReady(msg);

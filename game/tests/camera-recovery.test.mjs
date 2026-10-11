@@ -61,8 +61,28 @@ test('detector ready: calibrated, and warm only when the sensor sends it', () =>
 });
 
 test('seed: only a usable number is sent', () => {
-  assert.deepEqual(r.seedMessage(0.42), { t: 'seed', type: 'seed', baseline: 0.42 });
-  for (const b of [null, NaN, Infinity, undefined, '0.4']) assert.equal(r.seedMessage(b), null, String(b));
+  assert.deepEqual(r.seedMessage(0.42), { t: 'seed', baseline: 0.42 });
+  assert.deepEqual(r.seedMessage(r.SEED_MIN), { t: 'seed', baseline: r.SEED_MIN });
+  assert.deepEqual(r.seedMessage(r.SEED_MAX), { t: 'seed', baseline: r.SEED_MAX });
+  for (const b of [null, NaN, Infinity, undefined, '0.4', 0, -1, 0.0009, 1000.1]) assert.equal(r.seedMessage(b), null, String(b));
+});
+
+test('sensor not ready: presage with no socket or a detector that cannot fire yet', () => {
+  const ok = { mode: 'presage', connected: true, calibrated: true };
+  assert.equal(r.sensorNotReady(ok), false);
+  assert.equal(r.sensorNotReady({ ...ok, connected: false }), true);
+  assert.equal(r.sensorNotReady({ ...ok, calibrated: false }), true);
+  assert.equal(r.sensorNotReady({ mode: 'keyboard', connected: false, calibrated: false }), false, 'keyboard always counts');
+  assert.equal(r.sensorNotReady({ mode: 'sim', connected: true, calibrated: false }), false);
+});
+
+test('main.ts: no breathe-underwater penalty while the sensor is not ready', async () => {
+  const main = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
+  assert.match(main, /breathSince = underwater && !s\.holding && !sensorNotReady\(s\)/);
+});
+
+test('breath.ts: a baseline is remembered only in presage mode', () => {
+  assert.match(breath, /this\.state\.mode === 'presage' && msg\.source === 'presage' && usableBaseline\(msg\.baseline\)/);
 });
 
 test('breath.ts: the baseline is kept in memory only and survives stopLive', () => {

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { pathEffect, pathSummary } from './equipment-i18n';
 import { setShipThresholds, Shipyard, shipThreshold, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
+import { sensorNotReady } from './camera-recovery';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
@@ -1846,16 +1847,19 @@ const camWrap = document.getElementById('cam-wrap')!;
 // The bubble shows only while there is a camera: one lost mid-dive (or a sensor that stays
 // busy) drops to the keyboard, and an empty black box reads as a broken camera.
 let hadCamera = false;
+let lastBreathError = '';
 breath.onChange((s) => {
+  // Why live mode fell back mid-dive, as a toast too (the hint line also keeps it).
+  if (s.error !== lastBreathError) {
+    lastBreathError = s.error;
+    if (s.error && s.mode !== 'presage' && phase === 'play') hud.message(s.error, 6000);
+  }
   const has = Boolean(breath.video.srcObject);
   if (has === hadCamera) return;
   hadCamera = has;
   if (has) {
     if (phase === 'play' || phase === 'calibrating') camWrap.style.visibility = 'visible';
-  } else if (breath.liveWanted) {
-    camWrap.style.visibility = 'hidden';
-    if (phase === 'play' && s.error) hud.message(s.error, 6000);
-  }
+  } else if (breath.liveWanted) camWrap.style.visibility = 'hidden';
 });
 let paused = false;
 let trialSkinActive=false;
@@ -2710,7 +2714,9 @@ function update(dt: number, time: number) {
   if (playing && !flying) {
     // Breathing underwater = out of air. You must make it up before it runs out.
     // A single noisy "breathing" frame shouldn't cost the net: it must persist.
-    breathSince = underwater && !s.holding ? (breathSince ?? nowMs) : null;
+    // Not while the camera sensor isn't ready (socket down, detector warming up after a reconnect):
+    // its "not holding" then is no breath (camera-recovery.ts).
+    breathSince = underwater && !s.holding && !sensorNotReady(s) ? (breathSince ?? nowMs) : null;
     if (breathSince != null && nowMs - breathSince >= RELEASE_DEBOUNCE_MS && !outOfAir) {
       outOfAir = true;
       emergency = 1;
