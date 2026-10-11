@@ -2819,8 +2819,54 @@ button:disabled {
   font-weight: 800;
 }
 
+.aq-food-panel {
+  display: grid;
+  grid-template-columns: 68px minmax(150px, 1fr);
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 5px;
+}
+
+.aq-food-model {
+  width: 68px;
+  height: 68px;
+  grid-row: span 2;
+  border-radius: 10px;
+  background: rgba(8, 30, 42, 0.65);
+}
+
+.aq-food-select {
+  min-width: 0;
+  max-width: 190px;
+  padding: 4px 6px;
+  color: var(--ink);
+  background: rgba(2, 13, 23, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.aq-food-effect {
+  max-width: 220px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
 #aq-card .aq-feed {
   white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .aq-food-panel {
+    grid-template-columns: 52px minmax(120px, 1fr);
+  }
+
+  .aq-food-model {
+    width: 52px;
+    height: 52px;
+  }
 }
 
 /* ---- gear inspector (workbench) ---- */

@@ -14,7 +14,8 @@ import { PauseMenu } from './pause';
 import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
-import { Aquarium, AQUARIUM_FOOD_COST } from './aquarium';
+import { Aquarium } from './aquarium';
+import { fishFood, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -637,16 +638,17 @@ async function syncPearls(earned = 0) {
 }
 
 let foodBuying = false;
-/** Buy one aquarium food pellet. Legacy Pearls are spent first; on-chain PEARL is burned only when needed. */
-async function buyAquariumFood(): Promise<boolean> {
+/** Buy one selected aquarium food. Legacy Pearls are spent first; chain PEARL covers the rest. */
+async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<boolean> {
   if (foodBuying) return false;
+  const cost = food.price;
   const available = totalPearls(equipment);
-  if (available < AQUARIUM_FOOD_COST) {
-    hud.message(`Need ${AQUARIUM_FOOD_COST - available} more Pearls for food`, 1600);
+  if (available < cost) {
+    hud.message(`Need ${cost - available} more Pearls for ${food.nameZh}`, 1600);
     return false;
   }
-  const fromLegacy = Math.min(equipment.legacyPearls, AQUARIUM_FOOD_COST);
-  const fromChain = AQUARIUM_FOOD_COST - fromLegacy;
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
   foodBuying = true;
   try {
     if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
