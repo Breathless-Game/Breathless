@@ -27,7 +27,7 @@ export interface WorkbenchHooks {
   sonarColor?(color: string): void;
 }
 
-const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'bait'];
+const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'bait', 'sonar'];
 /** Where each piece lands, in table units (x right, z toward the camera). */
 const SPOTS: [number, number][] = [
   [-3.9, -1.2],
@@ -36,6 +36,7 @@ const SPOTS: [number, number][] = [
   [1.45, -1.3],
   [1.5, 1.3],
   [-0.9, 1.95],
+  [1.05, 1.95],
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
@@ -47,6 +48,7 @@ const SLOTS: [number, number][] = [
   [4.25, 0.3],
   [3.15, 1.75],
   [4.25, 1.75],
+  [4.25, 2.38],
 ];
 const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
 const MAP_W = 2.9;

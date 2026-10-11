@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { ROD_TIERS } from './equipment';
+import { buildDeepSonar } from './deep-sonar';
 
-export type UpgradeId = 'rod' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
+export type UpgradeId = 'rod' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp' | 'sonar';
 export type UpgradeLevel = 1 | 2 | 3;
 
 export interface UpgradeDef {
@@ -34,6 +35,7 @@ export const UPGRADES: UpgradeDef[] = [
   { id: 'fins', group: 'dive', name: 'Fins', nameZh: '脚蹼', effects: ['Swim speed 7.5', 'Swim speed 8.5', 'Swim speed 9.5'], prices: [0, 60, 400] },
   { id: 'tank', group: 'dive', name: 'Emergency tank', nameZh: '应急气瓶', effects: ['No reserve air', '+1 s emergency air', '+2 s emergency air'], prices: [0, 80, 500] },
   { id: 'lamp', group: 'dive', name: 'Headlamp', nameZh: '头灯', effects: ['Short beam', 'Wide beam', 'Wide, long beam'], prices: [0, 40, 300] },
+  { id: 'sonar', group: 'dive', name: 'Deep sonar', nameZh: '深潜声纳', effects: ['10 m cable · 3 nodes', '17 m cable · 4 nodes', '26 m cable · 5 nodes'], prices: [0, 300, 1200] },
 ];
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
@@ -324,7 +326,8 @@ export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel): THREE.Gro
             : id === 'net' ? buildNet(level)
               : id === 'fins' ? buildFins(level)
                 : id === 'tank' ? buildTank(level)
-                  : buildLamp(level);
+                  : id === 'lamp' ? buildLamp(level)
+                    : buildDeepSonar({ lengthLevel: level, detail: 1, startsCarried: false }).group;
   const outer = new THREE.Group();
   outer.add(inner);
   normalize(inner);

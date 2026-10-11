@@ -8,6 +8,7 @@
 import { storageKey } from './wallet';
 
 export type RodLevel = 1 | 2 | 3;
+export type SonarLevel = 1 | 2 | 3;
 
 export interface RodTier {
   /** The user-facing upgrade level. */
@@ -22,6 +23,13 @@ export interface RodTier {
   readonly cost: number;
   /** Alias retained for callers that describe the cost as an unlock threshold. */
   readonly threshold: number;
+}
+
+export interface SonarTier {
+  readonly level: SonarLevel;
+  readonly length: number;
+  readonly nodes: number;
+  readonly cost: number;
 }
 
 /**
@@ -55,8 +63,16 @@ export const ROD_TIERS: readonly RodTier[] = Object.freeze([
   }),
 ]);
 
+/** Cable reach progression for the deployable deep sonar. */
+export const SONAR_TIERS: readonly SonarTier[] = Object.freeze([
+  Object.freeze({ level: 1 as const, length: 10, nodes: 3, cost: 0 }),
+  Object.freeze({ level: 2 as const, length: 17, nodes: 4, cost: 300 }),
+  Object.freeze({ level: 3 as const, length: 26, nodes: 5, cost: 1200 }),
+]);
+
 export interface EquipmentState {
   rodLevel: RodLevel;
+  sonarLevel: SonarLevel;
   /** On-chain PEARL, as last read with pearlBalance(): a cache for instant UI. */
   pearls: number;
   /** Pearls earned locally before PEARL went on-chain. Spent before on-chain PEARL. */
@@ -67,7 +83,7 @@ export const EQUIPMENT_STORAGE_KEY = 'deepbreath.equipment';
 
 const LEGACY_ROD_KEY = 'deepbreath.rod';
 const LEGACY_PEARLS_KEYS = ['deepbreath.pearls', 'deepbreath.pearl'] as const;
-const DEFAULT_STATE: EquipmentState = { rodLevel: 1, pearls: 0, legacyPearls: 0 };
+const DEFAULT_STATE: EquipmentState = { rodLevel: 1, sonarLevel: 1, pearls: 0, legacyPearls: 0 };
 
 type EquipmentInput = EquipmentState | RodLevel | number | null | undefined;
 
@@ -79,6 +95,12 @@ function validLevel(value: unknown): RodLevel {
   const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
   if (!Number.isFinite(n)) return DEFAULT_STATE.rodLevel;
   return Math.min(3, Math.max(1, Math.floor(n))) as RodLevel;
+}
+
+function validSonarLevel(value: unknown): SonarLevel {
+  const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return DEFAULT_STATE.sonarLevel;
+  return Math.min(3, Math.max(1, Math.floor(n))) as SonarLevel;
 }
 
 function validPearls(value: unknown): number {
@@ -94,8 +116,9 @@ function normalize(value: unknown): EquipmentState {
   // `level` was used by an early prototype; retain it during migration.
   const level = record.rodLevel ?? record.level;
   // Saves from before on-chain PEARL have no legacyPearls: every Pearl in them was earned locally.
-  if (!('legacyPearls' in record)) return { rodLevel: validLevel(level), pearls: 0, legacyPearls: validPearls(record.pearls) };
-  return { rodLevel: validLevel(level), pearls: validPearls(record.pearls), legacyPearls: validPearls(record.legacyPearls) };
+  const sonarLevel = validSonarLevel(record.sonarLevel);
+  if (!('legacyPearls' in record)) return { rodLevel: validLevel(level), sonarLevel, pearls: 0, legacyPearls: validPearls(record.pearls) };
+  return { rodLevel: validLevel(level), sonarLevel, pearls: validPearls(record.pearls), legacyPearls: validPearls(record.legacyPearls) };
 }
 
 function readNumber(storage: Storage, key: string): number | undefined {
@@ -179,6 +202,21 @@ export function nextRodTier(input?: EquipmentInput): RodTier | null {
   return ROD_TIERS[level] ?? null;
 }
 
+function sonarInputLevel(input: EquipmentInput): SonarLevel {
+  if (input && typeof input === 'object') return validSonarLevel(input.sonarLevel);
+  return validSonarLevel(input);
+}
+
+export function sonarTier(input?: EquipmentInput): SonarTier {
+  const level = input == null ? DEFAULT_STATE.sonarLevel : sonarInputLevel(input);
+  return SONAR_TIERS[level - 1] ?? SONAR_TIERS[0];
+}
+
+export function nextSonarTier(input?: EquipmentInput): SonarTier | null {
+  const level = input == null ? DEFAULT_STATE.sonarLevel : sonarInputLevel(input);
+  return SONAR_TIERS[level] ?? null;
+}
+
 /** Every Pearl the player can spend: legacy local Pearls plus cached on-chain PEARL. */
 export function totalPearls(state: EquipmentState): number {
   return state.legacyPearls + state.pearls;
@@ -202,5 +240,14 @@ export function planUpgrade(state: EquipmentState): UpgradePlan | null {
   if (!tier || totalPearls(current) < tier.cost) return null;
   const fromLegacy = Math.min(current.legacyPearls, tier.cost);
   return { tier, fromLegacy, fromChain: tier.cost - fromLegacy };
+}
+
+/** Plan buying the next sonar cable tier using the same Pearl balance rules as the net. */
+export function planSonarUpgrade(state: EquipmentState): UpgradePlan | null {
+  const current = normalize(state);
+  const tier = nextSonarTier(current.sonarLevel);
+  if (!tier || totalPearls(current) < tier.cost) return null;
+  const fromLegacy = Math.min(current.legacyPearls, tier.cost);
+  return { tier: tier as unknown as RodTier, fromLegacy, fromChain: tier.cost - fromLegacy };
 }
 
