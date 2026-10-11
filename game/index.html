@@ -271,7 +271,21 @@
         <button id="gear-upgrade" class="primary">Upgrade</button>
         <div id="gear-notice" class="gear-notice hidden"></div>
       </div>
-      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. Upgrades change the net's visible size, capacity and catch radius; they never extend breath time.</p>
+      <div class="gear-upgrade-card sonar-upgrade-card">
+        <div class="row">
+          <div>
+            <div class="small muted">DEEP SONAR</div>
+            <div id="sonar-level" class="gear-next"></div>
+          </div>
+          <div id="sonar-progress-label" class="small"></div>
+        </div>
+        <div id="sonar-effect" class="gear-effect"></div>
+        <div id="sonar-next" class="gear-next"></div>
+        <progress id="sonar-progress" value="0" max="1"></progress>
+        <button id="sonar-upgrade" class="primary">Upgrade sonar</button>
+        <div id="sonar-notice" class="gear-notice hidden"></div>
+      </div>
+      <p class="small muted gear-footnote">Sell fish in the collection (C) to earn Pearls. Net upgrades change catch capacity; sonar upgrades extend the deployed cable. Neither upgrade extends breath time.</p>
     </div>
 
     <div id="report" class="hidden"></div>
