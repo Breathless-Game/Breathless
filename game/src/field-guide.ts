@@ -164,8 +164,9 @@ export class FieldGuide {
     }
   }
   /** Called by the 3D workbench after its book pickup animation finishes. */
-  openFromWorkbench() {
+  openFromWorkbench(): boolean {
     if (!this.open && !this.closingTimer) this.toggle();
+    return this.open;
   }
   close() {
     if (!this.open || this.closingTimer) return;

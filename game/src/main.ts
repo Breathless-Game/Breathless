@@ -1719,8 +1719,6 @@ const titleScreen = new TitleScreen(document.getElementById('title-canvas') as H
 const TITLE_LABELS: readonly (readonly [number, string, string])[] = [
   [1, 'AQUARIUM', '图鉴'],
   [2, 'SETTINGS', '设置'],
-  [3, 'GUIDE', '手册'],
-  [4, 'TUTORIAL', '新手引导'],
 ];
 function labelTitleFish() {
   for (const [i, en, zh] of TITLE_LABELS) titleScreen.setLabel(i, t(en, zh));
@@ -1854,11 +1852,10 @@ const workbench = new Workbench({
   },
   guide() {
     // Workbench has finished lifting the physical book; now reveal the pages.
-    fieldGuide?.openFromWorkbench();
+    return fieldGuide?.openFromWorkbench() ?? false;
   },
   synthesisOpen() {
     synthPanel.show();
-    void syncPearls();
     void syncPearls();
   },
   synthesisClose() {

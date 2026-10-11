@@ -60,7 +60,8 @@ export interface WorkbenchHooks {
   savedLoadout(): UpgradeId[] | null;
   saveLoadout(gear: UpgradeId[]): void;
   /** Open the physical field guide after its pickup animation. */
-  guide?(): void;
+  /** Open the field-guide modal; return false if it declined to open so the book goes back. */
+  guide?(): boolean | void;
 }
 
 export interface WorkbenchConditions {
@@ -278,6 +279,7 @@ export class Workbench {
   private figure = new THREE.Group();
   private figureDiver!: Diver;
   private figureHit!: THREE.Mesh;
+  private guideReturning = false;
   private guide = new THREE.Group();
   private guideCover = new THREE.Group();
   private guideHit!: THREE.Mesh;
@@ -487,7 +489,7 @@ export class Workbench {
   /** Esc: put down the gear being looked at, fold the chart; from the bare table, pan back up to the title. */
   escape() {
     if (this.state === 'inspect') this.inspector.close();
-    else if (this.state === 'guide') this.hooks.guide?.();
+    else if (this.state === 'guide') return; // the modal owns Esc; never re-open it from here
     else if (this.state === 'chart') this.closeChart();
     else if (this.state === 'synth') this.closeSynthesis();
     else if (this.state === 'idle') this.leave();
@@ -1668,13 +1670,14 @@ export class Workbench {
       this.guideOpen = e;
     }, () => {
       this.state = 'guide';
-      this.hooks.guide?.();
+      if (this.hooks.guide?.() === false) this.guideClosed(); // modal refused to open: put the book back
     });
   }
 
   /** Called by the host when the modal closes, returning the book to the bench. */
   guideClosed() {
-    if (!this.visible || this.guideOpen <= 0) return;
+    if (!this.visible || this.guideOpen <= 0 || this.guideReturning) return;
+    this.guideReturning = true;
     this.hovered = null;
     document.body.style.cursor = '';
     const lift0 = this.guideLift;
@@ -1687,6 +1690,7 @@ export class Workbench {
     }, () => {
       this.guideLift = 0;
       this.guideOpen = 0;
+      this.guideReturning = false;
       this.state = 'idle';
     });
   }
