@@ -1,4 +1,5 @@
 import type { BreathSource } from './breath';
+import { t as tr } from './i18n';
 
 // A guided 2.5-minute breath test. The screen tells the player when to hold
 // and when to breathe, so every second of the recording is labeled without
@@ -10,17 +11,17 @@ type Kind = 'connecting' | 'warmup' | 'ready' | 'hold' | 'breathe' | 'done';
 interface Step {
   kind: Kind;
   secs: number;
-  title: string;
-  sub: string;
+  title: [string, string];
+  sub: [string, string];
 }
 
 const ROUNDS = 4;
 const SCRIPT: Step[] = [
-  { kind: 'warmup', secs: 30, title: 'Breathe normally', sub: '正常呼吸 · sit still, face and chest in view' },
+  { kind: 'warmup', secs: 30, title: ['Breathe normally', '正常呼吸'], sub: ['Sit still, face and chest in view', '坐稳，脸和胸口保持在画面内'] },
   ...Array.from({ length: ROUNDS }, (_, i): Step[] => [
-    { kind: 'ready', secs: 3, title: `Get ready to hold (${i + 1}/${ROUNDS})`, sub: '准备憋气 · breathe in when it says HOLD' },
-    { kind: 'hold', secs: 15, title: 'HOLD your breath', sub: '憋气 · stay still, don’t talk' },
-    { kind: 'breathe', secs: 15, title: 'Breathe normally', sub: '正常呼吸' },
+    { kind: 'ready', secs: 3, title: [`Get ready to hold (${i + 1}/${ROUNDS})`, `准备憋气 (${i + 1}/${ROUNDS})`], sub: ['Breathe in when it says HOLD', '看到“憋气”时吸气'] },
+    { kind: 'hold', secs: 15, title: ['HOLD your breath', '憋气'], sub: ['Stay still, don’t talk', '保持不动，不要说话'] },
+    { kind: 'breathe', secs: 15, title: ['Breathe normally', '正常呼吸'], sub: ['Breathe normally', '正常呼吸'] },
   ]).flat(),
 ];
 
@@ -63,7 +64,7 @@ export class BreathTest {
     this.panel.classList.remove('hidden');
     this.result.classList.add('hidden');
     $('overlay').classList.add('testing');
-    this.render({ kind: 'connecting', secs: 0, title: 'Starting camera and Presage…', sub: '正在连接' }, 0);
+    this.render({ kind: 'connecting', secs: 0, title: ['Starting camera and Presage…', '正在启动摄像头和 Presage…'], sub: ['Connecting', '正在连接'] }, 0);
     clearInterval(this.timer);
     this.timer = window.setInterval(() => this.tick(), 100);
   }
@@ -80,7 +81,7 @@ export class BreathTest {
   private tick() {
     const s = this.breath.state;
     const now = performance.now();
-    this.seen.textContent = s.holding ? 'Sensor sees: HOLDING' : 'Sensor sees: BREATHING';
+    this.seen.textContent = s.holding ? tr('Sensor sees: HOLDING', '传感器识别：憋气') : tr('Sensor sees: BREATHING', '传感器识别：呼吸');
     this.seen.className = `test-seen ${s.holding ? 'holding' : ''}`;
 
     if (this.step < 0) {
@@ -93,14 +94,15 @@ export class BreathTest {
         this.sub.textContent = s.error
           ? s.error
           : !s.connected
-            ? 'Breath sensor offline: is `npm run sensor` running?'
-            : s.hint || `Waiting for Presage… ${waited.toFixed(0)} s`;
+            ? tr('Breath sensor offline: is `npm run sensor` running?', '呼吸传感器离线：`npm run sensor` 在运行吗？')
+            : s.hint || tr(`Waiting for Presage… ${waited.toFixed(0)} s`, `等待 Presage… ${waited.toFixed(0)} 秒`);
       }
       return;
     }
 
     const st = SCRIPT[this.step];
     const t = (now - this.stepStart) / 1000;
+    const sub = tr(...st.sub);
     if (st.kind === 'hold') {
       const h = this.holds.at(-1)!;
       if (s.holding && h.detectedAfter == null) h.detectedAfter = t;
@@ -109,7 +111,7 @@ export class BreathTest {
       this.breatheTicks++;
       if (s.holding) this.falseHoldTicks++;
     }
-    this.sub.textContent = s.hint && st.kind !== 'hold' ? `${st.sub} · ${s.hint}` : st.sub;
+    this.sub.textContent = s.hint && st.kind !== 'hold' ? `${sub} · ${s.hint}` : sub;
     this.render(st, t);
     if (t >= st.secs) this.enter(this.step + 1, now);
   }
@@ -122,13 +124,13 @@ export class BreathTest {
     this.breath.sendLabel(st.kind === 'hold');
     if (st.kind === 'hold') this.holds.push({ detectedAfter: null });
     this.panel.dataset.kind = st.kind;
-    this.title.textContent = st.title;
-    this.sub.textContent = st.sub;
+    this.title.textContent = tr(...st.title);
+    this.sub.textContent = tr(...st.sub);
   }
 
   private render(st: Step, t: number) {
     this.panel.dataset.kind = st.kind;
-    this.title.textContent = st.title;
+    this.title.textContent = tr(...st.title);
     if (st.kind === 'connecting') {
       this.count.textContent = '';
       this.bar.style.width = '0%';
@@ -146,16 +148,16 @@ export class BreathTest {
     this.breath.sendLabel(false);
     this.breath.sendCalib('test-end');
     this.panel.dataset.kind = 'done';
-    this.title.textContent = 'Done · 完成';
+    this.title.textContent = tr('Done', '完成');
     this.count.textContent = '';
     this.bar.style.width = '100%';
     const hit = this.holds.filter((h) => h.detectedAfter != null);
     const avg = hit.length ? hit.reduce((a, h) => a + h.detectedAfter!, 0) / hit.length : null;
     const falsePct = this.breatheTicks ? (this.falseHoldTicks / this.breatheTicks) * 100 : 0;
-    this.sub.textContent = 'Recording saved on the sensor (sensor/recordings/). 数据已保存。';
+    this.sub.textContent = tr('Recording saved on the sensor (sensor/recordings/).', '数据已保存到传感器 (sensor/recordings/)。');
     this.result.classList.remove('hidden');
     this.result.innerHTML = `
-      <div><b>${hit.length}/${this.holds.length}</b> holds detected${avg != null ? `, after ${avg.toFixed(1)} s on average` : ''}</div>
-      <div><b>${falsePct.toFixed(0)}%</b> of normal breathing was wrongly seen as holding</div>`;
+      <div><b>${hit.length}/${this.holds.length}</b> ${tr('holds detected', '次憋气被识别')}${avg != null ? tr(`, after ${avg.toFixed(1)} s on average`, `，平均 ${avg.toFixed(1)} 秒后`) : ''}</div>
+      <div><b>${falsePct.toFixed(0)}%</b> ${tr('of normal breathing was wrongly seen as holding', '的正常呼吸被误判为憋气')}</div>`;
   }
 }

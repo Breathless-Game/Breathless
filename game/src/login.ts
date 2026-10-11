@@ -3,6 +3,7 @@ import { onWalletsChange, ownerWallets } from './owner-wallets';
 import { orbNfts } from './explorer-links';
 import { formatPearls, onPearlBalance, pearlBalance } from './pearl-balance';
 import { LAST_WALLET_KEY, devnetHint, explorerAddress, isUserRejection, shortAddress, walletTiles, type WalletTile } from './wallet-storage';
+import { lang, onLangChange, t as tr } from './i18n';
 import phantomLogo from './wallet-logos/phantom.svg';
 import metamaskLogo from './wallet-logos/metamask.svg';
 import solflareLogo from './wallet-logos/solflare.svg';
@@ -14,6 +15,22 @@ import backpackLogo from './wallet-logos/backpack.svg';
 // their site. main.ts moves on to the workbench once the wallet reports connected.
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+/** devnetHint (wallet-storage.ts, kept import-free for its test) in the player's language. */
+function devnetHintText(name: string): string {
+  if (lang() === 'en') return devnetHint(name);
+  return name.toLowerCase() === 'phantom'
+    ? '仅支持 Devnet。Phantom → 设置 → 开发者设置 → 测试网模式 → Solana Devnet'
+    : `仅支持 Devnet。请在 ${name} 的网络设置中切换到 Solana Devnet。`;
+}
+
+/** The PEARL balance's error reasons (pearl-balance.ts explainPearlError) in 中文. */
+const PEARL_REASON_ZH: Record<string, string> = {
+  'The Solana RPC is rate limiting (429). Retry shortly.': 'Solana RPC 正在限流 (429)，请稍后重试。',
+  'The market is offline, so the PEARL balance cannot be read.': '市场离线，无法读取 PEARL 余额。',
+  'PEARL balance unavailable right now.': '暂时无法读取 PEARL 余额。',
+};
+const pearlReason = (reason: string) => (lang() === 'zh' ? PEARL_REASON_ZH[reason] ?? reason : reason);
 
 /** Bundled marks for wallets that aren't installed (an installed wallet shows its own icon). */
 const LOGOS: Record<string, string> = { phantom: phantomLogo, metamask: metamaskLogo, solflare: solflareLogo, backpack: backpackLogo };
@@ -62,6 +79,7 @@ export class LoginGate {
     this.grid.addEventListener('keydown', (e) => this.onKey(e));
     // A wallet extension that registers while the gate is up gets its tile right away.
     onWalletsChange(() => this.visible && this.render());
+    onLangChange(() => this.visible && this.render());
   }
 
   get visible() {
@@ -74,7 +92,7 @@ export class LoginGate {
     const tiles = this.render();
     this.root.classList.remove('hidden');
     this.tiles()[0]?.focus();
-    if (!tiles.some((t) => t.installed)) this.status.textContent = 'No Solana wallet found in this browser. Install one, then reload this page.';
+    if (!tiles.some((t) => t.installed)) this.status.textContent = tr('No Solana wallet found in this browser. Install one, then reload this page.', '这个浏览器里没有找到 Solana 钱包。请安装一个，然后刷新本页。');
   }
 
   hide() {
@@ -102,14 +120,14 @@ export class LoginGate {
         btn.setAttribute('aria-disabled', String(this.connecting !== null && !busy));
         btn.setAttribute(
           'aria-label',
-          `${t.name}${t.installed ? '' : ', not installed: opens its site'}${t.lastUsed ? ', last used' : ''}`,
+          `${t.name}${t.installed ? '' : tr(', not installed: opens its site', '，未安装：打开其网站')}${t.lastUsed ? tr(', last used', '，上次使用') : ''}`,
         );
         const art = make('span', 'wallet-art');
         art.append(logo(t.name, w?.icon));
         if (busy) art.append(make('span', 'wallet-spinner'));
-        btn.append(art, make('span', 'wallet-name', busy ? 'Connecting…' : t.name));
-        if (!t.installed) btn.append(make('span', 'wallet-tag', 'Install ↗'));
-        else if (t.lastUsed) btn.append(make('span', 'wallet-tag wallet-tag-last', 'Last used'));
+        btn.append(art, make('span', 'wallet-name', busy ? tr('Connecting…', '连接中…') : t.name));
+        if (!t.installed) btn.append(make('span', 'wallet-tag', tr('Install ↗', '安装 ↗')));
+        else if (t.lastUsed) btn.append(make('span', 'wallet-tag wallet-tag-last', tr('Last used', '上次使用')));
         else if (!t.devnet) btn.append(make('span', 'wallet-tag wallet-tag-warn', 'Devnet?'));
         btn.addEventListener('click', () => void this.pick(t));
         btn.addEventListener('focus', () => this.showHint(t));
@@ -123,14 +141,14 @@ export class LoginGate {
   }
 
   private showHint(t: WalletTile | undefined) {
-    this.hint.textContent = t ? devnetHint(t.name) : '';
+    this.hint.textContent = t ? devnetHintText(t.name) : '';
   }
 
   private async pick(t: WalletTile) {
     if (this.connecting) return;
     if (!t.installed) {
       if (t.url) window.open(t.url, '_blank', 'noopener');
-      this.status.textContent = `Install ${t.name}, then reload this page.`;
+      this.status.textContent = tr(`Install ${t.name}, then reload this page.`, `请安装 ${t.name}，然后刷新本页。`);
       return;
     }
     this.connecting = t.name;
@@ -140,8 +158,8 @@ export class LoginGate {
       await connectWallet(t.name);
     } catch (e) {
       this.status.textContent = isUserRejection(e)
-        ? `${t.name}: connection cancelled.`
-        : `Could not connect ${t.name}: ${(e as Error).message ?? String(e)}`;
+        ? tr(`${t.name}: connection cancelled.`, `${t.name}：已取消连接。`)
+        : tr(`Could not connect ${t.name}: ${(e as Error).message ?? String(e)}`, `无法连接 ${t.name}：${(e as Error).message ?? String(e)}`);
     } finally {
       this.connecting = null;
       if (this.visible) this.render();
@@ -172,7 +190,7 @@ export interface LogoutHooks {
 
 export interface WalletRowOptions {
   /** What to show while logged out; without it the row hides itself. */
-  empty?: string;
+  empty?: string | (() => string);
   /** A compact account chip: the address is a button that opens a menu (Copy address, NFTs on Orb, Explorer, Log out). */
   menu?: boolean;
   /** Link the address on Helius Orb (its NFTs) and Solana Explorer (devnet), beside it. */
@@ -205,11 +223,14 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
     badge.dataset.state = b.status;
     badge.title =
       b.status === 'ok'
-        ? 'Your PEARL balance on chain (devnet)'
+        ? tr('Your PEARL balance on chain (devnet)', '你在链上的 PEARL 余额 (devnet)')
         : b.status === 'loading'
-          ? 'Reading your PEARL balance…'
-          : b.reason;
-    badge.setAttribute('aria-label', b.status === 'ok' ? `${amount} PEARL` : `PEARL balance: ${b.status === 'loading' ? 'loading' : 'unavailable'}`);
+          ? tr('Reading your PEARL balance…', '正在读取 PEARL 余额…')
+          : pearlReason(b.reason);
+    badge.setAttribute(
+      'aria-label',
+      b.status === 'ok' ? `${amount} PEARL` : b.status === 'loading' ? tr('PEARL balance: loading', 'PEARL 余额：读取中') : tr('PEARL balance: unavailable', 'PEARL 余额：不可用'),
+    );
   };
   const makeBadge = () => {
     badge = make('span', 'pearl-badge');
@@ -256,13 +277,13 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
     el.classList.toggle('wallet-confirming', confirming !== null);
     if (!s.owner) {
       confirming = null;
-      el.textContent = empty ?? '';
+      el.textContent = (typeof empty === 'function' ? empty() : empty) ?? '';
       return;
     }
     if (confirming !== null) {
-      const question = make('span', 'wallet-question', `${confirming} Log out?`);
-      const yes = make('button', 'mini danger', 'Log out');
-      const no = make('button', 'mini', 'Cancel');
+      const question = make('span', 'wallet-question', `${confirming} ${tr('Log out?', '要登出吗？')}`);
+      const yes = make('button', 'mini danger', tr('Log out', '登出'));
+      const no = make('button', 'mini', tr('Cancel', '取消'));
       yes.addEventListener('click', () => go(yes));
       no.addEventListener('click', () => {
         confirming = null;
@@ -273,7 +294,7 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
       return;
     }
     const owner = s.owner;
-    const name = s.wallet?.name ?? 'Wallet';
+    const name = s.wallet?.name ?? tr('Wallet', '钱包');
     const mark = logo(name, s.wallet?.icon);
     const addr = make('span', 'wallet-addr', shortAddress(owner));
     if (menu) {
@@ -281,24 +302,24 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
       return;
     }
     mark.title = name;
-    addr.title = `${name} · ${owner}\nTo switch, pick another account in ${name}.`;
+    addr.title = `${name} · ${owner}\n${tr(`To switch, pick another account in ${name}.`, `要切换，请在 ${name} 中选择其他账户。`)}`;
     el.append(mark, addr);
     if (explorer) {
-      const a = make('a', 'wallet-explorer', 'Explorer ↗');
+      const a = make('a', 'wallet-explorer', tr('Explorer ↗', '浏览器 ↗'));
       a.href = explorerAddress(owner);
       a.target = '_blank';
       a.rel = 'noopener';
-      a.title = 'View this wallet on Solana Explorer (devnet)';
+      a.title = tr('View this wallet on Solana Explorer (devnet)', '在 Solana Explorer 上查看这个钱包 (devnet)');
       // The owner wallet holds the minted fish: Helius Orb shows them as NFTs.
-      const orb = make('a', 'wallet-orb', 'View on chain ↗');
+      const orb = make('a', 'wallet-orb', tr('View on chain ↗', '在链上查看 ↗'));
       orb.href = orbNfts(owner);
       orb.target = '_blank';
       orb.rel = 'noopener noreferrer';
-      orb.title = "This wallet's NFTs (your fish) on Helius Orb (devnet)";
+      orb.title = tr("This wallet's NFTs (your fish) on Helius Orb (devnet)", '这个钱包的 NFT（你的鱼），在 Helius Orb 上 (devnet)');
       el.append(orb, a);
     }
-    const btn = make('button', 'mini wallet-logout', 'Log out');
-    btn.setAttribute('aria-description', 'Your progress stays saved for this wallet.');
+    const btn = make('button', 'mini wallet-logout', tr('Log out', '登出'));
+    btn.setAttribute('aria-description', tr('Your progress stays saved for this wallet.', '你的进度会保存在这个钱包下。'));
     btn.addEventListener('click', () => askLogout(btn));
     el.append(btn);
   };
@@ -309,13 +330,13 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
     trigger.type = 'button';
     trigger.setAttribute('aria-haspopup', 'menu');
     trigger.setAttribute('aria-expanded', 'false');
-    trigger.setAttribute('aria-label', `${name} ${shortAddress(owner)}: account menu`);
+    trigger.setAttribute('aria-label', `${name} ${shortAddress(owner)}: ${tr('account menu', '账户菜单')}`);
     trigger.title = `${name} · ${owner}`;
     trigger.append(mark, addr, make('span', 'wallet-caret'));
 
     const list = make('div', 'wallet-menu');
     list.setAttribute('role', 'menu');
-    list.setAttribute('aria-label', `${name} account`);
+    list.setAttribute('aria-label', tr(`${name} account`, `${name} 账户`));
     list.hidden = true;
     const head = make('div', 'wallet-menu-head');
     head.append(make('span', 'wallet-menu-name', name), make('span', 'wallet-menu-addr', shortAddress(owner)));
@@ -325,12 +346,12 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
       node.tabIndex = -1;
       return node;
     };
-    const copy = item('button', 'Copy address');
+    const copy = item('button', tr('Copy address', '复制地址'));
     copy.addEventListener('click', () => {
       const done = (label: string) => {
         copy.textContent = label;
         window.clearTimeout(copiedTimer);
-        copiedTimer = window.setTimeout(() => (copy.textContent = 'Copy address'), 1400);
+        copiedTimer = window.setTimeout(() => (copy.textContent = tr('Copy address', '复制地址')), 1400);
       };
       // Some embedded browsers refuse the async clipboard: fall back to a hidden selection (kept
       // inside the row, so focusing it doesn't count as leaving the menu).
@@ -347,24 +368,24 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
         } catch {}
         t.remove();
         copy.focus();
-        done(ok ? 'Copied ✓' : 'Copy failed');
+        done(ok ? tr('Copied ✓', '已复制 ✓') : tr('Copy failed', '复制失败'));
       };
       if (!navigator.clipboard) return legacyCopy();
-      navigator.clipboard.writeText(owner).then(() => done('Copied ✓'), legacyCopy);
+      navigator.clipboard.writeText(owner).then(() => done(tr('Copied ✓', '已复制 ✓')), legacyCopy);
     });
-    const view = item('a', 'View on Explorer ↗');
+    const view = item('a', tr('View on Explorer ↗', '在浏览器中查看 ↗'));
     view.href = explorerAddress(owner);
     view.target = '_blank';
     view.rel = 'noopener';
     view.addEventListener('click', () => closeMenu(false));
-    const nfts = item('a', 'View NFTs on chain ↗');
+    const nfts = item('a', tr('View NFTs on chain ↗', '在链上查看 NFT ↗'));
     nfts.href = orbNfts(owner);
     nfts.target = '_blank';
     nfts.rel = 'noopener noreferrer';
-    nfts.title = 'Your fish as NFTs on Helius Orb (devnet)';
+    nfts.title = tr('Your fish as NFTs on Helius Orb (devnet)', '你的鱼作为 NFT，在 Helius Orb 上 (devnet)');
     nfts.addEventListener('click', () => closeMenu(false));
-    const out = item('button', 'Log out', ' wallet-menu-danger wallet-logout');
-    out.setAttribute('aria-description', 'Your progress stays saved for this wallet.');
+    const out = item('button', tr('Log out', '登出'), ' wallet-menu-danger wallet-logout');
+    out.setAttribute('aria-description', tr('Your progress stays saved for this wallet.', '你的进度会保存在这个钱包下。'));
     out.addEventListener('click', () => askLogout(out));
     list.append(head, copy, nfts, view, make('div', 'wallet-menu-sep'), out);
 
@@ -396,7 +417,7 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
 
   const go = (btn: HTMLButtonElement) => {
     btn.disabled = true;
-    btn.textContent = 'Logging out…';
+    btn.textContent = tr('Logging out…', '登出中…');
     confirming = null;
     void hooks.logOut().catch((e) => {
       console.error('logout failed', e);
@@ -422,5 +443,6 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
   el.addEventListener('keydown', (e) => ROW_KEYS.has(e.key) && e.stopPropagation());
   render();
   onWalletChange(render);
+  onLangChange(() => render());
   onPearlBalance(paintBadge);
 }

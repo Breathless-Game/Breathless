@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { rarityOdds } from './depth-odds';
 import { Rng } from './rng';
 import { buildMarineCreature, swimmingAnimation } from './marine';
+import { lang } from './i18n';
 
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
 
@@ -259,6 +260,58 @@ export function recordedDepth(depthM: number): number {
 /** The depth zone a depth falls in, so callers do not repeat the cutoffs. */
 export function zoneForDepth(depthM: number): Zone {
   return ZONES.find((zone) => depthM >= zone.top && depthM < zone.bottom) ?? ZONES[ZONES.length - 1];
+}
+
+// ---- Display names -------------------------------------------------------
+// The stored English `name` / `species` never change (they are saved and go into NFT
+// metadata); these helpers only translate what the player reads.
+const SPECIES_ZH: Record<string, string> = {
+  'Sand Minnow': '沙鲦', 'Grey Perch': '灰鲈', 'Mud Goby': '泥虾虎',
+  'Atlantic Salmon': '大西洋鲑', 'Bluefin Tuna': '蓝鳍金枪鱼', 'Reef Octopus': '礁章鱼',
+  'Striped Wrasse': '条纹隆头鱼', 'Coral Chromis': '珊瑚雀鲷', 'Silver Snapper': '银鲷',
+  'Manta Ray': '蝠鲼', 'Lantern Angler': '灯笼鮟鱇', 'Ribbon Moray': '带纹海鳗',
+  'Azure Tang': '蓝倒吊', 'Neon Cardinal': '霓虹天竺鲷', 'Green Sea Turtle': '绿海龟',
+  'Hammerhead Shark': '双髻鲨', 'Moon Jellyfish': '海月水母', 'Chambered Nautilus': '鹦鹉螺',
+  'Violet Lionfish': '紫狮子鱼', 'Ember Triggerfish': '炽炭鳞鲀', 'Ghost Angelfish': '幽灵神仙鱼',
+  'Lionmane Jellyfish': '狮鬃水母', 'Sawshark': '锯鲨', 'Golden Sea Turtle': '金海龟',
+  'Golden Koi Dragon': '金锦鲤龙', 'Whale Shark': '鲸鲨', 'Crowned Sailfish': '冠旗鱼',
+  'Starcoil Eel': '星环鳗', 'Vampire Squid': '吸血鬼乌贼', 'Coralback Titan Turtle': '珊瑚背巨龟',
+  'Abyssal Giant Octopus': '深渊巨章鱼', 'Prism Crown Jellyfish': '棱冠水母',
+  'Suncrest Spearfish': '日冠枪鱼', 'Jade Shell Turtle': '玉甲龟', 'Amethyst Cardinal': '紫晶天竺鲷',
+};
+const EPITHET_ZH: Record<string, string> = {
+  Plain: '素色', Dusty: '尘灰', Little: '小', Shy: '怕羞',
+  Banded: '条纹', Lively: '活泼', Bright: '明亮', Speckled: '斑点',
+  Glimmering: '微光', Deepwater: '深水', Royal: '皇家', Twilight: '暮色',
+  Phantom: '幻影', Venomous: '毒刺', Storm: '风暴', Midnight: '子夜',
+  Sunforged: '日铸', Ancient: '远古', Crowned: '加冕', Gilded: '鎏金',
+  Prismatic: '棱彩', Eternal: '永恒', Starborn: '星生',
+};
+const ZONE_ZH: Record<string, string> = { Shallows: '浅滩', 'Coral Reef': '珊瑚礁', 'The Abyss': '深渊' };
+const RARITY_ZH: Record<Rarity, string> = {
+  common: '普通', uncommon: '少见', rare: '稀有', epic: '史诗', legendary: '传说', mythic: '神话',
+};
+
+/** Zone name in the player's language. */
+export function zoneName(zone: { name: string }): string {
+  return lang() === 'zh' ? ZONE_ZH[zone.name] ?? zone.name : zone.name;
+}
+/** Rarity label in the player's language (RARITY[r].label stays English). */
+export function rarityLabel(r: Rarity): string {
+  return lang() === 'zh' ? RARITY_ZH[r] : RARITY[r].label;
+}
+/** Species name in the player's language. */
+export function speciesName(species: string): string {
+  return lang() === 'zh' ? SPECIES_ZH[species] ?? species : species;
+}
+/** A generated fish's name in the player's language; 中文 is epithet + species with no space. */
+export function fishDisplayName(fish: { name: string; species: string }): string {
+  if (lang() !== 'zh') return fish.name;
+  const suffix = ` ${fish.species}`;
+  if (!fish.name.endsWith(suffix)) return SPECIES_ZH[fish.name] ?? fish.name;
+  const epithet = EPITHET_ZH[fish.name.slice(0, -suffix.length)];
+  const sp = SPECIES_ZH[fish.species];
+  return epithet && sp ? epithet + sp : sp ?? fish.name;
 }
 
 // ---- Mesh ---------------------------------------------------------------
