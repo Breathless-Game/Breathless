@@ -43,6 +43,7 @@ export class Hud {
   /** Deepest depth passed to setDepth since page load (no persistence). */
   private bestDepth = 0;
   private emergency = $('emergency');
+  private alert = $('alert');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
   private netSlots = $('net-slots');
@@ -181,6 +182,18 @@ export class Hud {
   setEmergency(fraction: number | null) {
     this.emergency.classList.toggle('hidden', fraction == null);
     if (fraction != null) this.emergencyFill.style.width = `${Math.max(0, fraction) * 100}%`;
+  }
+
+  /** A warning that stays up until cleared with null. `key` is the key to press, shown as a keycap. */
+  setAlert(text: string | null, key?: string) {
+    this.alert.classList.toggle('hidden', text == null);
+    if (text == null) return;
+    this.alert.textContent = text;
+    if (key) {
+      const cap = document.createElement('b');
+      cap.textContent = key;
+      this.alert.append(' ', cap);
+    }
   }
 
   message(text: string, ms = 1800) {
