@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { ROD_TIERS } from './equipment';
+import { EQUIPMENT_TIERS, ROD_TIERS } from './equipment';
+import { buildDeepSonar } from './deep-sonar';
 import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
 
-export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
+export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp' | 'sonar';
 export type UpgradeLevel = 1 | 2 | 3;
 export {
   ACCESSORIES,
@@ -45,6 +46,15 @@ export const UPGRADES: UpgradeDef[] = [
   { id: 'fins', group: 'dive', name: 'Fins', nameZh: '脚蹼', effects: ['Swim speed 7.5', 'Swim speed 8.5', 'Swim speed 9.5'], prices: [0, 60, 400] },
   { id: 'tank', group: 'dive', name: 'Emergency tank', nameZh: '应急气瓶', effects: ['No reserve air', '+1 s emergency air', '+2 s emergency air'], prices: [0, 80, 500] },
   { id: 'lamp', group: 'dive', name: 'Headlamp', nameZh: '头灯', effects: ['Short beam', 'Wide beam', 'Wide, long beam'], prices: [0, 40, 300] },
+  // Like the net, the sonar's real tiers and prices live in equipment.ts.
+  {
+    id: 'sonar',
+    group: 'dive',
+    name: 'Deep sonar',
+    nameZh: '深潜声纳',
+    effects: [EQUIPMENT_TIERS.sonar[0].effect, EQUIPMENT_TIERS.sonar[1].effect, EQUIPMENT_TIERS.sonar[2].effect],
+    prices: [EQUIPMENT_TIERS.sonar[0].cost, EQUIPMENT_TIERS.sonar[1].cost, EQUIPMENT_TIERS.sonar[2].cost],
+  },
 ];
 
 
@@ -59,7 +69,19 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   fins: buildFins,
   tank: buildTank,
   lamp: buildLamp,
+  sonar: buildSonarDisplay,
 };
+
+/** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
+function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
+  const group = buildDeepSonar({ lengthLevel: level, detail: 2, startsCarried: false }).group;
+  const halos: THREE.Mesh[] = [];
+  group.traverse((object) => {
+    if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshBasicMaterial) halos.push(object);
+  });
+  for (const halo of halos) halo.removeFromParent();
+  return group;
+}
 
 /** Build a centred, two-unit display model shared by the workbench and catalog. */
 export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel): THREE.Group {

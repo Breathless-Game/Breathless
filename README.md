@@ -61,6 +61,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
 | Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
+| Sharks | None | None | At night, if you opt in: they hunt by your heart rate, and fish are rarer |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
 - **The trench**: on every map the seabed is a shelf, and under the boat a trench drops away with no bottom. There is no depth limit on any map; the deeper you go, the rarer the fish and the higher their catch value (section 7). The zones a map does not open on its shelf (e.g. below 18 m on the Fjord) are only reachable down the trench.
@@ -398,6 +399,8 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
         ├── water.ts        GPU waves, facet color and the faceted road of sun / moon glitter
         ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
+        ├── shark.ts        sharks on Open Ocean nights: how the pulse sets their number, senses, speed and bite; their swimming (pure rules)
+        ├── shark-fx.ts     the low-poly shark model and how it turns, leans and sweeps its tail
         ├── storm.ts        rough seas: when rogue waves form, the wave's shape, the capsize and how the boat lies, what is lost (pure rules)
         ├── storm-fx.ts     what a rogue wave looks like: foam on the crest, spray, the burst on impact, cargo and fish overboard
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
@@ -564,6 +567,8 @@ The report (`report.ts`) contains:
 - Automatically written interpretation text, and a disclaimer.
 - "Save PDF" (the print stylesheet outputs the report only) and "Delete my health data".
 
+Dives made with sharks in the water (see "Sharks" in section 11) are marked. Being hunted raises the pulse, so the report leaves them out of the resting heart rate, dive reflex, recovery and the heart-rate chart, and says how many it left out. Their breath-hold times, depth and fish still count.
+
 Privacy: the data stays in the browser on this machine. Disclaimer: for wellness reference only, not medical advice. Do not practice breath-holding in or near water.
 
 > In simulation mode the heart rate is fake: about 72 bpm at rest, dropping to about 58 during a hold, then jumping to about 86 after a release before it settles. It is there to demo the report without a camera.
@@ -579,7 +584,7 @@ Privacy: the data stays in the browser on this machine. Disclaimer: for wellness
 | `deepbreath.wallet` | Private key of the devnet throwaway wallet (an array of numbers) |
 | `deepbreath.equipment` | Rod level, cached PEARL balance and legacy local Pearls (`rodLevel`, `pearls`, `legacyPearls`) |
 | `deepbreath.pearl.pending` | PEARL sales already sent, so a retry after a timeout resumes instead of starting over |
-| `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `lightingEffects`, `weather` (auto / clear / cloudy / rain / storm), `showCamera`, `showHelp` |
+| `deepbreath.settings` | Player settings: `quality` (auto / high / medium / low), `lightingEffects`, `weather` (auto / clear / cloudy / rain / storm), `showCamera`, `showHelp`, `sharks` (ask / on / off) |
 | `deepbreath.maps` | Map progress: the selected map, the lifetime banked value (`bestValue`), the demo switch |
 
 To reset, run `localStorage.clear()` in the browser console.
@@ -664,6 +669,26 @@ Four plants grow there, all built from flat quads and triangles with one color p
 Plants sway in the vertex shader. A slow wave of current crosses the bed, so neighbors move one after another; tall kelp bends into an S and its tips trace loops; leaf tips flutter; the swell that rocks the boat moves the upper water back and forth; wind makes all of it stronger. Plants within 4.5 m of the diver bend away and trail in the direction of the swim.
 
 - `npm --prefix game test` checks that every rock rests on sand or rock, plants root on the drawn sand clear of the trench, any quality prefix is spread over the shelf, faces are single-colored, roots never move and stems never stretch.
+
+### Sharks (Open Ocean nights)
+
+The first time a dive starts on the Open Ocean the game asks whether you want sharks, and says what it costs and what it pays. The answer is saved; Esc → Settings → "Sharks at night" changes it (On / Off / Ask before a dive).
+
+With sharks on, they come out at night during a dive and hunt by your heartbeat:
+
+| Your pulse above rest | Sharks | Notice you from | Charge at | A bite takes |
+| --- | --- | --- | --- | --- |
+| Up to 4 bpm | 1 | 9 m | 4.6 m/s | 1 fish |
+| About 23 bpm | 2 | 20 m | 7.3 m/s | 2 fish |
+| 42 bpm or more | 3 | 31 m | 10 m/s | 3 fish |
+
+Everything in between scales smoothly; the second shark joins at 45% and the third at 80% of the way. The diver swims about 7.5 m/s, so a calm diver can outswim a charge and a frightened one cannot. A charge that has not caught you in 6 s is broken off and the shark keeps away for about 5 s (2 s in a frenzy); after a bite it keeps away for 9 s (4 s). Sharks do not follow you within 3.5 m of the surface. A bite tears fish out of the net (never banked fish) and knocks you aside; with an empty net it only rams you. Sharks flush from cold blue to dull red and grow a little as your pulse rises. At dawn, or when your pulse calms, they swim off.
+
+- **The pulse** is Presage's heart rate, compared with your own resting pulse, learned while you float at the surface. In keyboard mode there is no sensor, so the game estimates a pulse from how hard you swim (shown as `♥ ~80`): drifting slowly past a shark keeps it low.
+- **What it pays**: while sharks are out, every newly spawned fish rolls its rarity three times instead of the night's two and keeps the best.
+- **What it costs**: those dives are left out of the heart-rate figures in the health report (section 9).
+- `npm --prefix game test` covers the pulse scale, pack size, bites, the chase a calm diver wins and a frightened one loses, the safe surface and the pack leaving at dawn.
+- In the console, `sharkPack.sharks` lists them.
 
 ### Rough seas (Open Ocean)
 

@@ -14,6 +14,13 @@ export type EquipmentLevel = RodLevel;
 export type EquipmentSlot = 'net' | 'rod' | 'reel' | 'fins' | 'tank' | 'lamp';
 
 /**
+ * Everything the gear panel can level up with Pearls: the six loadout slots
+ * plus the deployable deep sonar. The sonar has no specialisation paths and is
+ * not a quick-wheel tool, so it stays out of `EquipmentSlot`.
+ */
+export type UpgradeSlot = EquipmentSlot | 'sonar';
+
+/**
  * Specialisation paths are deliberately separate from level progression. A
  * player first buys a slot's Lv2 module, then chooses one of two mutually
  * exclusive handling styles. This keeps old saves (which only contain level
@@ -99,6 +106,8 @@ export interface EquipmentState {
   finsLevel: EquipmentLevel;
   tankLevel: EquipmentLevel;
   lampLevel: EquipmentLevel;
+  /** Deep sonar tier: the deployed cable's reach (10 / 17 / 26 m). */
+  sonarLevel: EquipmentLevel;
   /** On-chain PEARL, as last read with pearlBalance(): a cache for instant UI. */
   pearls: number;
   /** Pearls earned locally before PEARL went on-chain. Spent before on-chain PEARL. */
@@ -125,7 +134,7 @@ export interface EquipmentStats {
 }
 
 export interface SlotTier {
-  readonly slot: EquipmentSlot;
+  readonly slot: UpgradeSlot;
   readonly level: EquipmentLevel;
   readonly name: string;
   readonly effect: string;
@@ -182,12 +191,13 @@ const DEFAULT_STATE: EquipmentState = {
   finsLevel: 1,
   tankLevel: 1,
   lampLevel: 1,
+  sonarLevel: 1,
   pearls: 0,
   legacyPearls: 0,
   paths: DEFAULT_EQUIPMENT_PATHS,
 };
 
-const SLOT_LEVELS: Record<EquipmentSlot, readonly SlotTier[]> = {
+const SLOT_LEVELS: Record<UpgradeSlot, readonly SlotTier[]> = {
   net: ROD_TIERS.map((tier) => ({
     slot: 'net', level: tier.level, name: tier.name, effect: `${tier.capacity} fish · ${tier.catchRadius.toFixed(1)} m catch radius`, cost: tier.cost,
   })),
@@ -216,10 +226,16 @@ const SLOT_LEVELS: Record<EquipmentSlot, readonly SlotTier[]> = {
     { slot: 'lamp', level: 2, name: 'Long-focus reflector', effect: '28 m beam', cost: 100 },
     { slot: 'lamp', level: 3, name: 'Wide diffuser', effect: '38 m wide beam', cost: 500 },
   ],
+  // Keep in step with DEEP_SONAR_LENGTH_TIERS in deep-sonar.ts (checked by tests/deep-sonar.test.mjs).
+  sonar: [
+    { slot: 'sonar', level: 1, name: 'Deep sonar', effect: '10 m cable · 3 pulse nodes', cost: 0 },
+    { slot: 'sonar', level: 2, name: 'Long-line sonar', effect: '17 m cable · 4 pulse nodes', cost: 300 },
+    { slot: 'sonar', level: 3, name: 'Abyssal sonar', effect: '26 m cable · 5 pulse nodes', cost: 1200 },
+  ],
 };
 
 /** Tier metadata for the multi-slot workshop UI. */
-export const EQUIPMENT_TIERS: Readonly<Record<EquipmentSlot, readonly SlotTier[]>> = SLOT_LEVELS;
+export const EQUIPMENT_TIERS: Readonly<Record<UpgradeSlot, readonly SlotTier[]>> = SLOT_LEVELS;
 
 function pathDef(
   slot: EquipmentSlot,
@@ -355,6 +371,7 @@ function normalize(value: unknown): EquipmentState {
     finsLevel: validLevel(record.finsLevel),
     tankLevel: validLevel(record.tankLevel),
     lampLevel: validLevel(record.lampLevel),
+    sonarLevel: validLevel(record.sonarLevel),
     pearls: preChain ? 0 : validPearls(record.pearls),
     legacyPearls: validPearls(preChain ? record.pearls : record.legacyPearls),
     paths: normalizePaths(record),
@@ -467,12 +484,12 @@ export function planUpgrade(state: EquipmentState): UpgradePlan | null {
   return { tier, fromLegacy, fromChain: tier.cost - fromLegacy };
 }
 
-function slotLevel(state: EquipmentState, slot: EquipmentSlot): EquipmentLevel {
+function slotLevel(state: EquipmentState, slot: UpgradeSlot): EquipmentLevel {
   const value = state[slot === 'rod' ? 'rodGearLevel' : `${slot}Level` as keyof EquipmentState];
   return validLevel(value);
 }
 
-function withSlotLevel(state: EquipmentState, slot: EquipmentSlot, level: EquipmentLevel): EquipmentState {
+function withSlotLevel(state: EquipmentState, slot: UpgradeSlot, level: EquipmentLevel): EquipmentState {
   const next = { ...state };
   if (slot === 'net') {
     next.netLevel = level;
@@ -481,6 +498,7 @@ function withSlotLevel(state: EquipmentState, slot: EquipmentSlot, level: Equipm
   else if (slot === 'reel') next.reelLevel = level;
   else if (slot === 'fins') next.finsLevel = level;
   else if (slot === 'tank') next.tankLevel = level;
+  else if (slot === 'sonar') next.sonarLevel = level;
   else next.lampLevel = level;
   return next;
 }
@@ -528,19 +546,19 @@ export function setEquipmentPath(state: EquipmentState, slot: EquipmentSlot, pat
 }
 
 /** Return the current tier metadata for any equipment slot. */
-export function slotTier(state: EquipmentState, slot: EquipmentSlot): SlotTier {
+export function slotTier(state: EquipmentState, slot: UpgradeSlot): SlotTier {
   const level = slotLevel(normalize(state), slot);
   return SLOT_LEVELS[slot][level - 1] ?? SLOT_LEVELS[slot][0];
 }
 
 /** Return the next tier metadata, or null at max level. */
-export function nextSlotTier(state: EquipmentState, slot: EquipmentSlot): SlotTier | null {
+export function nextSlotTier(state: EquipmentState, slot: UpgradeSlot): SlotTier | null {
   const level = slotLevel(normalize(state), slot);
   return SLOT_LEVELS[slot][level] ?? null;
 }
 
 export interface SlotUpgradePlan {
-  slot: EquipmentSlot;
+  slot: UpgradeSlot;
   tier: SlotTier;
   /** Taken from the local legacy balance, which is spent first. */
   fromLegacy: number;
@@ -552,7 +570,7 @@ export interface SlotUpgradePlan {
  * Plan buying the next tier for one slot, or null when it is maxed out or
  * unaffordable.  Same rule as planUpgrade(): legacy Pearls first, the rest on-chain.
  */
-export function planSlotUpgrade(state: EquipmentState, slot: EquipmentSlot): SlotUpgradePlan | null {
+export function planSlotUpgrade(state: EquipmentState, slot: UpgradeSlot): SlotUpgradePlan | null {
   const current = normalize(state);
   const tier = nextSlotTier(current, slot);
   if (!tier || totalPearls(current) < tier.cost) return null;
@@ -571,7 +589,7 @@ export function applySlotUpgrade(state: EquipmentState, plan: SlotUpgradePlan): 
 }
 
 /** Pure preview of buying the next tier for one slot (no on-chain spend happens here). */
-export function upgradeSlot(state: EquipmentState, slot: EquipmentSlot): EquipmentState | null {
+export function upgradeSlot(state: EquipmentState, slot: UpgradeSlot): EquipmentState | null {
   const plan = planSlotUpgrade(state, slot);
   return plan ? applySlotUpgrade(state, plan) : null;
 }
