@@ -3095,6 +3095,7 @@ button:disabled {
 
 .aq-tank {
   position: relative;
+  align-self: start;
 }
 
 .aq-layout {
@@ -3287,10 +3288,15 @@ button:disabled {
 
 #aq-empty {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 44%;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: min(100%, 36em);
+  padding: 0 16px;
   text-align: center;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 15px;
   pointer-events: none;
