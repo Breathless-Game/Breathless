@@ -707,6 +707,8 @@ To right it, surface within 9 m of the boat (where the wave left it). A large `F
 
 ### Weather
 
+On clear Fjord nights, the aurora has fine drifting rays, a soft green lower edge and a fading violet crown. Its folds and light are animated on the GPU without per-frame geometry uploads or extra draw calls. Clouds dim it, and the Lighting effects switch hides both the aurora and its water reflection. Preview an aurora surge in `events-lab.html` with the `aurora` button.
+
 Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Storm, and saves the choice. Natural weather starts clear and cycles through clear → cloudy → rain → storm → rain → cloudy → clear every 9 minutes. Manual changes and returns to natural weather blend over about 5 seconds. The HUD shows the current weather. This is an in-game cycle, with no real-world location or weather service.
 
 Cloud cover affects the sky, sun / moon intensity, underwater rays, fog and water reflections. Wind changes wave strength, boat rocking and rain slant; storms increase rainfall. Rain animates on the GPU and adds at most one draw call. Clear / cloudy weather and underwater views do not draw rain. Low, medium and high use at most 160 / 420 / 800 raindrops. The atmospheric sky uses one draw and a seamless 256 × 256 noise texture generated once; low / medium / high use 2 / 3 / 4 cloud texture samples, and low omits the high cloud veil and stars. No sky texture is redrawn or uploaded each frame. Weather changes reuse the material and rain buffers.
