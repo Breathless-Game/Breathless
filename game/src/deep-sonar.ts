@@ -242,9 +242,10 @@ export class DeepSonar implements DeepSonarMesh {
       const t = (i + 1) / (nodeCount + 1);
       const y = -0.08 - tier.length * t;
       const pulse = flatMaterial(accent, { emissive: accent, emissiveIntensity: 0.22 });
-      const node = new THREE.Mesh(nodeShape.clone(), pulse);
+      // All pulse nodes share one low-poly buffer; only transforms and materials differ.
+      const node = new THREE.Mesh(nodeShape, pulse);
       node.position.y = y;
-      const glow = new THREE.Mesh(glowShape.clone(), glowMaterial(accent, 0.055));
+      const glow = new THREE.Mesh(glowShape, glowMaterial(accent, 0.055));
       glow.position.y = y;
       glow.scale.setScalar(0.85);
       nodeRoot.add(node, glow);
@@ -252,8 +253,6 @@ export class DeepSonar implements DeepSonarMesh {
       this.nodeGlows.push(glow);
       this.pulseMats.push(pulse);
     }
-    nodeShape.dispose();
-    glowShape.dispose();
     this.group.add(nodeRoot, makeAnchor(tier.length, accent, this._detail));
     this.applyLighting();
   }
