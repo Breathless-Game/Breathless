@@ -12,6 +12,7 @@ import { Atmosphere } from './sky';
 import { SunShafts } from './sunshafts';
 import { SceneColorGrade } from './color-grade';
 import { buildScenery, type Scenery, type SceneryEnv } from './scenery';
+import { auroraGlow } from './aurora';
 import { FLORA, understorySpecies } from './flora';
 import { KelpBed, type KelpPlant } from './kelp';
 import { Shelf, layoutSeabed, plantHeight, type RockSlot, type SeabedLayout } from './seabed-layout';
@@ -289,6 +290,8 @@ export class World {
       this.scene.remove(this.scenery.group);
       disposeTree(this.scenery.group, this.scene);
     }
+    // Only the fjord's sky has an aurora; nothing else would clear what it left behind.
+    auroraGlow.ambient = auroraGlow.surge = 0;
     this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
     this.setQuality(this.quality);
@@ -1066,6 +1069,8 @@ export class World {
     (this.snow.material as THREE.PointsMaterial).color.set('#e8fbff').lerp(this.sun.color, 0.3);
     const waterMaterial = this.surface.material as WaterSurfaceMaterial;
     waterMaterial.update(this.waveTime, lighting, cameraY, this.quality, weather, this.map.waves);
+    // The sea mirrors the northern lights while they are out.
+    waterMaterial.reflectGlow(auroraGlow.color, this.lightingEffects ? Math.max(auroraGlow.ambient, auroraGlow.surge) : 0);
     waterMaterial.color.multiply(this.surfaceTint);
     this.rain.update(this.weatherTime, weather, cameraY, cameraX, lighting.nightMix);
     if (this.kelp) {

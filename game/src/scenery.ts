@@ -5,6 +5,7 @@ import type { MapDef, MapId } from './maps';
 import type { SceneryDetail } from './render-quality';
 import type { WeatherState } from './weather';
 import { Rng } from './rng';
+import { AuroraCurtain, auroraActivity, auroraGlow } from './aurora';
 
 // What you see above the water on each map: the fjord's snow peaks and cabins,
 // Heaven Lake's stone pillars and mist, the ocean's lighthouse and freighter.
@@ -623,25 +624,33 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   const rock = shades(['#4d5d6b', '#3f4d59', '#5a6a77']);
   const snow = shades(['#f4fbff', '#dcecf5']);
   const mountain = mountainMat();
-  // Each range keeps to its own slab of depth, and a peak is only `depth` times as
-  // deep as it is wide. Peaks of one range still merge into each other, but the
-  // two ranges never touch: a far snowfield cannot poke through a near rock face.
-  const peak = (x: number, z: number, r: number, h: number, depth: number) => {
-    const snowline = rng.range(0.42, 0.58);
-    const geo = jitter(new THREE.ConeGeometry(r, h, 7, 4), rng, r * 0.09);
-    paintFaces(geo, (t) => (t > snowline + rng.range(-0.1, 0.1) ? rng.pick(snow) : rng.pick(rock)));
-    // Turn it first: the squash is along the line of sight, whichever way the cone faces.
-    geo.rotateY(rng.range(0, 6));
-    batch.add(geo, mountain, x, h / 2 - 2, z, { sz: depth });
+  // Three ranges like sheets of cut paper, one behind the other. Each keeps to its own slab of
+  // depth (a peak is only `depth` times as deep as it is wide) and the peaks of one range stand
+  // clear of each other, so no mountain touches another and no face can poke through a
+  // neighbour's. The ranges are staggered: each closes the valleys of the one behind it.
+  const range = stream(0xf10d, 7);
+  interface Peak { x: number; z: number; r: number; h: number; depth: number }
+  const row = (xs: number[], z: number, depth: number, r: readonly [number, number], h: readonly [number, number]): Peak[] =>
+    xs.map((x0) => {
+      const p = { x: x0 + range.range(-4, 4), z: z + range.range(-2, 2), r: range.range(r[0], r[1]), h: range.range(h[0], h[1]), depth };
+      const snowline = range.range(0.42, 0.58);
+      const geo = jitter(new THREE.ConeGeometry(p.r, p.h, 7, 4), range, p.r * 0.07);
+      paintFaces(geo, (t) => (t > snowline + range.range(-0.1, 0.1) ? range.pick(snow) : range.pick(rock)));
+      // Turn it first: the squash is along the line of sight, whichever way the cone faces.
+      geo.rotateY(range.range(0, 6));
+      batch.add(geo, mountain, p.x, p.h / 2 - 2, p.z, { sz: depth });
+      return p;
+    });
+  row([-270, -180, -90, 0, 90, 180, 270], -142, 0.3, [30, 36], [52, 74]);
+  row([-225, -135, -45, 45, 135, 225], -112, 0.3, [26, 33], [38, 56]);
+  // The near range leaves the middle open like a channel, and stands clear of the waterfall's bluff (x = 47).
+  const near = row([-185, -105, 105, 185], -82, 0.33, [22, 30], [28, 42]);
+  /** Height of a near peak's slope above (x, z), or -Infinity where no peak stands. */
+  const slopeY = (x: number, z: number) => {
+    let y = -Infinity;
+    for (const p of near) y = Math.max(y, -2 + p.h * (1 - Math.hypot((x - p.x) / p.r, (z - p.z) / (p.r * p.depth))));
+    return y > -2 ? y : -Infinity;
   };
-  // Far range, then a nearer range that leaves the middle open like a channel.
-  for (let x = -220; x <= 220; x += 55) {
-    peak(x + rng.range(-12, 12), -126 + (rng.range(-130, -108) + 119) * 0.27, rng.range(30, 44), rng.range(48, 74), 0.45);
-  }
-  // The right-hand range starts beyond the waterfall's bluff (x = 47), which stands clear of it.
-  for (const x of [-168, -112, -60, 96, 140, 184]) {
-    peak(x + rng.range(-8, 8), -82 + (rng.range(-96, -82) + 89) * 0.3, rng.range(18, 28), rng.range(26, 42), 0.4);
-  }
 
   // Wooded shore at the foot of the near range.
   const pine = ['#1f4d3a', '#2a6048'];
@@ -655,10 +664,36 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
       const h = rng.range(3.2, 5.6);
       const x = mx + rng.range(-0.6, 0.6) * mr;
       const z = mz + rng.range(-0.4, 0.4) * mr;
-      const y = -0.8 + mr * 0.2;
+      // Where the shore runs under a mountain's foot, the tree stands on the slope, not inside it.
+      const y = Math.max(-0.8 + mr * 0.2, slopeY(x, z) - 0.6);
       const color = rng.pick(pine);
       put(new THREE.ConeGeometry(h * 0.34, h * 0.7, 6), color, x, y + h * 0.35, z);
       put(new THREE.ConeGeometry(h * 0.24, h * 0.55, 6), color, x, y + h * 0.72, z);
+    }
+  }
+
+  // Pines climb the lower slopes of the near range in groves, and stop well short of the snow.
+  // They are painted with the mountain's material, so in rain they sink into its silhouette.
+  const forest = stream(0xf10d, 6);
+  const kept = perDetail(detail, [0.4, 0.7, 1] as const);
+  for (const p of near) {
+    for (let grove = 0; grove < 8; grove++) {
+      // Only the side of the peak that faces the camera.
+      const around = forest.range(0.1, 0.9) * Math.PI;
+      const up = forest.range(0.02, 0.28);
+      const trees = forest.int(3, 6);
+      for (let t = 0; t < trees; t++) {
+        const a = around + forest.range(-0.1, 0.1);
+        const u = Math.min(0.36, Math.max(0.01, up + forest.range(-0.03, 0.05)));
+        const h = forest.range(3.4, 6.2) * (1 - u * 0.9);
+        const color = forest.pick(pine);
+        // Every tree is rolled at every detail level, so the ones that stay never move.
+        if (forest.next() >= kept) continue;
+        const out = p.r * (1 - u) * 0.97;
+        const [x, y, z] = [p.x + Math.cos(a) * out, -2.8 + p.h * u, p.z + Math.sin(a) * out * p.depth];
+        batch.add(solid(new THREE.ConeGeometry(h * 0.34, h * 0.7, 6), color), mountain, x, y + h * 0.35, z);
+        batch.add(solid(new THREE.ConeGeometry(h * 0.24, h * 0.55, 6), color), mountain, x, y + h * 0.72, z);
+      }
     }
   }
 
@@ -858,33 +893,20 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     stream(0xf10d, 4),
   );
 
-  // Aurora: ribbons that are bright along the bottom edge and fade upward.
-  const ribbons: { mesh: THREE.Mesh; base: Float32Array; phase: number }[] = [];
-  const tints = ['#4dffb0', '#58e6ff', '#9dff7a'];
-  for (let i = 0; i < 3; i++) {
-    const geo = new THREE.PlaneGeometry(300, 22, 48, 1);
-    const pos = geo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const tint = new THREE.Color(tints[i]);
-    for (let v = 0; v < pos.count; v++) if (pos.getY(v) < 0) tint.toArray(colors, v * 3);
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const mesh = new THREE.Mesh(
-      geo,
-      new THREE.MeshBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        fog: false,
-        side: THREE.DoubleSide,
-      }),
-    );
-    mesh.position.set(rng.range(-30, 30), 44 + i * 9, -150 - i * 6);
-    mesh.visible = false;
-    ribbons.push({ mesh, base: (pos.array as Float32Array).slice(), phase: rng.range(0, 6) });
-    group.add(mesh);
-  }
+  // Aurora: curtains of rays that rise from behind the peaks on some nights (see aurora.ts).
+  // They hang behind the far range even at the nearest point of their folds, so the rays fill
+  // the valleys and the sky above the ridges without ever crossing in front of a summit.
+  const columns = perDetail(detail, [36, 60, 96] as const);
+  const curtains = [
+    { y: 24, z: -174, height: 46, share: 0.9, look: {} },
+    { y: 36, z: -188, height: 42, share: 0.6, look: { low: '#59f0c8', mid: '#3fd6b0' } },
+    { y: 16, z: -202, height: 34, share: 0.45, look: { low: '#9dff9a' } },
+  ].slice(0, perDetail(detail, [2, 3, 3] as const)).map((c) => {
+    const curtain = new AuroraCurtain({ width: 340, height: c.height, columns, phase: rng.range(0, 6), ...c.look });
+    curtain.mesh.position.set(rng.range(-30, 30), c.y, c.z);
+    group.add(curtain.mesh);
+    return { curtain, share: c.share };
+  });
 
   return {
     group,
@@ -900,19 +922,10 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
       lights.update(time, night, shine);
       smokeLook.setNight(night);
       smoke.update(time, env?.weather?.wind ?? 0);
-      const auroraVisibility = shine ? 1 - (env?.weather?.cloud ?? 0) : 0;
-      for (const r of ribbons) {
-        r.mesh.visible = auroraVisibility > 0.01;
-        if (!r.mesh.visible) continue;
-        (r.mesh.material as THREE.MeshBasicMaterial).opacity = (0.42 + Math.sin(time * 0.35 + r.phase) * 0.14) * auroraVisibility;
-        const pos = r.mesh.geometry.attributes.position;
-        for (let v = 0; v < pos.count; v++) {
-          const x = r.base[v * 3];
-          pos.setY(v, r.base[v * 3 + 1] + Math.sin(x * 0.03 + time * 0.22 + r.phase) * 5);
-          pos.setZ(v, Math.sin(x * 0.018 + time * 0.3 + r.phase) * 12);
-        }
-        pos.needsUpdate = true;
-      }
+      // Not every night, and not all night: it comes in displays, and cloud hides it.
+      const display = shine ? auroraActivity(time) * (1 - (env?.weather?.cloud ?? 0)) : 0;
+      auroraGlow.ambient = display;
+      for (const { curtain, share } of curtains) curtain.update(time, display * share);
     },
   };
 }
@@ -947,24 +960,54 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
     }
     pillars.push({ x, z, top, bottom, crown });
   };
+  // No pillar stands inside another: one that would is moved back or forward until it is clear.
+  // The foot is up to 1.9 times the top, plus the jitter.
+  const apart = (x: number, z: number, top: number, zMin: number, zMax: number) => {
+    const foot = (t: number) => t * 2.15;
+    const clear = (at: number) => pillars.every((p) => Math.hypot(p.x - x, p.z - at) > foot(p.top) + foot(top) + 1);
+    for (let tries = 0; tries < 8 && !clear(z); tries++) z = z - 13 < zMin ? z - 13 + (zMax - zMin) : z - 13;
+    return z;
+  };
   for (let i = 0; i < 16; i++) {
-    pillar(-200 + i * 26.5 + rng.range(-9, 9), rng.range(-125, -75), rng.range(3, 6.5), rng.range(34, 78));
+    const [x, z, top, h] = [-200 + i * 26.5 + rng.range(-9, 9), rng.range(-125, -75), rng.range(3, 6.5), rng.range(34, 78)];
+    pillar(x, apart(x, z, top, -125, -75), top, h);
   }
   // A few close ones on each side frame the lake.
   for (const side of [-1, 1]) {
-    for (let i = 0; i < 3; i++) pillar(side * rng.range(78, 125), rng.range(-62, -42), rng.range(3.5, 5.5), rng.range(42, 64));
+    for (let i = 0; i < 3; i++) {
+      const [x, z, top, h] = [side * rng.range(78, 125), rng.range(-62, -42), rng.range(3.5, 5.5), rng.range(42, 64)];
+      pillar(x, apart(x, z, top, -62, -42), top, h);
+    }
   }
 
-  // The crater rim behind everything, with a dusting of snow.
-  const rim = shades(['#55655e', '#4a5952', '#60706a']);
-  const frost = new THREE.Color('#e4efec');
-  for (let x = -240; x <= 240; x += 60) {
-    const r = rng.range(46, 64);
-    const h = rng.range(20, 30);
-    const geo = jitter(new THREE.ConeGeometry(r, h, 6, 2), rng, r * 0.06);
-    paintFaces(geo, (t) => (t > 0.72 && rng.next() < 0.6 ? frost : rng.pick(rim)));
-    batch.add(geo, mountain, x + rng.range(-10, 10), h / 2 - 2, -140);
+  // The crater rim behind everything, with a dusting of snow. It is one continuous ridge, a
+  // zigzag crest above a straight foot, standing just behind the last pillar: its hills
+  // cannot run into each other or into a pillar.
+  const rim = ['#55655e', '#4a5952', '#60706a'];
+  const frost = '#e4efec';
+  const ridge = stream(0x71a2c1, 7);
+  const span = 20;
+  const crest: number[][] = [], waist: number[][] = [], foot: number[][] = [];
+  for (let x = -360; x <= 360; x += span) {
+    // Broad hills up to 30 m with lower saddles between them, never down to the water.
+    const height = Math.max(8, 13 + 9 * Math.sin(x * 0.026 + 1.1) + 5 * Math.sin(x * 0.061 + 4) + ridge.range(-2.5, 2.5));
+    crest.push([x + ridge.range(-5, 5), height, -147 + ridge.range(-3, 3)]);
+    waist.push([x + span / 2 + ridge.range(-4, 4), height * ridge.range(0.4, 0.6), -143.5 + ridge.range(-1, 1)]);
+    foot.push([x, -2, -140]);
   }
+  const faces = new Map<string, number[]>();
+  const face = (color: string, ...corners: number[][]) => {
+    if (!faces.has(color)) faces.set(color, []);
+    faces.get(color)!.push(...corners.flat());
+  };
+  for (let i = 0; i < crest.length - 1; i++) {
+    const snowy = (crest[i][1] + crest[i + 1][1]) / 2 > 19;
+    face(ridge.pick(rim), foot[i], foot[i + 1], waist[i]);
+    face(ridge.pick(rim), waist[i], foot[i + 1], waist[i + 1]);
+    face(snowy && ridge.next() < 0.6 ? frost : ridge.pick(rim), waist[i], crest[i + 1], crest[i]);
+    face(snowy && ridge.next() < 0.6 ? frost : ridge.pick(rim), waist[i], waist[i + 1], crest[i + 1]);
+  }
+  batch.add(triangles([...faces].map(([color, verts]) => [verts, color])), mountain, 0, 0, 0);
 
   // A lakeside pavilion on a rock.
   put(jitter(new THREE.IcosahedronGeometry(7, 0), rng, 0.9), '#5b5a4c', 34, -0.3, -50, { sy: 0.24 });
