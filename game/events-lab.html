@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Breathless · events lab</title>
+    <link rel="stylesheet" href="/src/scrollbar.css" />
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #071a30; color: #e8f4ff; font: 13px/1.4 system-ui, sans-serif; }
       #scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
@@ -14,7 +15,7 @@
       label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
       label > span:first-child { width: 64px; opacity: 0.8; }
       input[type='range'] { flex: 1; }
-      select { flex: 1; }
+      .dd { flex: 1; }
       .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
       .buttons button { padding: 6px 4px; border-radius: 6px; border: 1px solid #2c4a66; background: #0f2a45; color: inherit; cursor: pointer; }
       .buttons button:hover { background: #17406a; }

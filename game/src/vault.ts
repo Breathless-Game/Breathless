@@ -2,6 +2,7 @@ import { fishValue, zoneForDepth } from './fish';
 import { MAPS, type MapId } from './maps';
 import { bulkSellable, isFundsError, needsConfirm, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
+import { formatSerial, nftName } from './nft-uri';
 import { fishCard } from './portrait';
 import { sessionBalance, topUpSession, walletState } from './wallet';
 import { isUserRejection } from './wallet-storage';
@@ -60,7 +61,7 @@ export class Vault {
   private grid = $('collection-grid');
   private walletEl = $('wallet');
   private marketEl = $('market-bar');
-  private cards = new WeakMap<BankedFish, { fig: HTMLElement; cap: HTMLElement }>();
+  private cards = new WeakMap<BankedFish, { fig: HTMLElement; cap: HTMLElement; img: HTMLImageElement; serial?: number }>();
   private confirming: BankedFish | null = null;
   private confirmTimer = 0;
 
@@ -170,9 +171,11 @@ export class Vault {
       parts.push(el('span', 'paused', '⏸ Minting paused: the game wallet needs devnet SOL. Use Fund game wallet above. Checking again every minute.'));
     } else if (q.funds === 'offline' && waiting) {
       parts.push(el('span', 'paused', '⏸ Solana devnet is not answering. Retrying every minute.'));
+    } else if (q.serials === 'waiting' && queued) {
+      parts.push(el('span', 'paused', '⏸ Waiting for fish numbers: the game server is not answering. Retrying shortly.'));
     } else if (q.minting) {
       const step = q.minting.step ? STEP_LABEL[q.minting.step] : 'Starting…';
-      parts.push(el('span', '', `Minting ${q.minting.fish.name}: ${step}${queued ? ` · ${queued} more queued` : ''}`));
+      parts.push(el('span', '', `Minting ${nftName(q.minting.fish)}: ${step}${queued ? ` · ${queued} more queued` : ''}`));
     } else if (queued) {
       parts.push(el('span', '', `${queued} NFT${queued > 1 ? 's' : ''} queued`));
     }
@@ -206,8 +209,13 @@ export class Vault {
       img.src = fishCard(f);
       const cap = document.createElement('figcaption');
       fig.append(img, cap);
-      card = { fig, cap };
+      card = { fig, cap, img, serial: f.serial };
       this.cards.set(f, card);
+    }
+    // The number arrives after the first render (just before the mint, or with a repair): redraw once.
+    if (card.serial !== f.serial) {
+      card.serial = f.serial;
+      card.img.src = fishCard(f);
     }
     this.caption(f, card.cap);
     return card.fig;
@@ -218,6 +226,7 @@ export class Vault {
     const meta = document.createElement('span');
     const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
     meta.textContent = `${where} · ${f.depthM} m · ${fishValue(f)} pts · seed ${f.id}`;
+    if (f.serial) meta.prepend(el('span', 'serial', formatSerial(f.serial)), ' · ');
     const row = el('div', 'nft-row');
     row.append(this.nftBadge(f), this.sellControl(f));
     cap.replaceChildren(meta, row);
@@ -252,7 +261,8 @@ export class Vault {
       return el('span', 'nft-status busy', step);
     }
     if (f.nft === 'pending') {
-      return el('span', 'nft-status', q.funds === 'needs-sol' ? 'NFT queued · needs SOL' : 'NFT queued');
+      const why = q.funds === 'needs-sol' ? ' · needs SOL' : q.serials === 'waiting' && !f.serial ? ' · waiting for number' : '';
+      return el('span', 'nft-status', `NFT queued${why}`);
     }
     if (f.nft === 'failed') {
       const wrap = el('span', 'nft-status failed', f.retryAt ? 'Mint failed · retrying soon ' : 'Mint failed ');
@@ -297,7 +307,7 @@ export class Vault {
     const verb = quote.mintFirst ? 'Mint & sell' : 'Sell';
     if (this.confirming === f) {
       const wrap = el('span', 'sell-confirm', '');
-      const yes = el('button', 'mini primary', `Confirm · ${quote.pearls} Pearls`);
+      const yes = el('button', 'mini primary', `Confirm${f.serial ? ` ${formatSerial(f.serial)}` : ''} · ${quote.pearls} Pearls`);
       const no = el('button', 'mini', 'Cancel');
       yes.addEventListener('click', () => {
         this.setConfirming(null);

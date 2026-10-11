@@ -1,5 +1,6 @@
 import type { BreathState } from './breath';
 import { FishSpec, RARITY, fishValue } from './fish';
+import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { fishIcon } from './portrait';
 import { totalPearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
 
@@ -42,6 +43,7 @@ export class Hud {
   /** Deepest depth passed to setDepth since page load (no persistence). */
   private bestDepth = 0;
   private emergency = $('emergency');
+  private alert = $('alert');
   private emergencyFill = $('emergency-fill');
   private centerMsg = $('center-msg');
   private netSlots = $('net-slots');
@@ -182,6 +184,18 @@ export class Hud {
     if (fraction != null) this.emergencyFill.style.width = `${Math.max(0, fraction) * 100}%`;
   }
 
+  /** A warning that stays up until cleared with null. `key` is the key to press, shown as a keycap. */
+  setAlert(text: string | null, key?: string) {
+    this.alert.classList.toggle('hidden', text == null);
+    if (text == null) return;
+    this.alert.textContent = text;
+    if (key) {
+      const cap = document.createElement('b');
+      cap.textContent = key;
+      this.alert.append(' ', cap);
+    }
+  }
+
   message(text: string, ms = 1800) {
     this.centerMsg.textContent = text;
     this.centerMsg.classList.add('show');
@@ -238,7 +252,7 @@ export class Hud {
     this.activeGearHint.textContent = `按 ${keys[slot]} 快速切换 · Tab 轮盘`;
   }
 
-  toast(spec: FishSpec, title?: string) {
+  toast(spec: FishSpec & Numbered, title?: string) {
     const r = RARITY[spec.rarity];
     const el = document.createElement('div');
     const big = spec.rarity === 'legendary' || spec.rarity === 'mythic';
@@ -246,7 +260,15 @@ export class Hud {
     el.style.setProperty('--c', r.color);
     el.innerHTML = `<img alt=""><div><div class="r">${title ?? r.label.toUpperCase()}</div><div class="n"></div></div>`;
     el.querySelector('img')!.src = fishIcon(spec);
-    el.querySelector('.n')!.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
+    const n = el.querySelector('.n')!;
+    n.textContent = `${spec.name} · ${spec.weightKg} kg · ${fishValue(spec)} pts`;
+    // A minted fish (e.g. the SOLD toast) carries its number, dimmed after the name.
+    if (isSerial(spec.serial)) {
+      const tag = document.createElement('span');
+      tag.className = 'serial';
+      tag.textContent = formatSerial(spec.serial);
+      n.replaceChildren(spec.name, ' ', tag, ` · ${spec.weightKg} kg · ${fishValue(spec)} pts`);
+    }
     this.toasts.prepend(el);
     setTimeout(() => el.remove(), 3100);
   }

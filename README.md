@@ -57,9 +57,10 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Difficulty | Casual | Normal | Hard |
 | Zones on the shelf | 0–18 m, Shallows only | 0–38 m, Shallows + Sunken Forest | 0–60 m, Shallows + Coral Reef + The Abyss |
 | Shelf (seabed) | 20 m, then the bottomless trench | 40 m, then the bottomless trench | 62 m, then the bottomless trench |
-| Above the water | Snow peaks, a pine shore, two fishing cabins and a pier, ice floes; aurora and lit windows at night | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
+| Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, two fishing cabins and a pier, ice floes; lit windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
+| Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
 - **The trench**: on every map the seabed is a shelf, and under the boat a trench drops away with no bottom. There is no depth limit on any map; the deeper you go, the rarer the fish and the higher their catch value (section 7). The zones a map does not open on its shelf (e.g. below 18 m on the Fjord) are only reachable down the trench.
@@ -68,7 +69,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
 - **Saved progress**: the selected map, the lifetime banked value and the demo switch are stored in localStorage under the key `deepbreath.maps`.
 - **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), map-specific daylight hours (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
-- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. They are not shown or used in the game yet, and buying them with Pearl is not wired up. The one upgrade that is playable is the rod / net tier (`G`, section 7), which uses its own net model.
+- **Upgrades**: rod, bait and boat (speed / durability / rod slots), plus a set of diving gear. See [section 7 of the design doc](design/game-design-document.md#7-经济与升级) (in Chinese). The upgrade parts (rod, reel, bait, boat engine / hull / fishing deck, net, fins, emergency tank, headlamp) have low-poly models at three levels each in `game/src/upgrades.ts`. The workbench uses these display models, and 27 of the 30 variants (everything except the reel, which is generated live) are archived as PNG/GLB in [the equipment asset library](assets/README.md#7-equipment-upgrade-models). Purchase and diving effects for the other equipment remain separate gameplay work.
 
 ### Hackathon positioning
 
@@ -193,6 +194,7 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `H` | Health report (built only when you press it) |
 | `N` | Gradually switch morning / night; natural cycle and afternoon are available in pause settings |
 | `K` | Cycle the breath input: presage → sim → keyboard |
+| `F` | Right a capsized boat, from the surface beside it (Open Ocean storms) |
 | `Esc` | Pause menu: resume, settings, back to the main menu. It closes any open panel first; inside settings it goes back one level; during calibration it goes straight to the main menu |
 | `Enter` (main menu) | Same as clicking the START fish |
 
@@ -396,17 +398,20 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── sunshafts.ts    soft underwater sunlight scattering, batched into one draw
         ├── water.ts        GPU waves, facet color and the faceted road of sun / moon glitter
         ├── water-geometry.ts deterministic, watertight triangles with face color and patch attributes
+        ├── storm.ts        rough seas: when rogue waves form, the wave's shape, the capsize and how the boat lies, what is lost (pure rules)
+        ├── storm-fx.ts     what a rogue wave looks like: foam on the crest, spray, the burst on impact, cargo and fish overboard
         ├── weather.ts      natural weather cycle, smooth clear / cloudy / rain / storm transitions
         ├── rain.ts         GPU rain in one draw call, with quality-dependent rain limits
         ├── maps.ts         the three map definitions (open zones and shelf depth, unlock value, palette) and the saved map progress
         ├── scenery.ts      the above-water scenery for each map
+        ├── aurora.ts       the fjord's northern lights: ray curtains, when they show, and the glow the water mirrors
         ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
         ├── mappicker.ts    the map cards on the start card
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
         ├── equipment.ts    rod level, Pearl balance, saved state and the upgrade rule
         ├── gear-panel.ts   the rod / net upgrade panel
-        ├── upgrades.ts     the upgrade table and low-poly models for each upgrade level (not shown in the game yet)
+        ├── upgrades.ts     upgrade definitions and the centred workbench model API
         ├── fish.ts         rarity table, zone names, species names, rollFish(seed, depth), catch value by depth, fish meshes, swim and flee AI
         ├── depth-odds.ts   drop rates by depth (RARITY_BY_DEPTH), zoneName(depth); no imports, tested in tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 seeded random numbers
@@ -660,6 +665,21 @@ Plants sway in the vertex shader. A slow wave of current crosses the bed, so nei
 
 - `npm --prefix game test` checks that every rock rests on sand or rock, plants root on the drawn sand clear of the trench, any quality prefix is spread over the shelf, faces are single-colored, roots never move and stems never stretch.
 
+### Rough seas (Open Ocean)
+
+The Open Ocean has its own climate: of every nine minutes of natural weather, about three are a strong storm, in two spells (the other maps have one spell of just under a minute). A storm there also doubles the swell on top of what the wind lifts, so crests reach about 2 m. The water is the same low-poly surface with taller waves; the boat rides and pitches on the surface under its keel, a swimmer at the surface rises and falls with it, and the surface camera rides up to 1.35 m higher to stay above the crests.
+
+While a dive is on and the storm is strong (0.55 or more), a rogue wave forms 10 to 22 s in and every 38 to 70 s after one has passed. It rises 150 m to one side of the boat as one more crest on the same water, 3.2 m tall, steep on the face that leads and long behind, and crosses at 11 m/s: about 13 s from first sight to the boat, with a warning on screen. Chunks of foam tumble along its crest and spray is torn off it. The boat rides up the face and tips down it; when the crest is 3.5 m away an upright boat capsizes. It is flung over past keel-up, its bow kicks, it slews round, the wave carries it 5 m, and it rocks to rest. Spray bursts over it, foam is left on the water, and the deck cargo (crates, planks, barrels, a life ring) and the lost fish are thrown into the sea: the cargo floats off and sinks after about 20 s, the fish swim away. Then:
+
+- A third of the fish in your net (rounded up) are lost.
+- One piece of the gear packed for this dive goes overboard. That slot works at its basic level for the rest of the dive, as if it had not been packed; what you own is untouched and it is back on the next dive. The net is never lost.
+- Nothing can be banked while the boat is keel up. Surfacing keeps the catch in the net.
+
+To right it, surface within 9 m of the boat (where the wave left it) and press `F`; it takes 1.8 s and brings the boat back to its mooring. Leaving the dive or starting a new one also rights it. A capsized boat is not capsized again. Fish already banked are NFTs and are never touched.
+
+- `npm --prefix game test` covers when waves form, the crossing time, the single capsize, righting, the losses and the two climates.
+- In the console, `world.setWeather('storm')` on the Open Ocean brings the waves; `stormSea.x = -40` puts one four seconds from the boat.
+
 ### Weather
 
 Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Storm, and saves the choice. Natural weather starts clear and cycles through clear → cloudy → rain → storm → rain → cloudy → clear every 9 minutes. Manual changes and returns to natural weather blend over about 5 seconds. The HUD shows the current weather. This is an in-game cycle, with no real-world location or weather service.
@@ -686,7 +706,7 @@ Pause and background states freeze automatic weather and rain animation; manual 
 - Natural day / night cycle, water reflections and a saved lighting-effects switch
 - Natural weather plus clear / cloudy / rain / storm presets, with quality-scaled clouds and rain
 - Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, a seabed shelf of a different depth on each map with a bottomless trench under the boat, map picker on the start card, unlock by total banked fish value
-- Low-poly models for the upgrade parts (code only, not in the game yet)
+- Faceted PBR models for all nine equipment categories at three levels, used by the workbench, with PNG/GLB assets and an interactive equipment catalog
 - Rod / net upgrade MVP: three tiers of capacity and catch radius, a visibly bigger hoop, saved locally
 - Fish economy: every banked fish auto-minted as an NFT, selling burns it for Pearls, map progress counts lifetime value
 

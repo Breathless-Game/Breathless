@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { LightingState } from './daylight';
 import type { RenderQuality } from './render-quality';
 import type { WeatherState } from './weather';
+import { ROGUE } from './storm';
 
 /** Colored low-poly facets and a faceted road of sun or moon glitter in one water draw. */
 export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
@@ -13,6 +14,8 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     uWaterDetail: { value: 1 },
     uWaterWind: { value: 0 },
     uWaterMapWaves: { value: 1 },
+    // A rogue wave: where its crest is (x), how high it stands, and which way it travels (+1 or -1).
+    uWaterRogue: { value: new THREE.Vector3(0, 0, 1) },
     uWaterAbove: { value: 1 },
     uWaterSky: { value: new THREE.Color('#a8e3f5') },
     uWaterHorizon: { value: new THREE.Color('#e5f3e6') },
@@ -39,6 +42,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           uniform float uWaterTime;
           uniform float uWaterWind;
           uniform float uWaterMapWaves;
+          uniform vec3 uWaterRogue;
         `)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
           // Shared corners evaluate the same two waves on the GPU. No per-frame
@@ -46,6 +50,12 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           transformed.y += (sin(position.x * 0.15 + uWaterTime * 1.3) * 0.35
             + cos(position.z * 0.2 + uWaterTime * 0.9) * 0.25)
             * (1.0 + uWaterWind * 0.75) * uWaterMapWaves;
+          // A rogue wave is one more crest on the same facets, sweeping along x: steep on
+          // the face that leads, long behind (rogueProfile in storm.ts). It flattens out
+          // before it reaches the camera, which stands just this side of the boat.
+          float rogueAhead = (position.x - uWaterRogue.x) * uWaterRogue.z;
+          float rogueAcross = rogueAhead / (${ROGUE.width.toFixed(1)} * (rogueAhead > 0.0 ? ${ROGUE.steep.toFixed(2)} : ${ROGUE.back.toFixed(2)}));
+          transformed.y += uWaterRogue.y * exp(-rogueAcross * rogueAcross) * (1.0 - smoothstep(34.0, 46.0, position.z));
         `)
         .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
           vWaterPatch = aWaterPatch;
@@ -162,11 +172,16 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   }
 
   customProgramCacheKey(): string {
-    return 'deepbreath-water-facets-v2';
+    return 'deepbreath-water-facets-v4';
   }
 
   setEffectsEnabled(enabled: boolean): void {
     this.waterUniforms.uWaterEffects.value = enabled ? 1 : 0;
+  }
+
+  /** Raise a rogue wave `height` m tall with its crest at `x`, travelling `dir` (+1 or -1). A height of 0 is calm. */
+  setRogueWave(x: number, height: number, dir: number): void {
+    this.waterUniforms.uWaterRogue.value.set(x, height, dir < 0 ? -1 : 1);
   }
 
   update(time: number, lighting: LightingState, cameraY: number, quality: RenderQuality, weather?: WeatherState, mapWaves = 1): void {
@@ -184,5 +199,15 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
       * (1 - (weather?.cloud ?? 0) * 0.93);
     this.color.copy(this.dayWater).lerp(this.nightWater, lighting.nightMix);
     this.opacity = THREE.MathUtils.lerp(0.30, 0.78, uniforms.uWaterAbove.value);
+  }
+
+  /**
+   * Let the water mirror a glow in the sky (the aurora). Call after `update`, which resets the
+   * sky colours; `amount` is 0..1. The zenith takes more of it than the horizon.
+   */
+  reflectGlow(color: THREE.Color, amount: number): void {
+    if (amount <= 0) return;
+    this.waterUniforms.uWaterSky.value.lerp(color, Math.min(1, amount) * 0.45);
+    this.waterUniforms.uWaterHorizon.value.lerp(color, Math.min(1, amount) * 0.28);
   }
 }
