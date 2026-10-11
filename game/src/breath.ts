@@ -440,7 +440,7 @@ export class BreathSource {
   // Presage slots are all taken. On the first connect: stop streaming frames nobody
   // will process and fall back to the keyboard, which always works. On a reconnect the
   // slot is most likely still held by this game's own dead socket, which the sensor
-  // drops within ~20 s (sensor/heartbeat.mjs): keep the camera and wait (onBusy).
+  // frees once it notices that socket is gone: keep the camera and wait (onBusy).
   private onSensorError(msg: { code?: string; message?: string }) {
     const message = msg.message || 'Breath sensor error';
     console.warn(`[breath] ${message}`);

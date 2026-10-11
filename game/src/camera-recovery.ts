@@ -3,7 +3,8 @@
 
 /**
  * How long a reconnect may hear "busy" before the camera is given up. The sensor
- * drops a dead socket, freeing its Presage slot, within ~20 s (sensor/heartbeat.mjs).
+ * frees a dead socket's Presage slot once it notices the socket is gone (with a pong
+ * check on its 10 s ping, within ~20 s).
  */
 export const BUSY_GRACE_MS = 45_000;
 /** While waiting for the slot back, one frame a second keeps claiming it. */
