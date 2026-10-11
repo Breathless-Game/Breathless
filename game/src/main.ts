@@ -17,8 +17,8 @@ import { TitleScreen } from './title';
 import { Aquarium } from './aquarium';
 import { fishFood, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
-import type { UpgradeId } from './upgrades';
-import { loadSettings, saveSettings, type Settings } from './settings';
+import { UPGRADES, type UpgradeId } from './upgrades';
+import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import {
   advanceWorldBounds,
@@ -26,14 +26,14 @@ import {
   clampWorldXToBounds,
   createWorldBounds,
 } from './bounds';
-import { MAPS, MAP_ORDER, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, saveMapProgress, type MapId } from './maps';
+import { MAPS, MAP_ORDER, SHARK_WARNING, bankValue, isUnlocked, loadMapProgress, mapDepth, mapZones, markSharkWarningSeen, saveMapProgress, sharkWarningSeen, type MapId } from './maps';
 import { MapPicker } from './mappicker';
 import { AdaptiveQuality, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
-import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
+import { addBankedValue, bankEntry, biteForfeit, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -41,11 +41,13 @@ import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
-import { PulseEstimate, RestingPulse, SHARK, SharkPack, biteFish, sharkIntensity, type SharkEvent } from './shark';
+import { PulseEstimate, RestingPulse, SHARK, SharkPack, sharkIntensity, type SharkEvent } from './shark';
 import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
+import { SynthesisPanel } from './synthesis-panel';
+import { canCraft, craft as craftRecipe, loadSynthesis, saveSynthesis, SYNTHESIS_RECIPE_COSTS, SYNTHESIS_UPGRADE_COSTS, type RecipeDef, type SynthesisState } from './synthesis';
 import { FieldGuide } from './field-guide';
 import type { LessonId } from './tutorial';
 
@@ -331,6 +333,7 @@ let emergency = 1;
 let net: FishSpec[] = [];
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
+let synthesisState: SynthesisState = loadSynthesis();
 // The persistent inventory is filtered by the workbench for each dive. A null
 // loadout means the debug/title state where all owned upgrades are available.
 let activeLoadout: readonly UpgradeId[] | null = null;
@@ -379,45 +382,93 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On the Open Ocean, if the player said yes: one to two by day, two to four at night.
+// Always on the Open Ocean (the only map with sharks): one to two by day, two to
+// four at night. A bite there ends the dive: this dive's unsettled catch is lost
+// and the dive gear drops back to level 1 (see sharkBite).
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
 const restingPulse = new RestingPulse();
 const pulseEstimate = new PulseEstimate();
 const sharkEvents: SharkEvent[] = [];
-const sharkAsk = document.getElementById('shark-ask')!;
+const sharkWarn = document.getElementById('shark-warn')!;
+const sharkBitten = document.getElementById('shark-bitten')!;
+document.getElementById('shark-warn-en')!.textContent = SHARK_WARNING.en;
+document.getElementById('shark-warn-zh')!.textContent = SHARK_WARNING.zh;
+/** How long the bite's knockback and shake play before the dive ends. */
+const BITE_END_MS = 1400;
+/**
+ * Fish banked during this dive (since startGame), by identity: the only bank
+ * entries a bite may take back. Fish from earlier dives are never in it.
+ */
+const diveBanked = new Set<BankedFish>();
+/** What a bite cost, shown once the dive has ended. */
+interface BiteLoss {
+  net: number;
+  banked: number;
+  /** This dive's banked fish that were already minting, minted or for sale, and stay. */
+  safe: number;
+  dropped: DiveGearReset['dropped'];
+}
+let bitten = false; // the first bite of a dive settles it: nothing bites twice
+let biteLoss: BiteLoss | null = null;
+let biteTimer = 0;
 
-/** Do sharks hunt right now? */
+/** Do sharks hunt right now? On shark waters, during a dive: there is no opting out. */
 function sharksOut() {
-  return settings.sharks === 'on' && world.map.sharks && phase === 'play';
+  return world.map.sharks && phase === 'play';
 }
 
-/** Before a dive on shark waters, the player chooses once; Settings can change it later. */
-function askAboutSharks() {
-  if (!world.map.sharks || settings.sharks !== 'ask') return;
+/** Before the first dive on shark waters, one warning per wallet; the chart's place card repeats it every time. */
+function warnAboutSharks() {
+  if (!world.map.sharks || sharkWarningSeen()) return;
   paused = true;
   keys.clear();
-  sharkAsk.classList.remove('hidden');
+  sharkWarn.classList.remove('hidden');
 }
 
-function answerSharks(on: boolean) {
-  settings.sharks = on ? 'on' : 'off';
-  saveSettings(settings);
-  sharkAsk.classList.add('hidden');
+function closeSharkWarning(dive: boolean) {
+  sharkWarn.classList.add('hidden');
   paused = false;
-  // The pause was not a breath taken underwater.
-  breathSince = null;
-  hud.message(on ? 'One to two sharks by day, two to four at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  if (dive) {
+    markSharkWarningSeen();
+    // The pause was not a breath taken underwater.
+    breathSince = null;
+    hud.message('One to two sharks by day, two to four at night. Keep your heart rate down.', 2600);
+    return;
+  }
+  // Not diving after all: the dive that just began ends, back at the workbench.
+  goToMenu();
+  workbench.show(true);
 }
-document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
-document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
+document.getElementById('shark-warn-dive')!.addEventListener('click', () => closeSharkWarning(true));
+document.getElementById('shark-warn-back')!.addEventListener('click', () => closeSharkWarning(false));
+document.getElementById('shark-bitten-ok')!.addEventListener('click', () => sharkBitten.classList.add('hidden'));
 
-/** A shark reached the diver: it tears fish out of the net (more, the faster the heart beats) and knocks them aside. */
-function sharkBite(intensity: number) {
-  const taken = biteFish(net.length, intensity);
-  for (const i of taken) net.splice(i, 1);
-  hud.setNet(net, currentStats().netCapacity);
+/**
+ * The one place a shark bite takes the dive gear back. It goes through the same
+ * path as buying an upgrade (refreshEquipment: saveEquipment, the sonar config,
+ * the workbench's onGearChange, the gear panel and the HUD), so anything that
+ * follows upgrade levels sees a reset exactly as it sees a purchase.
+ */
+function resetDiveGearAfterBite(): DiveGearReset['dropped'] {
+  const { state, dropped } = resetDiveGear(equipment);
+  Object.assign(equipment, state);
+  refreshEquipment();
+  return dropped;
+}
+
+/**
+ * A shark reached the diver. Once per dive: the net and this dive's unsettled
+ * banked fish are lost, the dive gear resets to level 1, the diver is knocked
+ * aside, and a moment later the dive ends the normal way, back at the workbench.
+ */
+function sharkBite() {
+  if (bitten || phase !== 'play') return;
+  bitten = true;
+  // Out of play at once: no second bite, no catching, banking or boarding while the dive ends.
+  phase = 'blackout';
+  keys.clear();
   // Thrown away from the nearest shark: the one that bit.
   let nearest = Infinity, from = 0;
   for (const shark of sharkPack.sharks) {
@@ -427,7 +478,52 @@ function sharkBite(intensity: number) {
   diver.vel.x += (diver.pos.x >= from ? 1 : -1) * 7;
   diver.vel.y += 2;
   stormShake = Math.max(stormShake, 0.4);
-  hud.message(taken.length ? `SHARK BITE · ${taken.length} fish torn from your net` : 'A shark rams you!', 2200);
+
+  const fromNet = net.length;
+  net = [];
+  // Only fish the NFT queue has not started on (market.ts unsettled) and does not hold right now.
+  const lost = nftQueue.forfeit(biteForfeit(bank, diveBanked, (f) => nftQueue.holds(f)));
+  const safe = [...diveBanked].filter((f) => bank.includes(f)).length;
+  hud.setBank(bank);
+  const dropped = resetDiveGearAfterBite(); // also redraws the (now empty) net at the new capacity
+  biteLoss = { net: fromNet, banked: lost.length, safe, dropped };
+  hud.message(`SHARK BITE · ${fromNet + lost.length} fish lost · dive gear reset`, BITE_END_MS + 400);
+  biteTimer = window.setTimeout(() => {
+    biteTimer = 0;
+    if (phase !== 'blackout') return; // the dive was already left another way (logout)
+    goToMenu(); // the normal end of a dive: health log, sea, sharks, net, loadout, sonar, camera
+    workbench.show(true); // and back aboard at the workbench
+  }, BITE_END_MS);
+}
+
+/** What the bite cost, over the workbench once the dive has ended. */
+function showBiteReport(loss: BiteLoss) {
+  const total = loss.net + loss.banked;
+  const fish = (n: number) => `${n} fish`;
+  const en = document.createElement('b');
+  en.textContent = `Bitten by a shark: lost ${fish(total)}, dive gear reset to level 1.`;
+  document.getElementById('shark-bitten-summary')!.replaceChildren(en, document.createElement('br'), `被鲨鱼咬了：损失 ${total} 条鱼，潜水装备升级重置为 1 级。`);
+  const gearName = (slot: string) => {
+    const def = UPGRADES.find((u) => u.id === slot);
+    return def ? `${def.name} ${def.nameZh}` : slot;
+  };
+  const items = [
+    `From your net: ${fish(loss.net)} · 网中损失 ${loss.net} 条`,
+    `Banked this dive, not yet minting: ${fish(loss.banked)} · 本次入库、尚未铸造：${loss.banked} 条`,
+    ...(loss.safe ? [`Kept: ${fish(loss.safe)} from this dive already minting, minted or for sale · 已开始铸造或出售的 ${loss.safe} 条保留`] : []),
+    loss.dropped.length
+      ? `Reset to level 1 · 重置为 1 级: ${loss.dropped.map((d) => `${gearName(d.slot)} Lv${d.from} → 1`).join(', ')}`
+      : 'Your dive gear was already at level 1 · 潜水装备本已是 1 级',
+    'Kept: your boat and boat upgrades, Pearls, and fish from earlier dives · 保留：船与船只升级、珍珠、以往渔获',
+  ];
+  document.getElementById('shark-bitten-list')!.replaceChildren(
+    ...items.map((text) => {
+      const li = document.createElement('li');
+      li.textContent = text;
+      return li;
+    }),
+  );
+  sharkBitten.classList.remove('hidden');
 }
 
 /** Runs every frame of a dive: learns the pulse, moves the sharks and shows what they are doing. */
@@ -442,7 +538,7 @@ function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: 
   sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents, world.night);
   for (const event of sharkEvents) {
     if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
-    else if (event === 'bite') sharkBite(intensity);
+    else if (event === 'bite') sharkBite();
   }
   sharkFx.update(dt, sharkPack.sharks, intensity, world.dayCycle.state.nightMix, settings.lightingEffects);
   health.sharks = out;
@@ -667,6 +763,70 @@ async function buyAquariumFood(food: FishFoodDef = fishFood('pellet')): Promise<
   }
 }
 
+let synthesisBusy = false;
+/** Spend a synthesis station fee with the same legacy-first accounting as gear upgrades. */
+async function spendSynthesisPearls(cost: number): Promise<boolean> {
+  if (totalPearls(equipment) < cost) {
+    hud.message(`Need ${cost - totalPearls(equipment)} more Pearls`, 1500);
+    return false;
+  }
+  const fromLegacy = Math.min(equipment.legacyPearls, cost);
+  const fromChain = cost - fromLegacy;
+  try {
+    if (fromChain > 0) await (await nftQueue.loadPearl()).spendPearls(fromChain);
+    equipment.legacyPearls -= fromLegacy;
+    equipment.pearls = Math.max(0, equipment.pearls - fromChain);
+    refreshEquipment();
+    if (fromChain > 0) void syncPearls();
+    return true;
+  } catch (e) {
+    hud.message(`Synthesis payment failed · ${(e as Error).message ?? e}`, 1800);
+    return false;
+  }
+}
+
+async function synthCraft(id: RecipeDef['id']) {
+  if (synthesisBusy) return;
+  if (!canCraft(synthesisState, id)) {
+    hud.message('Materials missing · 材料不足', 1400);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(SYNTHESIS_RECIPE_COSTS[id])) return;
+    const next = craftRecipe(synthesisState, id);
+    if (!next) return;
+    synthesisState = next;
+    saveSynthesis(synthesisState);
+    hud.message(id === 'bait' ? 'Tide bait crafted · 鱼饵已合成' : 'Composite plate crafted · 护板已合成', 1600);
+  } finally {
+    synthesisBusy = false;
+  }
+}
+
+async function synthUpgrade(slot: UpgradeSlot) {
+  if (synthesisBusy) return;
+  const level = slot === 'rod' ? equipment.rodGearLevel : equipment[`${slot}Level` as keyof EquipmentState] as number;
+  if (level >= 3) return;
+  const cost = SYNTHESIS_UPGRADE_COSTS[slot][level - 1];
+  const tier = nextSlotTier(equipment, slot);
+  if (!tier) return;
+  if (synthesisState.crafted.composite < 1) {
+    hud.message('Craft one composite plate first · 先合成复合护板', 1800);
+    return;
+  }
+  synthesisBusy = true;
+  try {
+    if (!await spendSynthesisPearls(cost)) return;
+    Object.assign(equipment, applySlotUpgrade(equipment, { slot, tier: { ...tier, cost }, fromLegacy: 0, fromChain: 0 }));
+    synthesisState = { ...synthesisState, crafted: { ...synthesisState.crafted, composite: synthesisState.crafted.composite - 1 } };
+    saveSynthesis(synthesisState);
+    refreshEquipment();
+    hud.message(`${nextSlotLabel(slot)} upgraded in synthesis station`, 1800);
+  } finally {
+    synthesisBusy = false;
+  }
+ }
 let buying = false;
 /** Buys the next level of a slot. Resolves with why it didn't happen (also shown in the gear panel), or null. */
 async function buyNextUpgrade(slot: UpgradeSlot = 'net'): Promise<string | null> {
@@ -944,7 +1104,10 @@ function tryCatch() {
 // Banking pays nothing: every fish is queued to become an NFT, and Pearls come only from selling one.
 function bankNet() {
   if (!net.length) return;
-  bank.push(...net.map(bankEntry));
+  const entries = net.map(bankEntry);
+  bank.push(...entries);
+  // Into the Collection now, minted in the background; until minting starts a shark bite can still take it back.
+  for (const entry of entries) diveBanked.add(entry);
   saveBank();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(`Banked ${net.length} fish · minting NFTs…`);
@@ -1050,7 +1213,10 @@ function startGame() {
   calmSea();
   phase = 'play';
   fieldGuide?.mark('launch');
-  askAboutSharks();
+  // A fresh dive: nothing banked on it yet, and no bite taken.
+  diveBanked.clear();
+  bitten = false;
+  warnAboutSharks();
   resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
@@ -1326,7 +1492,10 @@ function labelStartFish(pan: number) {
 }
 
 function onEscape() {
-  if (shipyard.open) shipyard.close();
+  // The shark cards first: Esc on the warning is its Back, on the bite report its OK.
+  if (!sharkWarn.classList.contains('hidden')) closeSharkWarning(false);
+  else if (!sharkBitten.classList.contains('hidden')) sharkBitten.classList.add('hidden');
+  else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
   else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
@@ -1384,6 +1553,15 @@ function goToMenu() {
   camWrap.style.visibility = 'hidden';
   hud.hide();
   showTitle(true);
+  // A shark bite's dive ends here too (or was left another way during its knockback): say what it cost.
+  window.clearTimeout(biteTimer);
+  biteTimer = 0;
+  diveBanked.clear();
+  sharkWarn.classList.add('hidden');
+  if (biteLoss) {
+    showBiteReport(biteLoss);
+    biteLoss = null;
+  }
 }
 
 function applySettings(s: Settings) {
@@ -1478,6 +1656,15 @@ function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
   labelStartFish(benchPan);
 }
 
+const synthPanel = new SynthesisPanel({
+  state: () => synthesisState,
+  equipment: () => equipment,
+  pearls: () => totalPearls(equipment),
+  craft: synthCraft,
+  upgrade: synthUpgrade,
+  close: () => workbench.escape(),
+});
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
@@ -1561,6 +1748,12 @@ const workbench = new Workbench({
   },
   tutorial(id: LessonId) {
     fieldGuide?.mark(id);
+  },
+  synthesisOpen() {
+    synthPanel.show();
+  },
+  synthesisClose() {
+    synthPanel.hide();
   },
 });
 
@@ -1703,6 +1896,7 @@ async function logOut() {
 function loadWalletProgress() {
   bank.splice(0, bank.length, ...loadBank());
   Object.assign(equipment, loadEquipment());
+  synthesisState = loadSynthesis();
   Object.assign(mapProgress, loadMapProgress());
   if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
