@@ -27,7 +27,8 @@ const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
 const marineUrl = await moduleUrl('marine');
-const { Fish, ZONES, rollFish } = await import(await moduleUrl('fish', { './rng': rngUrl, './depth-odds': depthOddsUrl, './marine': marineUrl }));
+const i18nUrl = await moduleUrl('i18n');
+const { Fish, ZONES, rollFish } = await import(await moduleUrl('fish', { './rng': rngUrl, './depth-odds': depthOddsUrl, './marine': marineUrl, './i18n': i18nUrl }));
 
 function createDiver(quality = RENDER_QUALITY.high, y = -20) {
   const scene = new THREE.Scene();

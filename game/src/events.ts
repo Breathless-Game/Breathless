@@ -21,9 +21,28 @@ import { Rng } from './rng';
 
 export type Detail = 1 | 2 | 3; // low / medium / high
 
+/** Each event's toast in 中文, by id (the English is the schedule's `label`). */
+const LABEL_ZH: Record<string, string> = {
+  avalanche: '北坡发生雪崩！',
+  calving: '冰山崩解！一大块冰脱落了。',
+  aurora: '极光在头顶闪耀！',
+  rockfall: '落石！石块从石柱上滚落。',
+  cranes: '一群仙鹤飞过天空。',
+  mist: '一阵浓雾漫过湖面。',
+  whale: '远处有鲸鱼跃出水面！',
+  lightning: '闪电劈中了海面！',
+  ship: '一艘船从地平线上驶过。',
+  leviathan: '深处有庞然大物悄然游过……',
+  vent: '下方的气泡喷口爆发了！',
+  jellies: '一群发光的水母漂过。',
+};
+
 export interface WorldEventInfo {
   id: string;
+  /** The English toast (event-schedule.ts). */
   label: string;
+  /** The same toast in 中文 (falls back to `label` for an event without one). */
+  labelZh: string;
   map: MapId | 'any';
   underwater: boolean;
 }
@@ -2177,7 +2196,7 @@ export class WorldEvents {
       const effect = make(this.kit);
       effect.build();
       this.effects.set(def.id, effect);
-      this.infos.push({ id: def.id, label: def.label, map: def.map, underwater: def.underwater });
+      this.infos.push({ id: def.id, label: def.label, labelZh: LABEL_ZH[def.id] ?? def.label, map: def.map, underwater: def.underwater });
     }
   }
 }

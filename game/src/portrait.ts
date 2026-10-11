@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildFishMesh, FishSpec, RARITY } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
+import { t } from './i18n';
 
 // One small offscreen renderer that draws a fish on demand. The 512px card is
 // the NFT image: it is a pure function of the fish seed, so anyone can
@@ -111,7 +112,7 @@ export function fishCard(spec: FishSpec & Numbered): string {
   ctx.fillText(spec.name, 24, S - 32);
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '500 14px "Inter", system-ui, sans-serif';
-  ctx.fillText(`${spec.lengthCm} cm · ${spec.weightKg} kg · caught at ${spec.depthM} m · seed ${spec.id}`, 24, S - 12);
+  ctx.fillText(`${spec.lengthCm} cm · ${spec.weightKg} kg · ${t('caught at', '捕获深度')} ${spec.depthM} m · ${t('seed', '种子')} ${spec.id}`, 24, S - 12);
   ctx.strokeStyle = rc;
   ctx.lineWidth = 6;
   ctx.strokeRect(3, 3, S - 6, S - 6);

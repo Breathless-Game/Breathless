@@ -1,5 +1,6 @@
 import { MATERIALS, RECIPES, synthesisUpgradeCost, SYNTHESIS_RECIPE_COSTS, type MaterialId, type RecipeDef, type SynthesisState } from './synthesis';
 import type { EquipmentState, UpgradeSlot } from './equipment';
+import { onLangChange, pickName, t } from './i18n';
 
 export interface SynthesisPanelHooks {
   state(): SynthesisState;
@@ -12,7 +13,9 @@ export interface SynthesisPanelHooks {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const UPGRADE_SLOTS: readonly UpgradeSlot[] = ['net', 'rod', 'reel', 'fins', 'tank', 'lamp', 'sonar'];
-const LABELS: Record<UpgradeSlot, string> = { net: 'Net 网具', rod: 'Rod 杆身', reel: 'Reel 线轮', fins: 'Fins 脚蹼', tank: 'Tank 气瓶', lamp: 'Lamp 头灯', sonar: 'Sonar 声纳' };
+const label = (slot: UpgradeSlot) => ({
+  net: t('Net', '网具'), rod: t('Rod', '杆身'), reel: t('Reel', '线轮'), fins: t('Fins', '脚蹼'), tank: t('Tank', '气瓶'), lamp: t('Lamp', '头灯'), sonar: t('Sonar', '声纳'),
+})[slot];
 const levelOf = (equipment: EquipmentState, slot: UpgradeSlot) => slot === 'rod' ? equipment.rodGearLevel : equipment[`${slot}Level` as keyof EquipmentState] as number;
 
 /** DOM half of the workshop. Pointer and drag interactions share the same material drop path. */
@@ -39,6 +42,7 @@ export class SynthesisPanel {
       } else if (payload) this.addMaterial(payload as MaterialId);
     });
     this.render();
+    onLangChange(() => this.render());
   }
 
   get open() { return !this.root.classList.contains('hidden'); }
@@ -60,20 +64,20 @@ export class SynthesisPanel {
   }
 
   private renderWorking() {
-    const parts = MATERIALS.flatMap((mat) => Array.from({ length: this.working[mat.id] ?? 0 }, () => `<span class="wb-synth-chip" style="--chip:${mat.color}">${mat.nameZh}</span>`));
-    this.workingEl.innerHTML = parts.length ? parts.join('') : '<span class="small muted">Drop parts here · 将材料拖入中央</span>';
+    const parts = MATERIALS.flatMap((mat) => Array.from({ length: this.working[mat.id] ?? 0 }, () => `<span class="wb-synth-chip" style="--chip:${mat.color}">${pickName(mat)}</span>`));
+    this.workingEl.innerHTML = parts.length ? parts.join('') : `<span class="small muted">${t('Drop parts here', '将材料拖入中央')}</span>`;
   }
 
   private render() {
     const state = this.hooks.state();
-    this.balanceEl.textContent = `${this.hooks.pearls()} Pearls · ${state.crafted.bait} bait / ${state.crafted.composite} plates`;
+    this.balanceEl.textContent = `${this.hooks.pearls()} ${t('Pearls', '珍珠')} · ${state.crafted.bait} ${t('bait', '鱼饵')} / ${state.crafted.composite} ${t('plates', '护板')}`;
     const materialButton = (mat: typeof MATERIALS[number]) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'wb-synth-material';
       button.draggable = true;
       button.dataset.material = mat.id;
-      button.innerHTML = `<i style="--mat:${mat.color}"></i><span>${mat.nameZh}<small>${mat.name}</small></span><b>${state.materials[mat.id]}</b>`;
+      button.innerHTML = `<i style="--mat:${mat.color}"></i><span>${pickName(mat)}</span><b>${state.materials[mat.id]}</b>`;
       button.addEventListener('click', () => this.addMaterial(mat.id));
       button.addEventListener('dragstart', (event) => event.dataTransfer?.setData('text/plain', mat.id));
       return button;
@@ -84,7 +88,7 @@ export class SynthesisPanel {
     this.recipesEl.replaceChildren(...RECIPES.map((def) => {
       const row = document.createElement('div');
       row.className = 'wb-synth-recipe';
-      row.innerHTML = `<div><b>${def.nameZh}</b><span>${def.name}</span></div><small>${Object.entries(def.needs).map(([key, n]) => `${n} ${MATERIALS.find((m) => m.id === key)?.nameZh}`).join(' + ')} · ${SYNTHESIS_RECIPE_COSTS[def.id]} ✦</small><button type="button">合成</button>`;
+      row.innerHTML = `<div><b>${pickName(def)}</b></div><small>${Object.entries(def.needs).map(([key, n]) => `${n} ${pickName(MATERIALS.find((m) => m.id === key)!)}`).join(' + ')} · ${SYNTHESIS_RECIPE_COSTS[def.id]} ✦</small><button type="button">${t('Craft', '合成')}</button>`;
       row.querySelector('button')!.addEventListener('click', () => { if (!this.busy) void this.hooks.craft(def.id).then(() => this.render()); });
       return row;
     }));
@@ -95,7 +99,7 @@ export class SynthesisPanel {
       row.className = `wb-synth-upgrade${cost == null ? ' max' : ''}`;
       row.draggable = cost != null;
       row.addEventListener('dragstart', (event) => event.dataTransfer?.setData('text/plain', `upgrade:${slot}`));
-      row.innerHTML = `<span><b>${LABELS[slot]}</b><small>Lv ${level} → ${cost == null ? 'MAX' : level + 1}</small></span><strong>${cost == null ? '已满级' : `${cost} ✦`}</strong><button type="button" ${cost == null ? 'disabled' : ''}>升级</button>`;
+      row.innerHTML = `<span><b>${label(slot)}</b><small>Lv ${level} → ${cost == null ? t('MAX', '满级') : level + 1}</small></span><strong>${cost == null ? t('Max level', '已满级') : `${cost} ✦`}</strong><button type="button" ${cost == null ? 'disabled' : ''}>${t('Upgrade', '升级')}</button>`;
       row.querySelector('button')!.addEventListener('click', () => { if (cost != null && !this.busy) void this.hooks.upgrade(slot).then(() => this.render()); });
       return row;
     }));
