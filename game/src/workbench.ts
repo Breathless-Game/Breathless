@@ -258,6 +258,7 @@ export class Workbench {
     window.addEventListener('pointermove', (e) => this.onMove(e));
     window.addEventListener('pointerup', (e) => this.onUp(e));
     window.addEventListener('keydown', (e) => {
+      if (this.blocked()) return;
       if (this.state === 'chart' && e.key === 'Enter' && this.picked) {
         e.preventDefault();
         this.dive();
@@ -996,19 +997,26 @@ export class Workbench {
   }
 
   /** Our clicks land on a bare canvas (the title's, which sits under ours); not on menus or buttons. */
+  /** A modal (the Aquarium) is up over the scene: ignore the pointer and keys. */
+  blocked: () => boolean = () => false;
+
   private ours(e: PointerEvent) {
     return e.target instanceof HTMLCanvasElement;
   }
 
   private onDown(e: PointerEvent) {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
-    if (this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
+    if (this.blocked() || this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
     this.press = { piece: hit && hit !== 'map' ? hit : null, map: hit === 'map', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
     if (!this.visible) return;
+    if (this.blocked()) {
+      if (this.hovered) this.setHover(null, e);
+      return;
+    }
     this.trackPointer(e);
     if (this.held) {
       this.setRay(e);
@@ -1063,6 +1071,10 @@ export class Workbench {
 
   private onUp(e: PointerEvent) {
     if (!this.visible) return;
+    if (this.blocked() && !this.held) {
+      this.press = null;
+      return;
+    }
     if (this.held) {
       const p = this.held;
       this.held = null;

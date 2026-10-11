@@ -168,6 +168,9 @@ export class TitleScreen {
     window.addEventListener('resize', () => this.running && this.build(false));
   }
 
+  /** A modal (the Aquarium) is up over the scene: the pointer is not ours. */
+  blocked: () => boolean = () => false;
+
   get visible() {
     return this.running;
   }
@@ -538,6 +541,7 @@ export class TitleScreen {
   }
 
   private onDown(e: PointerEvent) {
+    if (this.blocked()) return;
     this.trackPointer(e);
     const { x, y } = this.at(e);
     const hit = this.fishAt(x, y);
@@ -555,6 +559,10 @@ export class TitleScreen {
 
   private onMove(e: PointerEvent) {
     if (!this.running) return;
+    if (this.blocked()) {
+      if (!this.held) this.hovered = null;
+      return;
+    }
     this.trackPointer(e);
     if (this.held) {
       e.preventDefault(); // carrying a fish: no table tips underneath
@@ -582,6 +590,10 @@ export class TitleScreen {
 
   private onUp(e: PointerEvent) {
     if (!this.running) return;
+    if (this.blocked() && !this.held) {
+      this.press = null;
+      return;
+    }
     this.trackPointer(e);
     if (this.held) {
       // Let go with the pointer's velocity, so fish can be thrown.

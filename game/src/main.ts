@@ -1255,7 +1255,7 @@ const shipyard = new Shipyard(world.boat, () => mapProgress.bestValue, (open) =>
 }, () => { shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity); }, scene, root => world.colorGrade.apply(root));
 const boatRay = new THREE.Raycaster();
 document.addEventListener('click', (e) => {
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open) return;
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || vault.open || gear.open || report.open || aquarium.open || settingsDesk.visible) return;
   if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
   const rect = canvas.getBoundingClientRect();
   boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
@@ -1264,7 +1264,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('pointermove', (e) => {
   if (e.target !== canvas && e.target !== document.getElementById('title-canvas')) return;
   const target = e.target as HTMLCanvasElement;
-  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open) { target.style.cursor = ''; return; }
+  if (phase !== 'menu' || !titleScreen.visible || paused || workbench.visible || loginGate.visible || pauseMenu.open || aquarium.open) { target.style.cursor = ''; return; }
   const rect = canvas.getBoundingClientRect();
   boatRay.setFromCamera(new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1), camera);
   if (boatRay.intersectObject(world.boat,true).length) target.style.cursor = 'pointer';
@@ -1358,6 +1358,8 @@ const settingsDesk = new SettingsDesk({
     labelStartFish(u);
   },
 });
+// The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
+titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
 function openSettingsDesk() {
   if (!workbench.visible && !settingsDesk.visible && !loginGate.visible) settingsDesk.show();
