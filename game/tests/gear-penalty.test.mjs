@@ -15,7 +15,8 @@ const url = (code) => `data:text/javascript;base64,${Buffer.from(code).toString(
 const WALLET = url("export const storageKey = (name) => 'deepbreath.Owner.' + name.replace(/^deepbreath\\./, '');");
 const LEVELS = url(await transpile('gear-levels.ts'));
 const NFT = url(await transpile('gear-nft.ts'));
-const E = await import(url((await transpile('equipment.ts')).replace(/from ['"]\.\/wallet['"]/, `from '${WALLET}'`)));
+const LAMP = url(await transpile('lamp-lighting.ts'));
+const E = await import(url((await transpile('equipment.ts')).replace(/from ['"]\.\/wallet['"]/, `from '${WALLET}'`).replace(/from ['"]\.\/lamp-lighting['"]/, `from '${LAMP}'`)));
 const { gearLevelsChanged, onGearLevelsChanged } = await import(LEVELS);
 const G = await import(NFT);
 const { GearSync, GEAR_QUIET_MS } = await import(url((await transpile('gear-sync.ts')).replace(/from ['"]\.\/gear-nft['"]/, `from '${NFT}'`)));
