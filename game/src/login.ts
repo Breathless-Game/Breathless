@@ -1,5 +1,6 @@
 import { connectWallet, onWalletChange, walletState, type WalletState } from './wallet';
 import { onWalletsChange, ownerWallets } from './owner-wallets';
+import { orbNfts } from './explorer-links';
 import { LAST_WALLET_KEY, devnetHint, explorerAddress, isUserRejection, shortAddress, walletTiles, type WalletTile } from './wallet-storage';
 import phantomLogo from './wallet-logos/phantom.svg';
 import metamaskLogo from './wallet-logos/metamask.svg';
@@ -171,9 +172,9 @@ export interface LogoutHooks {
 export interface WalletRowOptions {
   /** What to show while logged out; without it the row hides itself. */
   empty?: string;
-  /** A compact account chip: the address is a button that opens a menu (Copy address, Explorer, Log out). */
+  /** A compact account chip: the address is a button that opens a menu (Copy address, NFTs on Orb, Explorer, Log out). */
   menu?: boolean;
-  /** Link the address on Solana Explorer (devnet), beside it. */
+  /** Link the address on Helius Orb (its NFTs) and Solana Explorer (devnet), beside it. */
   explorer?: boolean;
 }
 
@@ -262,7 +263,13 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
       a.target = '_blank';
       a.rel = 'noopener';
       a.title = 'View this wallet on Solana Explorer (devnet)';
-      el.append(a);
+      // The owner wallet holds the minted fish: Helius Orb shows them as NFTs.
+      const orb = make('a', 'wallet-orb', 'View on chain ↗');
+      orb.href = orbNfts(owner);
+      orb.target = '_blank';
+      orb.rel = 'noopener noreferrer';
+      orb.title = "This wallet's NFTs (your fish) on Helius Orb (devnet)";
+      el.append(orb, a);
     }
     const btn = make('button', 'mini wallet-logout', 'Log out');
     btn.setAttribute('aria-description', 'Your progress stays saved for this wallet.');
@@ -324,10 +331,16 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: Wal
     view.target = '_blank';
     view.rel = 'noopener';
     view.addEventListener('click', () => closeMenu(false));
+    const nfts = item('a', 'View NFTs on chain ↗');
+    nfts.href = orbNfts(owner);
+    nfts.target = '_blank';
+    nfts.rel = 'noopener noreferrer';
+    nfts.title = 'Your fish as NFTs on Helius Orb (devnet)';
+    nfts.addEventListener('click', () => closeMenu(false));
     const out = item('button', 'Log out', ' wallet-menu-danger wallet-logout');
     out.setAttribute('aria-description', 'Your progress stays saved for this wallet.');
     out.addEventListener('click', () => askLogout(out));
-    list.append(head, copy, view, make('div', 'wallet-menu-sep'), out);
+    list.append(head, copy, nfts, view, make('div', 'wallet-menu-sep'), out);
 
     trigger.addEventListener('click', () => (open ? closeMenu(false) : openMenu(trigger, list, null)));
     trigger.addEventListener('keydown', (e) => {
