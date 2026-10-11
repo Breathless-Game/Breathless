@@ -126,6 +126,14 @@ export function parseSellBody(body) {
  */
 export const MAX_BATCH = 24;
 
+/**
+ * Most distinct transferTx values in one /sell-batch request. Every distinct one costs a polled
+ * getTransaction (up to ~6 RPCs while it is not found), so without a cap 24 made-up signatures
+ * cost ~144 RPCs for one rate-limiter charge. The client packs 20 fish per transfer, so 24 fish
+ * span at most 2 transfers; it splits older pending transfers into further requests.
+ */
+export const MAX_BATCH_TXS = 2;
+
 function parseBatchList(list, name) {
   if (!Array.isArray(list) || list.length < 1) throw new HttpError(400, `${name} must be a non-empty array`);
   if (list.length > MAX_BATCH) throw new HttpError(400, `At most ${MAX_BATCH} fish per request`);
@@ -161,6 +169,10 @@ export function parseSellBatchBody(body) {
     return { assetId: s.assetId, transferTx: s.transferTx };
   });
   noDuplicates(sales.map((s) => s.assetId));
+  const txs = new Set(sales.map((s) => s.transferTx)).size;
+  if (txs > MAX_BATCH_TXS) {
+    throw new HttpError(400, `At most ${MAX_BATCH_TXS} different transferTx per request (got ${txs}): split the sales by transfer`);
+  }
   return { seller: body.seller, sales };
 }
 
