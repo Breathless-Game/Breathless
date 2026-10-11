@@ -48,7 +48,9 @@ import { B } from '${umiStub}';
 export const playerStateProgramId = () => 'PROG';
 export const SLOT_ORDER = ['rod', 'reel', 'net', 'fins', 'tank', 'lamp', 'sonar'];
 export const decodeConfig = (d) => d, decodePlayerState = (d) => d, decodeAquarium = (d) => d;
+export const decodeProgressConfig = (d) => d, decodeProgress = (d) => d;
 export const findConfigPda = () => ['config'], findPlayerStatePda = () => ['player'], findAquariumPda = () => ['aquarium'];
+export const findProgressConfigPda = () => ['progress_config'], findProgressPda = () => ['progress'];
 export const initPlayer = () => new B(['init_player']);
 export const setSession = () => new B(['set_session']);
 export const sharkBite = () => new B(['shark_bite']);
@@ -88,6 +90,8 @@ function setup({ levels = LV1 } = {}) {
       getAccounts: async () => [
         { exists: true, owner: 'PROG', data: { pearlMint: 'MINT', tokenProgram: 'TP', prices: ps.GAME_PRICE_TABLE } },
         { exists: true, owner: 'PROG', data: { ...player } },
+        { exists: false },
+        { exists: true, owner: 'PROG', data: { rules: ps.GAME_PROGRESS_RULES } },
         { exists: false },
       ],
       getLatestBlockhash: async () => ({ blockhash: 'bh', lastValidBlockHeight: 100 }),

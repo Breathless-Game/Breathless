@@ -98,20 +98,81 @@ export function mintRequest(fish: MintFacts, a: { owner: string; payer: string; 
 interface MessageLike {
   accounts: readonly unknown[];
   header: { numRequiredSignatures: number };
-  instructions: readonly { programIndex: number }[];
+  instructions: readonly { programIndex: number; accountIndexes?: readonly number[]; data?: Uint8Array }[];
+}
+
+/** player_state record_catch's discriminator (game/src/idl/player_state.json; player-state.ts INSTRUCTION_DISCRIMINATORS). */
+export const RECORD_CATCH_DISCRIMINATOR: readonly number[] = Object.freeze([36, 14, 58, 242, 96, 105, 45, 233]);
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+
+/**
+ * The one player_state instruction a co-signed mint may carry: record_catch for this player's
+ * fish, signed by the market as oracle and paid by our session key (sensor/fish-collection.mjs
+ * buildMintTx). Every address is what we derived ourselves.
+ */
+export interface ExpectedRecordCatch {
+  program: string;
+  /** The market wallet (Config.oracle). */
+  oracle: string;
+  /** Our session key. */
+  payer: string;
+  /** player_state Config PDA ["config"]. */
+  config: string;
+  owner: string;
+  /** This owner's Progress PDA ["progress", owner]. */
+  progress: string;
+  /** The fish's seed key and its catch value, as the mint request said. */
+  fish: bigint;
+  value: number;
+}
+
+const u64At = (d: Uint8Array, at: number) => new DataView(d.buffer, d.byteOffset, d.byteLength).getBigUint64(at, true);
+
+/** Why this player_state instruction is not exactly the record_catch we expect, or null. */
+function recordCatchProblem(keys: string[], ix: MessageLike['instructions'][number], want: ExpectedRecordCatch): string | null {
+  const data = ix.data;
+  if (!data || data.length !== 24 || RECORD_CATCH_DISCRIMINATOR.some((b, i) => data[i] !== b)) return 'it calls a player_state instruction other than record_catch';
+  const accounts = (ix.accountIndexes ?? []).map((i) => keys[i]);
+  const expected = [want.oracle, want.payer, want.config, want.owner, want.progress, SYSTEM_PROGRAM];
+  if (accounts.length !== expected.length) return 'its record_catch has unexpected accounts';
+  if (accounts[0] !== want.oracle) return 'its record_catch oracle is not the market';
+  if (accounts[1] !== want.payer) return 'its record_catch payer is not the game wallet';
+  if (accounts[3] !== want.owner || accounts[4] !== want.progress) return 'its record_catch is for another player';
+  if (accounts.some((a, i) => a !== expected[i])) return 'its record_catch has unexpected accounts';
+  if (u64At(data, 8) !== want.fish || u64At(data, 16) !== BigInt(want.value)) return 'its record_catch is for another fish or value';
+  return null;
 }
 
 /**
  * Sign only what we asked for: the fee payer is our session key, the signers are exactly the
- * expected ones, and every instruction is a Core call. Returns why not, or null.
+ * expected ones, and every instruction is a Core call, except, for a mint (`recordCatch` given),
+ * at most one player_state record_catch that is exactly the expected one. Anything else from
+ * player_state or any other program is refused. Returns why not, or null.
  */
-export function cosignedTxProblem(m: MessageLike, expect: { payer: string; signers: string[]; program?: string }): string | null {
+export function cosignedTxProblem(
+  m: MessageLike,
+  expect: { payer: string; signers: string[]; program?: string; recordCatch?: ExpectedRecordCatch },
+): string | null {
   const keys = m.accounts.map(String);
   if (keys[0] !== expect.payer) return 'its fee payer is not the game wallet';
   const signers = keys.slice(0, m.header.numRequiredSignatures);
   if (signers.length !== expect.signers.length || !expect.signers.every((s) => signers.includes(s))) return 'it asks for unexpected signatures';
   const program = expect.program ?? CORE_PROGRAM;
-  if (!m.instructions.length || m.instructions.some((ix) => keys[ix.programIndex] !== program)) return 'it calls a program other than Metaplex Core';
+  const rc = expect.recordCatch;
+  let catches = 0;
+  let core = 0;
+  for (const ix of m.instructions) {
+    const p = keys[ix.programIndex];
+    if (p === program) {
+      core++;
+      continue;
+    }
+    if (!rc || p !== rc.program) return 'it calls a program other than Metaplex Core';
+    if (++catches > 1) return 'it records the catch more than once';
+    const problem = recordCatchProblem(keys, ix, rc);
+    if (problem) return problem;
+  }
+  if (!core) return 'it calls a program other than Metaplex Core';
   return null;
 }
 
@@ -157,7 +218,7 @@ export async function cosignMint(
   u: Umi,
   args: { info: CosignInfo; owner: string; session: Signer; fish: MintFacts; name: string; uri: string },
 ): Promise<CosignedMint> {
-  const [{ generateSigner }, { base58 }] = await Promise.all([import('@metaplex-foundation/umi'), import('@metaplex-foundation/umi/serializers')]);
+  const [{ generateSigner, publicKey }, { base58 }] = await Promise.all([import('@metaplex-foundation/umi'), import('@metaplex-foundation/umi/serializers')]);
   const collection = args.info.fishCollection as string;
   const asset = generateSigner(u);
   const payer = args.session.publicKey.toString();
@@ -170,7 +231,21 @@ export async function cosignMint(
     throw e;
   }
   const tx = u.transactions.deserialize(fromBase64(res.tx));
-  const problem = cosignedTxProblem(tx.message, { payer, signers: [payer, asset.publicKey.toString(), String(args.info.market)] });
+  // The market also records the catch on chain (player_state record_catch: the fish's value onto
+  // this owner's lifetime banked value). Everything it may say is derived here.
+  const ps = await import('./player-state');
+  const psProgram = ps.playerStateProgramId();
+  const recordCatch: ExpectedRecordCatch = {
+    program: psProgram.toString(),
+    oracle: String(args.info.market),
+    payer,
+    config: ps.findConfigPda(u, psProgram)[0].toString(),
+    owner: args.owner,
+    progress: ps.findProgressPda(u, publicKey(args.owner), psProgram)[0].toString(),
+    fish: ps.fishSeedKey(args.fish.id),
+    value: args.fish.value,
+  };
+  const problem = cosignedTxProblem(tx.message, { payer, signers: [payer, asset.publicKey.toString(), String(args.info.market)], recordCatch });
   if (problem) throw new Error(`The market sent an unexpected mint transaction (${problem}); not signing it`);
   const signed = await asset.signTransaction(await args.session.signTransaction(tx));
   const sig = await u.rpc.sendTransaction(signed, { preflightCommitment: 'confirmed' });

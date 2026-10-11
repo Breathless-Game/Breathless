@@ -45,6 +45,60 @@ test('a co-signed transaction is signed only if it is what we asked for', () => 
   assert.match(cosign.cosignedTxProblem({ ...ok, instructions: [] }, expect), /other than Metaplex Core/);
 });
 
+// A co-signed mint as sensor/fish-collection.mjs buildMintTx builds it: Core create, then record_catch.
+const PS = 'EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ';
+const CONFIG = 'Config1111111111111111111111111111111111111';
+const PROGRESS = 'Progress11111111111111111111111111111111111';
+const OTHER = 'An0ther1111111111111111111111111111111111';
+const SYSTEM = '11111111111111111111111111111111';
+function catchData(fish = 0xc0ffeen, value = 25n, disc = cosign.RECORD_CATCH_DISCRIMINATOR) {
+  const d = new Uint8Array(24);
+  d.set(disc);
+  const v = new DataView(d.buffer);
+  v.setBigUint64(8, fish, true);
+  v.setBigUint64(16, value, true);
+  return d;
+}
+//              0        1      2       3      4             5   6         7         8       9
+const KEYS = [SESSION, ASSET, MARKET, OWNER, PROGRESS, CONFIG, SYSTEM, cosign.CORE_PROGRAM, PS, OTHER];
+const CORE_IX = { programIndex: 7, accountIndexes: [1, 3, 0, 2], data: new Uint8Array([0]) };
+const CATCH_IX = { programIndex: 8, accountIndexes: [2, 0, 5, 3, 4, 6], data: catchData() };
+const mintMsg = (instructions, accounts = KEYS) => ({ accounts, header: { numRequiredSignatures: 3 }, instructions });
+const MINT_EXPECT = {
+  payer: SESSION,
+  signers: [SESSION, ASSET, MARKET],
+  recordCatch: { program: PS, oracle: MARKET, payer: SESSION, config: CONFIG, owner: OWNER, progress: PROGRESS, fish: 0xc0ffeen, value: 25 },
+};
+
+test('a co-signed mint may carry exactly one record_catch, and only the one we expect', () => {
+  const p = (instructions, expect = MINT_EXPECT, accounts) => cosign.cosignedTxProblem(mintMsg(instructions, accounts), expect);
+  assert.equal(p([CORE_IX, CATCH_IX]), null, 'Core create + our record_catch');
+  assert.equal(p([CORE_IX]), null, 'an older market without record_catch still mints');
+  const idl = JSON.parse(readFileSync(new URL('../src/idl/player_state.json', import.meta.url), 'utf8'));
+  assert.deepEqual([...cosign.RECORD_CATCH_DISCRIMINATOR], idl.instructions.find((i) => i.name === 'record_catch').discriminator);
+
+  assert.match(p([CORE_IX, CATCH_IX, CATCH_IX]), /more than once/);
+  assert.match(p([CATCH_IX]), /other than Metaplex Core/, 'no Core create at all');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xc0ffeen, 25n, [93, 58, 72, 158, 252, 114, 249, 96]) }]), /other than record_catch/, 'shark_bite');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData().slice(0, 16) }]), /other than record_catch/, 'short data');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: undefined }]), /other than record_catch/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 9, 4, 6] }]), /another player/, 'another owner');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 3, 9, 6] }]), /another player/, 'another Progress');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [9, 0, 5, 3, 4, 6] }]), /oracle is not the market/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [1, 0, 5, 3, 4, 6] }]), /oracle is not the market/, 'the asset as oracle');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 1, 5, 3, 4, 6] }]), /payer is not the game wallet/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 9, 3, 4, 6] }]), /unexpected accounts/, 'another Config');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 3, 4, 9] }]), /unexpected accounts/, 'not the system program');
+  assert.match(p([CORE_IX, { ...CATCH_IX, accountIndexes: [2, 0, 5, 3, 4, 6, 9] }]), /unexpected accounts/, 'an extra account');
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xbadn) }]), /another fish/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, data: catchData(0xc0ffeen, 30000n) }]), /another fish or value/);
+  assert.match(p([CORE_IX, { ...CATCH_IX, programIndex: 9 }]), /other than Metaplex Core/, 'a look-alike from another program');
+  // Without a record_catch expectation (the migrate flow) nothing but Core passes.
+  assert.match(p([CORE_IX, CATCH_IX], { payer: SESSION, signers: [SESSION, ASSET, MARKET] }), /other than Metaplex Core/);
+  // The market as payer, or an extra signer, is still refused first.
+  assert.match(p([CORE_IX, CATCH_IX], MINT_EXPECT, [MARKET, ASSET, SESSION, ...KEYS.slice(3)]), /fee payer/);
+});
+
 test('minted fish: in the collection, migratable by this device, or blocked with a reason', () => {
   const ctx = { owner: OWNER, session: SESSION, collection: COLLECTION };
   const fish = (updateAuthority, owner = OWNER) => ({ owner, updateAuthority });

@@ -7,8 +7,10 @@
  * The chain is the source of truth: the game never bumps a level, a material or a growth entry
  * itself. player-chain.ts reads the accounts and sends the instructions; main.ts renders.
  */
-import { fishKey, toAquariumGrowth, toEquipmentState, toSynthesisState, SLOT_ORDER } from './player-state';
-import type { AquariumAccount, FishGrowthEntry, PlayerStateAccount, PriceTable } from './player-state';
+import { BOAT_ORDER, fishKey, MAP_ORDER, toAquariumGrowth, toEquipmentState, toSynthesisState, SLOT_ORDER } from './player-state';
+import type { AquariumAccount, FishGrowthEntry, PlayerStateAccount, PriceTable, ProgressAccount, ProgressRules } from './player-state';
+import type { BoatId } from './gear-nft';
+import type { MapId } from './maps';
 import type { EquipmentPaths, EquipmentSlot, EquipmentState, UpgradeSlot } from './equipment';
 import type { MaterialId, RecipeDef, SynthesisState } from './synthesis';
 import type { FishFoodId } from './fish-food';
@@ -193,6 +195,73 @@ export function planFeed(aquarium: AquariumAccount | null, ids: readonly string[
   return plan;
 }
 
+// ---- Progress (v2: boats, ships, lifetime banked value) -----------------------------
+
+/** The Progress account as the game uses it (plain numbers). */
+export interface ProgressView {
+  /** Value of every fish the market recorded (record_catch with each co-signed mint); never decreases. */
+  lifetime: number;
+  best: number;
+  catches: number;
+  boatLevels: Record<BoatId, number>;
+  /** SHIPS index sailed. */
+  ship: number;
+}
+
+/**
+ * Progress -> the game's numbers. No account yet (no boat bought, no fish recorded): lifetime 0,
+ * every boat piece Lv1, the starter ship. Everyone starts from zero.
+ */
+export function progressView(progress: ProgressAccount | null): ProgressView {
+  if (!progress) {
+    return { lifetime: 0, best: 0, catches: 0, boatLevels: Object.fromEntries(BOAT_ORDER.map((b) => [b, 1])) as Record<BoatId, number>, ship: 0 };
+  }
+  return {
+    lifetime: num(progress.lifetimeValue),
+    best: num(progress.bestValue),
+    catches: progress.catches,
+    boatLevels: Object.fromEntries(BOAT_ORDER.map((b) => [b, progress.boatLevels[b]])) as Record<BoatId, number>,
+    ship: progress.ship,
+  };
+}
+
+/** ProgressConfig's rules as whole-PEARL / whole-value numbers. */
+export interface GameProgressRules {
+  /** Per boat piece: [Lv1 (0), Lv2, Lv3] in PEARL. */
+  boatPrices: Record<BoatId, [number, number, number]>;
+  /** Lifetime banked value per SHIPS index. */
+  shipThresholds: number[];
+  /** Lifetime banked value per map. */
+  mapThresholds: Record<MapId, number>;
+}
+
+export function gameProgressRules(r: ProgressRules): GameProgressRules {
+  return {
+    boatPrices: Object.fromEntries(BOAT_ORDER.map((b) => [b, r.boatPrices[b].map(num) as [number, number, number]])) as Record<BoatId, [number, number, number]>,
+    shipThresholds: r.shipThresholds.map(num),
+    mapThresholds: Object.fromEntries(MAP_ORDER.map((m) => [m, num(r.mapThresholds[m])])) as Record<MapId, number>,
+  };
+}
+
+/** What buy_boat for the next level of `boat` costs at ProgressConfig prices, or null at the top level. */
+export function boatQuote(rules: ProgressRules, levels: Record<BoatId, number>, boat: BoatId, pearls: number) {
+  const level = levels[boat] ?? 1;
+  if (level >= 3) return null;
+  const cost = num(rules.boatPrices[boat][level]);
+  return { level: (level + 1) as 2 | 3, cost, short: Math.max(0, cost - pearls) };
+}
+
+/** Maps open at this lifetime value (ProgressConfig thresholds). */
+export function mapsOpen(lifetime: number, rules: GameProgressRules): MapId[] {
+  return MAP_ORDER.filter((m) => lifetime >= rules.mapThresholds[m]);
+}
+
+/** Can SHIPS index `ship` be sailed at this lifetime value? */
+export function shipOpen(lifetime: number, rules: GameProgressRules, ship: number): boolean {
+  const need = rules.shipThresholds[ship];
+  return need !== undefined && lifetime >= need;
+}
+
 // ---- Lost confirmations -----------------------------------------------------------
 
 /**
@@ -205,6 +274,9 @@ export type ChainPurchase = (
   | { v: 1; kind: 'craft'; recipe: RecipeDef['id']; crafted: number }
   | { v: 1; kind: 'food'; food: FishFoodId; keys: string[]; feeds: number }
   | { v: 1; kind: 'path'; slot: EquipmentSlot; path: string }
+  /** v2: buy_boat to `level` (Progress.boat_levels), set_ship to `ship` (Progress.ship). */
+  | { v: 1; kind: 'boat'; boat: BoatId; level: number }
+  | { v: 1; kind: 'ship'; ship: number }
   /** init_player / set_session / an owed shark_bite sent on their own before a purchase. */
   | { v: 1; kind: 'setup' }
 ) & {
@@ -221,7 +293,12 @@ export function isChainPurchase(what: unknown): what is ChainPurchase {
  * landed (a level reached, a composite plate consumed, a craft or a feed counted); false means
  * "not visible", and the signature status decides.
  */
-export function purchaseVisible(what: ChainPurchase, player: PlayerStateAccount | null, aquarium: AquariumAccount | null): boolean {
+export function purchaseVisible(
+  what: ChainPurchase,
+  player: PlayerStateAccount | null,
+  aquarium: AquariumAccount | null,
+  progress: ProgressAccount | null = null,
+): boolean {
   switch (what.kind) {
     case 'upgrade':
       return !!player && player.levels[what.slot] >= what.level;
@@ -238,6 +315,11 @@ export function purchaseVisible(what: ChainPurchase, player: PlayerStateAccount 
     }
     case 'path':
       return !!player && (player.paths as unknown as Record<string, string>)[what.slot] === what.path;
+    case 'boat':
+      // Only buy_boat raises a boat level, and nothing lowers one.
+      return !!progress && (progress.boatLevels[what.boat] ?? 1) >= what.level;
+    case 'ship':
+      return !!progress && progress.ship === what.ship;
     default:
       return false;
   }
@@ -266,6 +348,7 @@ export function settleRecord(
   player: PlayerStateAccount | null,
   aquarium: AquariumAccount | null,
   maxAgeMs: number,
+  progress: ProgressAccount | null = null,
 ): Settlement {
   if (status) {
     if (status.commitment === 'processed') return 'kept'; // seen, not final yet
@@ -275,5 +358,5 @@ export function settleRecord(
   // maxAgeMs: a blockhash lives about a minute, so it can no longer land either way.
   const expired = (rec.lastValid !== undefined && height !== undefined && height > rec.lastValid) || now - rec.ts > maxAgeMs;
   if (!expired) return 'kept';
-  return isChainPurchase(rec.what) && !rec.what.bite && purchaseVisible(rec.what, player, aquarium) ? 'delivered' : 'dropped';
+  return isChainPurchase(rec.what) && !rec.what.bite && purchaseVisible(rec.what, player, aquarium, progress) ? 'delivered' : 'dropped';
 }
