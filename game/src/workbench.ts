@@ -71,17 +71,17 @@ const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'sonar', 'boat
 
 /**
  * Where each piece lies when it isn't packed, in table units (x right, z toward
- * the camera): all of them on the left of the table, three to a row, the boat last.
- * Kept off the back strip of the table: the title fish hang over it and would take the clicks.
+ * the camera): all of them on the left of the table, the gear three to a row and
+ * the boat behind it (standing up, it would hide whatever lay behind it).
  */
 const SPOTS: [number, number][] = [
-  [-4.4, -0.9],
-  [-3.3, -0.9],
-  [-2.2, -0.9],
-  [-4.4, 0.35],
-  [-3.3, 0.35],
-  [-2.2, 0.35],
-  [-3.3, 1.65], // the boat
+  [-4.4, -0.35],
+  [-3.05, -0.35],
+  [-1.7, -0.35],
+  [-4.4, 1.15],
+  [-3.05, 1.15],
+  [-1.7, 1.15],
+  [-3.05, -1.75], // the boat
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
@@ -102,7 +102,7 @@ const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'net', 'reel', 'so
 // The diver figure stands at the back of the tray, between the two rows of rings: it wears what's in them.
 const FIGURE_AT = new THREE.Vector3(3.55, 0.05, -1.65);
 const FIGURE_H = 1.25; // standing height, table units: its head stays under the SETTINGS fish
-const MAP_AT = new THREE.Vector3(0.1, 0, 0.1);
+const MAP_AT = new THREE.Vector3(0.4, 0, 0.1);
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
@@ -319,7 +319,14 @@ export class Workbench {
           for (const p of this.pieces) if (p.def.group === 'dive' && p.mode === 'free') this.makeReady(p);
         },
         takeOffAll: () => {
-          for (const p of this.pieces) if (p.mode === 'ready') this.unready(p);
+          // One after another, so they don't all land on the left at once and pile up.
+          this.pieces
+            .filter((p) => p.mode === 'ready')
+            .forEach((p, i) => {
+              p.slot = -1; // off the figure and out of the save at once; the toss follows
+              this.tween(i * 0.1, () => {}, () => p.mode === 'ready' && this.unready(p));
+            });
+          this.trayChanged();
         },
       },
       closed: () => {
@@ -758,14 +765,18 @@ export class Workbench {
       p.spin.set(0, 0, 0);
       if (intro) {
         // Packed gear falls straight down into its slot (dropInSlot); the rest tumbles onto the table.
-        const spread = slot >= 0 ? 0 : 0.4;
+        // Gentle enough that each lands about where it lies, not rolling into its neighbours.
+        const spread = slot >= 0 ? 0 : 0.2;
         p.mode = 'wait';
         p.obj.visible = false;
         p.dropAt = DROP_START_S + i * DROP_GAP_S;
-        p.pos.set(x + (Math.random() - 0.5) * spread, 6 + Math.random() * 2, z + (Math.random() - 0.5) * spread);
+        // Packed gear falls from high over the tray; the rest from lower, so its thud doesn't
+        // knock its close neighbours on the left all over the table.
+        const high = slot >= 0 ? 6 : 2.6;
+        p.pos.set(x + (Math.random() - 0.5) * spread, high + Math.random() * 1.2, z + (Math.random() - 0.5) * spread);
         p.q.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
-        p.spin.set((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 9);
-        p.vel.set((Math.random() - 0.5) * 1.5, -2, (Math.random() - 0.5) * 1.5);
+        p.spin.set((Math.random() - 0.5) * 4.5, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 4.5);
+        p.vel.set((Math.random() - 0.5) * 0.6, -2, (Math.random() - 0.5) * 0.6);
         if (p.id === 'boat') {
           // The boat is set down on its keel from not far up: dropped from the height of the
           // rest (or tumbling), its narrow keel kicks it off across the table.
