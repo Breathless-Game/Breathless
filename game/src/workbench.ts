@@ -1,9 +1,10 @@
 // Workbench: after START the camera pans down from the title rope (its fish
 // stay hanging at the top of the screen) onto a table seen at an angle (2.5D).
-// The gear drops onto it as 3D models and lands with a thud. Click a piece to get
-// it ready: it is set down in the tray on the right (click it there, or drag it
-// out, to put it back). The folded sea chart in the middle opens into a map with
-// the three places, one per chapter; pick one and dive.
+// The gear drops onto it as 3D models and lands with a thud. Click a piece for a
+// closer look (inspect.ts): it is held up in the middle with what it does and its
+// upgrades, and can be got ready from there. Drag a piece into the tray on the
+// right to get it ready (drag it out to put it back). The folded sea chart in the
+// middle opens into a map with the three places, one per chapter; pick one and dive.
 //
 // Physics is hand-rolled for a handful of pieces: gravity, a bounce off the table
 // top, and circle collisions in the table plane.
@@ -12,6 +13,7 @@ import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
 import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
 import { SoftPaper } from './paper';
+import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
 import { loadSonarConfig, saveSonarConfig, sonarLengthMeters } from './sonar-config';
 
@@ -28,14 +30,18 @@ export interface WorkbenchHooks {
   pan(u: number, tableY: number): void;
   /** Called once the place's preview fills the screen; the live scene must then show that same view. */
   dive(map: MapId, gear: UpgradeId[]): void;
+  /** The highest level owned of a piece of gear (1 = the starting gear). */
+  owned(id: UpgradeId): number;
   /** The ready-room color for the deep sonar beacon. */
   sonarColor?(color: string): void;
 }
 
-// The six dive-loadout slots plus the deployable deep sonar. The rod carries
+// The six dive-loadout slots plus the deployable deep sonar, and a model of the
+// boat (for upgrading the boat; it never goes in the ready tray). The rod carries
 // the net and the reel changes its recovery; bait is a boat upgrade and is not
 // packed on this workbench.
-const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar'];
+const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar', 'boat'];
+
 /** Where each piece lands, in table units (x right, z toward the camera). */
 // Kept off the back strip of the table: the title fish hang over it and would take the clicks.
 const SPOTS: [number, number][] = [
@@ -46,6 +52,7 @@ const SPOTS: [number, number][] = [
   [1.55, 0.8],
   [-0.9, 1.95],
   [1.05, 1.95],
+  [-0.6, -1.75], // the boat, behind the chart
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
@@ -65,11 +72,26 @@ const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
 
 const GEAR_SIZE = 1.05; // longest side of a piece, table units
+const BOAT_SIZE = 1.5; // the model boat, bow to stern
 const TRAY_SCALE = 0.8;
 const GRAVITY = 26;
 const RESTITUTION = 0.32;
 const BOUNCE_MIN = 2.2; // slower than this and it just settles
 const HOLD_Y = 0.85;
+// Rigid-body contact with the tabletop (workbench.contact).
+const CONTACT_EPS = 0.02; // points this close to the lowest one share the load
+const CONTACT_ITERS = 6;
+const MU = 0.55; // friction
+const ROLL_DAMP = 2.6; // turning slows while it touches, 1/s
+const SLIDE_DAMP = 1.2;
+const SLEEP_V = 0.18; // slower than this (and turning slower than SLEEP_W) …
+const SLEEP_W = 0.4;
+const SLEEP_S = 0.35; // … for this long, and it comes to rest
+// Carried pieces hang this far under the hand and swing like a pendulum.
+const SWING_L = 0.35;
+const SWING_DAMP = 3.2;
+const SWING_ACC = 0.4; // how much of the hand's acceleration reaches the piece
+const MAX_SWING = (60 * Math.PI) / 180;
 const MAP_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.07);
 const MAP_TOP = 0.03; // gear resting on the chart sits this much higher
 const PICKUP_S = 0.75; // the chart's flight from the table to the middle of the screen
@@ -95,7 +117,7 @@ const CLICK_MOVE_PX = 6;
 const CLICK_MS = 400;
 
 type Mode = 'wait' | 'free' | 'held' | 'moving' | 'ready';
-type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | 'diving';
+type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | 'diving' | 'inspect';
 
 interface Piece {
   id: UpgradeId;
@@ -105,6 +127,16 @@ interface Piece {
   r: number; // collision radius in the table plane
   restY: number; // centre height when lying on the table
   flat: THREE.Quaternion; // lying on its largest face
+  /** Points of the model (in its own frame): where it touches the table, however it lands. */
+  hull: THREE.Vector3[];
+  /** 1 / moment of inertia (the piece's mass is 1): how easily a push at its edge turns it. */
+  invI: number;
+  /** Seconds it has lain still: past SLEEP_S it sleeps until something knocks it. */
+  still: number;
+  /** Touching the table last step (a thud only on first touch). */
+  touching: boolean;
+  /** Carried: it hangs under the hand like a pendulum (null when not held). */
+  swing: { hand: THREE.Vector3; handVel: THREE.Vector3; dir: THREE.Vector3; w: THREE.Vector3 } | null;
   yaw: number;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
@@ -181,6 +213,7 @@ export class Workbench {
   private holdTarget = new THREE.Vector3();
   private hovered: Piece | 'map' | null = null;
   private picked: MapId | null = null;
+  private inspector: GearInspector;
 
   constructor(private hooks: WorkbenchHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
@@ -206,6 +239,19 @@ export class Workbench {
     key.position.set(-4, 10, 5);
     this.chartScene.add(key);
     GEAR.forEach((id, i) => this.pieces.push(this.buildPiece(id, i)));
+    const piece = (def: UpgradeDef) => this.pieces.find((p) => p.def === def)!;
+    this.inspector = new GearInspector({
+      owned: (def) => this.hooks.owned(def.id),
+      isReady: (def) => piece(def).slot >= 0,
+      setReady: (def, ready) => {
+        const p = piece(def);
+        if (ready && p.mode === 'free') this.makeReady(p);
+        else if (!ready && p.mode === 'ready') this.unready(p);
+      },
+      closed: () => {
+        if (this.state === 'inspect') this.state = 'idle';
+      },
+    });
 
     window.addEventListener('pointerdown', (e) => this.onDown(e));
     window.addEventListener('pointermove', (e) => this.onMove(e));
@@ -232,6 +278,11 @@ export class Workbench {
 
   get visible() {
     return this.state !== 'closed';
+  }
+
+  /** The bare table, nothing open or moving: Esc from here leaves it. */
+  get atRest() {
+    return this.state === 'idle';
   }
 
   /** Ready gear, in tray order. */
@@ -286,6 +337,7 @@ export class Workbench {
   }
 
   hide() {
+    this.inspector.close();
     this.state = 'closed';
     cancelAnimationFrame(this.raf);
     this.root.classList.add('hidden');
@@ -295,9 +347,10 @@ export class Workbench {
     document.body.style.cursor = '';
   }
 
-  /** Esc: fold the chart; from the bare table, pan back up to the title. */
+  /** Esc: put down the gear being looked at, fold the chart; from the bare table, pan back up to the title. */
   escape() {
-    if (this.state === 'chart') this.closeChart();
+    if (this.state === 'inspect') this.inspector.close();
+    else if (this.state === 'chart') this.closeChart();
     else if (this.state === 'idle') this.leave();
   }
 
@@ -400,15 +453,29 @@ export class Workbench {
     holder.add(model);
     let box = new THREE.Box3().setFromObject(holder);
     const size = box.getSize(new THREE.Vector3());
-    model.scale.multiplyScalar(GEAR_SIZE / Math.max(size.x, size.y, size.z));
+    // The model boat stands on its keel, a little bigger than the gear; everything else lies flat.
+    const upright = id === 'boat';
+    model.scale.multiplyScalar(((upright ? BOAT_SIZE : GEAR_SIZE) / Math.max(size.x, size.y, size.z)));
     box = new THREE.Box3().setFromObject(holder);
     model.position.sub(box.getCenter(new THREE.Vector3()));
     size.copy(box.getSize(new THREE.Vector3()));
     const flat = new THREE.Quaternion();
-    if (size.x <= size.y && size.x <= size.z) flat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
-    else if (size.z <= size.y && size.z <= size.x) flat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
-    const thin = Math.min(size.x, size.y, size.z);
-    const wide = [size.x, size.y, size.z].sort((a, b) => b - a);
+    if (!upright) {
+      if (size.x <= size.y && size.x <= size.z) flat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      else if (size.z <= size.y && size.z <= size.x) flat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    }
+    const thin = upright ? size.y : Math.min(size.x, size.y, size.z);
+    const wide = upright ? [size.x, size.z] : [size.x, size.y, size.z].sort((a, b) => b - a);
+
+    // A sample of the model's vertices, so it can rest on the table at any angle.
+    const hull: THREE.Vector3[] = [];
+    holder.updateMatrixWorld(true);
+    holder.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const pos = o.geometry.attributes.position;
+      const every = Math.max(1, Math.floor(pos.count / 120));
+      for (let k = 0; k < pos.count; k += every) hull.push(new THREE.Vector3().fromBufferAttribute(pos, k).applyMatrix4(o.matrixWorld));
+    });
 
     const obj = new THREE.Group();
     obj.add(holder);
@@ -429,6 +496,12 @@ export class Workbench {
       r: (wide[0] + wide[1]) * 0.24,
       restY: thin / 2,
       flat,
+      hull,
+      // A point cloud's inertia about a typical axis is about 2/3 of its mean squared radius.
+      invI: 1 / Math.max(0.02, (hull.reduce((s, v) => s + v.lengthSq(), 0) / Math.max(1, hull.length)) * (2 / 3)),
+      still: 0,
+      touching: false,
+      swing: null,
       yaw: 0,
       pos: new THREE.Vector3(SPOTS[i][0], thin / 2, SPOTS[i][1]),
       vel: new THREE.Vector3(),
@@ -449,6 +522,9 @@ export class Workbench {
       const [x, z] = SPOTS[i];
       p.slot = -1;
       p.hover = 0;
+      p.touching = false;
+      p.still = 0;
+      p.swing = null;
       p.yaw = (Math.random() - 0.5) * 1.6;
       p.vel.set(0, 0, 0);
       p.spin.set(0, 0, 0);
@@ -470,6 +546,105 @@ export class Workbench {
       }
     });
     for (const ring of this.slotRings) this.lightSlot(ring, false);
+  }
+
+  /**
+   * The piece against the tabletop at height `floorY`: pushed out if it sank in,
+   * then impulses at its touching points (bounce, friction). A push at one corner
+   * also turns it, so it tips over until it rests on a side that can hold it.
+   * Returns whether it touches.
+   */
+  private contact(p: Piece, floorY: number): boolean {
+    let low = Infinity;
+    const rel = p.hull.map((v) => {
+      const r = v.clone().applyQuaternion(p.q);
+      low = Math.min(low, r.y);
+      return r;
+    });
+    if (p.pos.y + low >= floorY + CONTACT_EPS) return false;
+    if (p.pos.y + low < floorY) p.pos.y = floorY - low;
+    // The touching points: the lowest few (enough to rest on an edge or a face).
+    const touch = rel.filter((r) => r.y < low + CONTACT_EPS).slice(0, 12);
+    const vp = new THREE.Vector3();
+    const rn = new THREE.Vector3();
+    const J = new THREE.Vector3();
+    let impact = 0;
+    for (const r of touch) impact = Math.max(impact, -vp.copy(p.spin).cross(r).add(p.vel).y);
+    if (!p.touching && impact > BOUNCE_MIN) this.thud(p, impact);
+    const bounce = impact > BOUNCE_MIN ? RESTITUTION : 0;
+    for (let iter = 0; iter < CONTACT_ITERS; iter++) {
+      for (const r of touch) {
+        vp.copy(p.spin).cross(r).add(p.vel); // velocity of that point
+        if (vp.y >= 0) continue;
+        // Normal impulse: stop (or bounce) the point, through both the push and the turn it causes.
+        rn.set(r.z, 0, -r.x); // r × up
+        const jn = (-(1 + (iter === 0 ? bounce : 0)) * vp.y) / (1 + p.invI * rn.lengthSq());
+        // Friction against the sliding part, at most MU times the normal push.
+        const tx = vp.x;
+        const tz = vp.z;
+        const slide = Math.hypot(tx, tz);
+        J.set(0, jn, 0);
+        if (slide > 1e-5) {
+          const t = new THREE.Vector3(tx / slide, 0, tz / slide);
+          const rt = new THREE.Vector3().crossVectors(r, t);
+          const jt = Math.min(slide / (1 + p.invI * rt.lengthSq()), MU * jn);
+          J.addScaledVector(t, -jt);
+        }
+        p.vel.add(J);
+        p.spin.addScaledVector(rn.crossVectors(r, J), p.invI);
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Carried: the piece hangs from the hand like a pendulum. When the hand speeds
+   * up, slows or turns, the piece lags and swings, then settles back under it.
+   */
+  private swingHeld(p: Piece, dt: number) {
+    if (!p.swing) {
+      p.swing = {
+        hand: p.pos.clone().add(new THREE.Vector3(0, SWING_L, 0)),
+        handVel: new THREE.Vector3(),
+        dir: new THREE.Vector3(0, -1, 0),
+        w: new THREE.Vector3(),
+      };
+    }
+    const s = p.swing;
+    const prev = s.hand.clone();
+    s.hand.lerp(tmpV.copy(this.holdTarget).setY(this.holdTarget.y + SWING_L), 1 - Math.exp(-dt * 22));
+    const handVel = s.hand.clone().sub(prev).divideScalar(dt);
+    const handAcc = handVel.clone().sub(s.handVel).divideScalar(dt).clampLength(0, 80);
+    s.handVel.copy(handVel);
+    // In the hand's frame gravity pulls down and the hand's acceleration pulls back
+    // (softened: the hand is a wrist, not a rigid rod).
+    const g = new THREE.Vector3(0, -GRAVITY, 0).addScaledVector(handAcc, -SWING_ACC);
+    s.w.addScaledVector(new THREE.Vector3().crossVectors(s.dir, g), dt / SWING_L);
+    s.w.multiplyScalar(Math.exp(-dt * SWING_DAMP));
+    let a = s.w.length() * dt;
+    if (a > 0) {
+      const axis = tmpV.copy(s.w).normalize();
+      // It can't swing up past MAX_SWING from hanging straight down.
+      const next = s.dir.clone().applyAxisAngle(axis, a);
+      if (Math.acos(Math.min(1, -next.y)) > MAX_SWING && next.y > s.dir.y) {
+        a = 0;
+        s.w.multiplyScalar(-0.3); // knocks against the limit and swings back
+      }
+      if (a > 0) {
+        tmpQ.setFromAxisAngle(axis, a);
+        s.dir.applyQuaternion(tmpQ).normalize();
+        p.q.premultiply(tmpQ); // the piece turns with its swing: never set square
+      }
+    }
+    p.pos.copy(s.hand).addScaledVector(s.dir, SWING_L);
+    p.vel.copy(handVel).add(tmpV.crossVectors(s.w, s.dir).multiplyScalar(SWING_L));
+  }
+
+  /** How high the piece's centre sits when its lowest point (at its current turn) is on the table. */
+  private standY(p: Piece) {
+    let low = 0;
+    for (const v of p.hull) low = Math.min(low, tmpV.copy(v).applyQuaternion(p.q).y);
+    return -low;
   }
 
   private restQ(p: Piece, yaw = p.yaw) {
@@ -610,41 +785,38 @@ export class Workbench {
         p.obj.visible = true;
       }
       if (p.mode === 'held') {
-        const prev = tmpV.copy(p.pos);
-        p.pos.lerp(this.holdTarget, 1 - Math.exp(-dt * 22));
-        p.vel.subVectors(p.pos, prev).divideScalar(dt);
-        p.q.slerp(this.restQ(p), 1 - Math.exp(-dt * 10));
+        this.swingHeld(p, dt);
         continue;
       }
       if (p.mode !== 'free') continue;
+      // Asleep on the table: nothing to do until a knock or a shove gives it velocity.
+      if (p.grounded && p.vel.lengthSq() < 1e-6 && p.spin.lengthSq() < 1e-6) continue;
 
+      // A rigid body: gravity, then its contacts with the table (or the chart) turn and stop it.
       p.vel.y -= GRAVITY * dt;
       p.pos.addScaledVector(p.vel, dt);
-      const floor = p.restY + (this.onMap(p) ? MAP_TOP : 0);
-      if (p.pos.y <= floor) {
-        p.pos.y = floor;
-        if (p.vel.y < -BOUNCE_MIN) {
-          this.thud(p, -p.vel.y);
-          p.vel.y *= -RESTITUTION;
-          p.spin.multiplyScalar(0.45);
-          p.grounded = false;
-        } else {
-          if (!p.grounded) p.yaw = new THREE.Euler().setFromQuaternion(p.q, 'YXZ').y;
-          p.vel.y = 0;
-          p.grounded = true;
-        }
-      } else if (p.pos.y > floor + 0.01) p.grounded = false;
-
-      if (p.grounded) {
-        const k = Math.exp(-dt * 6);
+      const a = p.spin.length() * dt;
+      if (a > 0) p.q.premultiply(tmpQ.setFromAxisAngle(tmpV.copy(p.spin).normalize(), a));
+      const touching = this.contact(p, this.onMap(p) ? MAP_TOP : 0);
+      p.touching = touching;
+      if (touching) {
+        // Rolling resistance, then sleep once it has been still for a moment.
+        p.spin.multiplyScalar(Math.exp(-dt * ROLL_DAMP));
+        const k = Math.exp(-dt * SLIDE_DAMP);
         p.vel.x *= k;
         p.vel.z *= k;
-        p.q.slerp(this.restQ(p), 1 - Math.exp(-dt * 14));
-        p.spin.multiplyScalar(Math.exp(-dt * 8));
+        if (p.vel.length() < SLEEP_V && p.spin.length() < SLEEP_W) p.still += dt;
+        else p.still = 0;
+        if (p.still > SLEEP_S) {
+          p.vel.set(0, 0, 0);
+          p.spin.set(0, 0, 0);
+          p.grounded = true;
+        }
       } else {
-        const a = p.spin.length() * dt;
-        if (a > 0) p.q.premultiply(tmpQ.setFromAxisAngle(tmpV.copy(p.spin).normalize(), a));
+        p.still = 0;
+        p.grounded = false;
       }
+      const floor = this.standY(p);
 
       // Walls only near the table top: a piece tossed out of the tray flies over them.
       if (p.pos.y < floor + 0.5) {
@@ -689,7 +861,7 @@ export class Workbench {
       for (let j = i + 1; j < live.length; j++) {
         const a = live[i];
         const b = live[j];
-        if (Math.abs(a.pos.y - b.pos.y) > a.restY + b.restY + 0.15) continue;
+        if (Math.abs(a.pos.y - b.pos.y) > this.standY(a) + this.standY(b) + 0.15) continue;
         const dx = b.pos.x - a.pos.x;
         const dz = b.pos.z - a.pos.z;
         const d = Math.hypot(dx, dz) || 1e-4;
@@ -892,12 +1064,18 @@ export class Workbench {
       const p = this.held;
       this.held = null;
       document.body.style.cursor = '';
-      if (this.inTray(p.pos)) this.makeReady(p);
+      const swing = p.swing;
+      p.swing = null;
+      p.still = 0;
+      p.touching = false;
+      // Only dive gear goes in the ready tray; the boat model just lands wherever it's dropped.
+      if (this.inTray(p.pos) && p.def.group === 'dive') this.makeReady(p);
       else {
         p.mode = 'free';
         p.grounded = false;
         if (p.vel.length() > 14) p.vel.setLength(14);
-        p.spin.set(p.vel.z * 0.6, 0, -p.vel.x * 0.6);
+        // Let go mid-swing: it flies on with that swing's turn.
+        p.spin.copy(swing?.w ?? new THREE.Vector3());
       }
       return;
     }
@@ -908,10 +1086,18 @@ export class Workbench {
     if (!click) return;
     if (press.map) this.openChart();
     else if (press.piece) {
-      if (press.piece.mode === 'ready') this.unready(press.piece);
-      else if (press.piece.mode === 'free') this.makeReady(press.piece);
       this.setHover(null, e);
+      this.inspect(press.piece);
     }
+  }
+
+  /** A closer look: the piece is held up in the middle of the screen, out of where it lies. */
+  private inspect(p: Piece) {
+    this.state = 'inspect';
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const at = p.pos.clone().project(this.camera);
+    this.inspector.show(p.def, { x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
   }
 
   private setHover(hit: Piece | 'map' | null, e: PointerEvent) {
@@ -924,7 +1110,11 @@ export class Workbench {
     const lines =
       hit === 'map'
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
-        : [`${hit.def.name} · ${hit.def.nameZh}`, hit.def.effects[0], hit.mode === 'ready' ? 'Ready · click to put it back' : 'Click to get it ready'];
+        : [
+            `${hit.def.name} · ${hit.def.nameZh}`,
+            hit.def.effects[0],
+            hit.mode === 'ready' ? 'Ready · click for a closer look' : hit.def.group === 'dive' ? 'Click for a closer look · drag to the tray' : 'Click to upgrade the boat',
+          ];
     this.tip.replaceChildren(
       ...lines.map((text, i) => {
         const el = document.createElement('div');
@@ -1083,7 +1273,7 @@ export class Workbench {
     this.renderPlace();
   }
 
-  /** The panel beside the chart: a frame of the place itself, what it is, what you carry, and Dive. */
+  /** The panel beside the chart: a live view of the place itself, what it is, what you carry, and Dive. */
   private renderPlace() {
     const id = this.picked;
     this.placeEl.classList.toggle('empty', !id);
@@ -1144,17 +1334,21 @@ export class Workbench {
     };
   }
   /** Esc from the table: the camera pans back up to the title. */
-  private leave() {
+  /** The table sinks away as the camera pans back up; then `done`, if given. */
+  leave(done?: () => void) {
     this.state = 'leaving';
     this.tip.classList.add('hidden');
-    this.tween(0.9, (u) => this.setPan(1 - easeInOut(u)), () => this.hide());
+    this.tween(0.9, (u) => this.setPan(1 - easeInOut(u)), () => {
+      this.hide();
+      done?.();
+    });
   }
 }
 
 // ---- Textures -----------------------------------------------------------------
 
 /** Planked tabletop, planks running left to right. */
-function drawPlanks(w: number, h: number): HTMLCanvasElement {
+export function drawPlanks(w: number, h: number): HTMLCanvasElement {
   const cv = document.createElement('canvas');
   cv.width = w;
   cv.height = h;
