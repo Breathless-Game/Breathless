@@ -374,10 +374,15 @@ export class World {
       const rng = new Rng(slot.seed);
       const geo = rockGeometry(rng, slot.r, detail, slot.squash);
       const y = this.seabedY + slot.y;
+      // rockGeometry rotates after scaling, so its actual vertical bounds are
+      // wider than the nominal radius. Align the rendered bottom with the
+      // layout's support point instead of letting rotation bury or float it.
+      const nominalBottom = -slot.r * slot.squash;
+      const bottomCorrection = nominalBottom - geo.boundingBox!.min.y;
       wallTint(rng.pick(palette), -y, tint);
       // Faces darken toward the buried underside, as on the trench walls.
       paintFaces(geo, (h) => shade.copy(tint).multiplyScalar((0.74 + 0.26 * h) * rng.range(0.86, 1.06)));
-      batch.add(geo, material, slot.x, y, slot.z);
+      batch.add(geo, material, slot.x, y + bottomCorrection, slot.z);
     };
     for (const slot of this.layout.outcrops) add(slot, 0);
     // The wall's big rocks take a finer cut so their silhouettes are not all the same solid.

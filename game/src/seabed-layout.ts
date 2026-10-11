@@ -229,8 +229,10 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
         const squash = rng.range(0.7, 1.05);
         const next: RockSlot = {
           x: rock.x + rng.range(-0.3, 0.3) * rock.r,
-          // Sunk into the rock below, so the pile reads as one mass.
-          y: rock.y + rock.r * rock.squash * 0.6 + r * squash * 0.4,
+          // Sink only a small part into the rock below. The old 60% sink made
+          // the upper rocks visibly clip through their supports, especially
+          // after the renderer's random rotation changed their true bounds.
+          y: rock.y + rock.r * rock.squash + r * squash * 0.82,
           z: rock.z + rng.range(-0.3, 0.3) * rock.r,
           r, squash, seed: seedOf(rng), tier: 1,
         };
