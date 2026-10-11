@@ -13,7 +13,7 @@ import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Aquarium } from './aquarium';
-import { Workbench } from './workbench';
+import { Workbench, type WorkbenchConditions } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
@@ -371,7 +371,7 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On the Open Ocean, if the player said yes: one by day, two at night.
+// On the Open Ocean, if the player said yes: one to two by day, two to four at night.
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
@@ -400,7 +400,7 @@ function answerSharks(on: boolean) {
   paused = false;
   // The pause was not a breath taken underwater.
   breathSince = null;
-  hud.message(on ? 'One shark by day, two at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  hud.message(on ? 'One to two sharks by day, two to four at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
 }
 document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
 document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
@@ -553,10 +553,13 @@ hud.setNet(net, currentStats().netCapacity);
 hud.setBank(bank);
 const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
-  sold(fish, result) {
+  sold(sales) {
     hud.setBank(bank);
-    hud.toast(fish, `SOLD · +${pearls(result.pearls).toUpperCase()}`);
-    void syncPearls(result.pearls);
+    const total = sales.reduce((s, x) => s + x.result.pearls, 0);
+    // One toast and one balance read per batch: the most valuable fish stands for the rest.
+    const top = sales.reduce((a, b) => (b.result.pearls > a.result.pearls ? b : a));
+    hud.toast(top.fish, `${sales.length > 1 ? `SOLD ${sales.length} FISH` : 'SOLD'} · +${pearls(total).toUpperCase()}`);
+    void syncPearls(total);
   },
 });
 const vault = new Vault(bank, nftQueue);
@@ -754,6 +757,33 @@ function setTimeOfDay(mode: TimeOfDay) {
   world.setTimeOfDay(mode);
   const labels: Record<TimeOfDay, string> = { cycle: 'Natural day cycle', morning: 'Morning light', afternoon: 'Afternoon light', night: 'Moonlight. Rarer fish rise.' };
   hud.message(labels[mode]);
+}
+
+const WEATHER_LABELS = {
+  clear: 'Clear · 晴朗',
+  cloudy: 'Cloudy · 多云',
+  rain: 'Rain · 降雨',
+  storm: 'Storm · 暴风雨',
+} as const;
+
+/** The live field note shown while a map is being prepared on the workbench. */
+function workbenchConditions(id: MapId): WorkbenchConditions {
+  const map = MAPS[id];
+  const lighting = world.dayCycle.state;
+  const weather = world.weather.state;
+  const minute = Math.round(lighting.hour * 60) % (24 * 60);
+  const temperatureC = map.surfaceTempC
+    + (lighting.daylight - 1) * 3
+    - weather.cloud * 1.2
+    - weather.rain * 0.8
+    - weather.wind * 0.4;
+  return {
+    time: `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`,
+    temperatureC: Math.round(temperatureC * 10) / 10,
+    weather: WEATHER_LABELS[weather.kind],
+    wind: `${Math.round(4 + weather.wind * 30)} km/h`,
+    rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+  };
 }
 
 function carrySonarForDive() {
@@ -970,6 +1000,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  diver.group.visible = true;
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
@@ -1106,6 +1137,10 @@ function climbAboard() {
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
+  // The boat is a safe zone: clear live colliders before the workbench opens.
+  noSharks();
+  // The workbench camera is a clean boat view; keep the seated character out of it.
+  diver.group.visible = false;
   keys.clear();
   vault.toggle(false);
   gear.toggle(false);
@@ -1127,6 +1162,7 @@ function climbAboard() {
 /** Not aboard any more: START reads START again and the title comes back. */
 function leaveBoat() {
   aboard = null;
+  diver.group.visible = true;
   leavingBoat = false;
   titleScreen.setLabel(START_FISH, 'START');
   titleScreen.setLift(0);
@@ -1143,6 +1179,7 @@ function backToWater() {
     titleScreen.hide();
     titleScreen.setPan(0);
     benchPan = 0;
+    diver.group.visible = true;
     diver.stand();
     diver.pos.copy(at.pos);
     diver.vel.copy(at.vel);
@@ -1164,8 +1201,10 @@ function startFish() {
   if (aboard) aboardToTitle();
   else if (workbench.visible) {
     if (workbench.atRest) workbench.escape(); // pans back up to the title
-  } else if (settingsDesk.visible) settingsDesk.escape();
-  else openWorkbench();
+  } else if (settingsDesk.visible) {
+    deskFromBench = false; // MAIN MENU goes all the way up, not back to the workbench
+    settingsDesk.escape();
+  } else openWorkbench();
 }
 
 /**
@@ -1305,12 +1344,29 @@ const BENCH_CAMERA_DROP = 1.4;
 let benchPan = 0;
 let aquariumPan = 0; // the aquarium pans the same way
 
+// The workbench and the settings desk each report their own pan. Switching from
+// one to the other, one sinks while the other rises: the camera, the title's rope
+// and the START fish follow whichever is further in.
+const tablePan = { bench: 0, desk: 0 };
+const tableY = { bench: 0, desk: 0 };
+let deskFromBench = false; // the settings desk was opened from the workbench, and goes back to it
+
+function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
+  tablePan[which] = u;
+  tableY[which] = y;
+  const bench = workbench.visible ? tablePan.bench : 0;
+  const desk = settingsDesk.visible ? tablePan.desk : 0;
+  const top = bench >= desk ? 'bench' : 'desk';
+  // Mid-swap (both tables up) the rope and the sea stay where they are: only the tables move.
+  benchPan = workbench.visible && settingsDesk.visible ? 1 : Math.max(bench, desk);
+  titleScreen.setPan(benchPan, tableY[top]);
+  labelStartFish(benchPan);
+}
+
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
-    benchPan = u;
-    titleScreen.setPan(u, tableY);
-    labelStartFish(u);
+    setTablePan('bench', u, tableY);
     // Leaving the boat, the fish rise away off the top while the table sinks.
     if (leavingBoat) titleScreen.setLift(1 - u);
   },
@@ -1335,6 +1391,7 @@ const workbench = new Workbench({
       startGame();
     } else openStartCard();
   },
+  conditions: workbenchConditions,
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
   owned: (id) => (isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1),
   buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve('Not upgradable here')),
@@ -1389,6 +1446,7 @@ function showTitle(intro: boolean) {
   loginGate.hide();
   workbench.hide();
   settingsDesk.hide();
+  deskFromBench = false;
   benchPan = 0;
   titleScreen.setPan(0);
   labelStartFish(0);
@@ -1415,16 +1473,32 @@ const settingsDesk = new SettingsDesk({
   connectWallet: () => loginGate.show(),
   logOut: () => void logOut(),
   pan(u, tableY) {
-    benchPan = u;
-    titleScreen.setPan(u, tableY);
-    labelStartFish(u);
+    setTablePan('desk', u, tableY);
+  },
+  view(move, yaw, pitch) {
+    deskView.move.copy(move);
+    deskView.yaw = yaw;
+    deskView.pitch = pitch;
+  },
+  leaving() {
+    // Opened from the workbench: that table comes back up as this one sinks.
+    if (!deskFromBench) return;
+    deskFromBench = false;
+    workbench.show(false, true);
   },
 });
 // The Aquarium covers the whole viewport: the scene behind it (title fish, workbench, desk) ignores the pointer and keys meanwhile.
 titleScreen.blocked = workbench.blocked = settingsDesk.blocked = () => aquarium.open;
 
+/** SETTINGS: from the title, pan down to the settings desk; from the workbench, swap tables. */
 function openSettingsDesk() {
-  if (!workbench.visible && !settingsDesk.visible && !loginGate.visible) settingsDesk.show();
+  if (settingsDesk.visible || loginGate.visible) return;
+  if (workbench.visible) {
+    if (!workbench.atRest) return;
+    deskFromBench = true;
+    workbench.leave(); // the workbench sinks while the settings desk rises
+  }
+  settingsDesk.show();
 }
 
 function openWorkbench() {
@@ -1535,6 +1609,11 @@ document.addEventListener('visibilitychange', () => {
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
+const camLook = new THREE.Vector3();
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+// How far the settings desk's camera has moved and turned to lean in over a plaque (settings-desk.ts).
+const deskView = { move: new THREE.Vector3(), yaw: 0, pitch: 0 };
 const timeLabel = document.getElementById('time-of-day')!;
 let displayedMinute = -1;
 let displayedWeather = '';
@@ -1652,8 +1731,15 @@ function update(dt: number, time: number) {
   // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
   cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
   camera.position.sub(shakeOffset);
+  // The settings desk's camera leans in over a plaque: the sea camera moves and turns
+  // with it, so it reads as the camera moving rather than the table sliding over a
+  // still view. (The sea is in metres, the desk in table units: near enough the same.)
+  const leaning = settingsDesk.visible;
+  if (leaning) camTarget.add(deskView.move);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
-  camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
+  const look = camLook.set(0, -1.6, -camera.position.z);
+  if (leaning) look.applyAxisAngle(AXIS_X, deskView.pitch).applyAxisAngle(AXIS_Y, -deskView.yaw);
+  camera.lookAt(look.add(camera.position));
 
   // World events, after World.update (the lightning flash tints what it wrote).
   // Only during a dive: leaving or starting one clears them and restarts the clock.

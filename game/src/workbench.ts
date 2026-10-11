@@ -33,7 +33,9 @@ export interface WorkbenchHooks {
   dive(map: MapId, gear: UpgradeId[]): void;
   /** The highest level owned of a piece of gear (1 = the starting gear). */
   owned(id: UpgradeId): number;
-  /** The ready-room color for the deep sonar beacon. */
+  /** Conditions at the selected map's surface when the dive is being prepared. */
+  conditions(map: MapId): WorkbenchConditions;
+  /** The workbench sonar piece applies its chosen beacon color to the dive model. */
   sonarColor?(color: string): void;
   /** Optional progress hooks for the action-driven field guide. */
   tutorial?(id: LessonId): void;
@@ -48,6 +50,14 @@ export interface WorkbenchHooks {
   ship(): { key: number; model: THREE.Object3D | null };
   /** The boat on the table opens the shipyard. */
   openShipyard(): void;
+}
+
+export interface WorkbenchConditions {
+  time: string;
+  temperatureC: number;
+  weather: string;
+  wind: string;
+  rain: string;
 }
 
 // The six dive-loadout slots plus the deployable deep sonar, and a model of the
@@ -200,8 +210,6 @@ export class Workbench {
   private pinsEl = $('wb-pins');
   private placeEl = $('wb-place');
   private previewBox = $('wb-place-preview');
-  private sonarColorInput = $<HTMLInputElement>('wb-sonar-color');
-  private sonarLength = $('wb-sonar-length');
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -273,6 +281,9 @@ export class Workbench {
         if (ready && p.mode === 'free') this.makeReady(p);
         else if (!ready && p.mode === 'ready') this.unready(p);
       },
+      sonarColor: (color) => {
+        this.hooks.sonarColor?.(color);
+      },
       buy: async (def) => {
         const failed = await this.hooks.buy(def.id);
         this.refreshGear();
@@ -301,13 +312,6 @@ export class Workbench {
       if (this.state === 'chart' && (e.target === this.chartEl || e.target === this.chartBg)) this.closeChart();
     });
     $('wb-dive').addEventListener('click', () => this.state === 'chart' && this.picked && this.dive());
-    const sonar = loadSonarConfig();
-    this.sonarColorInput.value = sonar.color;
-    this.sonarColorInput.addEventListener('input', () => {
-      const saved = saveSonarConfig({ ...loadSonarConfig(), color: this.sonarColorInput.value });
-      this.sonarColorInput.value = saved.color;
-      this.hooks.sonarColor?.(saved.color);
-    });
     window.addEventListener('resize', () => this.visible && this.resize());
   }
 
@@ -329,8 +333,11 @@ export class Workbench {
       .slice(0, SLOTS.length);
   }
 
-  /** intro: pan down from the title and drop the gear; otherwise come back to the table as it was. */
-  show(intro: boolean) {
+  /**
+   * intro: pan down from the title and drop the gear; otherwise come back to the
+   * table as it was. rise: pan the table up into view (with intro, always).
+   */
+  show(intro: boolean, rise = intro) {
     this.hooks.tutorial?.('bench');
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
@@ -355,7 +362,7 @@ export class Workbench {
     this.placed = true;
     this.time = 0;
     this.acc = 0;
-    if (intro) {
+    if (rise) {
       this.state = 'opening';
       this.panU = 0;
       this.tween(PAN_S, (u) => this.setPan(easeInOut(u)), () => (this.state = 'idle'));
@@ -364,6 +371,7 @@ export class Workbench {
       this.setPan(1);
     }
     this.placeCamera();
+    this.renderConditions(this.picked ?? this.hooks.progress().selected);
     this.last = performance.now();
     cancelAnimationFrame(this.raf);
     const loop = (now: number) => {
@@ -789,6 +797,10 @@ export class Workbench {
       }
     }
     this.shake *= Math.exp(-dt * 9);
+
+    // Refresh the field note at a low rate so the live random front stays readable
+    // without touching the chart texture or rebuilding the workbench.
+    if (this.picked && Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.renderConditions(this.picked);
 
     for (const p of this.pieces) {
       p.hover = lerp(p.hover, this.hovered === p ? 1 : 0, 1 - Math.exp(-dt * 14));
@@ -1391,6 +1403,7 @@ export class Workbench {
   private renderPlace() {
     const id = this.picked;
     this.placeEl.classList.toggle('empty', !id);
+    $('wb-place-conditions').classList.toggle('hidden', !id);
     if (!id) {
       this.previewBox.replaceChildren();
       this.hooks.preview(null);
@@ -1407,10 +1420,17 @@ export class Workbench {
     }
     const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
     $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
-    const sonar = loadSonarConfig();
-    this.sonarColorInput.value = sonar.color;
-    this.sonarLength.textContent = `${sonarLengthMeters(sonar.lengthLevel)} m cable`;
+    if (id) this.renderConditions(id);
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
+  }
+
+  private renderConditions(id: MapId) {
+    const conditions = this.hooks.conditions(id);
+    $('wb-entry-time').textContent = conditions.time;
+    $('wb-entry-temp').textContent = `${conditions.temperatureC > 0 ? '+' : ''}${conditions.temperatureC.toFixed(1)}°C`;
+    $('wb-entry-weather').textContent = conditions.weather;
+    $('wb-entry-wind').textContent = conditions.wind;
+    $('wb-entry-rain').textContent = conditions.rain;
   }
 
   /**

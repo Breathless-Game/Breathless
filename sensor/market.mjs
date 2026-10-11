@@ -12,7 +12,9 @@
 //   const market = await createMarket({ rpc, dir });
 //   http.createServer(async (req, res) => { if (await market.handle(req, res)) return; ... });
 //
-// Routes: GET /api/market/info, POST /api/market/quote, POST /api/market/sell (server mode).
+// Routes: GET /api/market/info, POST /api/market/quote, POST /api/market/sell (server mode),
+// and for selling many fish with one wallet approval (server mode): POST /api/market/quote-batch
+// { seller, assetIds } and POST /api/market/sell-batch { seller, sales: [{ assetId, transferTx }] }.
 //
 // Secrets (gitignored, mode 600, Solana CLI format, never logged; only public keys are printed):
 //   program mode  MARKET_ORACLE_KEYPAIR, default <dir>/.market-oracle.json
@@ -27,6 +29,9 @@ import { mplCore } from '@metaplex-foundation/mpl-core';
 import { mplToolbox } from '@metaplex-foundation/mpl-toolbox';
 import { mplTokenMetadata } from '@metaplex-foundation/mpl-token-metadata';
 import { HttpError, RateLimiter, isAddress } from './market-rules.mjs';
+
+/** A batch request counts as one sale-request per this many fish (at least one) against the trade limit. */
+const FISH_PER_TRADE_HIT = 5;
 import { DEFAULT_LAYOUT, layoutFromIdl } from './fish-market.mjs';
 import { createProgramMode } from './market-program-mode.mjs';
 import { createServerMode } from './market-server-mode.mjs';
@@ -119,12 +124,32 @@ export async function createMarket({
     });
   }
 
+  /** A batch already paid one trade hit to get here; bigger ones pay a little more (rounded up). */
+  function chargeBatch(ip, fish) {
+    const extra = Math.ceil(fish / FISH_PER_TRADE_HIT) - 1;
+    if (extra > 0 && !tradeLimiter.allow(ip, Date.now(), extra)) throw new HttpError(429, 'Too many sales, slow down');
+  }
+  const batchSize = (list) => (Array.isArray(list) ? list.length : 0);
+  const PROGRAM_MODE = 'Program mode: sign the quoted sell_fish transaction instead';
+
   const ROUTES = {
     'GET /api/market/info': () => mode.info(),
     'POST /api/market/quote': async (req) => mode.quote(await readJson(req)),
     'POST /api/market/sell': async (req) => {
-      if (!mode.sell) throw new HttpError(409, 'Program mode: sign the quoted sell_fish transaction instead');
+      if (!mode.sell) throw new HttpError(409, PROGRAM_MODE);
       return mode.sell(await readJson(req));
+    },
+    'POST /api/market/quote-batch': async (req, ip) => {
+      if (!mode.quoteBatch) throw new HttpError(409, 'Program mode: quote each fish with /quote');
+      const body = await readJson(req);
+      chargeBatch(ip, batchSize(body?.assetIds));
+      return mode.quoteBatch(body);
+    },
+    'POST /api/market/sell-batch': async (req, ip) => {
+      if (!mode.sellBatch) throw new HttpError(409, PROGRAM_MODE);
+      const body = await readJson(req);
+      chargeBatch(ip, batchSize(body?.sales));
+      return mode.sellBatch(body);
     },
   };
 
@@ -141,7 +166,7 @@ export async function createMarket({
         throw new HttpError(known ? 405 : 404, known ? 'Method not allowed' : 'Not found');
       }
       if (req.method === 'POST' && !tradeLimiter.allow(ip)) throw new HttpError(429, 'Too many sales, slow down');
-      send(res, 200, await fn(req));
+      send(res, 200, await fn(req, ip));
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
       const error = e instanceof HttpError ? e.message : String(e?.message ?? e).split('\n')[0].slice(0, 200);
