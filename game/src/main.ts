@@ -33,7 +33,11 @@ import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, resetDiveGear, rodTier, saveEquipment, setEquipmentPath, totalPearls, type DiveGearReset, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, biteForfeit, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { addBankedValue, bankEntry, biteForfeit, isFundsError, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
+import { GearSync } from './gear-sync';
+import { gearLevelsChanged, onGearLevelsChanged } from './gear-levels';
+import { BOAT_IDS, normalizeBoat, normalizeKit, type GearLevels } from './gear-nft';
+import { renderGearChain } from './gear-chain-ui';
 import { NftQueue } from './nft-queue';
 import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
@@ -714,6 +718,9 @@ let onGearChange = () => {};
 
 function refreshEquipment() {
   onGearChange();
+  // Every level change passes through here (bought, branch switched, a shark bite's reset): the
+  // on-chain Boat / Dive Kit sync observes it (gear-levels.ts) and compares levels itself.
+  gearLevelsChanged();
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
@@ -1688,7 +1695,7 @@ const workbench = new Workbench({
   },
   conditions: workbenchConditions,
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
-  owned: (id) => (isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1),
+  owned: ownedGearLevel,
   buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : Promise.resolve('Not upgradable here')),
   pearls: () => totalPearls(equipment),
   paths: (id) =>
@@ -1772,6 +1779,11 @@ onGearChange = () => workbench.visible && workbench.refreshGear();
 
 function isUpgradeSlot(id: UpgradeId): id is UpgradeSlot {
   return id in EQUIPMENT_TIERS;
+}
+
+/** The highest level owned of a piece (1 = the starting gear). Boat-group pieces are not sold yet, so they stay at 1. */
+function ownedGearLevel(id: UpgradeId): number {
+  return isUpgradeSlot(id) ? ownedLevel(equipment, id) : 1;
 }
 
 function isEquipmentSlot(id: UpgradeId): id is EquipmentSlot {
@@ -1860,6 +1872,46 @@ function openWorkbench() {
 // timer, poll or mint keeps running for it.
 let walletOwner: string | null = null;
 
+// ---- On-chain gear --------------------------------------------------------
+// The player's Boat and Dive Kit NFTs follow their levels in the background (gear-sync.ts): minted
+// once to the owner by the game wallet, then updated after each settled batch of changes. The
+// game never waits on it. VITE_GEAR_NFT=0 (not a secret) turns it off; local levels are the truth.
+const GEAR_NFT_ON = (import.meta.env.VITE_GEAR_NFT as string | undefined) !== '0';
+
+/** The levels the NFTs should show now, or null before a wallet's progress has loaded. */
+function gearSnapshot(): GearLevels | null {
+  if (!walletOwner) return null;
+  const branches = Object.fromEntries((Object.keys(EQUIPMENT_PATHS) as EquipmentSlot[]).map((slot) => [slot, activePath(equipment, slot)]));
+  return {
+    boat: normalizeBoat({ ship: shipyard.shipIndex, ...Object.fromEntries(BOAT_IDS.map((id) => [id, ownedGearLevel(id)])) }),
+    kit: normalizeKit({
+      rod: ownedLevel(equipment, 'rod'),
+      reel: ownedLevel(equipment, 'reel'),
+      net: ownedLevel(equipment, 'net'),
+      fins: ownedLevel(equipment, 'fins'),
+      tank: ownedLevel(equipment, 'tank'),
+      lamp: ownedLevel(equipment, 'lamp'),
+      sonar: ownedLevel(equipment, 'sonar'),
+      branches,
+    }),
+  };
+}
+
+const gearChainCard = document.getElementById('wb-chain')!;
+const gearSync = new GearSync({
+  key: () => (walletState().owner ? storageKey('gear-nft') : null),
+  store: localStorage,
+  session: () => walletState().session,
+  snapshot: gearSnapshot,
+  loadChain: () => import('./chain'),
+  isFundsError,
+  timers: { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id) },
+  changed: () => renderGearChain(gearChainCard, GEAR_NFT_ON ? [gearSync.status('boat'), gearSync.status('kit')] : []),
+  hidden: () => document.hidden,
+});
+// Every level change (bought, branch switched, ship equipped, a penalty's reset) reaches the sync.
+onGearLevelsChanged(() => gearSync.levelsChanged());
+
 const diving = () => phase !== 'menu';
 
 /** What logging out right now would cost, or null when nothing. */
@@ -1879,6 +1931,7 @@ async function logOut() {
     // End a dive the way Main menu does: the hold still goes in this wallet's health log.
     if (diving()) goToMenu();
     nftQueue.stop();
+    gearSync.stop();
     await disconnectWallet(); // drops the owner: the listener below reloads
   } finally {
     loggingOut = false;
@@ -1901,6 +1954,8 @@ function loadWalletProgress() {
   shipyard.reload(); shipBonus = shipyard.bonus; refreshEquipment();
   // Resume fish this wallet left queued to mint or sell.
   nftQueue.start();
+  // And bring its Boat and Dive Kit NFTs up to date (minting them the first time).
+  if (GEAR_NFT_ON) gearSync.start();
 }
 
 onWalletChange((s) => {
@@ -2279,6 +2334,8 @@ Object.assign(window, {
   stormSea,
   sharkPack,
   nftQueue,
+  /** The on-chain Boat and Dive Kit sync: gearSync.status('kit'), gearSync.log. */
+  gearSync,
   /** The deep sonar mesh; deploySonar() is what V does during a dive with the sonar packed. */
   sonar,
   deploySonar,
