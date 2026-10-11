@@ -6,6 +6,11 @@ import type { FishSpec, Rarity } from './fish';
 //                                      └→ failed → retried with backoff, or by hand
 // Banking pays nothing; Pearls come only from selling a minted fish to the market.
 
+/** A Pearl amount as text, pluralised: "1 Pearl", "0 Pearls", "12 Pearls". */
+export function pearls(n: number): string {
+  return `${n} ${n === 1 ? 'Pearl' : 'Pearls'}`;
+}
+
 export type NftStatus = 'pending' | 'minting' | 'minted' | 'failed';
 
 /** A fish in the bank (`deepbreath.bank`), with its NFT and sale state. */

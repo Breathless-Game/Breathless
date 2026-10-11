@@ -28,7 +28,7 @@ import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
+import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
@@ -529,7 +529,7 @@ const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
   sold(fish, result) {
     hud.setBank(bank);
-    hud.toast(fish, `SOLD · +${result.pearls} PEARLS`);
+    hud.toast(fish, `SOLD · +${pearls(result.pearls).toUpperCase()}`);
     void syncPearls(result.pearls);
   },
 });
@@ -599,8 +599,8 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net') {
   }
   const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
-    gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
-    hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
+    gear.showNotice(`Need ${pearls(next.cost - totalPearls(equipment))} more.`);
+    hud.message(`Need ${pearls(next.cost - totalPearls(equipment))} more`, 1500);
     return;
   }
   // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
@@ -1184,7 +1184,9 @@ const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
 mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, 'Not connected');
-for (const id of ['pause-wallet', 'collection-wallet', 'wallet-chip']) mountWalletRow(document.getElementById(id)!, logoutHooks);
+mountWalletRow(document.getElementById('pause-wallet')!, logoutHooks);
+mountWalletRow(document.getElementById('collection-wallet')!, logoutHooks, { empty: 'Not connected', explorer: true });
+mountWalletRow(document.getElementById('wallet-chip')!, logoutHooks, { menu: true });
 
 function openWorkbench() {
   if (workbench.visible || loginGate.visible) return;

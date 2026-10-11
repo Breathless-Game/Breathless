@@ -1,6 +1,6 @@
 import { connectWallet, onWalletChange, walletState, type WalletState } from './wallet';
 import { onWalletsChange, ownerWallets } from './owner-wallets';
-import { LAST_WALLET_KEY, devnetHint, isUserRejection, shortAddress, walletTiles, type WalletTile } from './wallet-storage';
+import { LAST_WALLET_KEY, devnetHint, explorerAddress, isUserRejection, shortAddress, walletTiles, type WalletTile } from './wallet-storage';
 import phantomLogo from './wallet-logos/phantom.svg';
 import metamaskLogo from './wallet-logos/metamask.svg';
 import solflareLogo from './wallet-logos/solflare.svg';
@@ -168,16 +168,63 @@ export interface LogoutHooks {
   logOut(): Promise<void>;
 }
 
+export interface WalletRowOptions {
+  /** What to show while logged out; without it the row hides itself. */
+  empty?: string;
+  /** A compact account chip: the address is a button that opens a menu (Copy address, Explorer, Log out). */
+  menu?: boolean;
+  /** Link the address on Solana Explorer (devnet), beside it. */
+  explorer?: boolean;
+}
+
+/** Keys a focused row control handles itself: the game's window handlers (Enter starts, arrows swim) must not see them. */
+const ROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' ']);
+
 /**
- * The wallet's logo, the connected address and a Log out button, kept current. With a dive under
- * way the button asks once more, inline. `empty`: what to show while logged
- * out; without it the row hides itself.
+ * The wallet's logo, the connected address and Log out, kept current. With a dive under way Log out
+ * asks once more, inline. `menu`: Log out (with Copy address and Explorer) sits in a small menu the
+ * address opens, for the title chip. `empty` (or a plain string): what to show while logged out;
+ * without it the row hides itself.
  */
-export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, empty?: string) {
+export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, options: WalletRowOptions | string = {}) {
+  const { empty, menu = false, explorer = false } = typeof options === 'string' ? { empty: options } : options;
   let confirming: string | null = null;
+  /** The account menu (menu mode), while open. */
+  let open: { trigger: HTMLButtonElement; list: HTMLElement } | null = null;
+  let copiedTimer = 0;
+
+  const menuItems = () => (open ? [...open.list.querySelectorAll<HTMLElement>('[role="menuitem"]')] : []);
+  const closeMenu = (refocus: boolean) => {
+    if (!open) return;
+    const { trigger, list } = open;
+    open = null;
+    list.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    el.classList.remove('wallet-menu-open');
+    if (refocus) trigger.focus();
+  };
+  const openMenu = (trigger: HTMLButtonElement, list: HTMLElement, focus: 'first' | 'last' | null) => {
+    open = { trigger, list };
+    list.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    el.classList.add('wallet-menu-open');
+    const all = menuItems();
+    if (focus) (focus === 'first' ? all[0] : all[all.length - 1])?.focus();
+  };
+
+  /** Log out, or ask first when it would cost something (a dive in progress). */
+  const askLogout = (btn: HTMLButtonElement) => {
+    confirming = hooks.warning();
+    if (confirming === null) go(btn);
+    else render();
+  };
+
   const render = () => {
     const s: WalletState = walletState();
+    open = null;
+    window.clearTimeout(copiedTimer);
     el.replaceChildren();
+    el.classList.remove('wallet-menu-open');
     el.classList.toggle('hidden', !s.owner && empty === undefined);
     el.classList.toggle('wallet-confirming', confirming !== null);
     if (!s.owner) {
@@ -198,20 +245,116 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, empty?: stri
       no.focus();
       return;
     }
+    const owner = s.owner;
     const name = s.wallet?.name ?? 'Wallet';
     const mark = logo(name, s.wallet?.icon);
+    const addr = make('span', 'wallet-addr', shortAddress(owner));
+    if (menu) {
+      el.append(...accountMenu(owner, name, mark, addr));
+      return;
+    }
     mark.title = name;
-    const addr = make('span', 'wallet-addr', shortAddress(s.owner));
-    addr.title = `${name} · ${s.owner}\nTo switch, pick another account in ${name}.`;
+    addr.title = `${name} · ${owner}\nTo switch, pick another account in ${name}.`;
+    el.append(mark, addr);
+    if (explorer) {
+      const a = make('a', 'wallet-explorer', 'Explorer ↗');
+      a.href = explorerAddress(owner);
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.title = 'View this wallet on Solana Explorer (devnet)';
+      el.append(a);
+    }
     const btn = make('button', 'mini wallet-logout', 'Log out');
     btn.setAttribute('aria-description', 'Your progress stays saved for this wallet.');
-    btn.addEventListener('click', () => {
-      confirming = hooks.warning();
-      if (confirming === null) go(btn);
-      else render();
-    });
-    el.append(mark, addr, btn);
+    btn.addEventListener('click', () => askLogout(btn));
+    el.append(btn);
   };
+
+  /** The chip: a button with the logo and address, and the menu it opens. */
+  const accountMenu = (owner: string, name: string, mark: HTMLElement, addr: HTMLElement) => {
+    const trigger = make('button', 'wallet-trigger');
+    trigger.type = 'button';
+    trigger.setAttribute('aria-haspopup', 'menu');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('aria-label', `${name} ${shortAddress(owner)}: account menu`);
+    trigger.title = `${name} · ${owner}`;
+    trigger.append(mark, addr, make('span', 'wallet-caret'));
+
+    const list = make('div', 'wallet-menu');
+    list.setAttribute('role', 'menu');
+    list.setAttribute('aria-label', `${name} account`);
+    list.hidden = true;
+    const head = make('div', 'wallet-menu-head');
+    head.append(make('span', 'wallet-menu-name', name), make('span', 'wallet-menu-addr', shortAddress(owner)));
+    const item = <K extends 'button' | 'a'>(tag: K, label: string, extra = '') => {
+      const node = make(tag, `wallet-menu-item${extra}`, label);
+      node.setAttribute('role', 'menuitem');
+      node.tabIndex = -1;
+      return node;
+    };
+    const copy = item('button', 'Copy address');
+    copy.addEventListener('click', () => {
+      const done = (label: string) => {
+        copy.textContent = label;
+        window.clearTimeout(copiedTimer);
+        copiedTimer = window.setTimeout(() => (copy.textContent = 'Copy address'), 1400);
+      };
+      // Some embedded browsers refuse the async clipboard: fall back to a hidden selection (kept
+      // inside the row, so focusing it doesn't count as leaving the menu).
+      const legacyCopy = () => {
+        const t = document.createElement('textarea');
+        t.value = owner;
+        t.readOnly = true;
+        t.className = 'wallet-copy-buffer';
+        el.append(t);
+        t.select();
+        let ok = false;
+        try {
+          ok = document.execCommand('copy');
+        } catch {}
+        t.remove();
+        copy.focus();
+        done(ok ? 'Copied ✓' : 'Copy failed');
+      };
+      if (!navigator.clipboard) return legacyCopy();
+      navigator.clipboard.writeText(owner).then(() => done('Copied ✓'), legacyCopy);
+    });
+    const view = item('a', 'View on Explorer ↗');
+    view.href = explorerAddress(owner);
+    view.target = '_blank';
+    view.rel = 'noopener';
+    view.addEventListener('click', () => closeMenu(false));
+    const out = item('button', 'Log out', ' wallet-menu-danger wallet-logout');
+    out.setAttribute('aria-description', 'Your progress stays saved for this wallet.');
+    out.addEventListener('click', () => askLogout(out));
+    list.append(head, copy, view, make('div', 'wallet-menu-sep'), out);
+
+    trigger.addEventListener('click', () => (open ? closeMenu(false) : openMenu(trigger, list, null)));
+    trigger.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        openMenu(trigger, list, e.key === 'ArrowDown' ? 'first' : 'last');
+      } else if ((e.key === 'Enter' || e.key === ' ') && !open) {
+        // Opened from the keyboard: focus goes into the menu.
+        e.preventDefault();
+        openMenu(trigger, list, 'first');
+      }
+    });
+    list.addEventListener('keydown', (e) => {
+      const all = menuItems();
+      const i = all.indexOf(document.activeElement as HTMLElement);
+      const to = (n: number) => all[(n + all.length) % all.length]?.focus();
+      if (e.key === 'ArrowDown') to(i + 1);
+      else if (e.key === 'ArrowUp') to(i - 1);
+      else if (e.key === 'Home') to(0);
+      else if (e.key === 'End') to(all.length - 1);
+      else if (e.key === 'Tab') return closeMenu(false);
+      else return;
+      e.preventDefault();
+    });
+    return [trigger, list];
+  };
+
   const go = (btn: HTMLButtonElement) => {
     btn.disabled = true;
     btn.textContent = 'Logging out…';
@@ -221,10 +364,14 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, empty?: stri
       render();
     });
   };
-  // A confirm left behind (a click or focus elsewhere, Esc) quietly backs out.
+  // An open menu or a confirm left behind (a click or focus elsewhere, Esc) quietly backs out.
   const dismiss = (e: Event) => {
-    if (confirming === null) return;
+    if (confirming === null && !open) return;
     if (e.type !== 'keydown' && el.contains(e.target as Node | null)) return;
+    if (open) {
+      if (e.type === 'keydown') e.stopPropagation(); // Esc closes the menu, not the screen behind it
+      return closeMenu(e.type === 'keydown');
+    }
     confirming = null;
     render();
   };
@@ -233,6 +380,7 @@ export function mountWalletRow(el: HTMLElement, hooks: LogoutHooks, empty?: stri
   document.addEventListener('keydown', (e) => e.key === 'Escape' && dismiss(e), true);
   // The title and the workbench read clicks off the window: keep this row's out of them.
   el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('keydown', (e) => ROW_KEYS.has(e.key) && e.stopPropagation());
   render();
   onWalletChange(render);
 }
