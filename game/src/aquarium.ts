@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { coreAsset } from './explorer-links';
-import { fishValue, RARITY, zoneForDepth } from './fish';
+import { fishValue, rarityLabel, RARITY, zoneForDepth, zoneName } from './fish';
+import { onLangChange, pickName, t } from './i18n';
 import { FISH_FOODS, fishFood, type FishFoodDef, type FishFoodId } from './fish-food';
 import { buildFishFoodModel } from './fish-food-models';
 import { MAPS, type MapId } from './maps';
@@ -42,7 +43,13 @@ const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 
 export interface AquariumHooks {
   /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
   pan(u: number): void;
-  buyFood(food: FishFoodDef): Promise<boolean>;
+  /**
+   * Pay for one food in on-chain PEARL, like gear upgrades.
+   * Resolves with the PEARL burned, or null when nothing was spent: the fish is fed only then.
+   */
+  buyFood(food: FishFoodDef): Promise<number | null>;
+  /** Spendable Pearls (the cached on-chain PEARL balance), for the feed button's affordability state. */
+  pearls(): number;
   message(text: string): void;
 }
 
@@ -138,6 +145,7 @@ export class Aquarium {
   private stage = this.root.querySelector<HTMLElement>('.aq-stage')!;
   private bar = this.root.querySelector<HTMLElement>('.aq-bar')!;
   private canvas = $<HTMLCanvasElement>('aq-canvas');
+  private tankEl = this.canvas.parentElement!;
   private ctx = this.canvas.getContext('2d')!;
   private tabs = $('aq-tabs');
   private label = $('aq-label');
@@ -162,6 +170,11 @@ export class Aquarium {
   private tween: { t: number; dur: number; from: number; to: number } | null = null;
   private yaw = 0; // radians the tank is turned; + brings its right side toward you
   private yawTarget = 0;
+  // 0 is the normal eye-level view, 1 is a plan view looking down through the water.
+  // It eases between the two so a double-click feels like turning the tank over rather
+  // than snapping the fish and glass to a new projection.
+  private view = 0;
+  private viewTarget = 0;
   private aquariumState: AquariumState = { growth: {}, light: { color: DEFAULT_AQUARIUM_LIGHT } };
   private lightInput = $<HTMLInputElement>('aq-light');
   private lightRgb = this.parseRgb(DEFAULT_AQUARIUM_LIGHT);
@@ -178,6 +191,10 @@ export class Aquarium {
     private bank: BankedFish[],
     private hooks: AquariumHooks,
   ) {
+    onLangChange(() => {
+      this.renderBar();
+      if (this.picked) this.pick(this.picked);
+    });
     $('aq-close').addEventListener('click', () => this.close());
     $('aq-prev').addEventListener('click', () => this.step(-1));
     $('aq-next').addEventListener('click', () => this.step(1));
@@ -210,6 +227,14 @@ export class Aquarium {
     });
     this.canvas.addEventListener('pointerleave', () => (this.hover = null));
     this.canvas.addEventListener('click', (e) => this.pick(this.fishAt(e)));
+    this.tankEl.addEventListener('dblclick', (e) => {
+      // The info card sits above the canvas. Let a double-click anywhere on the tank
+      // switch views, but keep its buttons and links as normal controls.
+      if ((e.target as HTMLElement).closest('#aq-card, button, a, input')) return;
+      e.preventDefault();
+      this.viewTarget = this.viewTarget > 0.5 ? 0 : 1;
+      this.canvas.classList.toggle('top-view', this.viewTarget > 0.5);
+    });
     // The tank sways gently after the mouse, like a card tilting under it: the side
     // the mouse is on leans away a little.
     window.addEventListener('pointermove', (e) => {
@@ -345,6 +370,8 @@ export class Aquarium {
     if (this.open) return;
     if (this.state === 'closed') {
       this.yaw = this.yawTarget = 0;
+      this.view = this.viewTarget = 0;
+      this.canvas.classList.remove('top-view');
       this.favorites = loadFavorites(); // per wallet, so read fresh each time
       this.aquariumState = loadAquariumState(undefined, this.stateKey());
       this.lightInput.value = this.aquariumState.light.color;
@@ -465,7 +492,7 @@ export class Aquarium {
       const b = document.createElement('button');
       b.className = 'mini';
       b.textContent = `${i + 1}`;
-      b.title = `Tank ${i + 1}`;
+      b.title = t(`Tank ${i + 1}`, `鱼缸 ${i + 1}`);
       b.classList.toggle('on', this.tank === i);
       b.addEventListener('click', () => this.setTank(i));
       return b;
@@ -473,7 +500,7 @@ export class Aquarium {
     const fav = document.createElement('button');
     fav.className = 'mini fav';
     fav.textContent = '★';
-    fav.title = 'Favorites tank';
+    fav.title = t('Favorites tank', '收藏鱼缸');
     fav.classList.toggle('on', this.tank === 'fav');
     fav.addEventListener('click', () => this.setTank('fav'));
     this.tabs.replaceChildren(...tabs, fav);
@@ -481,18 +508,18 @@ export class Aquarium {
 
     const n = this.fishIn(this.tank).length;
     if (this.tank === 'fav') {
-      this.label.textContent = `★ Favorites · 收藏 · ${n} / ${TANK_SIZE}`;
+      this.label.textContent = t(`★ Favorites · ${n} / ${TANK_SIZE}`, `★ 收藏 · ${n} / ${TANK_SIZE}`);
     } else {
       const first = this.tank * TANK_SIZE;
-      this.label.textContent = `Tank ${this.tank + 1} · 鱼缸 · ${n ? `#${first + 1}–${first + n}` : 'empty'} · ${n} / ${TANK_SIZE}`;
+      this.label.textContent = t(`Tank ${this.tank + 1} · ${n ? `#${first + 1}–${first + n}` : 'empty'} · ${n} / ${TANK_SIZE}`, `鱼缸 ${this.tank + 1} · ${n ? `#${first + 1}–${first + n}` : '空'} · ${n} / ${TANK_SIZE}`);
     }
     this.empty.classList.toggle('hidden', n > 0);
     this.empty.textContent =
       this.tank === 'fav'
-        ? 'No favorites yet. Click a fish in a tank and star it to move it here.'
+        ? t('No favorites yet. Click a fish in a tank and star it to move it here.', '还没有收藏。点一条鱼并加星，它就会来到这里。')
         : this.bank.length
-          ? 'This tank is empty.'
-          : 'No fish yet. Dive, and what you bring home swims here.';
+          ? t('This tank is empty.', '这个鱼缸是空的。')
+          : t('No fish yet. Dive, and what you bring home swims here.', '还没有鱼。下潜一趟，带回家的鱼会游在这里。');
   }
 
   // ---- Fish -------------------------------------------------------------
@@ -575,14 +602,23 @@ export class Aquarium {
    * is at scale 1 and the back wall at BACK_SCALE, and turning swings the box
    * about its middle.
    */
-  private cam(x: number, z: number) {
+  private cam(x: number, z: number, view = this.view) {
     const f = (FRONT.x1 - FRONT.x0) * this.w;
     const depth = f * (1 / BACK_SCALE - 1);
     const X = (x - 0.5) * f;
     const Z = (z - 0.5) * depth;
     const c = Math.cos(this.yaw);
     const s = Math.sin(this.yaw);
-    return { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c, f };
+    const front = { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c, f };
+    if (view <= 0) return front;
+    // In plan view screen depth is the tank's vertical position. X remains the
+    // horizontal position so sorting still puts plants/fish nearest the glass first.
+    const top = { X: (x - 0.5) * f, d: 1 + (1 - z) * f * 0.5, f };
+    return {
+      X: lerp(front.X, top.X, view),
+      d: lerp(front.d, top.d, view),
+      f,
+    };
   }
 
   /**
@@ -591,16 +627,40 @@ export class Aquarium {
    * grows out of the canvas.
    */
   private proj(x: number, y: number, z: number) {
-    const { X, d, f } = this.cam(x, z);
-    const near = Math.min(this.cam(0, 0).d, this.cam(1, 0).d);
-    const s = (f / d) * Math.min(1, near / f);
-    const fy = lerp(FRONT.y0, FRONT.y1, y) * this.h;
-    const vy = VANISH_Y * this.h;
-    return { x: this.w / 2 + X * s, y: vy + (fy - vy) * s, s };
+    const f = (FRONT.x1 - FRONT.x0) * this.w;
+    const depth = f * (1 / BACK_SCALE - 1);
+    const X = (x - 0.5) * f;
+    const Z = (z - 0.5) * depth;
+    const c = Math.cos(this.yaw);
+    const s = Math.sin(this.yaw);
+    const frontCam = { X: X * c + Z * s, d: f + depth / 2 - X * s + Z * c };
+    // Use the unblended camera here: the front projection must keep its scale
+    // stable while the tank eases toward the overhead view.
+    const frontNear = Math.min(this.cam(0, 0, 0).d, this.cam(1, 0, 0).d);
+    const frontScale = (f / frontCam.d) * Math.min(1, frontNear / f);
+    const front = {
+      x: this.w / 2 + frontCam.X * frontScale,
+      y: VANISH_Y * this.h + (lerp(FRONT.y0, FRONT.y1, y) * this.h - VANISH_Y * this.h) * frontScale,
+      s: frontScale,
+    };
+    if (this.view <= 0) return front;
+
+    // A top-down projection uses z as screen depth and y as a small lift toward
+    // the viewer. This keeps the fish and plants readable while exposing the tank floor.
+    const topDepth = (FRONT.y1 - FRONT.y0) * this.h;
+    const topX = this.w * (FRONT.x0 + x * (FRONT.x1 - FRONT.x0));
+    const topY = this.h * (FRONT.y0 + (1 - z) * (FRONT.y1 - FRONT.y0)) + (0.5 - y) * topDepth * 0.18;
+    const top = { x: topX, y: topY, s: lerp(1.02, 0.86, clamp(y, 0, 1)) };
+    return {
+      x: lerp(front.x, top.x, this.view),
+      y: lerp(front.y, top.y, this.view),
+      s: lerp(front.s, top.s, this.view),
+    };
   }
 
   /** Whether a side wall (x = 0 or 1) faces the eye from outside, so it's in front of the fish. */
   private sideInFront(side: 0 | 1) {
+    if (this.view > 0.5) return false;
     const wall = this.cam(side, 0.5);
     const mid = this.cam(0.5, 0.5);
     // The eye is at the origin: is it on the wall's outward side?
@@ -633,7 +693,7 @@ export class Aquarium {
     this.card.classList.toggle('hidden', !s);
     if (!s) return;
     const f = s.fish;
-    const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
+    const where = f.map && f.map in MAPS ? pickName(MAPS[f.map as MapId]) : zoneName(zoneForDepth(f.depthM));
     const fav = this.favorites.has(f.id);
     const img = document.createElement('img');
     img.src = fishIcon(f);
@@ -643,7 +703,7 @@ export class Aquarium {
     name.textContent = nftName(f);
     const rarity = document.createElement('div');
     rarity.className = 'aq-rarity';
-    rarity.textContent = RARITY[f.rarity].label;
+    rarity.textContent = rarityLabel(f.rarity);
     rarity.style.color = RARITY[f.rarity].color;
     const meta = document.createElement('div');
     meta.className = 'small muted';
@@ -655,17 +715,17 @@ export class Aquarium {
     if (feeds > 0) {
       const grown = document.createElement('div');
       grown.className = 'aq-growth';
-      grown.textContent = `Grown +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`;
+      grown.textContent = t(`Grown +${Math.round((scale - 1) * 100)}% · fed ${feeds}`, `已长大 +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`);
       body.append(grown);
     }
     const foodHint = document.createElement('div');
     foodHint.className = 'aq-card-food-hint';
-    foodHint.textContent = 'Choose food beside the tank · 在鱼缸旁选择鱼食';
+    foodHint.textContent = t('Choose food beside the tank', '在鱼缸旁选择鱼食');
     body.append(foodHint);
     const star = document.createElement('button');
     star.className = fav ? 'mini' : 'mini primary';
     const full = !fav && this.favoriteFish().length >= TANK_SIZE;
-    star.textContent = fav ? '☆ Unfavorite · 移出收藏' : full ? 'Favorites tank is full' : '★ Favorite · 收藏';
+    star.textContent = fav ? t('☆ Unfavorite', '☆ 移出收藏') : full ? t('Favorites tank is full', '收藏鱼缸已满') : t('★ Favorite', '★ 收藏');
     star.disabled = full;
     star.addEventListener('click', () => this.toggleFavorite(f));
     const actions = document.createElement('div');
@@ -677,14 +737,14 @@ export class Aquarium {
       link.href = coreAsset(f.assetId);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.textContent = 'View NFT on chain ↗';
+      link.textContent = t('View NFT on chain ↗', '在链上查看 NFT ↗');
       link.addEventListener('click', (e) => e.stopPropagation());
       actions.append(link);
     }
     const x = document.createElement('button');
     x.className = 'mini';
     x.textContent = '✕';
-    x.title = 'Close';
+    x.title = t('Close', '关闭');
     x.addEventListener('click', () => this.pick(null));
     this.card.replaceChildren(img, body, actions, x);
   }
@@ -698,7 +758,7 @@ export class Aquarium {
     const food = fishFood(this.selectedFood);
     const fish = this.fishIn(this.tank);
     if (!fish.length) {
-      this.hooks.message('There are no fish in this tank · 当前鱼缸没有鱼');
+      this.hooks.message(t('There are no fish in this tank', '当前鱼缸没有鱼'));
       return;
     }
     if (this.feeding) return;
@@ -721,8 +781,8 @@ export class Aquarium {
     }
     this.feeding = true;
     try {
-      const purchased = await this.hooks.buyFood(food);
-      if (!purchased) return;
+      const paid = await this.hooks.buyFood(food);
+      if (!paid) return;
       this.aquariumState = { ...next, light: { ...this.aquariumState.light } };
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
       this.foodDrop = { x: 0.5, y: SURFACE + 0.04, z: 0.25, life: 4.2, count: fedCount };
@@ -745,7 +805,7 @@ export class Aquarium {
         });
       }
       this.feederStatus.textContent = `${fedCount} fish are rushing in · ${food.nameZh} 正在下落`;
-      this.hooks.message(`${fedCount} fish rushed in for food · 鱼群抢食中`);
+      this.hooks.message(t(`${fedCount} fish rushed in for food · ${spentText(paid)}`, `${fedCount} 条鱼正在抢食 · ${spentText(paid)}`));
       if (this.picked) this.pick(this.picked);
     } finally {
       this.feeding = false;
@@ -801,6 +861,8 @@ export class Aquarium {
       this.foodPreview.renderer.render(this.foodPreview.scene, this.foodPreview.camera);
     }
     this.yaw += (this.yawTarget - this.yaw) * Math.min(1, dt * YAW_EASE);
+    this.view += (this.viewTarget - this.view) * Math.min(1, dt * 4.5);
+    if (Math.abs(this.viewTarget - this.view) < 0.001) this.view = this.viewTarget;
     this.slosh = Math.max(0, this.slosh - dt * 0.35);
     if (this.foodDrop) {
       this.foodDrop.life -= dt;
@@ -1083,4 +1145,9 @@ export class Aquarium {
     ctx.lineWidth = 1;
     ctx.stroke();
   }
+}
+
+/** What a feeding cost: on-chain PEARL burned. */
+export function spentText(burned: number): string {
+  return `−${burned} PEARL`;
 }

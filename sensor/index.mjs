@@ -31,6 +31,7 @@ import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector } from './breath-detector.mjs';
 import { loadJpegDecoder } from './decode.mjs';
 import { FrameFormat, LatestFrameDecoder, parseFrame } from './frames.mjs';
+import { createGearHandler } from './nft-gear.mjs';
 import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
@@ -520,6 +521,8 @@ if (SERVE) {
   // Fish NFT metadata and art, generated from the URL (nft-meta.mjs). PUBLIC_ORIGIN overrides the
   // origin its JSON points at; by default that is the request's Host.
   const nft = createNftHandler({ log });
+  // The Boat and Dive Kit NFTs' metadata and cards (nft-gear.mjs), before `nft`, which 404s other /api/nft/ paths.
+  const gear = createGearHandler();
   // Fish numbers (#0042) for new mints, POST /api/nft/serial (nft-serial.mjs), counted in the market
   // dir (startMarket has created it by now). Before `nft`, which answers every other /api/nft/ path.
   const serials = createSerialHandler({ file: join(marketDir(), SERIAL_FILE), clientIp, log });
@@ -531,6 +534,7 @@ if (SERVE) {
       } catch {} // the static handler answers 400
       if (pathname.startsWith('/api/')) {
         if (await serials(req, res)) return;
+        if (await gear(req, res)) return;
         if (await nft(req, res)) return;
         if (market && (await market.handle(req, res))) return;
         // Never fall through to the index.html fallback: the game would read that as a market answer.

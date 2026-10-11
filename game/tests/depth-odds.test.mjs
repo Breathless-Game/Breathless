@@ -60,14 +60,14 @@ test('P(rarity >= k) never decreases with depth, for every k', () => {
   }
 });
 
-test('epic, legendary and mythic are gated behind 15, 30 and 50 m', () => {
-  for (let depth = -5; depth <= 60; depth += 0.25) {
+test('epic, legendary and mythic are gated behind 40, 80 and 80 m', () => {
+  for (let depth = -5; depth <= 200; depth += 0.25) {
     const [, , , epic, legendary, mythic] = weights(depth);
-    if (depth <= 15) assert.equal(epic, 0, `epic at ${depth} m`);
+    if (depth <= 40) assert.equal(epic, 0, `epic at ${depth} m`);
     else assert.ok(epic > 0, `epic missing at ${depth} m`);
-    if (depth <= 30) assert.equal(legendary, 0, `legendary at ${depth} m`);
+    if (depth <= 80) assert.equal(legendary, 0, `legendary at ${depth} m`);
     else assert.ok(legendary > 0, `legendary missing at ${depth} m`);
-    if (depth <= 50) assert.equal(mythic, 0, `mythic at ${depth} m`);
+    if (depth <= 80) assert.equal(mythic, 0, `mythic at ${depth} m`);
     else assert.ok(mythic > 0, `mythic missing at ${depth} m`);
   }
 });
@@ -86,7 +86,7 @@ test('weights interpolate linearly between anchors', () => {
   for (let k = 0; k < ORDER.length; k++) {
     assert.ok(Math.abs(w65[k] - (w50[k] + w80[k]) / 2) < EPS, `${ORDER[k]} at 65 m`);
   }
-  assert.ok(Math.abs(weights(275)[5] - 2.25) < EPS);
+  assert.ok(Math.abs(weights(275)[5] - 8) < EPS);
 });
 
 test('zone names follow the depth bands, with no bottom below the Trench', () => {

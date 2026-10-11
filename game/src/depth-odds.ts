@@ -14,19 +14,18 @@ type Weights = [common: number, uncommon: number, rare: number, epic: number, le
 // row sums to 100. Between anchors the weights are linearly interpolated;
 // below the last anchor they stay constant.
 //
-// Gates: epic only below 15 m, legendary only below 30 m, mythic only below
-// 50 m. The anchors are spaced for the measured ~7.75 m/s swim speed: a 30 s
-// hold reaches ~115 m and back with no fishing, 60 s ~230 m. Casual players
-// fish ~40–80 m (legendary+ 0.5–1.5%), strong ones 120–200 m (3–6%).
+// Gates: rare below 18 m, epic below 40 m, legendary below 80 m,
+// mythic below 80 m. Higher tiers require progressively deeper dives.
 export const RARITY_BY_DEPTH: [depthM: number, weights: Weights][] = [
-  [0, [90, 9.5, 0.5, 0, 0, 0]],
-  [15, [80, 17, 3, 0, 0, 0]],
-  [30, [68, 24, 7, 1, 0, 0]],
-  [50, [58, 28, 10.5, 3, 0.5, 0]],
-  [80, [48, 31, 14, 5.5, 1.3, 0.2]],
-  [120, [39, 32, 18, 8, 2.4, 0.6]],
-  [200, [30, 30, 22, 12, 4.5, 1.5]],
-  [350, [22, 26, 25, 16.5, 7.5, 3]],
+  [0, [92, 8, 0, 0, 0, 0]],
+  [18, [75, 25, 0, 0, 0, 0]],
+  [40, [55, 32, 13, 0, 0, 0]],
+  [50, [48, 33, 16, 3, 0, 0]],
+  [80, [35, 34, 24, 7, 0, 0]],
+  [120, [9, 27, 30, 17, 12, 5]],
+  [150, [3, 24, 33, 20.6, 14, 5.4]],
+  [200, [0, 17, 34, 26, 17, 6]],
+  [350, [0, 6, 30, 31, 23, 10]],
 ];
 
 function weightsAt(depthM: number): readonly number[] {

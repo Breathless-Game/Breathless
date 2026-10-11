@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { EQUIPMENT_TIERS, ROD_TIERS, type UpgradeSlot } from './equipment';
+import { tierEffect } from './equipment-i18n';
+import { lang, pickName } from './i18n';
 import { buildDeepSonar } from './deep-sonar';
+import { loadSonarConfig } from './sonar-config';
 import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
@@ -33,6 +36,30 @@ export interface UpgradeDef {
 function fromTiers(slot: UpgradeSlot): Pick<UpgradeDef, 'effects' | 'prices'> {
   const t = EQUIPMENT_TIERS[slot];
   return { effects: [t[0].effect, t[1].effect, t[2].effect], prices: [t[0].cost, t[1].cost, t[2].cost] };
+}
+
+/** Chinese effect lines for upgrades whose text is not read from equipment.ts. */
+const EFFECTS_ZH: Partial<Record<UpgradeId, readonly [string, string, string]>> = {
+  bait: ['咬钩等待 ×1.0', '咬钩等待 ×0.8', '咬钩等待 ×0.6'],
+  boat: ['航程 2 小时 · 船体 3', '航程 1 小时 · 船体 5', '航程 30 分钟 · 船体 8'],
+  boatSpeed: ['航程 2 小时', '航程 1 小时', '航程 30 分钟'],
+  boatHull: ['耐久 3', '耐久 5', '耐久 8'],
+  boatDeck: ['1 根鱼竿', '2 根鱼竿', '3 根鱼竿'],
+};
+
+/** Display name of an upgrade in the current UI language. */
+export function upgradeName(def: UpgradeDef): string {
+  return pickName(def);
+}
+
+/** Display effect line (level 1-3) of an upgrade in the current UI language. */
+export function upgradeEffect(def: UpgradeDef, level: number): string {
+  const i = Math.max(0, Math.min(2, level - 1));
+  if (lang() !== 'zh') return def.effects[i];
+  if (def.id === 'net') return `容纳 ${ROD_TIERS[i].capacity} 条鱼`;
+  const fixed = EFFECTS_ZH[def.id];
+  if (fixed) return fixed[i];
+  return tierEffect(def.id as Exclude<UpgradeSlot, 'net'>, i + 1);
 }
 
 export const UPGRADES: UpgradeDef[] = [
@@ -110,7 +137,7 @@ function buildBoat(level: UpgradeLevel): THREE.Group {
 
 /** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
 function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
-  const group = buildDeepSonar({ lengthLevel: level, detail: 2, startsCarried: false }).group;
+  const group = buildDeepSonar({ color: loadSonarConfig().color, lengthLevel: level, detail: 2, startsCarried: false }).group;
   const halos: THREE.Mesh[] = [];
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshBasicMaterial) halos.push(object);

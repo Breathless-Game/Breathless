@@ -26,3 +26,4 @@
 @media(max-width:750px){.shipyard h1 span{display:block;margin:6px 0 0}.shipyard-slots button>span{display:block;font-size:8px}.shipyard-slots button{min-height:125px}}
 .shipyard .shipyard-translation{display:block;font-size:11px;color:#c0d8df;line-height:1.5;margin-top:4px;letter-spacing:0;font-weight:400}
 @media(max-width:750px){.shipyard h1 span{display:block;margin:6px 0 0}.shipyard-slots button>span{display:block;font-size:8px}.shipyard-slots button{min-height:125px}}
+.shipyard .shipyard-shell{zoom:.85}

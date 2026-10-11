@@ -57,6 +57,15 @@ function useKeypair(u, file, label, log) {
   u.use(keypairIdentity(u.eddsa.createKeypairFromSecretKey(secret)));
 }
 
+/** The fish collection server mode created in this dir, if any (program mode then only buys its fish). */
+function savedFishCollection(dir) {
+  try {
+    return JSON.parse(readFileSync(path.join(dir, '.market-state.json'), 'utf8')).fishCollection ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function loadIdl(file) {
   return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
 }
@@ -70,6 +79,8 @@ export async function createMarket({
   log = console.log,
   // Rate limits key on this. Behind a local proxy or tunnel pass one that reads the forwarded client IP.
   clientIp = (req) => req.socket?.remoteAddress ?? '?',
+  // Server mode, for tests and the e2e only: { legacyGraceSlots, limits: { mintsPerHour, migrationsPerHour, dailyPearls } }.
+  fishOptions = {},
 } = {}) {
   if (!dir) throw new Error('createMarket: dir is required');
   programId ||= null; // only the env var (or option) turns program mode on, so server mode stays the safe default
@@ -86,10 +97,10 @@ export async function createMarket({
     // A relative MARKET_ORACLE_KEYPAIR is relative to the repo root (the default reads as sensor/.market-oracle.json).
     const file = oracleKeypair ? path.resolve(REPO_ROOT, oracleKeypair) : path.join(dir, '.market-oracle.json');
     useKeypair(u, file, 'oracle', log);
-    mode = createProgramMode({ u, programId, layout, log });
+    mode = createProgramMode({ u, programId, layout, log, fishCollection: savedFishCollection(dir) });
   } else {
     useKeypair(u, path.join(dir, '.market-keypair.json'), 'market', log);
-    mode = createServerMode({ u, rpc, dir, log });
+    mode = createServerMode({ u, rpc, dir, log, fishOptions });
   }
   const modeName = programId ? 'program' : 'server';
 
@@ -145,6 +156,15 @@ export async function createMarket({
       chargeBatch(ip, batchSize(body?.assetIds));
       return mode.quoteBatch(body);
     },
+    // Fish NFTs enter the market's collection only through these (fish-collection.mjs).
+    'POST /api/market/cosign-mint': async (req) => {
+      if (!mode.cosignMint) throw new HttpError(409, 'Program mode: mint without a co-signature');
+      return mode.cosignMint(await readJson(req));
+    },
+    'POST /api/market/cosign-migrate': async (req) => {
+      if (!mode.cosignMigrate) throw new HttpError(409, 'Program mode: nothing to migrate');
+      return mode.cosignMigrate(await readJson(req));
+    },
     'POST /api/market/sell-batch': async (req, ip) => {
       if (!mode.sellBatch) throw new HttpError(409, PROGRAM_MODE);
       const body = await readJson(req);
@@ -171,7 +191,8 @@ export async function createMarket({
       const status = e instanceof HttpError ? e.status : 500;
       const error = e instanceof HttpError ? e.message : String(e?.message ?? e).split('\n')[0].slice(0, 200);
       if (status === 500) log(`[market] ${route} failed: ${error}`);
-      if (!res.headersSent) send(res, status, { error });
+      // e.extra: e.g. { code, retryAfterMs } on a limit, { assetId } on an already-minted fish.
+      if (!res.headersSent) send(res, status, { ...(e instanceof HttpError ? e.extra : undefined), error });
       else res.end();
     }
     return true;
