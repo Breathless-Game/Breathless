@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
+import { CARD_RENDER_VERSION } from '../fish-png.mjs';
 import { createNftHandler, originFor, parseImagePath, parseMetaPath } from '../nft-meta.mjs';
+
+/** The JSON's image URL carries the card renderer's version, so caches let go when the art changes. */
+const R = `?r=${CARD_RENDER_VERSION}`;
 
 const META = '/api/nft/meta/v1/c61cd89c/uncommon/8-3-38-0.52/slim-130-45-50-310-3/Coral%20Reef/Lively%20Striped%20Wrasse.json';
 const IMG = '/api/nft/img/v1/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png';
@@ -61,7 +65,7 @@ test('serves Metaplex JSON whose image resolves to a 512x512 PNG', async () => {
     const meta = await res.json();
     assert.equal(meta.name, 'Lively Striped Wrasse');
     assert.equal(meta.symbol, 'DIVE');
-    assert.equal(meta.image, base + IMG);
+    assert.equal(meta.image, base + IMG + R);
     assert.deepEqual(meta.properties, { category: 'image', files: [{ uri: meta.image, type: 'image/png' }] });
     const attrs = Object.fromEntries(meta.attributes.map((a) => [a.trait_type, a.value]));
     assert.equal(attrs.Rarity, 'Uncommon');
@@ -86,7 +90,7 @@ test('serves Metaplex JSON whose image resolves to a 512x512 PNG', async () => {
 test('PUBLIC_ORIGIN wins for the image URL', async () => {
   await withServer({ publicOrigin: 'https://breathless.gotclass.xyz' }, async (base) => {
     const meta = await (await fetch(base + META)).json();
-    assert.equal(meta.image, 'https://breathless.gotclass.xyz' + IMG);
+    assert.equal(meta.image, 'https://breathless.gotclass.xyz' + IMG + R);
   });
 });
 
@@ -124,7 +128,7 @@ test('v2 JSON is named "<name> #0042" and its image draws the number', async () 
   await withServer({ publicOrigin: '' }, async (base) => {
     const meta = await (await fetch(base + META2)).json();
     assert.equal(meta.name, 'Lively Striped Wrasse #0042');
-    assert.equal(meta.image, base + IMG2);
+    assert.equal(meta.image, base + IMG2 + R);
     const attrs = Object.fromEntries(meta.attributes.map((a) => [a.trait_type, a.value]));
     assert.equal(attrs.Number, '#0042');
     const big = await (await fetch(base + META2.replace('/v2/42/', '/v2/1234567/'))).json();

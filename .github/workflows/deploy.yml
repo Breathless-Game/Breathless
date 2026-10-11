@@ -53,6 +53,7 @@ jobs:
           node --check sensor/nft-meta.mjs
           node --check sensor/nft-serial.mjs
           node --check sensor/fish-png.mjs
+          node --check sensor/fish-card.gen.mjs
           node --check sensor/market-sale.mjs
           node --check sensor/market-payout.mjs
           node --check sensor/fish-gen.mjs

@@ -2,21 +2,23 @@ import * as THREE from 'three';
 import { buildFishMesh, FishSpec, RARITY } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { t } from './i18n';
+import { CARD_FISH, CARD_FOV, CARD_LIGHTS, cardSpec, disposeFish, poseCardFish } from './fish-card-geometry';
 
 // One small offscreen renderer that draws a fish on demand. The 512px card is
 // the NFT image: it is a pure function of the fish seed, so anyone can
-// re-render it and check it matches.
+// re-render it and check it matches. The card's fish, pose, camera and lights
+// come from fish-card-geometry.ts, which the server's NFT image uses too.
 
 let renderer: THREE.WebGLRenderer | null = null;
 const iconCache = new Map<string, string>();
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
-scene.add(new THREE.HemisphereLight('#ffffff', '#33415c', 1.6));
-const key = new THREE.DirectionalLight('#ffffff', 2.6);
-key.position.set(2, 3, 4);
-const rim = new THREE.DirectionalLight('#9fe8ff', 1.4);
-rim.position.set(-3, 1, -2);
-scene.add(key, rim);
+const camera = new THREE.PerspectiveCamera(CARD_FOV, 1, 0.1, 100);
+scene.add(new THREE.HemisphereLight(CARD_LIGHTS.hemi.sky, CARD_LIGHTS.hemi.ground, CARD_LIGHTS.hemi.intensity));
+for (const d of CARD_LIGHTS.dirs) {
+  const light = new THREE.DirectionalLight(d.color, d.intensity);
+  light.position.set(d.position[0], d.position[1], d.position[2]);
+  scene.add(light);
+}
 
 /** True while the shared renderer's context is gone; nothing it draws then may be cached. */
 function contextLost(r: THREE.WebGLRenderer | null): boolean {
@@ -56,23 +58,12 @@ function renderFish(spec: FishSpec, size: number): HTMLCanvasElement {
 
 function drawFish(r: THREE.WebGLRenderer, spec: FishSpec) {
   const fish = buildFishMesh(spec);
-  fish.group.scale.setScalar(1);
-  fish.group.rotation.set(0, -0.55, 0.08);
-  fish.tail.rotation.y = 0.25;
   scene.add(fish.group);
-  const box = new THREE.Box3().setFromObject(fish.group);
-  const center = box.getCenter(new THREE.Vector3());
-  const radius = box.getSize(new THREE.Vector3()).length() / 2;
-  const dist = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 0.95;
-  camera.position.set(center.x + dist * 0.25, center.y + dist * 0.18, center.z + dist);
-  camera.lookAt(center);
+  poseCardFish(fish, camera);
   r.setClearColor(0x000000, 0);
   r.render(scene, camera);
   scene.remove(fish.group);
-  fish.group.traverse((o) => {
-    if (o instanceof THREE.Mesh) o.geometry.dispose();
-  });
-  fish.material.dispose();
+  disposeFish(fish);
 }
 
 /** Transparent render at any size, for UI sprites. Not cached: call once and keep the result. */
@@ -118,7 +109,8 @@ export function fishCard(spec: FishSpec & Numbered): string {
     }
     ctx.fill();
   }
-  ctx.drawImage(renderFish(spec, 420), 46, 40, 420, 420);
+  // The fish from the same facts, rounded the same way, as the NFT image URL gives the server.
+  ctx.drawImage(renderFish(cardSpec(spec), CARD_FISH.size), CARD_FISH.x, CARD_FISH.y, CARD_FISH.size, CARD_FISH.size);
   ctx.fillStyle = 'rgba(5,13,28,0.72)';
   ctx.fillRect(0, S - 92, S, 92);
   ctx.fillStyle = rc;

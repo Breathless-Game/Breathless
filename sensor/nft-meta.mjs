@@ -17,7 +17,7 @@
 // The JSON's image URL uses PUBLIC_ORIGIN when set, else the request's Host (cloudflared passes
 // the public hostname through), else DEFAULT_ORIGIN.
 
-import { ARCHETYPES, RARITIES, renderFishPng } from './fish-png.mjs';
+import { ARCHETYPES, CARD_RENDER_VERSION, RARITIES, renderFishPng } from './fish-png.mjs';
 
 export const DEFAULT_ORIGIN = 'https://breathless.gotclass.xyz';
 const SYMBOL = 'DIVE';
@@ -52,8 +52,6 @@ function parseLook(s) {
 
 const parseId = (s) => (/^[0-9a-f]{1,16}$/.test(s) ? s : null);
 const parseRarity = (s) => (Object.hasOwn(RARITIES, s) ? s : null);
-/** The seed behind a fish id (seed.toString(16)), as the shards on the in-game card use it. */
-const seedOf = (id) => Number.parseInt(id.slice(-8), 16) >>> 0;
 
 /** Species from a fish name: names are "<Epithet> <Species>" (fish.ts rollFish). */
 export const speciesOf = (name) => name.split(' ').slice(1).join(' ') || name;
@@ -126,7 +124,9 @@ export function originFor(req, configured = process.env.PUBLIC_ORIGIN) {
 export function metadataJson(fish, origin) {
   const species = speciesOf(fish.name);
   const label = RARITIES[fish.rarity].label;
-  const image = origin + imagePath(fish);
+  // ?r=<renderer version>: images are cached for a week (here, at Cloudflare, in wallets), so a
+  // change to the card art moves the URL. The server ignores the query; the path alone draws it.
+  const image = `${origin}${imagePath(fish)}?r=${CARD_RENDER_VERSION}`;
   const article = /^[aeiou]/i.test(label) ? 'An' : 'A';
   const numbered = fish.serial !== undefined;
   return {
@@ -189,7 +189,7 @@ export function createNftHandler({ publicOrigin = process.env.PUBLIC_ORIGIN, log
       if (renders === RENDERS_PER_MINUTE + 1) log(`[nft] render limit reached (${RENDERS_PER_MINUTE}/min), answering 503 for new images`);
       return null;
     }
-    const out = renderFishPng({ rarity: fish.rarity, species: fish.species, seed: seedOf(fish.id), look: fish.look, serial: fish.serial });
+    const out = renderFishPng({ id: fish.id, rarity: fish.rarity, species: fish.species, look: fish.look, serial: fish.serial });
     pngs.set(pathname, out);
     if (pngs.size > PNG_CACHE) pngs.delete(pngs.keys().next().value);
     return out;
