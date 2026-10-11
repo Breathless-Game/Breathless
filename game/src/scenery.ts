@@ -629,6 +629,140 @@ function smokeMaterial(day: string) {
 
 // ---- Fjord (Norway / Iceland) -------------------------------------------
 
+/** One mountain of a fjord range. Everything is measured from the middle of its foot. */
+interface Massif {
+  geo: THREE.BufferGeometry;
+  /** How far its foot reaches to the left (a negative number) and to the right. */
+  left: number;
+  right: number;
+  /** The point on its face at compass angle `a` (0 is +x, π/2 faces the camera), `u` of the way up. */
+  at(a: number, u: number, out: THREE.Vector3): THREE.Vector3;
+  /** Height of its surface above (x, z), or -Infinity outside its foot. */
+  heightAt(x: number, z: number): number;
+}
+
+/** How far up each ring of a massif's skin sits; the summit closes it. */
+const MASSIF_RINGS = [0, 0.2, 0.42, 0.63, 0.82] as const;
+const MASSIF_ROCK = ['#4d5d6b', '#3f4d59', '#5a6a77'];
+const MASSIF_SNOW = ['#f4fbff', '#dcecf5'];
+
+/**
+ * A mountain as one skin drawn up from an uneven foot to a summit that stands off
+ * centre, so no two have the same outline. The foot is a lopsided polygon with a
+ * buttress or two, the flanks are fuller or steeper from one mountain to the
+ * next, and most carry a shoulder on one side. The skin never folds over itself,
+ * and it is pressed thin along the line of sight (`depth`) so a range keeps to
+ * its own slab. Snow lies above a line that wanders round the mountain, and
+ * mostly not on its cliffs.
+ */
+function massif(rng: Rng, r: number, h: number, depth: number): Massif {
+  const sides = rng.int(8, 10);
+  const step = (Math.PI * 2) / sides;
+  const turn = rng.range(0, step);
+  const angle = Array.from({ length: sides }, (_, j) => turn + (j + rng.range(-0.3, 0.3)) * step);
+  const plan = angle.map(() => rng.range(0.72, 1.08));
+  for (let k = 0; k < 2; k++) plan[rng.int(0, sides - 1)] = rng.range(1.12, 1.28);
+  const steep = rng.range(0.8, 1.4);
+  const lean = [rng.range(-0.3, 0.3) * r, rng.range(-0.1, 0.1) * r];
+  const ring = MASSIF_RINGS.map((u, k) =>
+    angle.map((a, j) => {
+      const out = r * plan[j] * Math.pow(1 - u, steep) * (k ? rng.range(0.9, 1.1) : 1);
+      const off = Math.pow(u, 1.3);
+      return new THREE.Vector3(lean[0] * off + Math.cos(a) * out, h * u + (k ? rng.range(-0.035, 0.035) * h : 0), (lean[1] * off + Math.sin(a) * out) * depth);
+    }),
+  );
+  const top = new THREE.Vector3(lean[0], h, lean[1] * depth);
+  // A shoulder: one corner, on a side that shows in the outline, is lifted and pushed out
+  // over the ring below. That leaves a cliff under it and a shelf behind it.
+  if (rng.next() < 0.7) {
+    const k = rng.int(2, 3);
+    const toward = rng.next() < 0.5 ? 0 : Math.PI;
+    let j = 0;
+    for (let i = 1; i < sides; i++) if (Math.cos(angle[i] - toward) > Math.cos(angle[j] - toward)) j = i;
+    const [corner, below, above] = [ring[k][j], ring[k - 1][j], k + 1 < ring.length ? ring[k + 1][j] : top];
+    corner.x += (below.x - corner.x) * 0.75;
+    corner.z += (below.z - corner.z) * 0.75;
+    corner.y = Math.min(corner.y + rng.range(0.1, 0.17) * h, above.y - 0.02 * h);
+  }
+
+  const faces = new Map<string, number[]>();
+  const snowline = rng.range(0.36, 0.58);
+  const [lobes, phase] = [rng.int(1, 3), rng.range(0, 6)];
+  const [ab, ac] = [new THREE.Vector3(), new THREE.Vector3()];
+  const tri = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) => {
+    const up = (a.y + b.y + c.y) / 3 / h;
+    const around = Math.atan2((a.z + b.z + c.z) / depth, a.x + b.x + c.x);
+    // How level the face would lie on the mountain before it was pressed thin: 1 flat, 0 a wall.
+    ab.subVectors(b, a).setZ((b.z - a.z) / depth);
+    ac.subVectors(c, a).setZ((c.z - a.z) / depth);
+    const level = ab.cross(ac).normalize().y;
+    const line = snowline + 0.1 * Math.sin(around * lobes + phase) + rng.range(-0.06, 0.06);
+    const color = up > line && (level > 0.3 || rng.next() < 0.3) ? rng.pick(MASSIF_SNOW) : rng.pick(MASSIF_ROCK);
+    if (!faces.has(color)) faces.set(color, []);
+    faces.get(color)!.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  };
+  for (let k = 0; k + 1 < ring.length; k++) {
+    for (let j = 0; j < sides; j++) {
+      const [a, b, c, d] = [ring[k][j], ring[k][(j + 1) % sides], ring[k + 1][j], ring[k + 1][(j + 1) % sides]];
+      // Either diagonal: the facets do not all run the same way.
+      if (rng.next() < 0.5) {
+        tri(a, c, b);
+        tri(b, c, d);
+      } else {
+        tri(a, c, d);
+        tri(a, d, b);
+      }
+    }
+  }
+  const last = ring[ring.length - 1];
+  for (let j = 0; j < sides; j++) tri(last[j], top, last[(j + 1) % sides]);
+
+  const [lower, upper] = [new THREE.Vector3(), new THREE.Vector3()];
+  const at = (a: number, u: number, out: THREE.Vector3) => {
+    const full = Math.PI * 2;
+    const turned = angle[0] + ((((a - angle[0]) % full) + full) % full);
+    let j = sides - 1;
+    for (let i = 0; i + 1 < sides; i++) {
+      if (turned < angle[i + 1]) {
+        j = i;
+        break;
+      }
+    }
+    const s = (turned - angle[j]) / ((j + 1 < sides ? angle[j + 1] : angle[0] + full) - angle[j]);
+    const level = Math.min(Math.max(u, 0), MASSIF_RINGS[MASSIF_RINGS.length - 1]);
+    let k = 0;
+    while (k + 2 < MASSIF_RINGS.length && level >= MASSIF_RINGS[k + 1]) k++;
+    const v = (level - MASSIF_RINGS[k]) / (MASSIF_RINGS[k + 1] - MASSIF_RINGS[k]);
+    lower.lerpVectors(ring[k][j], ring[k][(j + 1) % sides], s);
+    upper.lerpVectors(ring[k + 1][j], ring[k + 1][(j + 1) % sides], s);
+    return out.lerpVectors(lower, upper, v);
+  };
+  const probe = new THREE.Vector3();
+  const heightAt = (x: number, z: number) => {
+    const a = Math.atan2(z / depth, x);
+    const reach = Math.hypot(x, z / depth);
+    at(a, 0, probe);
+    let [far, y] = [Math.hypot(probe.x, probe.z / depth), probe.y];
+    if (reach > far) return -Infinity;
+    // Walk up the face until it has drawn in past the point.
+    for (let u = 0.04; u < 0.83; u += 0.04) {
+      at(a, u, probe);
+      const here = Math.hypot(probe.x, probe.z / depth);
+      if (here <= reach) return y + (probe.y - y) * ((far - reach) / Math.max(1e-6, far - here));
+      [far, y] = [here, probe.y];
+    }
+    return y;
+  };
+
+  return {
+    geo: triangles([...faces].map(([color, verts]) => [verts, color])),
+    left: Math.min(...ring[0].map((v) => v.x)),
+    right: Math.max(...ring[0].map((v) => v.x)),
+    at,
+    heightAt,
+  };
+}
+
 function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   const rng = new Rng(0xf10d);
   const batch = new Batch();
@@ -640,32 +774,47 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   const rock = shades(['#4d5d6b', '#3f4d59', '#5a6a77']);
   const snow = shades(['#f4fbff', '#dcecf5']);
   const mountain = mountainMat();
-  // Three ranges like sheets of cut paper, one behind the other. Each keeps to its own slab of
-  // depth (a peak is only `depth` times as deep as it is wide) and the peaks of one range stand
-  // clear of each other, so no mountain touches another and no face can poke through a
-  // neighbour's. The ranges are staggered: each closes the valleys of the one behind it.
+  // Ranges like sheets of cut paper, one behind the other, each a row of mountains of
+  // uneven size: mostly middling, with the odd giant and the odd foothill, and now and then
+  // a pass between two of them. Every mountain keeps to its own ground: within a range none
+  // touches the next, and a range is no deeper than its slab, so no face can poke through
+  // another. The ranges overlap freely as the camera sees them, which is what hides the rows.
   const range = stream(0xf10d, 7);
-  interface Peak { x: number; z: number; r: number; h: number; depth: number }
-  const row = (xs: number[], z: number, depth: number, r: readonly [number, number], h: readonly [number, number]): Peak[] =>
-    xs.map((x0) => {
-      const p = { x: x0 + range.range(-4, 4), z: z + range.range(-2, 2), r: range.range(r[0], r[1]), h: range.range(h[0], h[1]), depth };
-      const snowline = range.range(0.42, 0.58);
-      const geo = jitter(new THREE.ConeGeometry(p.r, p.h, 7, 4), range, p.r * 0.07);
-      paintFaces(geo, (t) => (t > snowline + range.range(-0.1, 0.1) ? range.pick(snow) : range.pick(rock)));
-      // Turn it first: the squash is along the line of sight, whichever way the cone faces.
-      geo.rotateY(range.range(0, 6));
-      batch.add(geo, mountain, p.x, p.h / 2 - 2, p.z, { sz: depth });
-      return p;
-    });
-  row([-270, -180, -90, 0, 90, 180, 270], -142, 0.3, [30, 36], [52, 74]);
-  row([-225, -135, -45, 45, 135, 225], -112, 0.3, [26, 33], [38, 56]);
+  interface Peak extends Massif {
+    x: number;
+    z: number;
+  }
+  const stand = (m: Massif, x: number, z: number): Peak => {
+    batch.add(m.geo, mountain, x, -2, z);
+    return { ...m, x, z };
+  };
+  /** The foot reaches up to 1.28 radii: pressed this thin, it stays within 12.5 m of its range's line. */
+  const thin = (r: number, depth: number) => Math.min(depth, 12.5 / (r * 1.3));
+  const rangeAcross = (z: number, from: number, to: number, r: readonly [number, number], h: readonly [number, number], depth: number) => {
+    for (let x = from; x < to; ) {
+      const roll = range.next();
+      const [wide, tall] = roll < 0.22 ? [1.25, 1.25] : roll < 0.5 ? [0.7, 0.55] : [1, 1];
+      const pr = range.range(r[0], r[1]) * wide;
+      const m = massif(range, pr, range.range(h[0], h[1]) * tall, thin(pr, depth));
+      // Its foot starts where the last one ended; the next starts a little way on from where this one ends.
+      const peak = stand(m, x - m.left, z + range.range(-1, 1));
+      x = peak.x + m.right + (range.next() < 0.18 ? range.range(14, 26) : range.range(0.5, 7));
+    }
+  };
+  rangeAcross(-198, -330, 330, [34, 44], [64, 92], 0.24);
+  rangeAcross(-168, -300, 300, [30, 38], [52, 76], 0.27);
+  rangeAcross(-138, -270, 270, [26, 33], [42, 62], 0.3);
+  rangeAcross(-110, -250, 250, [22, 28], [30, 48], 0.3);
   // The near range leaves the middle open like a channel, and stands clear of the waterfall's bluff (x = 47).
-  const near = row([-185, -105, 105, 185], -82, 0.33, [22, 30], [28, 42]);
+  const near = [-185, -105, 105, 185].map((x0) => {
+    const pr = range.range(19, 23);
+    return stand(massif(range, pr, range.range(26, 46), thin(pr, 0.33)), x0 + range.range(-4, 4), -82 + range.range(-1, 1));
+  });
   /** Height of a near peak's slope above (x, z), or -Infinity where no peak stands. */
   const slopeY = (x: number, z: number) => {
     let y = -Infinity;
-    for (const p of near) y = Math.max(y, -2 + p.h * (1 - Math.hypot((x - p.x) / p.r, (z - p.z) / (p.r * p.depth))));
-    return y > -2 ? y : -Infinity;
+    for (const p of near) y = Math.max(y, -2 + p.heightAt(x - p.x, z - p.z));
+    return y;
   };
 
   // Wooded shore at the foot of the near range.
@@ -705,8 +854,9 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
         const color = forest.pick(pine);
         // Every tree is rolled at every detail level, so the ones that stay never move.
         if (forest.next() >= kept) continue;
-        const out = p.r * (1 - u) * 0.97;
-        const [x, y, z] = [p.x + Math.cos(a) * out, -2.8 + p.h * u, p.z + Math.sin(a) * out * p.depth];
+        // Rooted a little way into the face, so no trunk shows daylight under it.
+        p.at(a, u, _p);
+        const [x, y, z] = [p.x + _p.x, -2.8 + _p.y, p.z + _p.z];
         batch.add(solid(new THREE.ConeGeometry(h * 0.34, h * 0.7, 6), color), mountain, x, y + h * 0.35, z);
         batch.add(solid(new THREE.ConeGeometry(h * 0.24, h * 0.55, 6), color), mountain, x, y + h * 0.72, z);
       }
