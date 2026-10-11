@@ -48,7 +48,7 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { FieldGuide } from './field-guide';
 import { isAction, keysFor, openControls } from './controls';
 import { Trip, TripReport } from './trip';
-import { TableScene } from './table-scene';
+import { TankTable } from './aquarium-tank';
 import { HealthDesk } from './health-desk';
 import type { LessonId } from './tutorial';
 
@@ -573,7 +573,7 @@ const nftQueue = new NftQueue(bank, saveBank, {
 });
 const vault = new Vault(bank, nftQueue);
 // The aquarium and the health desk each come up on a table like the workbench's (table-scene.ts).
-const aquariumTable = new TableScene('aquarium-table', { pan: (u, y) => setTablePan('aquarium', u, y) });
+const aquariumTable = new TankTable({ pan: (u, y) => setTablePan('aquarium', u, y) });
 const aquarium = new Aquarium(bank, { table: aquariumTable });
 const healthDesk = new HealthDesk({ pan: (u, y) => setTablePan('health', u, y) });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).

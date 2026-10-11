@@ -2735,26 +2735,24 @@ button:disabled {
 }
 
 /* ---- aquarium (图鉴) ---- */
-/* Over the aquarium's table (table-scene.ts): the tank drops onto it from above.
-   aquarium.ts sizes the stage and sets where its foot rests (padding-bottom). */
+/* The tank itself is 3D, on the aquarium's table (aquarium-tank.ts). Over it, only
+   the bar at the bottom, the empty-tank note and a fish's card. */
 #aquarium {
   position: fixed;
   inset: 0;
   z-index: 31;
-  display: grid;
-  place-items: center;
-  padding: 16px;
   pointer-events: none;
 }
 
 .aq-stage {
-  position: relative;
-  width: min(1100px, 100%, calc((100vh - 120px) * 1.75));
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(900px, calc(100vw - 32px));
   display: flex;
-  flex-direction: column-reverse; /* the bar under the tank, clear of the title fish */
+  flex-direction: column-reverse; /* the bar at the bottom, the card above it */
   gap: 10px;
-  transform: translateY(-125vh);
-  pointer-events: auto;
 }
 
 .aq-bar {
@@ -2763,10 +2761,17 @@ button:disabled {
   gap: 8px;
   flex-wrap: wrap;
   opacity: 0;
+  transition: opacity 0.35s;
   padding: 6px 10px;
   border-radius: 12px;
   background: var(--panel);
   border: 1px solid var(--line);
+  pointer-events: auto;
+}
+
+/* The tank has landed: its bar fades in. */
+#aquarium.landed .aq-bar {
+  opacity: 1;
 }
 
 .aq-title {
@@ -2820,38 +2825,37 @@ button:disabled {
   position: relative;
 }
 
+/* The old 2D tank's canvas: the tank is 3D now. */
 #aq-canvas {
-  display: block;
-  width: 100%;
-  aspect-ratio: 1.75;
+  display: none;
 }
 
 #aq-empty {
-  position: absolute;
+  position: fixed;
   left: 0;
   right: 0;
-  top: 44%;
+  top: 46%;
   text-align: center;
-  color: var(--muted);
-  font-size: 15px;
+  color: var(--ink);
+  font-size: 16px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
   pointer-events: none;
 }
 
 #aq-card {
-  position: absolute;
-  left: 50%;
-  bottom: 18%;
-  transform: translateX(-50%);
+  position: relative;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 12px;
   width: max-content;
-  max-width: calc(100% - 32px);
+  max-width: 100%;
   padding: 8px 12px 8px 8px;
   border-radius: 14px;
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(8px);
+  pointer-events: auto;
 }
 
 #aq-card img {

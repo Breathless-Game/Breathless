@@ -35,6 +35,9 @@ export class TableScene {
   protected time = 0;
   /** A short jolt (table units), easing away: something heavy landed. */
   protected shake = 0;
+  /** Where the camera stands and looks once the table is up (a table can move it, e.g. lower to face a tank). */
+  protected camAt = CAM.clone();
+  protected lookAt = LOOK.clone();
   private tween: { from: number; to: number; t: number; dur: number; done?: () => void } | null = null;
   private raf = 0;
   private last = 0;
@@ -203,8 +206,10 @@ export class TableScene {
     const lift = (1 - this.panU) * RISE;
     const jx = (Math.random() - 0.5) * this.shake;
     const jy = (Math.random() - 0.5) * this.shake;
-    this.camera.position.set(CAM.x * fit + jx, CAM.y * fit + lift + jy, LOOK.z + (CAM.z - LOOK.z) * fit);
-    this.camera.lookAt(LOOK.x + jx * 0.5, LOOK.y + lift + jy * 0.5, LOOK.z);
+    const cam = this.camAt;
+    const look = this.lookAt;
+    this.camera.position.set(cam.x * fit + jx, cam.y * fit + lift + jy, look.z + (cam.z - look.z) * fit);
+    this.camera.lookAt(look.x + jx * 0.5, look.y + lift + jy * 0.5, look.z);
     this.camera.updateMatrixWorld();
     if (!report) return;
     const back = new THREE.Vector3(0, 0, TABLE.z0 + SHADOW_Z).project(this.camera);
