@@ -319,6 +319,7 @@ function mintBody(f, { serial = 42, over = {}, fishOver = {} } = {}) {
 test('cosign-mint accepts the game\'s own request and writes exactly the validated attributes', () => {
   const m = parseCosignMint(mintBody(goodFish), { market: MARKET });
   assert.equal(m.fishId, goodFish.id);
+  assert.equal(m.value, goodFish.value, 'the validated value record_catch adds');
   assert.deepEqual(m.attributeList, attributesOf(goodFish));
   assert.ok(parseCosignMint(mintBody(goodFish, { serial: 0 }), { market: MARKET }), 'a fish without a number (v1 URI)');
 });

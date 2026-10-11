@@ -283,6 +283,8 @@ export function parseCosignMint(body, { market, tolerance } = {}) {
     name,
     uri,
     fishId: facts.id,
+    /** The catch value checkFish accepted: what record_catch adds to the owner's lifetime value. */
+    value: facts.value,
     attributeList: [
       { key: 'rarity', value: facts.rarity },
       { key: 'species', value: facts.species },

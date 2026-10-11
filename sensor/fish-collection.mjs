@@ -3,7 +3,9 @@
 //
 //   POST /api/market/cosign-mint     { owner, payer, asset, name, uri, fish }
 //       The game asks before minting a fish. We re-derive the fish from its seed (fish-trust.mjs),
-//       build the Core create with collection = ours, and sign it as collection authority. The
+//       build the Core create with collection = ours plus player_state record_catch (the fish's
+//       value onto the owner's lifetime banked value, buildMintTx), and sign it as collection
+//       authority and player_state oracle. The
 //       game's session key (payer) and the new asset sign and send it, so the game wallet still
 //       pays the mint; the market only signs. -> { tx (base64), lastValidBlockHeight, collection }
 //   POST /api/market/cosign-migrate  { owner, payer, assetIds }
@@ -43,6 +45,7 @@ import {
   parseRegistry,
   readFacts,
 } from './fish-trust.mjs';
+import { fishSeedKey, playerStateProgramId, recordCatch } from './player-state-ix.mjs';
 
 export const REGISTRY_FILE = '.market-fish.jsonl';
 const COLLECTION_NEEDS_SOL = 0.005; // ~0.0014 SOL rent + fee, measured on a local validator
@@ -51,11 +54,51 @@ const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
 
 /**
+ * The co-signed mint: the Core create into our collection, then player_state record_catch
+ * (player-state-ix.mjs), which adds the validated value to the owner's lifetime banked value
+ * once per fish (the seed key). Oracle = the market (already a signer here as the collection's
+ * authority), payer = the session key (already the fee payer): no new signature. A retried mint
+ * of the same fish is a no-op on chain. The game's cosignedTxProblem (game/src/fish-cosign.ts)
+ * accepts exactly this pair. Throws when it would not fit in one transaction.
+ */
+export function buildMintTx(u, { m, collection, blockhash, programId = playerStateProgramId() }) {
+  const payer = createNoopSigner(publicKey(m.payer));
+  const builder = create(u, {
+    asset: createNoopSigner(publicKey(m.asset)),
+    collection,
+    owner: publicKey(m.owner),
+    payer,
+    authority: u.identity, // the collection's update authority: the only signature that admits a fish
+    name: m.name,
+    uri: m.uri,
+    plugins: [{ type: 'Attributes', attributeList: m.attributeList }],
+  })
+    .add(recordCatch(u, { oracle: u.identity, payer, owner: m.owner, fish: fishSeedKey(m.fishId), value: m.value, programId }))
+    .setFeePayer(payer)
+    .setBlockhash(blockhash)
+    .useLegacyVersion();
+  const size = builder.getTransactionSize(u);
+  if (size > TX_LIMIT) throw new HttpError(422, `This fish's mint transaction is too large (${size} > ${TX_LIMIT} bytes)`);
+  return builder.build(u);
+}
+
+/**
  * deps: u (umi, identity = market wallet, mplCore installed), state + save (the server mode's
  * persisted state object), dir, ledger (SoldLedger, for the payout cap), balanceSol(maxAgeMs), log.
  * opts: legacyGraceSlots, limits ({ mintsPerHour, migrationsPerHour, dailyPearls }) for tests.
  */
-export function createFishCollection({ u, state, save, dir, ledger, balanceSol, log, legacyGraceSlots = LEGACY_GRACE_SLOTS, limits = {} }) {
+export function createFishCollection({
+  u,
+  state,
+  save,
+  dir,
+  ledger,
+  balanceSol,
+  log,
+  legacyGraceSlots = LEGACY_GRACE_SLOTS,
+  limits = {},
+  playerStateProgram = playerStateProgramId(),
+}) {
   const market = u.identity.publicKey.toString();
   const mintsPerHour = limits.mintsPerHour ?? MINTS_PER_HOUR;
   const migrationsPerHour = limits.migrationsPerHour ?? MIGRATIONS_PER_HOUR;
@@ -182,22 +225,8 @@ export function createFishCollection({ u, state, save, dir, ledger, balanceSol, 
       const q = mintQuota.take(m.owner);
       if (!q.ok) throw mintLimitError('Mint', mintsPerHour, q.retryAfterMs);
     }
-    const payer = createNoopSigner(publicKey(m.payer));
     const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
-    const tx = create(u, {
-      asset: createNoopSigner(publicKey(m.asset)),
-      collection,
-      owner: publicKey(m.owner),
-      payer,
-      authority: u.identity, // the collection's update authority: the only signature that admits a fish
-      name: m.name,
-      uri: m.uri,
-      plugins: [{ type: 'Attributes', attributeList: m.attributeList }],
-    })
-      .setFeePayer(payer)
-      .setBlockhash(blockhash)
-      .useLegacyVersion()
-      .build(u);
+    const tx = buildMintTx(u, { m, collection, blockhash, programId: playerStateProgram });
     const signed = await u.identity.signTransaction(tx);
     registry.set(m.owner, m.fishId, { asset: m.asset, lastValid: blockhash.lastValidBlockHeight, kind: 'mint' });
     return { tx: b64(u.transactions.serialize(signed)), lastValidBlockHeight: blockhash.lastValidBlockHeight, collection: collection.publicKey.toString() };
