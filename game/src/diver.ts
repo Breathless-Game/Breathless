@@ -202,16 +202,17 @@ export class Diver {
    * Nothing shows while the diver floats or swims: only a crossing does, and
    * a faster one throws more.
    */
-  private updateWaterContact(dt: number): void {
+  private updateWaterContact(dt: number, heave: number): void {
     const yaw = this.group.rotation.y;
     const pitch = this.body.rotation.z;
     const reach = HEAD_X * Math.cos(pitch);
     const headX = this.pos.x + Math.cos(yaw) * reach;
     const headZ = this.pos.z - Math.sin(yaw) * reach;
-    // How far under the head is, against the waves rather than y = 0.
-    const under = this.waterAt(headX, headZ) - (this.pos.y + HEAD_X * Math.sin(pitch));
+    // How far under the head is as drawn, against the waves rather than y = 0.
+    const under = this.waterAt(headX, headZ) - (this.pos.y + heave + HEAD_X * Math.sin(pitch));
     // The diver's own climb: it has to be swimming that way and actually moving
-    // (at the surface the buoyancy still pushes up, and a respawn moves without swimming).
+    // (at the surface the buoyancy still pushes up, a respawn moves without swimming,
+    // and the swell that heaves a swimmer is not a climb at all).
     const moved = dt > 0 ? (this.pos.y - this.lastY) / dt : 0;
     const climb = Math.sign(moved) === Math.sign(this.vel.y) ? Math.sign(moved) * Math.min(Math.abs(moved), Math.abs(this.vel.y)) : 0;
     this.lastY = this.pos.y;
@@ -326,7 +327,6 @@ export class Diver {
 
   /** Air pulled under with a dive: small bubbles off the body that turn and rise back to the surface. */
   private trailAir(): void {
-    this.group.position.copy(this.pos);
     this.group.updateMatrixWorld(true);
     for (; this.wakeDebt >= 1; this.wakeDebt--) {
       if (this.bubbles.length >= this.bubbleLimit) continue;
@@ -485,11 +485,13 @@ export class Diver {
     }
   }
 
-  update(dt: number, time: number, depth: number) {
+  /** `heave` lifts the drawn diver (m) without moving `pos`: a swimmer riding heavy seas. */
+  update(dt: number, time: number, depth: number, heave = 0) {
     const speed = this.vel.length();
     if (Math.abs(this.vel.x) > 0.2) this.facing = this.vel.x > 0 ? 1 : -1;
 
     this.group.position.copy(this.pos);
+    this.group.position.y += heave;
     const targetYaw = this.facing > 0 ? 0 : Math.PI;
     const yawDelta = THREE.MathUtils.euclideanModulo(targetYaw - this.group.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
     this.group.rotation.y += yawDelta * Math.min(1, dt * 8);
@@ -516,7 +518,7 @@ export class Diver {
     }
 
     this.headlamp.intensity = THREE.MathUtils.clamp((depth - 18) / 30, 0, 1) * this.lampMaxIntensity;
-    this.updateWaterContact(dt);
+    this.updateWaterContact(dt, heave);
 
     this.bubbleUpdateAccumulator += dt;
     const interval = 1 / this.bubbleHz;

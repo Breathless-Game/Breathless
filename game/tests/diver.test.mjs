@@ -186,6 +186,28 @@ test('white water follows the waves: a swell is not a dive, and a dive splashes 
   assert.ok(crown.every(position => position.y > 0.5), 'on the raised water, not at y = 0');
 });
 
+test('a swimmer heaved by heavy seas splashes where the picture is, not where the physics is', () => {
+  const { scene, diver } = createFloatingDiver();
+  let level = 0;
+  diver.setWaterSurface(() => level);
+  // The swell lifts the water and the drawn diver together by more than a head's depth.
+  for (let frame = 0; frame < 240; frame++) {
+    level = 1.5 * Math.sin((frame / 240) * Math.PI * 0.5);
+    diver.update(1 / 60, frame / 60, -diver.pos.y, level);
+  }
+  assert.equal(whiteWater(scene).length, 0);
+  assert.ok(level > 1.4 && Math.abs(diver.group.position.y - (diver.pos.y + level)) < 1e-9, 'the picture rides the crest');
+
+  diver.vel.set(0, -4.5, 0);
+  for (let frame = 0; frame < 6; frame++) {
+    diver.pos.y -= 4.5 / 60;
+    diver.update(1 / 60, 4 + frame / 60, -diver.pos.y, level);
+  }
+  const crown = whiteWater(scene);
+  assert.ok(crown.length > 0, 'diving off the crest splashes at once');
+  assert.ok(crown.every(position => position.y > level));
+});
+
 test('a respawn just under the surface floats up without a splash', () => {
   for (const level of [-0.25, 0, 0.25]) {
     const { scene, diver } = createFloatingDiver();
