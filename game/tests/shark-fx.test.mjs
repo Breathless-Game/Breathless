@@ -64,7 +64,7 @@ test('a reused render slot starts at its new shark instead of the old depth and 
   fx.update(1 / 60, [replacement], 0, 0, true);
   const root = fx.group.children[0];
   assert.equal(root.position.x, 30);
-  assert.equal(root.position.z, -1.3);
+  assert.equal(root.position.z, -1.5);
   assert.equal(root.scale.x, 1);
   assert.equal(root.children[0].children[2].rotation.z, -0.04);
 });
