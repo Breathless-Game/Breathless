@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { coreAsset } from './explorer-links';
 import { fishValue, rarityLabel, RARITY, zoneForDepth, zoneName } from './fish';
-import { onLangChange, pickName, t } from './i18n';
+import { lang, onLangChange, pickName, t } from './i18n';
 import { FISH_FOODS, fishFood, type FishFoodDef, type FishFoodId } from './fish-food';
 import { buildFishFoodModel } from './fish-food-models';
 import { MAPS, type MapId } from './maps';
@@ -193,6 +193,8 @@ export class Aquarium {
   ) {
     onLangChange(() => {
       this.renderBar();
+      this.renderFoodOptions();
+      this.renderFeederText();
       if (this.picked) this.pick(this.picked);
     });
     $('aq-close').addEventListener('click', () => this.close());
@@ -206,13 +208,7 @@ export class Aquarium {
       this.setAmbientColor(this.aquariumState.light.color);
       saveAquariumState(this.aquariumState, undefined, this.stateKey());
     });
-    for (const food of FISH_FOODS) {
-      const option = document.createElement('option');
-      option.value = food.id;
-      option.textContent = `${food.nameZh} · ${food.price} ✦`;
-      this.feederSelect.append(option);
-    }
-    this.feederSelect.value = this.selectedFood;
+    this.renderFoodOptions();
     this.feederSelect.addEventListener('change', () => {
       const selected = this.feederSelect.value as FishFoodId;
       if (!FISH_FOODS.some((food) => food.id === selected)) return;
@@ -304,16 +300,46 @@ export class Aquarium {
     }
   }
 
-  private renderFeeder() {
+  private renderFoodOptions() {
+    this.feederSelect.replaceChildren(...FISH_FOODS.map((food) => {
+      const option = document.createElement('option');
+      option.value = food.id;
+      option.textContent = `${pickName(food)} · ${food.price} PEARL`;
+      return option;
+    }));
+    this.feederSelect.value = this.selectedFood;
+  }
+
+  /** Feeder status text plus the Pour button; re-run on language change and food selection. */
+  private renderFeederText() {
     const food = fishFood(this.selectedFood);
     this.feederSelect.value = food.id;
-    this.feederStatus.textContent = `${food.descriptionZh} · 所有鱼会游来抢食`;
-    this.feederButton.textContent = `Pour into tank · 倒入鱼缸 · ${food.nameZh} · ${food.price} ✦`;
+    const description = lang() === 'zh' ? food.descriptionZh : food.description;
+    this.feederStatus.textContent = `${description} · ${t('the whole school will rush in', '所有鱼会游来抢食')}`;
+    this.renderFeederButton();
+  }
+
+  /** The Pour button alone: label, affordability and the in-flight lock. */
+  private renderFeederButton() {
+    const food = fishFood(this.selectedFood);
+    const pearls = this.hooks.pearls();
+    const affordable = pearls >= food.price;
+    this.feederButton.textContent = affordable
+      ? `${t('Pour into tank', '倒入鱼缸')} · ${pickName(food)} · ${food.price} PEARL`
+      : t(`Need ${food.price - pearls} more PEARL`, `还差 ${food.price - pearls} PEARL`);
+    this.feederButton.title = `${food.price} PEARL`;
+    // Locked while a payment is in flight so rapid clicks cannot pay twice; feedSchool() clears the lock before re-rendering.
+    this.feederButton.disabled = !affordable || this.feeding;
+  }
+
+  private renderFeeder() {
+    const food = fishFood(this.selectedFood);
+    this.renderFeederText();
     this.disposeFoodPreview();
     this.feederModel.replaceChildren();
     const modelCanvas = this.makeFoodPreview(food);
     if (modelCanvas) {
-      modelCanvas.setAttribute('aria-label', `${food.name} · click to pour into the tank`);
+      modelCanvas.setAttribute('aria-label', t(`${food.name} · click to pour into the tank`, `${food.nameZh} · 点击倒入鱼缸`));
       modelCanvas.addEventListener('click', () => void this.feedSchool());
       this.feederModel.append(modelCanvas);
     }
@@ -751,7 +777,7 @@ export class Aquarium {
 
   private renderCardFoodHint() {
     const hint = this.card.querySelector<HTMLElement>('.aq-card-food-hint');
-    if (hint) hint.textContent = `Selected: ${fishFood(this.selectedFood).nameZh} · click the food beside the tank to feed all fish`;
+    if (hint) hint.textContent = t(`Selected: ${pickName(fishFood(this.selectedFood))} · click the food beside the tank to feed all fish`, `已选：${pickName(fishFood(this.selectedFood))} · 点击鱼缸旁的鱼食喂所有鱼`);
   }
 
   private async feedSchool() {
@@ -776,10 +802,16 @@ export class Aquarium {
       }
     }
     if (!fedCount) {
-      this.hooks.message(blockedReason === 'max' ? 'Every fish here is fully grown · 这里的鱼都长到最大了' : 'The school is still full · 鱼群还在饱腹冷却');
+      this.hooks.message(blockedReason === 'max' ? t('Every fish here is fully grown', '这里的鱼都长到最大了') : t('The school is still full', '鱼群还在饱腹冷却'));
+      return;
+    }
+    if (this.hooks.pearls() < food.price) {
+      this.hooks.message(t(`Need ${food.price - this.hooks.pearls()} more PEARL`, `还差 ${food.price - this.hooks.pearls()} PEARL`));
+      this.renderFeederButton();
       return;
     }
     this.feeding = true;
+    this.renderFeederButton();
     try {
       const paid = await this.hooks.buyFood(food);
       if (!paid) return;
@@ -804,11 +836,14 @@ export class Aquarium {
           v: 0.12 + Math.random() * 0.1,
         });
       }
-      this.feederStatus.textContent = `${fedCount} fish are rushing in · ${food.nameZh} 正在下落`;
+      this.feederStatus.textContent = t(`${fedCount} fish are rushing in · ${pickName(food)} is sinking`, `${fedCount} 条鱼正在冲过来 · ${pickName(food)} 正在下落`);
       this.hooks.message(t(`${fedCount} fish rushed in for food · ${spentText(paid)}`, `${fedCount} 条鱼正在抢食 · ${spentText(paid)}`));
-      if (this.picked) this.pick(this.picked);
     } finally {
+      // Release the lock before re-rendering: the feeder renders disabled while `feeding` is set,
+      // so this must run on success, on a declined/failed payment (null) and on a throw.
       this.feeding = false;
+      this.renderFeederButton();
+      if (this.picked) this.pick(this.picked);
     }
   }
 
