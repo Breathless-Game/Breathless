@@ -43,6 +43,7 @@ export class FieldGuide {
   private previousFocus: HTMLElement | null = null;
   private inertElements = new Map<HTMLElement, boolean>();
   private collapsed = false;
+  private closingTimer = 0;
 
   constructor(private hooks: GuideHooks) {
     this.root.id = 'field-guide';
@@ -55,20 +56,21 @@ export class FieldGuide {
       <footer class="guide-footer"><button type="button" id="guide-prev" aria-label="上一章">← 上一页</button><span id="guide-page-number"></span><button type="button" id="guide-next" aria-label="下一章">下一页 →</button></footer>
     </section>`;
     this.launcher.className = 'guide-launcher';
-    this.launcher.innerHTML = `<button type="button" id="guide-open" aria-label="打开潜水手册 (B)" aria-controls="field-guide" aria-expanded="false"><span aria-hidden="true">▤</span> 手册 <kbd>B</kbd></button><button type="button" id="tour-toggle" aria-controls="dive-tutorial">新手引导</button>`;
+    this.launcher.innerHTML = `<button type="button" id="tour-toggle" aria-controls="dive-tutorial">新手引导</button>`;
     this.tour.id = 'dive-tutorial';
     this.tour.className = 'dive-tutorial';
     this.tour.setAttribute('aria-label', '新手教程');
-    // The launcher's buttons aren't shown: the GUIDE and TUTORIAL fish on the title rope
-    // open the book and switch the tutorial (main.ts). It's kept off-page for its state.
-    document.body.append(this.tour, this.root);
+    // The guide itself is the 3D book on the workbench. The tutorial remains a
+    // normal bottom-right utility panel, rather than a fish.
+    document.body.append(this.launcher, this.tour, this.root);
     this.root.querySelector('#guide-close')!.addEventListener('click', () => this.close());
-    this.launcher.querySelector('#guide-open')!.addEventListener('click', () => this.toggle());
     this.launcher.querySelector('#tour-toggle')!.addEventListener('click', () => this.setEnabled(!this.state.enabled));
     this.root.querySelector('#guide-prev')!.addEventListener('click', () => this.turn(-1));
     this.root.querySelector('#guide-next')!.addEventListener('click', () => this.turn(1));
     this.root.querySelectorAll<HTMLButtonElement>('[data-chapter]').forEach(button => button.addEventListener('click', () => {
-      this.chapter = Number(button.dataset.chapter); this.renderBook();
+      const next = Number(button.dataset.chapter);
+      const direction = next === this.chapter ? 0 : next > this.chapter ? 1 : -1;
+      this.chapter = next; this.renderBook(direction);
     }));
     this.root.addEventListener('click', event => { if (event.target === this.root) this.close(); });
     window.addEventListener('keydown', event => this.handleKey(event), true);
@@ -85,6 +87,7 @@ export class FieldGuide {
   toggle() {
     if (this.open) this.close();
     else {
+      if (this.closingTimer) return;
       if (!this.hooks.canOpen()) return;
       this.previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       this.hooks.toggled(true);
@@ -93,23 +96,30 @@ export class FieldGuide {
         if (child === this.root || !(child instanceof HTMLElement)) continue;
         this.inertElements.set(child, child.inert); child.inert = true;
       }
-      this.launcher.querySelector('#guide-open')!.setAttribute('aria-expanded', 'true');
       this.mark('book');
-      this.renderBook();
+      this.renderBook(0);
       this.root.querySelector<HTMLButtonElement>('#guide-close')!.focus();
     }
   }
-  close() {
-    if (!this.open) return;
-    this.root.classList.add('hidden');
-    this.inertElements.forEach((inert, element) => { element.inert = inert; });
-    this.inertElements.clear();
-    this.launcher.querySelector('#guide-open')!.setAttribute('aria-expanded', 'false');
-    this.hooks.toggled(false);
-    if (this.previousFocus?.isConnected && !this.previousFocus.closest('.hidden')) this.previousFocus.focus();
-    else this.launcher.querySelector<HTMLButtonElement>('#guide-open')!.focus();
+  /** Called by the 3D workbench after its book pickup animation finishes. */
+  openFromWorkbench() {
+    if (!this.open && !this.closingTimer) this.toggle();
   }
-  /** The TUTORIAL fish: switches the step-by-step tutorial on or off. */
+  close() {
+    if (!this.open || this.closingTimer) return;
+    this.root.classList.add('closing');
+    this.closingTimer = window.setTimeout(() => {
+      this.closingTimer = 0;
+      this.root.classList.add('hidden');
+      this.root.classList.remove('closing');
+      this.inertElements.forEach((inert, element) => { element.inert = inert; });
+      this.inertElements.clear();
+      this.hooks.toggled(false);
+      if (this.previousFocus?.isConnected && !this.previousFocus.closest('.hidden')) this.previousFocus.focus();
+      else this.launcher.querySelector<HTMLButtonElement>('#tour-toggle')!.focus();
+    }, 240);
+  }
+  /** Switches the step-by-step tutorial on or off from the bottom-right panel. */
   toggleTutorial() {
     this.setEnabled(!this.state.enabled);
   }
@@ -122,7 +132,7 @@ export class FieldGuide {
       if (this.open) this.mark('book');
     }
     this.renderTutorial();
-    if (this.open) this.renderBook();
+    if (this.open) this.renderBook(0);
   }
   private restart() {
     this.state = { enabled: true, chosen: true, completed: [] };
@@ -132,13 +142,13 @@ export class FieldGuide {
   private openLesson() {
     const lesson = currentLesson(this.state);
     this.chapter = Math.max(0, CHAPTERS.findIndex(c => c.id === lesson?.chapter));
-    if (!this.open) this.toggle(); else this.renderBook();
+    if (!this.open) this.toggle(); else this.renderBook(0);
   }
   private turn(delta: number) {
     this.chapter = Math.max(0, Math.min(CHAPTERS.length - 1, this.chapter + delta));
-    this.renderBook();
+    this.renderBook(delta < 0 ? -1 : 1);
   }
-  private renderBook() {
+  private renderBook(direction: -1 | 0 | 1 = 0) {
     const chapter = CHAPTERS[this.chapter];
     const packed = new Set(this.hooks.packed());
     this.root.querySelector('#guide-pages')!.innerHTML = `<article class="guide-page guide-picture">
@@ -164,7 +174,14 @@ export class FieldGuide {
     this.root.querySelector('#guide-page-number')!.textContent = `${String(this.chapter + 1).padStart(2, '0')} / ${String(CHAPTERS.length).padStart(2, '0')}`;
     this.root.querySelector<HTMLButtonElement>('#guide-prev')!.disabled = this.chapter === 0;
     this.root.querySelector<HTMLButtonElement>('#guide-next')!.disabled = this.chapter === CHAPTERS.length - 1;
-    this.root.querySelector('#guide-pages')!.scrollTop = 0;
+    const pages = this.root.querySelector<HTMLElement>('#guide-pages')!;
+    pages.scrollTop = 0;
+    pages.classList.remove('page-turn-forward', 'page-turn-back');
+    if (direction) {
+      // Force a reflow so consecutive clicks still replay the page-turn animation.
+      void pages.offsetWidth;
+      pages.classList.add(direction > 0 ? 'page-turn-forward' : 'page-turn-back');
+    }
   }
   private renderTutorial() {
     const toggle = this.launcher.querySelector<HTMLButtonElement>('#tour-toggle')!;
