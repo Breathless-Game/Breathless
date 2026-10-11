@@ -181,31 +181,32 @@ function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, count: number
   return mesh;
 }
 
-/** A disc that is bright in the middle and black at the rim; drawn additively it reads as a glow. */
-function glowDisc(segments = 12) {
-  const pos: number[] = [];
-  const col: number[] = [];
-  const at = (r: number, k: number, v: number) => {
-    const a = (k / segments) * Math.PI * 2;
-    pos.push(r * Math.cos(a), r * Math.sin(a), 0);
-    col.push(v, v, v);
-  };
-  for (let k = 0; k < segments; k++) {
-    pos.push(0, 0, 0);
-    col.push(1, 1, 1);
-    at(0.3, k, 0.45);
-    at(0.3, k + 1, 0.45);
-    at(0.3, k, 0.45);
-    at(1, k, 0);
-    at(1, k + 1, 0);
-    at(0.3, k, 0.45);
-    at(1, k + 1, 0);
-    at(0.3, k + 1, 0.45);
+let glowMap: THREE.DataTexture | null = null;
+
+/**
+ * The glow around a lamp: a tight bright core inside a wide, faint skirt that
+ * reaches nothing well before the rim, so it has no outline. The falloff is
+ * stored as it should look on screen and drawn additively on a plain quad.
+ */
+function glowMat() {
+  if (!glowMap) {
+    const size = 128;
+    const data = new Uint8Array(size * size * 4).fill(255);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const r = Math.hypot(x + 0.5 - size / 2, y + 0.5 - size / 2) / (size / 2);
+        const v = (0.62 * Math.exp(-((r / 0.1) ** 2)) + 0.38 * Math.exp(-((r / 0.4) ** 2))) * (1 - THREE.MathUtils.smoothstep(r, 0.6, 1));
+        data.fill(Math.round(255 * v), (y * size + x) * 4, (y * size + x) * 4 + 3);
+      }
+    }
+    glowMap = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    glowMap.colorSpace = THREE.SRGBColorSpace;
+    glowMap.magFilter = THREE.LinearFilter;
+    glowMap.minFilter = THREE.LinearMipmapLinearFilter;
+    glowMap.generateMipmaps = true;
+    glowMap.needsUpdate = true;
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  return geo;
+  return new THREE.MeshBasicMaterial({ map: glowMap, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
 }
 
 const additive = () =>
@@ -278,7 +279,7 @@ class Lights {
     }
     group.add(this.heads);
     if (detail >= 2 && specs.some((s) => s.halo)) {
-      const glows = (this.glows = instanced(glowDisc(), additive(), specs.length));
+      const glows = (this.glows = instanced(new THREE.PlaneGeometry(2, 2), glowMat(), specs.length));
       for (let i = 0; i < specs.length; i++) {
         glows.setMatrixAt(i, HIDDEN);
         glows.setColorAt(i, _c.setRGB(0, 0, 0));
@@ -322,7 +323,7 @@ class Lights {
       // Nudged toward the camera so the lamp head doesn't cut its own glow in half.
       _p.fromArray(this.at, i * 3).z += 0.4;
       glows.setMatrixAt(i, _m.compose(_p, _q.identity(), _s.set(r, r, r)));
-      glows.setColorAt(i, _c.copy(this.lit[i]).multiplyScalar(0.45 * f));
+      glows.setColorAt(i, _c.copy(this.lit[i]).multiplyScalar(0.8 * f));
     }
     this.heads.instanceColor!.needsUpdate = true;
     if (glows && shine) {
@@ -1389,6 +1390,252 @@ function buildTianchi(map: MapDef, detail: SceneryDetail): Scenery {
   };
 }
 
+// ---- Open Ocean: the freighter and the lighthouse beam -------------------
+
+/** Metres of air a lighthouse beam lights up before it has faded out. */
+const BEAM_REACH = 92;
+
+/**
+ * A lighthouse beam as light hanging in the air: a cone that is brightest along
+ * its axis and fades to nothing at its outline, at its far end and right at the
+ * lamp, so the cone itself is never seen. Pointing at the viewer it all but
+ * vanishes, and the lamp's own flash takes over.
+ */
+function beamMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { uBeamColor: { value: new THREE.Color('#fff1c4') }, uBeamStrength: { value: 0 } },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    vertexShader: `
+      varying float vBeamAlong;
+      varying vec3 vBeamNormal;
+      varying vec3 vBeamView;
+      void main() {
+        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+        vBeamAlong = length(position) / ${BEAM_REACH.toFixed(1)};
+        vBeamNormal = normalMatrix * normal;
+        vBeamView = -viewPosition.xyz;
+        gl_Position = projectionMatrix * viewPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uBeamColor;
+      uniform float uBeamStrength;
+      varying float vBeamAlong;
+      varying vec3 vBeamNormal;
+      varying vec3 vBeamView;
+      void main() {
+        // The cone wall faces the viewer along the beam's axis and turns edge-on at its outline.
+        float facing = abs(dot(normalize(vBeamNormal), normalize(vBeamView)));
+        float across = pow(facing, 2.4);
+        float along = pow(1.0 - clamp(vBeamAlong, 0.0, 1.0), 1.7) * smoothstep(0.0, 0.05, vBeamAlong);
+        gl_FragColor = vec4(uBeamColor, uBeamStrength * across * along);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `,
+  });
+}
+
+// The freighter's lane along the horizon. It sails the lane end to end and turns
+// round out of sight, so it crosses the view about every two and a half minutes.
+const LANE_Z = -132;
+const LANE_HALF = 240;
+const SHIP_SPEED = 3.2;
+const SHIP_BEAM = 5;
+/** Top of the funnel in the ship's own space: bow at +x, y up from the waterline, +z to starboard. */
+const FUNNEL_TOP = [-14.6, 10.9, 0] as const;
+
+/**
+ * The freighter's lamps: [x, y, z, head size] in the ship's own space, with `side`
+ * marking the ones that keep to whichever side faces the viewer. The masthead
+ * lights (the aft one higher), red to port, green to starboard and the white
+ * stern light are what a real ship shows, so its heading can be read at night.
+ */
+const SHIP_LAMPS: { spec: LightSpec; at: readonly [number, number, number, number]; side?: boolean }[] = [
+  { spec: { color: '#fff6e0', glass: '#2a3138', halo: 1.5 }, at: [13.4, 7.95, 0, 0.34] },
+  { spec: { color: '#fff6e0', glass: '#2a3138', halo: 1.7 }, at: [-11.2, 11.9, 0, 0.36] },
+  { spec: { color: '#3dff7a', glass: '#1f3b2a', halo: 1.2 }, at: [-10.6, 8.2, 3, 0.3] },
+  { spec: { color: '#ff4636', glass: '#3b2220', halo: 1.2 }, at: [-10.6, 8.2, -3, 0.3] },
+  { spec: { color: '#fff6e0', glass: '#2a3138', halo: 1 }, at: [-17.5, 3.4, 0, 0.28] },
+  // Deck floodlights on the foremast and under the bridge, and the light the accommodation spills.
+  { spec: { color: '#dfe9ff', glass: '#2a3138', halo: 2.4, level: () => 0.55 }, at: [13.1, 6.3, 0.6, 0.22], side: true },
+  { spec: { color: '#dfe9ff', glass: '#2a3138', halo: 2.4, level: () => 0.55 }, at: [-9.4, 8.95, 1.2, 0.22], side: true },
+  { spec: { color: '#ffc98a', glass: '#000000', halo: 6, level: () => 0.3 }, at: [-12.3, 6, 3.3, 0], side: true },
+];
+
+/**
+ * A container ship working along the horizon: it rides the swell, trails smoke
+ * from its funnel, pushes a bow wave and leaves a wake. At night its windows and
+ * navigation lights come on, and the lighthouse beam washes over it as it passes.
+ */
+class Freighter {
+  /** Its lamps, to append to the map's Lights; `attach` says where they landed. */
+  readonly lampSpecs = SHIP_LAMPS.map((l) => l.spec);
+  /** Position along the lane and heading. */
+  private root = new THREE.Group();
+  /** Everything that pitches and rolls. */
+  private body = new THREE.Group();
+  private hull: THREE.MeshStandardMaterial;
+  private windows: THREE.MeshStandardMaterial;
+  private radar: THREE.Mesh;
+  private bowWave: THREE.Mesh;
+  private foam: THREE.MeshBasicMaterial;
+  private smoke: Puffs;
+  private smokeLook = smokeMaterial('#7d838a');
+  private funnel: PuffSource;
+  private trail: [number, number] = [0, 0.5];
+  private lights: Lights | null = null;
+  private firstLamp = 0;
+
+  constructor(group: THREE.Group, private waves: number, detail: SceneryDetail, rng: Rng) {
+    const [navy, white, red, steel] = ['#27384a', '#e9e6de', '#b8382c', '#d8d8d8'];
+    const profile = new THREE.Shape(
+      [[-16.2, -1.2], [13.6, -1.2], [17.6, 3.5], [11.4, 3.3], [11.4, 2.2], [-8.6, 2.2], [-8.6, 2.9], [-17.4, 2.9], [-17, 0.6]].map(([x, y]) => new THREE.Vector2(x, y)),
+    );
+    const hull = new THREE.ExtrudeGeometry(profile, { depth: SHIP_BEAM, bevelEnabled: false });
+    hull.translate(0, 0, -SHIP_BEAM / 2);
+    // Draw the bow in to a stem.
+    const hp = hull.attributes.position;
+    for (let i = 0; i < hp.count; i++) if (hp.getX(i) > 10) hp.setZ(i, hp.getZ(i) * Math.max(0.12, 1 - (hp.getX(i) - 10) / 8.5));
+    hull.computeVertexNormals();
+
+    const parts: [THREE.BufferGeometry, THREE.ColorRepresentation, number, number, number][] = [
+      [hull, navy, 0, 0, 0],
+      // Red boot topping at the waterline, then the accommodation block aft.
+      [new THREE.BoxGeometry(27.6, 1.5, SHIP_BEAM + 0.12), '#8f2d25', -2.6, -0.5, 0],
+      [new THREE.BoxGeometry(6.4, 2.1, 4.6), white, -12.4, 3.95, 0],
+      [new THREE.BoxGeometry(5.4, 1.9, 4.2), white, -12.6, 5.95, 0],
+      [new THREE.BoxGeometry(4.2, 1.7, 5.8), white, -11.8, 7.75, 0],
+      [new THREE.BoxGeometry(4.6, 0.22, 4.4), '#cfd3d6', -11.8, 8.71, 0],
+      [new THREE.CylinderGeometry(0.8, 0.95, 3.4, 6), red, FUNNEL_TOP[0], 8.6, 0],
+      [new THREE.CylinderGeometry(0.82, 0.82, 0.5, 6), '#1d2126', FUNNEL_TOP[0], 10.5, 0],
+      [new THREE.CylinderGeometry(0.09, 0.13, 2.9, 5), steel, -11.2, 10.25, 0],
+      [new THREE.BoxGeometry(0.12, 0.12, 2.2), steel, -11.2, 10.9, 0],
+      [new THREE.CylinderGeometry(0.08, 0.13, 4.4, 5), steel, 13.4, 5.55, 0],
+      [new THREE.BoxGeometry(1.7, 0.6, 0.75), '#e2702a', -13.6, 5.35, 2.55],
+      [new THREE.BoxGeometry(1.7, 0.6, 0.75), '#e2702a', -13.6, 5.35, -2.55],
+    ];
+    // Deck cargo: seven bays of containers, two abreast, stacked one to three high.
+    const boxes = ['#b5483a', '#2f6f9f', '#d08a2e', '#3f8f5f', '#7b5aa6', '#c9b23a', '#8a8f96'];
+    for (let bay = 0; bay < 7; bay++) {
+      const tiers = rng.int(1, 3);
+      for (let tier = 0; tier < tiers; tier++) {
+        for (const z of [-1.2, 1.2]) {
+          if (tier === tiers - 1 && tier > 0 && rng.next() < 0.25) continue;
+          parts.push([new THREE.BoxGeometry(2.5, 1.1, 2.25), rng.pick(boxes), -6.6 + bay * 2.75, 2.75 + tier * 1.13, z]);
+        }
+      }
+    }
+    // Windows down both sides and across the front of the bridge. Most are lit at night; a few stay dark.
+    const panes: [THREE.BufferGeometry, THREE.ColorRepresentation, number, number, number][] = [];
+    const pane = (geo: THREE.BufferGeometry, x: number, y: number, z: number) => {
+      if (rng.next() < 0.2) parts.push([geo, '#1c2630', x, y, z]);
+      else panes.push([geo, '#ffffff', x, y, z]);
+    };
+    for (const side of [1, -1]) {
+      for (let i = 0; i < 5; i++) pane(new THREE.BoxGeometry(0.55, 0.5, 0.06), -14.8 + i * 1.25, 4.2, side * 2.33);
+      for (let i = 0; i < 4; i++) pane(new THREE.BoxGeometry(0.55, 0.5, 0.06), -14.6 + i * 1.25, 6.1, side * 2.13);
+      for (let i = 0; i < 5; i++) pane(new THREE.BoxGeometry(0.62, 0.62, 0.06), -13.5 + i * 0.85, 7.95, side * 2.93);
+    }
+    for (let i = 0; i < 5; i++) pane(new THREE.BoxGeometry(0.06, 0.62, 0.7), -9.67, 7.95, -2.1 + i * 1.05);
+
+    // Its own material: the lighthouse beam lights the whole ship as it sweeps across.
+    this.hull = flatMat('#ffffff', { vertexColors: true, emissive: '#fff1c4', emissiveIntensity: 0 });
+    this.windows = new THREE.MeshStandardMaterial({ color: '#1c2630', emissive: '#ffd08a', emissiveIntensity: 0, flatShading: true });
+    this.radar = new THREE.Mesh(compound([[new THREE.BoxGeometry(2, 0.16, 0.28), steel, 0, 0, 0]]), this.hull);
+    this.radar.position.set(-12.6, 9.1, 0);
+    this.body.add(new THREE.Mesh(compound(parts), this.hull), new THREE.Mesh(compound(panes), this.windows), this.radar);
+
+    // Foam stays on the water while the hull moves above it: the wave curling off
+    // the bow, and a wake that widens and fades astern.
+    const crest: number[] = [];
+    for (const s of [1, -1]) crest.push(16.9, 0.05, s * 0.25, 13.2, 1, s * 2.2, 12.4, 0.05, s * 2.9, 13.2, 1, s * 2.2, 9.6, 0.25, s * 3, 12.4, 0.05, s * 2.9);
+    this.bowWave = new THREE.Mesh(triangles([[crest, '#f3f8fa']]), flatMat('#ffffff', { vertexColors: true, side: THREE.DoubleSide, emissive: '#ffffff', emissiveIntensity: 0.25 }));
+    const wake: number[] = [];
+    const fade: number[] = [];
+    const strip = (x0: number, w0: number, a0: number, x1: number, w1: number, a1: number, off = 0) => {
+      wake.push(x0, 0, off - w0, x1, 0, off - w1, x0, 0, off + w0, x0, 0, off + w0, x1, 0, off - w1, x1, 0, off + w1);
+      for (const a of [a0, a1, a0, a0, a1, a1]) fade.push(1, 1, 1, a);
+    };
+    for (let i = 0; i < 6; i++) {
+      const [u0, u1] = [i / 6, (i + 1) / 6];
+      strip(-17 - u0 * 34, 1.5 + u0 * 2.6, 0.8 * (1 - u0), -17 - u1 * 34, 1.5 + u1 * 2.6, 0.8 * (1 - u1));
+    }
+    for (const s of [1, -1]) strip(11, 0.2, 0.6, -17, 0.35, 0.3, s * 2.75);
+    const wakeGeo = new THREE.BufferGeometry();
+    wakeGeo.setAttribute('position', new THREE.Float32BufferAttribute(wake, 3));
+    wakeGeo.setAttribute('color', new THREE.Float32BufferAttribute(fade, 4));
+    this.foam = new THREE.MeshBasicMaterial({ color: '#f3f8fa', vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    const wakeMesh = new THREE.Mesh(wakeGeo, this.foam);
+    wakeMesh.position.y = 0.12;
+
+    this.root.add(this.body, this.bowWave, wakeMesh);
+    this.root.position.z = LANE_Z;
+    group.add(this.root);
+
+    this.funnel = { x: 0, y: 0, z: LANE_Z, counts: [0, 6, 10], life: 9, rise: 6.5, drift: this.trail, size: [0.9, 3], spread: 0.5 };
+    this.smoke = new Puffs(group, this.smokeLook.mat, [this.funnel], detail, rng);
+  }
+
+  /** Its lamps are `lights` entries `first`, `first + 1`, ... in the order of `lampSpecs`. */
+  attach(lights: Lights, first: number) {
+    this.lights = lights;
+    this.firstLamp = first;
+  }
+
+  /** `beam` is the lighthouse lamp's rotation and where it stands, for the wash of light as it sweeps past. */
+  update(time: number, night: boolean, shine: boolean, env: SceneryEnv | undefined, beam: { angle: number; x: number; z: number }) {
+    const period = (4 * LANE_HALF) / SHIP_SPEED;
+    const leg = fract(time / period + 0.19);
+    const dir = leg < 0.5 ? 1 : -1;
+    const x = LANE_HALF * (leg < 0.5 ? 4 * leg - 1 : 3 - 4 * leg);
+    const waveTime = env?.waveTime ?? time;
+    const waves = this.waves * (env?.swell ?? 1);
+
+    // A ship this long spans several waves: it heaves and pitches with a fraction of each.
+    this.root.position.x = x;
+    this.root.rotation.y = dir > 0 ? 0 : Math.PI;
+    this.body.position.y = waterY(x, LANE_Z, waveTime, waves) * 0.35;
+    this.body.rotation.z = Math.atan(0.0525 * Math.cos(x * 0.15 + waveTime * 1.3) * waves) * 0.35 * dir;
+    this.body.rotation.x = Math.sin(waveTime * 0.55 + 1.3) * 0.022 * waves;
+    this.radar.rotation.y = time * 2.2;
+    this.bowWave.position.y = waterY(x + dir * 14, LANE_Z, waveTime, waves) * 0.5;
+    this.bowWave.scale.y = 0.85 + 0.3 * Math.sin(time * 2.1) + 0.15 * waves;
+    this.foam.color.setScalar(night ? 0.34 : 0.95);
+
+    this.windows.emissiveIntensity = shine ? 1.7 : 0;
+    // The beam only reaches the ship while it passes behind the lighthouse.
+    const [dx, dz] = [x - beam.x, LANE_Z - beam.z];
+    const distance = Math.hypot(dx, dz);
+    const aim = Math.abs(dx * Math.cos(beam.angle) - dz * Math.sin(beam.angle)) / distance;
+    this.hull.emissiveIntensity = shine ? 0.3 * THREE.MathUtils.smoothstep(aim, 0.96, 0.998) * (1 - THREE.MathUtils.smoothstep(distance, 50, 105)) : 0;
+
+    this.root.updateMatrix();
+    this.body.updateMatrix();
+    const pose = _m.multiplyMatrices(this.root.matrix, this.body.matrix);
+    if (this.lights) {
+      SHIP_LAMPS.forEach((lamp, i) => {
+        const [lx, ly, lz, size] = lamp.at;
+        // Turned round, the ship's own z points away: keep the deck lights on the near side.
+        this.lights!.place(this.firstLamp + i, _m2.makeScale(size, size, size).setPosition(lx, ly, lamp.side ? lz * dir : lz).premultiply(pose));
+      });
+    }
+
+    // Smoke leaves the funnel and is left behind as the ship moves on; wind lays it flatter.
+    // It trails less far than the ship really travels, so the puffs still overlap into one plume.
+    _p.set(...FUNNEL_TOP).applyMatrix4(pose);
+    this.funnel.x = _p.x;
+    this.funnel.y = _p.y;
+    this.funnel.z = _p.z;
+    this.trail[0] = -dir * SHIP_SPEED * this.funnel.life * 0.5;
+    this.smokeLook.setNight(night);
+    this.smoke.update(time, env?.weather?.wind ?? 0);
+  }
+}
+
 // ---- Open Ocean ---------------------------------------------------------
 
 function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
@@ -1428,18 +1675,6 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     put(jitter(ring, foam, 0.3), '#eef6f8', x, 0.22, z);
   }
 
-  // A freighter far out on the horizon.
-  const [sx, sz] = [-24, -140];
-  const hullShape = new THREE.Shape([new THREE.Vector2(-12, -1.2), new THREE.Vector2(11, -1.2), new THREE.Vector2(14, 2.2), new THREE.Vector2(-12.4, 2)]);
-  const shipHull = new THREE.ExtrudeGeometry(hullShape, { depth: 4, bevelEnabled: false });
-  shipHull.translate(0, 0, -2);
-  put(shipHull, '#2f3944', sx, 0, sz);
-  put(new THREE.BoxGeometry(24, 0.3, 4.1), red, sx - 0.3, -0.3, sz);
-  put(new THREE.BoxGeometry(5, 3.6, 3.4), white, sx - 8, 3.8, sz);
-  put(new THREE.BoxGeometry(6, 0.3, 4.2), white, sx - 7.8, 5.75, sz);
-  put(new THREE.CylinderGeometry(0.75, 0.85, 2.4, 6), red, sx - 10, 7.1, sz);
-  put(new THREE.CylinderGeometry(0.12, 0.15, 6.2, 5), stack, sx + 9, 5, sz);
-  for (const hx of [-2, 2.5, 7]) put(new THREE.BoxGeometry(3.2, 0.8, 3.2), '#4c5a66', sx + hx, 2.4, sz);
   group.add(batch.build());
 
   const beacon = lampMat('#ffe9a8');
@@ -1456,19 +1691,14 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     { color: '#ff4433', glass: '#7a2a22', period: 4, flash: 0.6, halo: 1.2 },
     { color: '#44ff77', glass: '#285f3c', period: 3, flash: 0.6, phase: 1.3, halo: 1.2 },
   ].slice(0, markerCount);
-  const shipLights: [number, number, number, number, number, string][] = [
-    // dx, y, dz, width, height, colour
-    [-9.5, 4.6, 1.75, 0.6, 0.4, '#ffe2a0'],
-    [-8, 4.6, 1.75, 0.6, 0.4, '#ffe2a0'],
-    [-6.5, 4.6, 1.75, 0.6, 0.4, '#ffe2a0'],
-    [9, 8.3, 0, 0.35, 0.35, '#ffffff'],
-    [-5.3, 5.1, 2.05, 0.35, 0.35, '#45ff7a'],
-  ];
-  for (const [, , , , , color] of shipLights) specs.push({ color, glass: '#1d2730', halo: 2.4 });
+  // A freighter working along the horizon (its own seeded stream, like every feature).
+  const freighter = new Freighter(group, map.waves, detail, stream(0x0cea17, 5));
+  specs.push(...freighter.lampSpecs);
+  // The lamp never goes fully dark between flashes: a wide, soft glow that swells as a beam comes round.
   const lighthouseGlow = specs.length;
-  specs.push({ color: '#ffe9a8', glass: '#000000', halo: 7, level: sweep });
+  specs.push({ color: '#ffe9a8', glass: '#000000', halo: 11, level: (t) => 0.22 + 0.78 * sweep(t) });
   const lights = new Lights(group, new THREE.CylinderGeometry(0.5, 0.5, 1, 6), specs, detail);
-  shipLights.forEach(([dx, y, dz, w, h], i) => lights.placeAt(markerCount + i, sx + dx, y, sz + dz, w, h));
+  freighter.attach(lights, markerCount);
   lights.placeAt(lighthouseGlow, lx, 18.2, lz + 1.2, 0);
 
   // Sparse distant channel markers leave the foreground and reflection path open.
@@ -1521,30 +1751,20 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
     stream(0x0cea17, 4),
   );
 
-  // On high, the lamp's two beams sweep the night: additive cones, brightest at the lamp.
-  let beam: THREE.Object3D | null = null;
+  // On high, the lamp's two beams sweep the night as light in the air (see beamMaterial).
+  let beam: THREE.Mesh | null = null;
+  const beamLook = beamMaterial();
   // Rotation at which a beam points from the lighthouse at the camera (x = 0, z = 22).
   const facing = Math.atan2(-(22 - lz), 0 - lx);
   if (detail >= 3) {
     // Apex at the lamp, opening along +x (side 1) or -x (side -1), dipping slightly toward the sea.
     const cone = (side: number) => {
-      const g = new THREE.ConeGeometry(7, 70, 12, 4, true);
-      g.translate(0, -35, 0);
+      const g = new THREE.ConeGeometry(6.5, BEAM_REACH, 28, 1, true);
+      g.translate(0, -BEAM_REACH / 2, 0);
       g.rotateZ(side > 0 ? Math.PI / 2 : -Math.PI / 2);
       return g.rotateZ(-0.05 * side);
     };
-    const geo = mergeGeometries([cone(1), cone(-1)])!;
-    const pos = geo.attributes.position;
-    const col = new Float32Array(pos.count * 3);
-    const warm = new THREE.Color('#fff1c4');
-    for (let i = 0; i < pos.count; i++) {
-      const fade = Math.pow(1 - Math.min(1, Math.abs(pos.getX(i)) / 70), 1.6);
-      _c.copy(warm).multiplyScalar(fade).toArray(col, i * 3);
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    const mat = additive();
-    mat.opacity = 0.3;
-    beam = new THREE.Mesh(geo, mat);
+    beam = new THREE.Mesh(mergeGeometries([cone(1), cone(-1)])!, beamLook);
     beam.position.set(lx, 18.2, lz);
     beam.visible = false;
     group.add(beam);
@@ -1590,11 +1810,15 @@ function buildOcean(map: MapDef, detail: SceneryDetail): Scenery {
       flashSheet.visible = flashMaterial.opacity > 0.005;
       // The lamp turns: bright when a beam sweeps past the viewer.
       beacon.emissiveIntensity = shine ? 0.6 + sweep(time) * 2.4 : 0;
+      // A beam faces the camera whenever |sin(0.8 t)| peaks, matching the lamp.
+      const turn = time * 0.8 - Math.PI / 2 + facing;
       if (beam) {
         beam.visible = shine;
-        // A beam faces the camera whenever |sin(0.8 t)| peaks, matching the lamp.
-        beam.rotation.y = time * 0.8 - Math.PI / 2 + facing;
+        beam.rotation.y = turn;
+        // Rain and spray in the air are what make a beam visible: faint on a clear night.
+        beamLook.uniforms.uBeamStrength.value = 0.26 + 0.34 * rainMist.value;
       }
+      freighter.update(time, night, shine, env, { angle: turn, x: lx, z: lz });
       markers.update(time, env);
       lights.update(time, night, shine);
       gulls.update(time, night);

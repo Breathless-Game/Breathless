@@ -471,6 +471,36 @@ export function totalPearls(state: EquipmentState): number {
   return state.legacyPearls + state.pearls;
 }
 
+/** How a flat Pearl price (fish food, synthesis fees) splits between the two balances. */
+export interface PearlSpend {
+  /** Taken from the local legacy balance, which is spent first (the on-chain badge does not move). */
+  fromLegacy: number;
+  /** Must be burned on-chain with spendPearls() before the purchase applies. */
+  fromChain: number;
+}
+
+/**
+ * Plan paying `cost` Pearls, or null when unaffordable or the cost is not a positive
+ * whole number. Same rule as the gear upgrades: legacy Pearls first, the rest on-chain.
+ */
+export function planPearlSpend(state: EquipmentState, cost: number): PearlSpend | null {
+  if (!Number.isSafeInteger(cost) || cost <= 0) return null;
+  const current = normalize(state);
+  if (totalPearls(current) < cost) return null;
+  const fromLegacy = Math.min(current.legacyPearls, cost);
+  return { fromLegacy, fromChain: cost - fromLegacy };
+}
+
+/** Apply a planned spend once its on-chain part has been burned. */
+export function applyPearlSpend(state: EquipmentState, spend: PearlSpend): EquipmentState {
+  const current = normalize(state);
+  return {
+    ...current,
+    legacyPearls: Math.max(0, current.legacyPearls - spend.fromLegacy),
+    pearls: Math.max(0, current.pearls - spend.fromChain),
+  };
+}
+
 export interface UpgradePlan {
   tier: RodTier;
   /** Taken from the local legacy balance, which is spent first. */
