@@ -22,7 +22,8 @@ Environment=HOST=127.0.0.1
 ExecStart=/opt/breathless-node/bin/node sensor/index.mjs --serve game/dist
 Restart=always
 RestartSec=3
-MemoryMax=900M
+# At 900M the Presage SDK, sharp and node swapped, and Presage reported "Frame rate too low".
+MemoryMax=1400M
 
 # Hardening. The app writes only under /srv/breathless (the SmartSpectra SDK
 # caches in ~/.cache; recordings, if enabled, go to app/sensor/recordings).
