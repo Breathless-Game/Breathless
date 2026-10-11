@@ -6,6 +6,16 @@ import { nftName } from './nft-uri';
 import { fishIcon } from './portrait';
 import { Rng } from './rng';
 import { storageKey } from './wallet';
+import {
+  AQUARIUM_STORAGE_KEY,
+  DEFAULT_AQUARIUM_LIGHT,
+  feedAquariumFish,
+  growthScale,
+  loadAquariumState,
+  normalizeLightColor,
+  saveAquariumState,
+  type AquariumState,
+} from './aquarium-state';
 
 // The aquarium (图鉴): the fish you've banked, swimming in a 2.5D glass tank. It comes
 // in the way the workbench does: the camera pans down, the title's rope and fish ride
@@ -16,6 +26,7 @@ import { storageKey } from './wallet';
 // fish is its rendered sprite placed at a depth (smaller, dimmer further back).
 
 export const TANK_SIZE = 50;
+export const AQUARIUM_FOOD_COST = 5;
 const FAVORITES_KEY = 'favorites';
 const ICONS_PER_FRAME = 3; // sprites rendered per frame while a tank fills, so opening never stalls
 // The pan in and out, as long as the workbench's.
@@ -26,6 +37,8 @@ const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 
 export interface AquariumHooks {
   /** 0 = the title, 1 = the aquarium: the title lifts its rope away and the sea camera sinks. */
   pan(u: number): void;
+  buyFood(): Promise<boolean>;
+  message(text: string): void;
 }
 
 // Tank box: where its front glass sits on the canvas (in fractions) when it faces you,
@@ -61,6 +74,7 @@ interface Swimmer {
   phase: number;
   alpha: number;
   leaving: boolean;
+  growthPulse: number;
 }
 
 interface Plant {
@@ -127,6 +141,9 @@ export class Aquarium {
   private tween: { t: number; dur: number; from: number; to: number } | null = null;
   private yaw = 0; // radians the tank is turned; + brings its right side toward you
   private yawTarget = 0;
+  private aquariumState: AquariumState = { growth: {}, light: { color: DEFAULT_AQUARIUM_LIGHT } };
+  private lightInput = $<HTMLInputElement>('aq-light');
+  private feeding = false;
 
   constructor(
     private bank: BankedFish[],
@@ -135,6 +152,13 @@ export class Aquarium {
     $('aq-close').addEventListener('click', () => this.close());
     $('aq-prev').addEventListener('click', () => this.step(-1));
     $('aq-next').addEventListener('click', () => this.step(1));
+    this.lightInput.addEventListener('input', () => {
+      this.aquariumState = {
+        ...this.aquariumState,
+        light: { color: normalizeLightColor(this.lightInput.value) },
+      };
+      saveAquariumState(this.aquariumState, undefined, this.stateKey());
+    });
     this.canvas.addEventListener('pointermove', (e) => {
       this.hover = this.fishAt(e);
       this.canvas.style.cursor = this.hover ? 'pointer' : '';
@@ -155,6 +179,14 @@ export class Aquarium {
     new ResizeObserver(() => this.resize()).observe(this.canvas);
   }
 
+  private stateKey() {
+    try {
+      return storageKey(AQUARIUM_STORAGE_KEY);
+    } catch {
+      return AQUARIUM_STORAGE_KEY;
+    }
+  }
+
   /** Up, or on its way up: Esc and the title's keys belong to it. */
   get open() {
     return this.state === 'opening' || this.state === 'open';
@@ -166,6 +198,8 @@ export class Aquarium {
     if (this.state === 'closed') {
       this.yaw = this.yawTarget = 0;
       this.favorites = loadFavorites(); // per wallet, so read fresh each time
+      this.aquariumState = loadAquariumState(undefined, this.stateKey());
+      this.lightInput.value = this.aquariumState.light.color;
       this.swimmers.clear();
       this.pick(null);
       this.setTank(0, true);
@@ -315,8 +349,9 @@ export class Aquarium {
     const y = lerp(SWIM.y0, SWIM.y1, Math.random());
     const z = lerp(SWIM.z0, SWIM.z1, Math.random());
     const dir = Math.random() < 0.5 ? -1 : 1;
-    // 15 cm reads as small, 150 cm as large.
-    const size = clamp(Math.log(Math.max(fish.lengthCm, 1) / 15) / Math.log(10), 0, 1);
+    // 15 cm reads as small, 150 cm as large. Feeding changes only the aquarium
+    // presentation; the banked/NFT fish metadata remains unchanged.
+    const size = this.sizeFor(fish);
     return {
       fish,
       img: null,
@@ -335,7 +370,13 @@ export class Aquarium {
       phase: Math.random() * Math.PI * 2,
       alpha: 0,
       leaving: false,
+      growthPulse: 0,
     };
+  }
+
+  private sizeFor(fish: BankedFish) {
+    const feeds = this.aquariumState.growth[fish.id]?.feedCount ?? 0;
+    return clamp(Math.log(Math.max(fish.lengthCm * growthScale(feeds), 1) / 15) / Math.log(10), 0, 1);
   }
 
   private swim(s: Swimmer, dt: number) {
@@ -442,8 +483,20 @@ export class Aquarium {
     rarity.style.color = RARITY[f.rarity].color;
     const meta = document.createElement('div');
     meta.className = 'small muted';
-    meta.textContent = `${f.lengthCm} cm · ${f.weightKg} kg · ${where} · ${f.depthM} m · ${fishValue(f)} pts`;
+    const feeds = this.aquariumState.growth[f.id]?.feedCount ?? 0;
+    const scale = growthScale(feeds);
+    meta.textContent = `${Math.round(f.lengthCm * scale)} cm · ${f.weightKg} kg · ${where} · ${f.depthM} m · ${fishValue(f)} pts`;
     body.append(name, rarity, meta);
+    if (feeds > 0) {
+      const grown = document.createElement('div');
+      grown.className = 'aq-growth';
+      grown.textContent = `Grown +${Math.round((scale - 1) * 100)}% · 喂食 ${feeds}`;
+      body.append(grown);
+    }
+    const feed = document.createElement('button');
+    feed.className = 'mini primary aq-feed';
+    feed.textContent = `Feed · 喂食 · ${AQUARIUM_FOOD_COST} ✦`;
+    feed.addEventListener('click', () => void this.feed(f));
     const star = document.createElement('button');
     star.className = fav ? 'mini' : 'mini primary';
     const full = !fav && this.favoriteFish().length >= TANK_SIZE;
@@ -468,7 +521,40 @@ export class Aquarium {
     x.textContent = '✕';
     x.title = 'Close';
     x.addEventListener('click', () => this.pick(null));
+    actions.prepend(feed);
     this.card.replaceChildren(img, body, actions, x);
+  }
+
+  private async feed(f: BankedFish) {
+    const result = feedAquariumFish(this.aquariumState, f.id);
+    if (!result.fed) {
+      this.hooks.message(result.reason === 'max' ? 'This fish is fully grown · 已经长到最大' : 'The fish is still full · 稍后再喂');
+      return;
+    }
+    if (this.feeding) return;
+    this.feeding = true;
+    try {
+      const purchased = await this.hooks.buyFood();
+      if (!purchased) return;
+      this.aquariumState = { ...result.state, light: { ...this.aquariumState.light } };
+      saveAquariumState(this.aquariumState, undefined, this.stateKey());
+      const swimmer = this.swimmers.get(f);
+      if (swimmer) swimmer.size = this.sizeFor(f);
+      this.hooks.message(`${f.name} grew after a meal · 喂食后长大了`);
+      if (swimmer) {
+        swimmer.growthPulse = 1;
+        for (let i = 0; i < 5; i++) this.bubbles.push({
+          x: swimmer.x + (Math.random() - 0.5) * 0.06,
+          y: swimmer.y + (Math.random() - 0.5) * 0.04,
+          z: swimmer.z,
+          r: 1.5 + Math.random() * 2.5,
+          v: 0.12 + Math.random() * 0.1,
+        });
+      }
+      if (swimmer && !swimmer.leaving && this.fishIn(this.tank).includes(f)) this.pick(swimmer);
+    } finally {
+      this.feeding = false;
+    }
   }
 
   /** Starring moves the fish to the Favorites tank; it swims out of this one. */
@@ -525,6 +611,7 @@ export class Aquarium {
         s.img = img;
       }
       this.swim(s, dt);
+      s.growthPulse = Math.max(0, s.growthPulse - dt * 1.8);
       if (s.leaving && s.alpha === 0) this.swimmers.delete(f);
     }
     if (Math.random() < dt * 5) {
@@ -734,7 +821,8 @@ export class Aquarium {
     // Nose up or down a little with its climb; the sprite faces right, so mirror it to face left.
     // Turning the tank shortens fish swimming across it a little.
     ctx.rotate(clamp(s.vy * 3, -0.25, 0.25) * Math.sign(s.face || 1));
-    ctx.scale(s.face * Math.cos(this.yaw), 1);
+    const pulse = 1 + Math.sin((1 - s.growthPulse) * Math.PI) * 0.1;
+    ctx.scale(s.face * Math.cos(this.yaw) * pulse, pulse);
     ctx.globalAlpha = s.alpha * (1 - s.z * 0.25);
     // Further back is dimmer and bluer, as if through more water.
     const dim = 1 - s.z * 0.4;
