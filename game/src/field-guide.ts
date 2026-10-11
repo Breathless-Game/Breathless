@@ -284,10 +284,13 @@ export class FieldGuide {
     this.setEnabled(!this.state.enabled);
   }
 
-  /** The corner buttons (手册 · 新手引导): hidden while the title's GUIDE and TUTORIAL fish hang there instead. */
+  /** The corner buttons (手册 · 新手引导): hidden while the title's GUIDE and TUTORIAL fish hang there instead, shown everywhere else. */
   showLauncher(show: boolean) {
+    if (show === this.launcherShown) return; // cheap to call every frame
+    this.launcherShown = show;
     this.launcher.classList.toggle('hidden', !show);
   }
+  private launcherShown: boolean | null = null;
 
   private setEnabled(enabled: boolean) {
     this.state = { ...this.state, enabled, chosen: true };

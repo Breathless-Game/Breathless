@@ -2675,8 +2675,6 @@ function update(dt: number, time: number) {
 
   hud.setBreath(s, outOfAir);
   hud.placeBreath(overDiversHead());
-  // The corner 手册 / 新手引导 buttons are gone.
-  fieldGuide?.showLauncher(false); // never: on the title the rope's GUIDE and TUTORIAL fish, in a dive B
   hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
@@ -2812,6 +2810,9 @@ function frame() {
     world.updateLighting(time, camera.position.y, camera.position.x);
   }
   updateTimeLabel();
+  // The corner 手册 / 新手引导 buttons: on the title the rope's GUIDE and TUTORIAL fish stand in for them.
+  // Outside update() so a pause does not leave them stale; showLauncher only touches the DOM on a change.
+  fieldGuide?.showLauncher(!titleScreen.visible);
   if (previewOn) renderPreview(); // before the main view, which is what the canvas then shows
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
