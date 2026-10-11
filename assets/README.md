@@ -35,6 +35,8 @@ The pictures are renders. The game does not load them: it draws every fish and t
 | Fish model | `buildFishMesh(spec)` | [`game/src/fish.ts`](../game/src/fish.ts) |
 | Fish sprite, icon and NFT card | `fishSprite` / `fishIcon` / `fishCard` | [`game/src/portrait.ts`](../game/src/portrait.ts) |
 | Fishing rod | `buildFishingNetMesh()` | [`game/src/gear.ts`](../game/src/gear.ts) |
+| 13 Diving Accessories | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts), [`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
+| Accessory 3D Studio | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html), [`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | Preview page | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html), [`game/src/asset-library.ts`](../game/src/asset-library.ts) |
 
 ---
