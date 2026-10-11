@@ -3,7 +3,7 @@ import { fishValue, RARITY, RARITY_ORDER, type FishSpec, type Rarity } from './f
 import type { DiveRecord } from './health';
 import { t } from './i18n';
 import { MAPS, type MapId } from './maps';
-import { compute } from './report';
+import { compute, wellnessDisclaimer } from './report';
 import { storageKey } from './wallet';
 
 // A trip: from the first dive off the title until you're back at the main menu.
@@ -265,6 +265,42 @@ export const GRADE_COLOR: Record<string, string> = { S: '#d0359f', A: '#c8901c',
  * desk's sheet on the table, and the report at the end of a trip. null: no trips yet.
  */
 export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null, W: number, H: number) {
+  drawSheet(c, r, W, H);
+  // Along the foot of the sheet, under the traces: wellness only, not medical advice (as in report.ts).
+  c.save();
+  c.textAlign = 'left';
+  c.textBaseline = 'alphabetic';
+  c.fillStyle = 'rgba(58, 34, 16, 0.6)';
+  // Two lines at most between the traces and the border: a smaller font rather than a cut-off line.
+  let px = Math.round(H * 0.018);
+  let lines: string[];
+  for (;;) {
+    c.font = `500 ${px}px Inter, system-ui, sans-serif`;
+    lines = wrapText(c, wellnessDisclaimer(), W - 140);
+    if (lines.length <= 2 || px <= 10) break;
+    px--;
+  }
+  const step = Math.round(px * 1.25);
+  lines.forEach((l, i) => c.fillText(l, 70, H - 34 - (lines.length - 1 - i) * step));
+  c.restore();
+}
+
+/** Break `text` into lines no wider than `max`: at spaces, or between CJK characters. */
+function wrapText(c: CanvasRenderingContext2D, text: string, max: number): string[] {
+  const parts = text.match(/[^\s\u3000-\u9fff\uff00-\uffef]+\s*|[\u3000-\u9fff\uff00-\uffef]\s*|\s+/g) ?? [];
+  const lines: string[] = [];
+  let line = '';
+  for (const p of parts) {
+    if (line && c.measureText(line + p).width > max) {
+      lines.push(line.trimEnd());
+      line = p.trimStart();
+    } else line += p;
+  }
+  if (line.trim()) lines.push(line.trimEnd());
+  return lines;
+}
+
+function drawSheet(c: CanvasRenderingContext2D, r: TripRecord | null, W: number, H: number) {
   // Cream paper, a ruled border.
   c.fillStyle = '#f3ead6';
   c.fillRect(0, 0, W, H);
@@ -383,13 +419,13 @@ export function drawTripSheet(c: CanvasRenderingContext2D, r: TripRecord | null,
   // Heart (red) and breathing (blue) over the trip.
   const gy = ry + 10;
   c.fillStyle = 'rgba(90, 60, 30, 0.06)';
-  c.fillRect(R, gy, rw, H - gy - 70);
-  if (r.pulse.length > 1 || r.breath.length > 1) drawTraces(c, r, R + 8, gy + 10, rw - 16, H - gy - 90);
+  c.fillRect(R, gy, rw, H - gy - 84);
+  if (r.pulse.length > 1 || r.breath.length > 1) drawTraces(c, r, R + 8, gy + 10, rw - 16, H - gy - 104);
   else {
     c.textAlign = 'center';
     c.fillStyle = soft;
     c.font = '600 26px Inter, system-ui, sans-serif';
-    c.fillText(t('No sensor this trip', '无传感器数据'), R + rw / 2, gy + (H - gy - 70) / 2);
+    c.fillText(t('No sensor this trip', '无传感器数据'), R + rw / 2, gy + (H - gy - 84) / 2);
   }
 }
 

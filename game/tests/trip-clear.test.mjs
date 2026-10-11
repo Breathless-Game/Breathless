@@ -26,7 +26,7 @@ const trip = await import(await transpile('trip.ts', {
   './fish': dataUrl('export const fishValue = () => 1; export const RARITY = {}; export const RARITY_ORDER = [];'),
   './i18n': dataUrl('export const t = (en) => en;'),
   './maps': dataUrl('export const MAPS = {};'),
-  './report': dataUrl('export const compute = () => ({});'),
+  './report': dataUrl("export const compute = () => ({}); export const wellnessDisclaimer = () => 'Wellness only';"),
 }));
 
 test('clearTrips: removes this wallet\'s trips and the unscoped fallback', () => {

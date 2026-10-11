@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { onLangChange, t } from './i18n';
 import { SoftPaper } from './paper';
+import { wellnessDisclaimer } from './report';
 import { TableScene, type TableHooks } from './table-scene';
 import { drawTripSheet, GRADE_COLOR, loadTrips, mapNames, secs, tripDate, type TripRecord } from './trip';
 
@@ -521,7 +522,8 @@ export class HealthDesk extends TableScene {
       <div class="trip-line"><span>Deepest · 最深</span><b>${Math.round(r.deepest)} m</b></div>
       <div class="trip-line"><span>Longest hold · 屏息</span><b>${secs(r.longestHoldMs)}</b></div>
       <div class="trip-line"><span>Heart rate · 心率</span><b>${r.heart ? `${Math.round(r.heart.avg)} bpm` : '—'}</b></div>
-      <div class="small muted">Click to lay it out · 点击展开</div>`;
+      <div class="small muted">Click to lay it out · 点击展开</div>
+      <div class="health-tip-disclaimer">${wellnessDisclaimer()}</div>`;
     this.tip.style.transform = `translate(${Math.min(e.clientX + 18, window.innerWidth - 280)}px, ${Math.max(16, e.clientY - 200)}px)`;
     this.tip.classList.remove('hidden');
   }

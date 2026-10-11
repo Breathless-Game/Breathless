@@ -4710,6 +4710,13 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   font-size: 13px;
 }
 
+#health-tip .health-tip-disclaimer {
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: rgba(58, 34, 16, 0.55);
+}
+
 .health-tip-score {
   display: flex;
   align-items: center;

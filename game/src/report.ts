@@ -245,6 +245,11 @@ function drawPulse(el: HTMLCanvasElement, d: DiveRecord) {
   ctx.fillText(t(`seconds underwater (0 – ${tMax.toFixed(0)} s)`, `水下秒数（0 – ${tMax.toFixed(0)} 秒）`), w / 2, h - 4);
 }
 
+/** The wellness-only line under every health figure: this report, the trip report and the health desk. */
+export function wellnessDisclaimer() {
+  return t('Wellness insights only, from camera-based Presage SmartSpectra estimates. Not a medical device and not medical advice. Never practice breath holds in or near water, and stop if you feel dizzy or light-headed.', '仅为健康参考，基于摄像头的 Presage SmartSpectra 估算。不是医疗设备，也不构成医疗建议。切勿在水中或水边练习屏息，感到头晕或眩晕时请立即停止。');
+}
+
 export class Report {
   private panel = $('report');
 
@@ -316,7 +321,7 @@ export class Report {
       <section class="insights"><b class="small">${t('What this means', '这意味着什么')}</b><ul>${insights(s)
         .map((line) => `<li>${line}</li>`)
         .join('')}</ul></section>
-      <p class="disclaimer small">${t('Wellness insights only, from camera-based Presage SmartSpectra estimates. Not a medical device and not medical advice. Never practice breath holds in or near water, and stop if you feel dizzy or light-headed.', '仅为健康参考，基于摄像头的 Presage SmartSpectra 估算。不是医疗设备，也不构成医疗建议。切勿在水中或水边练习屏息，感到头晕或眩晕时请立即停止。')}</p>
+      <p class="disclaimer small">${wellnessDisclaimer()}</p>
       <button id="report-delete" class="link small">${t('Delete my health data', '删除我的健康数据')}</button>`;
     this.wire();
     drawHolds($('chart-holds') as HTMLCanvasElement, dives, s.best.holdMs);
