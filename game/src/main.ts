@@ -12,7 +12,7 @@ import { PauseMenu } from './pause';
 import { TitleScreen } from './title';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
-import { loadSettings, type Settings } from './settings';
+import { loadSettings, saveSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import {
   advanceWorldBounds,
@@ -34,6 +34,8 @@ import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
+import { PulseEstimate, RestingPulse, SHARK, SharkPack, biteFish, sharkIntensity, type SharkEvent } from './shark';
+import { SharkFx } from './shark-fx';
 import { disposeTree } from './lowpoly';
 
 // ---- Tuning -------------------------------------------------------------
@@ -143,8 +145,10 @@ function rollFor(depth: number): FishSpec {
   const a = rollFish(randomSeed(), depth);
   if (!world.night) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
-  const b = rollFish(randomSeed(), depth);
-  return RARITY_ORDER.indexOf(b.rarity) > RARITY_ORDER.indexOf(a.rarity) ? b : a;
+  // With sharks out it is three: the price of swimming with them.
+  const rarer = (x: FishSpec, y: FishSpec) => (RARITY_ORDER.indexOf(y.rarity) > RARITY_ORDER.indexOf(x.rarity) ? y : x);
+  const b = rarer(a, rollFish(randomSeed(), depth));
+  return sharksOut() ? rarer(b, rollFish(randomSeed(), depth)) : b;
 }
 
 function addFish(band: Band, depth: number, halfWidth: number, minX = -halfWidth, maxX = halfWidth) {
@@ -328,6 +332,84 @@ function applyEquipmentVisuals() {
 let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
+// ---- Sharks -------------------------------------------------------------
+// On a map with sharks (the Open Ocean), at night, if the player said yes (shark.ts).
+const sharkPack = new SharkPack();
+const sharkFx = new SharkFx(scene);
+world.colorGrade.apply(sharkFx.group);
+const restingPulse = new RestingPulse();
+const pulseEstimate = new PulseEstimate();
+const sharkEvents: SharkEvent[] = [];
+const sharkAsk = document.getElementById('shark-ask')!;
+
+/** Do sharks hunt right now? */
+function sharksOut() {
+  return settings.sharks === 'on' && world.map.sharks && world.night && phase === 'play';
+}
+
+/** Before a dive on shark waters, the player chooses once; Settings can change it later. */
+function askAboutSharks() {
+  if (!world.map.sharks || settings.sharks !== 'ask') return;
+  paused = true;
+  keys.clear();
+  sharkAsk.classList.remove('hidden');
+}
+
+function answerSharks(on: boolean) {
+  settings.sharks = on ? 'on' : 'off';
+  saveSettings(settings);
+  sharkAsk.classList.add('hidden');
+  paused = false;
+  // The pause was not a breath taken underwater.
+  breathSince = null;
+  hud.message(on ? 'Sharks come out after dark. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+}
+document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
+document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
+
+/** A shark reached the diver: it tears fish out of the net (more, the faster the heart beats) and knocks them aside. */
+function sharkBite(intensity: number) {
+  const taken = biteFish(net.length, intensity);
+  for (const i of taken) net.splice(i, 1);
+  hud.setNet(net, currentStats().netCapacity);
+  // Thrown away from the nearest shark: the one that bit.
+  let nearest = Infinity, from = 0;
+  for (const shark of sharkPack.sharks) {
+    const d = Math.hypot(shark.x - diver.pos.x, shark.y - diver.pos.y);
+    if (d < nearest) [nearest, from] = [d, shark.x];
+  }
+  diver.vel.x += (diver.pos.x >= from ? 1 : -1) * 7;
+  diver.vel.y += 2;
+  stormShake = Math.max(stormShake, 0.4);
+  hud.message(taken.length ? `SHARK BITE · ${taken.length} fish torn from your net` : 'A shark rams you!', 2200);
+}
+
+/** Runs every frame of a dive: learns the pulse, moves the sharks and shows what they are doing. */
+function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: number) {
+  const depth = -diver.pos.y;
+  restingPulse.tick(dt, pulse, depth < 1.2 && !holding);
+  // Without a sensor the pulse is estimated from how hard the diver swims.
+  const estimated = pulse == null;
+  const bpm = pulse ?? pulseEstimate.tick(dt, diver.vel.length() / Math.max(1, currentStats().swimSpeed));
+  const out = sharksOut();
+  const intensity = out ? sharkIntensity(bpm, estimated ? SHARK.rest : restingPulse.bpm) : 0;
+  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents);
+  for (const event of sharkEvents) {
+    if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
+    else if (event === 'bite') sharkBite(intensity);
+  }
+  sharkFx.update(dt, sharkPack.sharks, intensity);
+  health.sharks = out;
+  hud.setSharks(out ? { count: sharkPack.sharks.length, bpm, estimated, intensity } : null);
+}
+
+function noSharks() {
+  sharkPack.reset();
+  sharkFx.clear();
+  health.sharks = false;
+  hud.setSharks(null);
+}
+
 // ---- Rough seas ---------------------------------------------------------
 // On a map with storm swell (the Open Ocean), a storm sends rogue waves at the boat (storm.ts).
 const stormSea = new RogueWaves();
@@ -378,6 +460,7 @@ function rightBoat() {
 
 /** Calm water and an upright boat: a new dive, or back on the menu. */
 function calmSea() {
+  noSharks();
   stormSea.reset();
   stormFx.clear();
   stormShake = 0;
@@ -748,6 +831,7 @@ function startGame() {
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
   phase = 'play';
+  askAboutSharks();
   resetWorldBounds();
   overlay.classList.add('hidden');
   // The workbench's dive transition may still be fading out if the player was quick.
@@ -1174,6 +1258,9 @@ function update(dt: number, time: number) {
     }
   }
 
+  // Over the shelf the seabed is the sharks' floor; down the trench there is none.
+  tendSharks(dt, s.pulse, s.holding, Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY ? -Infinity : world.seabedY);
+
   // Rough seas: only during a dive, and only where a storm piles up the swell.
   const stormEvent = stormSea.tick(dt, world.weather.state.storm, phase === 'play' && world.map.stormSwell > 0);
   world.setRogueWave(stormSea.x, stormSea.dir, stormSea.height);
@@ -1349,6 +1436,7 @@ Object.assign(window, {
   keys,
   renderQuality,
   stormSea,
+  sharkPack,
   nftQueue,
   setTimeOfDay,
   walletState,
