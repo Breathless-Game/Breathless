@@ -247,7 +247,7 @@ export class TitleScreen {
 
   /** intro: replay the rope swing and the fish drop; otherwise start settled. */
   show(intro: boolean) {
-    this.canvas.parentElement!.classList.remove('hidden');
+    this.canvas.parentElement!.classList.remove('hidden', 'boot');
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.build(intro && !reduced);
     if (this.running) return;
