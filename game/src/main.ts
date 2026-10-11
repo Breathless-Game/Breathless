@@ -1106,7 +1106,7 @@ let trialSkinActive=false;
 const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
 const endSkinTrial=()=>{if(!trialSkinActive)return;trialSkinActive=false;diver.setSkin(0);skinPicker.resetChoice();applyEquipmentVisuals();};
 const skinHint=document.createElement('div');skinHint.className='skin-hint';skinHint.textContent='长按角色或 E 换装 · Hold diver or E';skinHint.hidden=true;document.body.append(skinHint);
-setInterval(()=>{skinHint.hidden=phase!=='play'||diver.seated||diver.jumping||paused;},400);
+setInterval(()=>{skinHint.hidden=phase!=='play'||diver.seated||diver.jumping||paused||-diver.pos.y>SURFACE_DEPTH;},400);
 let skinHold:ReturnType<typeof setTimeout>|null=null;
 const skinRing=document.createElement('div');skinRing.style.cssText='position:fixed;width:30px;height:30px;transform:translate(-50%,-50%);pointer-events:none;z-index:9999;filter:drop-shadow(0 0 2px #7aead9);display:none';
 skinRing.innerHTML='<svg viewBox="0 0 64 64" width="30" height="30"><circle cx="32" cy="32" r="26" fill="#0b273850" stroke="#ffffff40" stroke-width="3"/><circle data-progress cx="32" cy="32" r="26" fill="none" stroke="#b6fff0" stroke-width="3" stroke-linecap="round" stroke-dasharray="163.363" stroke-dashoffset="163.363" transform="rotate(-90 32 32)"/></svg>';document.body.append(skinRing);
@@ -1114,7 +1114,7 @@ let skinProgressFrame=0;
 let skinPointer:number|null=null,skinX=0,skinY=0,skinOpened=false;
 let skinHoldMode:'pointer'|'keyboard'|null=null;
 const clearSkinHold=()=>{if(skinHold!==null)clearTimeout(skinHold);skinHold=null;skinPointer=null;skinHoldMode=null;cancelAnimationFrame(skinProgressFrame);skinRing.style.display='none';};
-const canHoldSkin=()=>phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+const canHoldSkin=()=>phase==='play'&&!paused&&!diver.seated&&!diver.jumping&&-diver.pos.y<=SURFACE_DEPTH;
 const startSkinProgress=(mode:'pointer'|'keyboard')=>{
   skinHoldMode=mode;
   const rect=canvas.getBoundingClientRect();
@@ -1150,7 +1150,20 @@ window.addEventListener('pointermove',e=>{if(e.pointerId===skinPointer&&Math.hyp
 window.addEventListener('pointerup',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
 window.addEventListener('pointercancel',()=>{if(skinHoldMode==='pointer')clearSkinHold();},true);
 window.addEventListener('blur',()=>clearSkinHold());
-canvas.addEventListener('click',e=>{if(skinOpened){e.preventDefault();e.stopImmediatePropagation();skinOpened=false;}},true);
+let catchClickStart=-Infinity,catchClickX=0,catchClickY=0,catchClickReady=false;
+canvas.addEventListener('pointerdown',e=>{
+  catchClickReady=e.button===0&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickStart=performance.now();catchClickX=e.clientX;catchClickY=e.clientY;
+},true);
+window.addEventListener('pointermove',e=>{if(Math.hypot(e.clientX-catchClickX,e.clientY-catchClickY)>14)catchClickReady=false;},true);
+window.addEventListener('pointercancel',()=>{catchClickReady=false;},true);
+window.addEventListener('blur',()=>{catchClickReady=false;});
+canvas.addEventListener('click',e=>{
+  if(skinOpened){e.preventDefault();e.stopImmediatePropagation();skinOpened=false;catchClickReady=false;return;}
+  const catchNow=catchClickReady&&e.button===0&&performance.now()-catchClickStart<350&&phase==='play'&&!paused&&!diver.seated&&!diver.jumping;
+  catchClickReady=false;
+  if(catchNow){e.preventDefault();e.stopImmediatePropagation();tryCatch();}
+},true);
 let resetDayClock = false;
 
 function pause() {
