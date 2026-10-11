@@ -7,15 +7,15 @@ import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
-import { Vault } from './vault';
+import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
-import { Report } from './report';
+import { LazyReport as Report } from './lazy-panels';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
-import { SettingsDesk } from './settings-desk';
+import { LazySettingsDesk as SettingsDesk } from './lazy-panels';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
-import { Aquarium } from './aquarium';
+import { LazyAquarium as Aquarium } from './lazy-panels';
 import { fishFood, type FishFoodDef } from './fish-food';
 import { Workbench, type WorkbenchConditions } from './workbench';
 import { UPGRADES, type UpgradeId } from './upgrades';
@@ -43,7 +43,8 @@ import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
-import { WorldEvents, type EventContext } from './events';
+import { LazyWorldEvents as WorldEvents } from './lazy-panels';
+import type { EventContext } from './events';
 import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
 import { PulseEstimate, RestingPulse, SHARK, SharkPack, sharkIntensity, type SharkEvent } from './shark';
@@ -134,7 +135,7 @@ const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
 // dive (see update()); menus show none and cost nothing.
-const events = new WorldEvents(scene, world.map, renderQuality.settings.detail);
+const events = new WorldEvents(scene, world.map, renderQuality.settings.detail, () => world.colorGrade.apply(scene));
 world.colorGrade.apply(scene);
 const eventCtx: EventContext = { cameraY: 2.2, depth: 0, night: false, shelfDepth: 30 };
 let eventsLive = false;

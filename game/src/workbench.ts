@@ -15,7 +15,8 @@ import { MAPS, MAP_ORDER, SHARK_WARNING, mapDepth, mapPlace, mapBlurb, mapDiffic
 import { lang, onLangChange, pickName, t } from './i18n';
 import { SoftPaper } from './paper';
 import { Diver } from './diver';
-import { GearInspector, type ShipHooks } from './inspect';
+import { LazyGearInspector as GearInspector } from './lazy-panels';
+import type { ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, upgradeName, upgradeEffect, type UpgradeDef, type UpgradeId } from './upgrades';
 import type { WeatherState } from './weather';
 import { setDeepSonarColor } from './deep-sonar';
