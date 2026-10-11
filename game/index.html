@@ -72,7 +72,7 @@
           </section>
         </div>
 
-        <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>B</b> field guide · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> menu</div>
+        <div id="help">← → ↑ ↓ swim · <b>Space</b> catch · <b>1–6</b> quick gear · hold <b>Tab</b> wheel · <b>B</b> field guide · <b>C</b> collection · <b>G</b> upgrades · <b>N</b> night · <b>K</b> breath input · <b>F</b> (mash) right the boat · <b>Esc</b> boat &amp; table</div>
 
         <section id="bank" class="panel">
           <div class="small muted">BANKED</div>
@@ -115,6 +115,10 @@
           <button id="aq-prev" class="mini" title="Previous tank (←)">‹</button>
           <div id="aq-tabs"></div>
           <button id="aq-next" class="mini" title="Next tank (→)">›</button>
+          <label class="aq-light-control" title="Aquarium ambience / 鱼缸氛围灯">
+            <span class="small">灯光</span>
+            <input id="aq-light" type="color" value="#42e8d2" aria-label="Aquarium ambience light color" />
+          </label>
           <button id="aq-close" class="mini" title="Back to the title (Esc)">×</button>
         </div>
         <div class="aq-tank">
@@ -127,7 +131,7 @@
 
     <div id="workbench" class="hidden">
       <canvas id="wb-canvas"></canvas>
-      <div id="wb-hint" class="small">Click gear for a closer look · drag it to the tray to get it ready · click the map to choose where to dive · Esc back</div>
+      <div id="wb-hint" class="small">Drag gear from the left into its ring on the tray · click gear or the diver for a closer look · click the map to dive · Esc back</div>
     </div>
 
     <!-- Above the title layer, whose fish hang in front of the table. -->
@@ -145,6 +149,7 @@
           <div id="wb-place-title"></div>
           <div id="wb-place-sub" class="small"></div>
           <p id="wb-place-text"></p>
+          <div id="wb-place-warn" class="small hidden"></div>
           <section id="wb-place-conditions" class="wb-weather-card" aria-label="Entry conditions">
             <div class="wb-weather-title">FIELD NOTES · 入场记录</div>
             <div class="wb-weather-grid">
@@ -258,19 +263,34 @@
       </div>
     </div>
 
-    <div id="shark-ask" class="hidden">
+    <!-- Shark waters: the one-time warning before the first dive there, and what a bite cost. -->
+    <div id="shark-warn" class="shark-card hidden">
       <div class="card">
-        <h2>One shark by day. Two at night.</h2>
-        <p>They home in on your heartbeat. The faster it beats, the faster they charge and the more fish a bite tears from your net. Keep calm and they lose interest; they will not follow you to the surface.</p>
+        <h2>Sharks hunt here · 鲨鱼出没</h2>
+        <p class="shark-danger"><b id="shark-warn-en"></b><br /><span id="shark-warn-zh"></span></p>
+        <p>One shark by day, two at night. They home in on your heartbeat: keep calm and they lose interest, and they will not follow you to the surface.</p>
         <ul>
-          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times instead of the usual one by day or two at night and keeps the best.</li>
-          <li><b>No heart-rate reading.</b> Dives with sharks in the water are left out of the heart-rate figures in your health report: a chase is not a resting measurement. Breath-hold times still count.</li>
+          <li><b>A bite ends the dive.</b> The fish in your net and the fish banked this dive that have not started minting are lost. Your net shaft, reel, net, fins, emergency tank, headlamp and deep sonar all drop back to level 1, with no refund.</li>
+          <li><b>Kept:</b> your boat, Pearls, and every fish from earlier dives or already minting, minted or for sale.</li>
+          <li><b>Rarer fish.</b> While sharks are out, every new fish rolls its rarity three times and keeps the best.</li>
+          <li><b>No heart-rate reading.</b> Dives with sharks are left out of the heart-rate figures in your health report. Breath-hold times still count.</li>
         </ul>
         <div class="menu-buttons">
-          <button id="shark-yes" class="primary">Dive with sharks</button>
-          <button id="shark-no">No sharks</button>
+          <button id="shark-warn-dive" class="primary">I understand, dive · 明白，下潜</button>
+          <button id="shark-warn-back">Back to the workbench · 返回工作台</button>
         </div>
-        <p class="small muted">Change it any time: Esc → Settings → Sharks.</p>
+        <p class="small muted">Shown once. The chart repeats the warning whenever you pick the Open Ocean.</p>
+      </div>
+    </div>
+
+    <div id="shark-bitten" class="shark-card hidden">
+      <div class="card">
+        <h2>Bitten by a shark · 被鲨鱼咬了</h2>
+        <p id="shark-bitten-summary" class="shark-danger"></p>
+        <ul id="shark-bitten-list"></ul>
+        <div class="menu-buttons">
+          <button id="shark-bitten-ok" class="primary">Back to the workbench · 回到工作台</button>
+        </div>
       </div>
     </div>
 
@@ -322,14 +342,6 @@
           </label>
           <label class="setting"><span>Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <label class="setting"><span>Controls hint</span><input type="checkbox" id="set-help" /></label>
-          <label class="setting">
-            <span>Sharks (Open Ocean)</span>
-            <select id="set-sharks">
-              <option value="ask">Ask before a dive</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
-            </select>
-          </label>
           <div class="setting"><span>Wallet</span><span id="set-wallet" class="wallet-row"></span></div>
           <div class="menu-buttons">
             <button id="settings-back">Back</button>

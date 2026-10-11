@@ -9,7 +9,8 @@ import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 // swipe flips through its three levels; levels not owned yet show as a dark
 // silhouette with their price. The boat opens the same view on the ships
 // (ships.ts): ‹ › flips through all six, each with its bonuses, its banked-value
-// threshold, and Equip.
+// threshold, and Equip. The diver figure opens it on the diver: click a piece of
+// gear in the list to put it on or take it off (that's the ready tray).
 
 const LEVELS: UpgradeLevel[] = [1, 2, 3];
 const GROW_S = 0.35;
@@ -39,7 +40,20 @@ export interface InspectHooks {
   selectPath(def: UpgradeDef, id: string): void;
   /** The ships, for the boat (showShips). */
   ships: ShipHooks;
+  /** Dressing the diver figure (showDiver). What it wears is what's in the ready tray (isReady / setReady). */
+  diver: DiverHooks;
   closed(): void;
+}
+
+export interface DiverHooks {
+  /** Everything the diver can wear (the dive gear). */
+  gear(): readonly UpgradeDef[];
+  /** How many pieces it can wear at once (the tray's slots). */
+  slots: number;
+  /** A fresh figure wearing what's in the tray now. */
+  model(): THREE.Object3D;
+  wearAll(): void;
+  takeOffAll(): void;
 }
 
 /** One ship as the inspector shows it. */
@@ -79,6 +93,8 @@ export class GearInspector {
   private def: UpgradeDef | null = null;
   /** Looking at the ships (the boat) rather than one piece of gear's levels. */
   private shipMode = false;
+  /** Dressing the diver figure. */
+  private diverMode = false;
   private level = 1;
   private spin = 0;
   private swap: { t: number; dir: number; from: THREE.Group; to: THREE.Group } | null = null;
@@ -109,6 +125,10 @@ export class GearInspector {
     $('wb-inspect-close').addEventListener('click', () => this.close());
     $('wb-inspect-buy').addEventListener('click', () => void this.buy());
     $('wb-inspect-ready').addEventListener('click', () => {
+      if (this.diverMode) {
+        this.hooks.diver.takeOffAll();
+        return this.redress();
+      }
       if (!this.def) return;
       this.hooks.setReady(this.def, !this.hooks.isReady(this.def));
       this.renderInfo();
@@ -152,18 +172,18 @@ export class GearInspector {
   }
 
   get open() {
-    return this.def !== null || this.shipMode;
+    return this.def !== null || this.shipMode || this.diverMode;
   }
 
-  /** How many models ‹ › flips through: three levels, or every ship. */
+  /** How many models ‹ › flips through: three levels, every ship, or the one diver. */
   private get count() {
-    return this.shipMode ? this.hooks.ships.list().length : 3;
+    return this.shipMode ? this.hooks.ships.list().length : this.diverMode ? 1 : 3;
   }
 
   /** Look at `def`, growing it out of the screen point `from` (where it lies on the table). */
   show(def: UpgradeDef, from: { x: number; y: number }) {
     this.def = def;
-    this.shipMode = false;
+    this.shipMode = this.diverMode = false;
     this.level = Math.min(3, Math.max(1, this.hooks.owned(def)));
     this.open3d(from);
   }
@@ -172,7 +192,17 @@ export class GearInspector {
   showShips(from: { x: number; y: number }) {
     this.def = null;
     this.shipMode = true;
+    this.diverMode = false;
     this.level = this.hooks.ships.current() + 1;
+    this.open3d(from);
+  }
+
+  /** The diver figure, to dress. */
+  showDiver(from: { x: number; y: number }) {
+    this.def = null;
+    this.shipMode = false;
+    this.diverMode = true;
+    this.level = 1;
     this.open3d(from);
   }
 
@@ -213,7 +243,7 @@ export class GearInspector {
   close() {
     if (!this.open) return;
     this.def = null;
-    this.shipMode = false;
+    this.shipMode = this.diverMode = false;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.root.classList.remove('open');
@@ -251,6 +281,9 @@ export class GearInspector {
         ship.scale.multiplyScalar(k);
         m = new THREE.Group();
         m.add(ship);
+      } else if (this.diverMode) {
+        m = new THREE.Group();
+        m.add(this.hooks.diver.model()); // already centred, standing
       } else m = buildUpgradeModel(this.def!.id, level as UpgradeLevel, { preserveTierScale: true });
       m.scale.setScalar(1.15); // preserve the tier silhouette inside the inspector frame
       this.models.set(level, m);
@@ -260,6 +293,7 @@ export class GearInspector {
 
   private renderInfo() {
     if (this.shipMode) return this.renderShip();
+    if (this.diverMode) return this.renderDiver();
     const def = this.def;
     if (!def) return;
     const owned = this.hooks.owned(def);
@@ -268,7 +302,7 @@ export class GearInspector {
     $('wb-inspect-name').textContent = def.name;
     $('wb-inspect-zh').textContent = def.nameZh;
     $('wb-inspect-up-kind').textContent = 'UPGRADE · 升级';
-    this.root.classList.remove('ships');
+    this.root.classList.remove('ships', 'diver');
     $('wb-inspect-kind').textContent = def.group === 'dive' ? 'Dive gear · 潜水装备' : 'Boat gear · 船上装备';
     $('wb-inspect-level').textContent = `Level ${lv} / 3${unlocked ? '' : ' · locked'}`;
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
@@ -337,6 +371,8 @@ export class GearInspector {
     $('wb-inspect-kind').textContent = 'Ship · 船只';
     $('wb-inspect-up-kind').textContent = 'SHIP · 船只';
     this.root.classList.add('ships');
+    this.root.classList.remove('diver');
+    $('wb-inspect-sonar-color').classList.add('hidden');
     $('wb-inspect-name').textContent = ship.name;
     $('wb-inspect-zh').textContent = ship.nameZh;
     $('wb-inspect-level').textContent = `Level ${String(i).padStart(2, '0')} · ${i === current ? 'sailing · 当前使用' : unlocked ? 'unlocked · 已解锁' : 'locked · 未解锁'}`;
@@ -380,6 +416,80 @@ export class GearInspector {
     $('wb-inspect-lock').textContent = unlocked ? '' : `🔒 ${ship.threshold} banked value`;
   }
 
+  /**
+   * Diver mode: the figure wearing what's packed. Every piece of dive gear is in
+   * the list; click one to put it on or take it off. What it wears is the ready
+   * tray, saved for next time.
+   */
+  private renderDiver() {
+    const d = this.hooks.diver;
+    const gear = d.gear();
+    const worn = gear.filter((g) => this.hooks.isReady(g));
+    const full = worn.length >= d.slots;
+    $('wb-inspect-kind').textContent = 'Diver · 潜水员';
+    $('wb-inspect-up-kind').textContent = 'LOADOUT · 配装';
+    this.root.classList.remove('ships');
+    this.root.classList.add('diver');
+    $('wb-inspect-sonar-color').classList.add('hidden');
+    $('wb-inspect-paths').classList.add('hidden');
+    $('wb-inspect-name').textContent = 'Your diver';
+    $('wb-inspect-zh').textContent = '潜水员';
+    $('wb-inspect-level').textContent = `Wearing ${worn.length} / ${d.slots} · 已穿戴`;
+    $('wb-inspect-level').classList.remove('locked');
+    $('wb-inspect-effect').textContent =
+      'Click a piece to put it on or take it off. What the diver wears goes down with you, at the level you own. 点击装备穿上或卸下，穿着的装备会带下水。';
+    $('wb-inspect-levels').replaceChildren(
+      ...gear.map((g) => {
+        const on = this.hooks.isReady(g);
+        const lv = Math.min(3, Math.max(1, this.hooks.owned(g)));
+        const li = document.createElement('li');
+        li.textContent = `${on ? '✓' : '+'} ${g.name} · ${g.nameZh} · Lv ${lv}`;
+        li.classList.toggle('on', on);
+        li.classList.toggle('locked', !on && full); // no room for it
+        li.title = on ? 'Take it off · 卸下' : full ? 'Every slot is taken: take something off first' : 'Put it on · 穿上';
+        li.addEventListener('click', () => {
+          if (!on && full) {
+            this.notice = 'Every slot is taken: take something off first. 位置已满';
+            return this.renderInfo();
+          }
+          this.notice = '';
+          this.hooks.setReady(g, !on);
+          this.redress();
+        });
+        return li;
+      }),
+    );
+    const off = $<HTMLButtonElement>('wb-inspect-ready');
+    off.classList.remove('hidden', 'primary');
+    off.textContent = 'Take all off · 全部卸下';
+    off.disabled = worn.length === 0;
+
+    $('wb-inspect-up-title').textContent = 'Packed for the dive · 本次携带';
+    $('wb-inspect-up-effect').textContent = worn.length ? worn.map((g) => g.name).join(' · ') : 'Nothing: you dive with the basics';
+    $('wb-inspect-up-price').textContent = 'Saved automatically: it is packed the same next time · 自动保存';
+    const all = $<HTMLButtonElement>('wb-inspect-buy');
+    all.classList.remove('hidden');
+    all.disabled = full || worn.length === gear.length;
+    all.classList.toggle('primary', !all.disabled);
+    all.textContent = 'Wear all · 全部穿上';
+    $('wb-inspect-pearls').textContent = this.notice || `${d.slots - worn.length} slot${d.slots - worn.length === 1 ? '' : 's'} free · 空位`;
+
+    $('wb-inspect-dots').replaceChildren();
+    $<HTMLButtonElement>('wb-inspect-prev').disabled = true;
+    $<HTMLButtonElement>('wb-inspect-next').disabled = true;
+    this.stage.classList.remove('locked');
+    $('wb-inspect-lock').textContent = '';
+  }
+
+  /** The tray changed: a freshly dressed figure takes the old one's place on the turntable. */
+  private redress() {
+    const old = this.models.get(1);
+    if (old) this.turntable.remove(old);
+    this.models.delete(1);
+    this.turntable.add(this.model(1));
+    this.renderInfo();
+  }
+
   private equipShip() {
     this.notice = this.hooks.ships.equip(this.level - 1) ? '' : 'Still locked: bank more fish first.';
     this.renderInfo();
@@ -388,6 +498,10 @@ export class GearInspector {
   /** Buys the next level; the piece on the table and the dots follow (the workbench rebuilds its model). */
   private async buy() {
     if (this.shipMode) return this.equipShip();
+    if (this.diverMode) {
+      this.hooks.diver.wearAll();
+      return this.redress();
+    }
     const def = this.def;
     if (!def || this.buying) return;
     this.buying = true;

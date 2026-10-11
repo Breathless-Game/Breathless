@@ -451,7 +451,7 @@ body {
   background: linear-gradient(90deg, #5fd38d, #ffb340 55%, var(--danger));
 }
 
-#shark-ask {
+.shark-card {
   position: fixed;
   inset: 0;
   z-index: 36;
@@ -461,7 +461,7 @@ body {
   padding: 16px;
 }
 
-#shark-ask .card {
+.shark-card .card {
   max-width: 520px;
   width: 100%;
   max-height: 100%;
@@ -473,18 +473,18 @@ body {
   backdrop-filter: blur(10px);
 }
 
-#shark-ask h2 {
+.shark-card h2 {
   margin: 0 0 12px;
   font-size: 26px;
   font-weight: 900;
 }
 
-#shark-ask ul {
+.shark-card ul {
   margin: 12px 0 0;
   padding-left: 20px;
 }
 
-#shark-ask li {
+.shark-card li {
   margin: 8px 0;
 }
 
@@ -1282,6 +1282,28 @@ button.link {
 
 #wb-place-gear {
   margin-bottom: 14px;
+}
+
+/* Shark waters: what a bite costs, in the place card before you dive. */
+#wb-place-warn {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 107, 107, 0.55);
+  border-radius: 12px;
+  background: rgba(120, 20, 28, 0.32);
+  line-height: 1.45;
+}
+
+#wb-place-warn b {
+  color: var(--danger);
+}
+
+.shark-danger {
+  padding: 10px 14px;
+  border-left: 3px solid var(--danger);
+  background: rgba(120, 20, 28, 0.28);
+  border-radius: 8px;
+  line-height: 1.5;
 }
 
 #wb-place-conditions {
@@ -2691,6 +2713,27 @@ button:disabled {
   color: #2a1d00;
 }
 
+.aq-light-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(4, 18, 30, 0.55);
+  color: var(--muted);
+}
+
+.aq-light-control input {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
 .aq-tank {
   position: relative;
 }
@@ -2727,6 +2770,7 @@ button:disabled {
   background: var(--panel);
   border: 1px solid var(--line);
   backdrop-filter: blur(8px);
+  flex-wrap: wrap;
 }
 
 #aq-card img {
@@ -2788,6 +2832,62 @@ button:disabled {
   #aq-card img {
     width: 40px;
     height: 40px;
+  }
+}
+
+.aq-growth {
+  color: var(--hold);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.aq-food-panel {
+  display: grid;
+  grid-template-columns: 68px minmax(150px, 1fr);
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 5px;
+}
+
+.aq-food-model {
+  width: 68px;
+  height: 68px;
+  grid-row: span 2;
+  border-radius: 10px;
+  background: rgba(8, 30, 42, 0.65);
+}
+
+.aq-food-select {
+  min-width: 0;
+  max-width: 190px;
+  padding: 4px 6px;
+  color: var(--ink);
+  background: rgba(2, 13, 23, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.aq-food-effect {
+  max-width: 220px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+#aq-card .aq-feed {
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .aq-food-panel {
+    grid-template-columns: 52px minmax(120px, 1fr);
+  }
+
+  .aq-food-model {
+    width: 52px;
+    height: 52px;
   }
 }
 
@@ -3518,7 +3618,32 @@ button:disabled {
   color: var(--hold);
 }
 /* Ship mode (the boat): the intro is a paragraph, not a one-line effect. */
-#wb-inspect.ships #wb-inspect-effect {
+/* Dressing the diver figure: each piece of gear is a row to click (on / off). */
+#wb-inspect.diver #wb-inspect-levels li {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+#wb-inspect.diver #wb-inspect-levels li:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+#wb-inspect.diver #wb-inspect-levels li.on {
+  border-color: rgba(62, 240, 168, 0.55);
+  background: rgba(62, 240, 168, 0.1);
+}
+#wb-inspect.diver #wb-inspect-levels li.locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+#wb-inspect.diver #wb-inspect-levels li.locked::after {
+  content: '';
+}
+
+#wb-inspect.ships #wb-inspect-effect,
+#wb-inspect.diver #wb-inspect-effect {
   font-size: 14px;
   font-weight: 500;
   line-height: 1.5;

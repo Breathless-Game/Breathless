@@ -1,8 +1,8 @@
-// Sharks on the Open Ocean, if the player opts in: one or two by day, two to
-// four at night. The population is picked once per day/night period, so it
-// feels like a group arriving rather than a counter flickering every frame.
+// Sharks on the Open Ocean, always (there is no opting out): one or two by day,
+// two to four at night. The population is picked once per day/night period, so
+// it feels like a group arriving rather than a counter flickering every frame.
 // They hunt by the diver's heartbeat: the faster it beats, the sooner
-// they notice, the faster they charge and the more fish a bite costs. Pure
+// they notice and the faster they charge. A bite ends the dive (main.ts). Pure
 // rules with no rendering, so the tests can load this straight from
 // TypeScript: shark-fx.ts draws them, main.ts applies the bites.
 
