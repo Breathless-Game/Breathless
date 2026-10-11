@@ -463,7 +463,7 @@ export class GearPanel {
       pathButton.type = 'button';
       pathButton.className = 'gear-path-button';
       pathButton.textContent = this.language === 'zh' ? path.nameZh : path.name;
-      pathButton.title = `${path.name}: ${path.summary}`;
+      pathButton.title = this.language === 'zh' ? path.nameZh : `${path.name}: ${path.summary}`;
       const pathSelected = level >= 2 && path.id === selectedPath;
       pathButton.setAttribute('aria-pressed', String(pathSelected));
       pathButton.disabled = level < 2;
@@ -477,7 +477,9 @@ export class GearPanel {
     const pathSummary = document.createElement('div');
     pathSummary.className = 'gear-path-summary';
     pathSummary.textContent = level >= 2
-      ? `${this.language === 'zh' ? selectedDef.summary : selectedDef.name} · Lv${selectedTier.level}: ${selectedTier.effect}`
+      ? this.language === 'zh'
+        ? `${selectedDef.nameZh} · Lv${selectedTier.level}：已启用`
+        : `${selectedDef.name} · Lv${selectedTier.level}: ${selectedTier.effect}`
       : copy.chooseBranch;
     paths.appendChild(pathSummary);
     return paths;
