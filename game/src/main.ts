@@ -32,6 +32,7 @@ import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { activePath, applySlotUpgrade, deriveStats, EQUIPMENT_PATHS, EQUIPMENT_TIERS, loadEquipment, nextSlotTier, ownedLevel, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
 import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
+import { nudgePearlBalance, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
 import { WorldEvents, type EventContext } from './events';
@@ -596,6 +597,7 @@ function refreshEquipment() {
   const tier = currentTier();
   const stats = currentStats();
   saveEquipment(equipment);
+  nudgePearlBalance(equipment.pearls);
   const sonarConfig = saveSonarConfig({ ...loadSonarConfig(), lengthLevel: equipment.sonarLevel });
   sonar.setLengthLevel(equipment.sonarLevel);
   sonar.setColor(sonarConfig.color);
@@ -613,9 +615,11 @@ async function syncPearls(earned = 0) {
   }
   try {
     equipment.pearls = await (await nftQueue.loadPearl()).pearlBalance();
+    setPearlBalance(equipment.pearls);
     refreshEquipment();
   } catch (e) {
     console.warn('PEARL balance unavailable', e);
+    setPearlsUnavailable(e);
   }
 }
 
@@ -1505,6 +1509,7 @@ onWalletChange((s) => {
   }
   walletOwner = s.owner;
   loadWalletProgress();
+  void syncPearls(); // first read after login feeds the title badge
   if (loginGate.visible) {
     loginGate.hide();
     workbench.show(true);
