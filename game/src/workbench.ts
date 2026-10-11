@@ -34,6 +34,17 @@ export interface WorkbenchHooks {
   owned(id: UpgradeId): number;
   /** The ready-room color for the deep sonar beacon. */
   sonarColor?(color: string): void;
+  /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
+  buy(id: UpgradeId): Promise<string | null>;
+  pearls(): number;
+  /** The piece's two branches from Lv2 (null: none), the one it runs, and switching. */
+  paths(id: UpgradeId): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
+  activePath(id: UpgradeId): string | null;
+  selectPath(id: UpgradeId, path: string): void;
+  /** The ship you sail (ships.ts): which one (key), and a fresh copy of its model once loaded. */
+  ship(): { key: number; model: THREE.Object3D | null };
+  /** The boat on the table opens the shipyard. */
+  openShipyard(): void;
 }
 
 // The six dive-loadout slots plus the deployable deep sonar, and a model of the
@@ -85,9 +96,15 @@ const CONTACT_ITERS = 6;
 const MU = 0.55; // friction
 const ROLL_DAMP = 2.6; // turning slows while it touches, 1/s
 const SLIDE_DAMP = 1.2;
-const SLEEP_V = 0.18; // slower than this (and turning slower than SLEEP_W) …
-const SLEEP_W = 0.4;
-const SLEEP_S = 0.35; // … for this long, and it comes to rest
+const STICK_W = 2; // turning slower than this (rad/s) on the table, it is held more and more
+const STICK_DAMP = 6;
+const SLEEP_V = 0.4; // slower than this (and turning slower than SLEEP_W) …
+const SLEEP_W = 1.5;
+const REST_MOVE = 0.02; // … and over that time it has moved less than this (table units) …
+const REST_TURN = 0.04; // … and turned less than this (radians)
+const SLEEP_S = 0.5; // … for this long, and it comes to rest
+const CALM_V = 0.25; // this slow (and turning slower than CALM_W) counts as still wherever it drifts
+const CALM_W = 0.6;
 // Carried pieces hang this far under the hand and swing like a pendulum.
 const SWING_L = 0.35;
 const SWING_DAMP = 3.2;
@@ -122,6 +139,8 @@ type State = 'closed' | 'idle' | 'opening' | 'chart' | 'closing' | 'leaving' | '
 
 interface Piece {
   id: UpgradeId;
+  /** What its model shows: the level owned, or for the boat which ship (-1: the stand-in). */
+  key: number;
   def: UpgradeDef;
   obj: THREE.Group;
   hit: THREE.Mesh;
@@ -134,6 +153,8 @@ interface Piece {
   invI: number;
   /** Seconds it has lain still: past SLEEP_S it sleeps until something knocks it. */
   still: number;
+  /** Where it was when it started to look still (see SLEEP_S). */
+  restAt: { pos: THREE.Vector3; q: THREE.Quaternion } | null;
   /** Touching the table last step (a thud only on first touch). */
   touching: boolean;
   /** Carried: it hangs under the hand like a pendulum (null when not held). */
@@ -249,6 +270,15 @@ export class Workbench {
         if (ready && p.mode === 'free') this.makeReady(p);
         else if (!ready && p.mode === 'ready') this.unready(p);
       },
+      buy: async (def) => {
+        const failed = await this.hooks.buy(def.id);
+        this.refreshGear();
+        return failed;
+      },
+      pearls: () => this.hooks.pearls(),
+      paths: (def) => this.hooks.paths(def.id),
+      activePath: (def) => this.hooks.activePath(def.id),
+      selectPath: (def, path) => this.hooks.selectPath(def.id, path),
       closed: () => {
         if (this.state === 'inspect') this.state = 'idle';
       },
@@ -258,6 +288,7 @@ export class Workbench {
     window.addEventListener('pointermove', (e) => this.onMove(e));
     window.addEventListener('pointerup', (e) => this.onUp(e));
     window.addEventListener('keydown', (e) => {
+      if (this.blocked()) return;
       if (this.state === 'chart' && e.key === 'Enter' && this.picked) {
         e.preventDefault();
         this.dive();
@@ -295,8 +326,11 @@ export class Workbench {
       .slice(0, SLOTS.length);
   }
 
-  /** intro: pan down from the title and drop the gear; otherwise come back to the table as it was. */
-  show(intro: boolean) {
+  /**
+   * intro: pan down from the title and drop the gear; otherwise come back to the
+   * table as it was. rise: pan the table up into view (with intro, always).
+   */
+  show(intro: boolean, rise = intro) {
     this.root.classList.remove('hidden');
     this.ui.classList.remove('hidden');
     this.chartEl.classList.add('hidden');
@@ -314,11 +348,13 @@ export class Workbench {
     this.press = null;
     this.paintMap();
     this.resize();
+    // Levels bought (or a ship picked, or a wallet's save loaded) since the pieces were last built.
+    this.refreshGear();
     if (intro || !this.placed) this.scatter(intro);
     this.placed = true;
     this.time = 0;
     this.acc = 0;
-    if (intro) {
+    if (rise) {
       this.state = 'opening';
       this.panU = 0;
       this.tween(PAN_S, (u) => this.setPan(easeInOut(u)), () => (this.state = 'idle'));
@@ -445,8 +481,19 @@ export class Workbench {
     this.mapTex.needsUpdate = true;
   }
 
+  /** The model for a piece as owned now: its bought level, or for the boat the ship you sail. */
+  private pieceModel(id: UpgradeId): { model: THREE.Object3D; key: number } {
+    if (id === 'boat') {
+      const ship = this.hooks.ship();
+      // Until the ship models load, the boat from the map stands in.
+      return ship.model ? { model: ship.model, key: ship.key } : { model: buildUpgradeModel('boat', 1), key: -1 };
+    }
+    const level = Math.min(3, Math.max(1, this.hooks.owned(id))) as 1 | 2 | 3;
+    return { model: buildUpgradeModel(id, level), key: level };
+  }
+
   private buildPiece(id: UpgradeId, i: number): Piece {
-    const model = buildUpgradeModel(id, 1);
+    const { model, key } = this.pieceModel(id);
     model.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true;
     });
@@ -492,6 +539,7 @@ export class Workbench {
     this.scene.add(obj);
     return {
       id,
+      key,
       def: UPGRADES.find((u) => u.id === id)!,
       obj,
       hit,
@@ -502,6 +550,7 @@ export class Workbench {
       // A point cloud's inertia about a typical axis is about 2/3 of its mean squared radius.
       invI: 1 / Math.max(0.02, (hull.reduce((s, v) => s + v.lengthSq(), 0) / Math.max(1, hull.length)) * (2 / 3)),
       still: 0,
+      restAt: null,
       touching: false,
       swing: null,
       yaw: 0,
@@ -516,6 +565,41 @@ export class Workbench {
       hover: 0,
       tray: 1,
     };
+  }
+
+  /**
+   * Swaps in the model of any piece that changed: a level bought (from the
+   * inspector or the gear panel) or a new ship. The new piece takes the old
+   * one's place, slot and turn, and gives a little hop as it changes.
+   */
+  refreshGear() {
+    this.pieces.forEach((old, i) => {
+      if (old.mode === 'held' || old.mode === 'moving') return;
+      const want = old.id === 'boat' ? this.hooks.ship() : null;
+      const key = want ? (want.model ? want.key : -1) : Math.min(3, Math.max(1, this.hooks.owned(old.id)));
+      if (key === old.key) return;
+      const p = this.buildPiece(old.id, GEAR.indexOf(old.id));
+      p.obj.visible = old.obj.visible;
+      p.mode = old.mode;
+      p.slot = old.slot;
+      p.dropAt = old.dropAt;
+      p.yaw = old.yaw;
+      p.q.copy(old.q);
+      p.pos.copy(old.pos);
+      p.tray = old.tray;
+      p.pos.y = Math.max(p.pos.y, this.standY(p));
+      if (p.mode === 'free') {
+        p.vel.set(0, 3, 0);
+        p.grounded = false;
+      }
+      if (old.obj.visible) this.puff(p.pos.x, p.pos.z, p.r * 1.4);
+      this.scene.remove(old.obj);
+      old.obj.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
+      if (this.hovered === old) this.hovered = null;
+      this.pieces[i] = p;
+    });
   }
 
   /** Back to the starting layout. intro: everything waits above the table to drop in. */
@@ -802,13 +886,25 @@ export class Workbench {
       const touching = this.contact(p, this.onMap(p) ? MAP_TOP : 0);
       p.touching = touching;
       if (touching) {
-        // Rolling resistance, then sleep once it has been still for a moment.
-        p.spin.multiplyScalar(Math.exp(-dt * ROLL_DAMP));
+        // Rolling resistance, much stronger when it barely turns (a stand-in for static friction:
+        // a curved underside would otherwise teeter forever), then sleep once still for a moment.
+        const slow = Math.max(0, 1 - p.spin.length() / STICK_W);
+        p.spin.multiplyScalar(Math.exp(-dt * (ROLL_DAMP + STICK_DAMP * slow)));
         const k = Math.exp(-dt * SLIDE_DAMP);
         p.vel.x *= k;
         p.vel.z *= k;
-        if (p.vel.length() < SLEEP_V && p.spin.length() < SLEEP_W) p.still += dt;
-        else p.still = 0;
+        // At rest is judged by net motion over a window, not the instant: resting contact
+        // jitters (gravity in, impulse out) without going anywhere.
+        // Still: barely moving right now, or (jittering in place) not getting anywhere.
+        const v = p.vel.length();
+        const w = p.spin.length();
+        if (v < SLEEP_V && w < SLEEP_W) {
+          if (p.still === 0) p.restAt = { pos: p.pos.clone(), q: p.q.clone() };
+          p.still += dt;
+          const r = p.restAt!;
+          const calm = v < CALM_V && w < CALM_W;
+          if (!calm && (r.pos.distanceTo(p.pos) > REST_MOVE || r.q.angleTo(p.q) > REST_TURN)) p.still = 0; // it is going somewhere
+        } else p.still = 0;
         if (p.still > SLEEP_S) {
           p.vel.set(0, 0, 0);
           p.spin.set(0, 0, 0);
@@ -996,19 +1092,26 @@ export class Workbench {
   }
 
   /** Our clicks land on a bare canvas (the title's, which sits under ours); not on menus or buttons. */
+  /** A modal (the Aquarium) is up over the scene: ignore the pointer and keys. */
+  blocked: () => boolean = () => false;
+
   private ours(e: PointerEvent) {
     return e.target instanceof HTMLCanvasElement;
   }
 
   private onDown(e: PointerEvent) {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
-    if (this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
+    if (this.blocked() || this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
     this.press = { piece: hit && hit !== 'map' ? hit : null, map: hit === 'map', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
     if (!this.visible) return;
+    if (this.blocked()) {
+      if (this.hovered) this.setHover(null, e);
+      return;
+    }
     this.trackPointer(e);
     if (this.held) {
       this.setRay(e);
@@ -1063,6 +1166,10 @@ export class Workbench {
 
   private onUp(e: PointerEvent) {
     if (!this.visible) return;
+    if (this.blocked() && !this.held) {
+      this.press = null;
+      return;
+    }
     if (this.held) {
       const p = this.held;
       this.held = null;
@@ -1090,7 +1197,8 @@ export class Workbench {
     if (press.map) this.openChart();
     else if (press.piece) {
       this.setHover(null, e);
-      this.inspect(press.piece);
+      if (press.piece.id === 'boat') this.hooks.openShipyard();
+      else this.inspect(press.piece);
     }
   }
 
@@ -1115,7 +1223,7 @@ export class Workbench {
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
         : [
             `${hit.def.name} · ${hit.def.nameZh}`,
-            hit.def.effects[0],
+            hit.id === 'boat' ? 'Your ship · 当前船只 — click for the shipyard' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
             hit.mode === 'ready' ? 'Ready · click for a closer look' : hit.def.group === 'dive' ? 'Click for a closer look · drag to the tray' : 'Click to upgrade the boat',
           ];
     this.tip.replaceChildren(

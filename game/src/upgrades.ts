@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { EQUIPMENT_TIERS, ROD_TIERS } from './equipment';
+import { EQUIPMENT_TIERS, ROD_TIERS, type UpgradeSlot } from './equipment';
 import { buildDeepSonar } from './deep-sonar';
 import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
@@ -29,9 +29,15 @@ export interface UpgradeDef {
   prices: [number, number, number];
 }
 
+/** Effects and prices straight from equipment.ts, the progression the game actually uses. */
+function fromTiers(slot: UpgradeSlot): Pick<UpgradeDef, 'effects' | 'prices'> {
+  const t = EQUIPMENT_TIERS[slot];
+  return { effects: [t[0].effect, t[1].effect, t[2].effect], prices: [t[0].cost, t[1].cost, t[2].cost] };
+}
+
 export const UPGRADES: UpgradeDef[] = [
-  { id: 'rod', group: 'dive', name: 'Net shaft', nameZh: '鱼竿杆身', effects: ['Tool reach 1.2 m', 'Tool reach 1.55 m', 'Tool reach 1.9 m'], prices: [0, 100, 500] },
-  { id: 'reel', group: 'dive', name: 'Recovery reel', nameZh: '高速回收线轮', effects: ['Base swing recovery', '20% faster recovery', '40% faster recovery'], prices: [0, 120, 600] },
+  { id: 'rod', group: 'dive', name: 'Net shaft', nameZh: '鱼竿杆身', ...fromTiers('rod') },
+  { id: 'reel', group: 'dive', name: 'Recovery reel', nameZh: '高速回收线轮', ...fromTiers('reel') },
   { id: 'bait', group: 'boat', name: 'Bait', nameZh: '鱼饵', effects: ['Bite wait ×1.0', 'Bite wait ×0.8', 'Bite wait ×0.6'], prices: [0, 40, 300] },
   // The whole boat as one piece on the workbench: its engine and hull upgrade together.
   { id: 'boat', group: 'boat', name: 'Boat', nameZh: '船', effects: ['Trip 2 h · hull 3', 'Trip 1 h · hull 5', 'Trip 30 min · hull 8'], prices: [0, 120, 700] },
@@ -47,9 +53,9 @@ export const UPGRADES: UpgradeDef[] = [
     effects: [`Holds ${ROD_TIERS[0].capacity} fish`, `Holds ${ROD_TIERS[1].capacity} fish`, `Holds ${ROD_TIERS[2].capacity} fish`],
     prices: [ROD_TIERS[0].cost, ROD_TIERS[1].cost, ROD_TIERS[2].cost],
   },
-  { id: 'fins', group: 'dive', name: 'Fins', nameZh: '脚蹼', effects: ['Swim speed 7.5', 'Swim speed 8.5', 'Swim speed 9.5'], prices: [0, 60, 400] },
-  { id: 'tank', group: 'dive', name: 'Emergency tank', nameZh: '应急气瓶', effects: ['No reserve air', '+1 s emergency air', '+2 s emergency air'], prices: [0, 80, 500] },
-  { id: 'lamp', group: 'dive', name: 'Headlamp', nameZh: '头灯', effects: ['Short beam', 'Wide beam', 'Wide, long beam'], prices: [0, 40, 300] },
+  { id: 'fins', group: 'dive', name: 'Fins', nameZh: '脚蹼', ...fromTiers('fins') },
+  { id: 'tank', group: 'dive', name: 'Emergency tank', nameZh: '应急气瓶', ...fromTiers('tank') },
+  { id: 'lamp', group: 'dive', name: 'Headlamp', nameZh: '头灯', ...fromTiers('lamp') },
   // Like the net, the sonar's real tiers and prices live in equipment.ts.
   {
     id: 'sonar',
