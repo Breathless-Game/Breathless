@@ -3,6 +3,7 @@ import { guideArt, type GuideArt } from './guide-art';
 import { currentLesson, LESSONS, loadTutorial, recordLesson, saveTutorial, type LessonId } from './tutorial';
 import { lang, onLangChange, t } from './i18n';
 import { SYNTHESIS_ENABLED } from './synthesis';
+import { clampPosition, exceedsDragThreshold, fromFraction, LAUNCHER_POS_KEY, parseSavedPos, placePanel, toFraction } from './launcher-drag';
 
 type ChapterId = 'prepare' | 'assembly' | 'gear' | 'synthesis' | 'dive' | 'return' | 'sonar';
 interface Chapter {
@@ -116,6 +117,7 @@ export class FieldGuide {
     }));
     this.root.addEventListener('click', event => { if (event.target === this.root) this.close(); });
     window.addEventListener('keydown', event => this.handleKey(event), true);
+    this.initDrag();
     this.renderChrome();
     this.renderTutorial();
     onLangChange(() => {
@@ -123,6 +125,74 @@ export class FieldGuide {
       this.renderTutorial();
       if (this.open) this.renderBook();
     });
+  }
+  private placeTour: () => void = () => {};
+  /** Make the launcher draggable (mouse/touch). Position is stored as viewport fractions. */
+  private initDrag() {
+    const el = this.launcher;
+    const sides = ['left', 'top', 'right', 'bottom'] as const;
+    let custom = parseSavedPos((() => { try { return localStorage.getItem(LAUNCHER_POS_KEY); } catch { return null; } })());
+    const apply = () => {
+      if (!custom) {
+        for (const k of sides) { el.style[k] = ''; this.tour.style[k] = ''; }
+        el.classList.remove('moved');
+        return;
+      }
+      const w = el.offsetWidth, h = el.offsetHeight;
+      const p = fromFraction(custom, w, h, window.innerWidth, window.innerHeight);
+      el.classList.add('moved');
+      el.style.left = `${p.left}px`; el.style.top = `${p.top}px`; el.style.right = 'auto'; el.style.bottom = 'auto';
+      this.placeTour();
+    };
+    this.placeTour = () => {
+      if (!custom) return;
+      const r = el.getBoundingClientRect();
+      const pos = placePanel({ left: r.left, top: r.top, width: r.width, height: r.height },
+        this.tour.offsetWidth || 350, this.tour.offsetHeight || 220, window.innerWidth, window.innerHeight);
+      this.tour.style.left = `${pos.left}px`; this.tour.style.right = 'auto';
+      this.tour.style.top = pos.top === undefined ? 'auto' : `${pos.top}px`;
+      this.tour.style.bottom = pos.bottom === undefined ? 'auto' : `${pos.bottom}px`;
+    };
+    const save = () => {
+      try { if (custom) localStorage.setItem(LAUNCHER_POS_KEY, JSON.stringify(custom)); else localStorage.removeItem(LAUNCHER_POS_KEY); } catch { /* storage unavailable */ }
+    };
+    let start: { id: number; x: number; y: number; left: number; top: number } | null = null;
+    let dragging = false, suppress = false;
+    el.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.stopPropagation();
+      const r = el.getBoundingClientRect();
+      start = { id: event.pointerId, x: event.clientX, y: event.clientY, left: r.left, top: r.top };
+      dragging = false; suppress = false;
+      try { el.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+    });
+    el.addEventListener('pointermove', event => {
+      if (!start || event.pointerId !== start.id) return;
+      const dx = event.clientX - start.x, dy = event.clientY - start.y;
+      if (!dragging) {
+        if (!exceedsDragThreshold(dx, dy)) return;
+        dragging = true; el.classList.add('dragging');
+      }
+      const w = el.offsetWidth, h = el.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+      const p = clampPosition(start.left + dx, start.top + dy, w, h, vw, vh);
+      custom = toFraction(p.left, p.top, w, h, vw, vh);
+      apply();
+      event.preventDefault();
+    });
+    const end = (event: PointerEvent) => {
+      if (!start || event.pointerId !== start.id) return;
+      try { el.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
+      if (dragging) { suppress = true; save(); setTimeout(() => { suppress = false; }, 300); }
+      el.classList.remove('dragging');
+      start = null; dragging = false;
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    // A drag finishes with a click on a button; swallow exactly that one.
+    el.addEventListener('click', event => { if (suppress) { suppress = false; event.stopPropagation(); event.preventDefault(); } }, true);
+    el.addEventListener('dblclick', () => { custom = null; save(); apply(); });
+    window.addEventListener('resize', () => { if (custom) apply(); });
+    apply();
   }
   /** The book's fixed text (cover, tabs, page buttons) and the launcher, in the current language. */
   private renderChrome() {
@@ -254,10 +324,15 @@ export class FieldGuide {
       pages.classList.add(direction > 0 ? 'page-turn-forward' : 'page-turn-back');
     }
   }
-  private renderTutorial() {
+  private renderTutorial() { this.renderTutorialInner(); this.placeTour(); }
+  private renderTutorialInner() {
     const toggle = this.launcher.querySelector<HTMLButtonElement>('#tour-toggle')!;
     toggle.setAttribute('aria-pressed', String(this.state.enabled));
     toggle.textContent = this.state.enabled ? t('Tutorial: on', '引导：开启') : t('Tutorial', '新手引导');
+    const hint = t('Drag to move · double-click to reset', '可拖动 · 双击复位');
+    toggle.title = hint;
+    toggle.setAttribute('aria-description', hint);
+    this.launcher.querySelector('#guide-open')!.setAttribute('title', hint);
     this.tour.classList.toggle('hidden', this.state.chosen && !this.state.enabled);
     if (!this.state.chosen) {
       this.tour.innerHTML = `<p class="guide-eyebrow">${t('FIRST DIVE', '初次下潜')}</p><h2>${t('First time out? Let’s practise together.', '第一次出海？一起练习吧。')}</h2><p>${t('From packing your gear to bringing home your first fish, one step at a time. Turn it off any time.', '从准备装备到带回第一条鱼，一步一步来。随时可以关闭。')}</p><div class="tour-actions"><button type="button" id="tour-start">${t('Start tutorial →', '开始引导 →')}</button><button type="button" id="tour-dismiss">${t('Explore freely', '自由探索')}</button></div>`;
