@@ -40,6 +40,7 @@ try {
 }
 console.log('market info', info);
 if (info.mode === 'program' && !info.ready) stop('program mode, but fish_market config is not initialized with this oracle');
+if (info.cosign) stop('this market only buys fish minted into its collection through /cosign-mint; these test fish are minted directly, so it would refuse them. Use fish-trust-e2e.mjs (co-signed mint, migration, sale), or a market from before the collection');
 
 // ---- Throwaway player wallet.
 const u = createUmi(RPC, 'confirmed').use(mplCore());

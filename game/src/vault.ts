@@ -214,6 +214,9 @@ export class Vault {
     const forSale = this.bank.filter((f) => f.sellQueued && f.nft !== 'minted').length;
     if (q.batch) {
       box = this.batchNotice(q.batch);
+    } else if (q.mintPause && q.mintPause.until > Date.now() && queued) {
+      const at = new Date(q.mintPause.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      box = notice('warn', `Minting paused until ${at}: this wallet reached the market's hourly mint limit.`, `Nothing is lost: ${queued} NFT${queued > 1 ? 's' : ''} stay queued and mint on their own.`);
     } else if (q.funds === 'needs-sol' && waiting) {
       // Fund sits on the game wallet card just above: one button, not two.
       box = notice('warn', 'Minting paused: the game wallet needs devnet SOL.', `Fund it above. Checking again every minute.${more ? ` ${more}.` : ''}`);
@@ -316,7 +319,11 @@ export class Vault {
     if (f.nft === 'minted' && f.assetId) status.appendChild(explorerLink(f.assetId));
     const parts: HTMLElement[] = [meta, status];
     const err = q.sellErrors.get(f) ?? (f.nft === 'failed' ? f.mintError : undefined);
-    if (err) {
+    if (f.sellBlock && !q.sellErrors.has(f)) {
+      const line = el('div', 'err', `Not sellable: ${f.sellBlock}`);
+      line.title = line.textContent ?? '';
+      parts.push(line);
+    } else if (err) {
       const sale = q.sellErrors.has(f);
       const line = el('div', 'err', sale ? `Sale failed: ${err}` : `Mint failed: ${err}`);
       line.title = line.textContent ?? '';
@@ -390,6 +397,11 @@ export class Vault {
     if (!quote.ok && quote.reason === 'paid-out') {
       const tag = el('span', 'paid', 'Paid out');
       tag.title = 'Banked before selling existed: its Pearls were paid on surfacing.';
+      return tag;
+    }
+    if (!quote.ok && quote.reason === 'blocked') {
+      const tag = el('span', 'paid', 'Not sellable');
+      tag.title = f.sellBlock ?? 'The market cannot buy this NFT';
       return tag;
     }
     if (q.selling.has(f)) {
