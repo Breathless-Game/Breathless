@@ -924,6 +924,9 @@ export class World {
    * (paused, or a fresh map) re-poses it so a changed setting still shows.
    */
   updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
+    // Float on the sea clock even while the shipyard pauses gameplay physics.
+    this.boat.position.y = 0.25 + Math.sin(this.waveTime * 1.3) * 0.18 * this.swell() * this.map.waves;
+    this.boat.rotation.z = Math.sin(this.waveTime * 1.1) * 0.05 * this.swell() * this.map.waves;
     this.lastSceneTime = time;
     this.lastCameraY = cameraY;
     this.lastCameraX = cameraX;
@@ -1005,12 +1008,6 @@ export class World {
   }
 
   private updateDecorations(time: number, dt: number, cameraY: number) {
-    // Waves.
-    const waveTime = this.waveTime;
-    const swell = this.swell();
-    const waves = this.map.waves;
-    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
-    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
 
     for (const k of this.kelps) {
       if (!k.root.visible) continue;
