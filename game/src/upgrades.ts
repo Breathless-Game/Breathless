@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { ROD_TIERS } from './equipment';
-import { buildRod, buildBait, buildNet } from './upgrade-models/fishing';
+import { buildRod, buildReel, buildBait, buildNet } from './upgrade-models/fishing';
 import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/marine';
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
 
-export type UpgradeId = 'rod' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
+export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp';
 export type UpgradeLevel = 1 | 2 | 3;
 export {
   ACCESSORIES,
@@ -27,7 +27,8 @@ export interface UpgradeDef {
 }
 
 export const UPGRADES: UpgradeDef[] = [
-  { id: 'rod', group: 'boat', name: 'Fishing rod', nameZh: '鱼竿', effects: ['1 roll per bite', 'Best of 2 rolls', 'Best of 3 rolls'], prices: [0, 60, 400] },
+  { id: 'rod', group: 'dive', name: 'Net shaft', nameZh: '鱼竿杆身', effects: ['Tool reach 1.2 m', 'Tool reach 1.55 m', 'Tool reach 1.9 m'], prices: [0, 100, 500] },
+  { id: 'reel', group: 'dive', name: 'Recovery reel', nameZh: '高速回收线轮', effects: ['Base swing recovery', '20% faster recovery', '40% faster recovery'], prices: [0, 120, 600] },
   { id: 'bait', group: 'boat', name: 'Bait', nameZh: '鱼饵', effects: ['Bite wait ×1.0', 'Bite wait ×0.8', 'Bite wait ×0.6'], prices: [0, 40, 300] },
   { id: 'boatSpeed', group: 'boat', name: 'Boat engine', nameZh: '船 · 速度', effects: ['Trip takes 2 h', 'Trip takes 1 h', 'Trip takes 30 min'], prices: [0, 80, 500] },
   { id: 'boatHull', group: 'boat', name: 'Boat hull', nameZh: '船 · 耐久', effects: ['Durability 3', 'Durability 5', 'Durability 8'], prices: [0, 80, 500] },
@@ -49,6 +50,7 @@ export const UPGRADES: UpgradeDef[] = [
 
 const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
   rod: buildRod,
+  reel: buildReel,
   bait: buildBait,
   boatSpeed: buildBoatSpeed,
   boatHull: buildBoatHull,

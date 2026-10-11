@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Every fish and the fishing rod in 屏息 Breathless is built in code. The rod uses more detailed hardware and PBR materials while retaining faceted shading. This folder catalogs the assets with renders, model parameters, a reusable Lv1 fishing-net GLB, and 27 equipment upgrade display models. The game builds its models live; the exported files are available for reuse.
+Every fish and the fishing rod in 屏息 Breathless is built in code. The rod uses more detailed hardware and PBR materials while retaining faceted shading. This folder catalogs the assets with renders, model parameters, a reusable Lv1 fishing-net GLB, and 27 archived equipment upgrade display models (30 are defined; the reel is not archived yet). The game builds its models live; the exported files are available for reuse.
 
 ---
 
@@ -34,7 +34,7 @@ assets/
 │   ├── <id>-lv1.png / <id>-lv1.glb      base display model
 │   ├── <id>-lv2.png / <id>-lv2.glb      reinforced display model
 │   ├── <id>-lv3.png / <id>-lv3.glb      advanced display model
-│   ├── equipment-contact-sheet.png     all 27 models together
+│   ├── equipment-contact-sheet.png     27 archived models together
 │   └── manifest.json                   file names and tier index
 └── cards/               one example NFT card: 512 × 512 PNG
 ```
@@ -372,7 +372,7 @@ Edit `buildFishingNetMesh()` in `gear.ts`. Keep the origin at the shoulder and t
 
 ## 7. Equipment upgrade models
 
-Nine classes have three separately built tiers each: **27 matte, broadly faceted PBR display models**, with realistic proportions and changes to the hardware as well as the colors. [`buildUpgradeModel(id, level)`](../game/src/upgrades.ts) supplies the workbench and equipment catalog. These are display assets; generating or exporting them does not connect purchase handling, boat travel, or the fins, reserve-air and light effects to gameplay. The diver's approved runtime landing net remains in [`gear.ts`](../game/src/gear.ts).
+Ten classes have three separately built tiers each (**30 matte, broadly faceted PBR display models**), with realistic proportions and changes to the hardware as well as the colors. The 27 models archived under `assets/upgrades/` predate the stand-alone reel; export the 3 reel tiers from the equipment preview page to complete the archive. [`buildUpgradeModel(id, level)`](../game/src/upgrades.ts) supplies the workbench and equipment catalog. These are display assets; generating or exporting them does not connect purchase handling, boat travel, or the fins, reserve-air and light effects to gameplay. The diver's approved runtime landing net remains in [`gear.ts`](../game/src/gear.ts).
 
 <img src="upgrades/equipment-contact-sheet.png" width="1080" alt="All nine equipment classes, with Lv1, Lv2 and Lv3 side by side">
 
@@ -392,6 +392,6 @@ Each cell below links the corresponding PNG and GLB in `assets/upgrades/`. File 
 | Reserve air / `tank` | Empty harness and cylinder clamps; **no bottle or reserve air**<br>[PNG](upgrades/tank-lv1.png) · [GLB](upgrades/tank-lv1.glb) | Rounded single bottle, valve, hose and mouthpiece<br>[PNG](upgrades/tank-lv2.png) · [GLB](upgrades/tank-lv2.glb) | Twin bottles, manifold and pressure gauge with needle<br>[PNG](upgrades/tank-lv3.png) · [GLB](upgrades/tank-lv3.glb) |
 | Headlamp / `lamp` | Single lamp, headband and rear battery<br>[PNG](upgrades/lamp-lv1.png) · [GLB](upgrades/lamp-lv1.glb) | Wider reflector cup and impact guard<br>[PNG](upgrades/lamp-lv2.png) · [GLB](upgrades/lamp-lv2.glb) | Two optical heads and larger rear battery<br>[PNG](upgrades/lamp-lv3.png) · [GLB](upgrades/lamp-lv3.glb) |
 
-Start `npm run game`, then open <http://localhost:5173/equipment-preview.html> ([page source](../game/equipment-preview.html)). Select a class and level, drag to rotate, scroll to zoom, or reset the view. The gallery renders all 27 tiers. **Generate all assets** creates the GLB links and `manifest.json`; download each PNG/GLB and the contact sheet into `assets/upgrades/`. The manifest records ID, level, class name, reference effect text, filenames and GLB byte size. Its effect text describes upgrade definitions, not a guarantee that those effects are wired into gameplay.
+Start `npm run game`, then open <http://localhost:5173/equipment-preview.html> ([page source](../game/equipment-preview.html)). Select a class and level, drag to rotate, scroll to zoom, or reset the view. The gallery renders all 30 tiers. **Generate all assets** creates the GLB links and `manifest.json`; download each PNG/GLB and the contact sheet into `assets/upgrades/`. The manifest records ID, level, class name, reference effect text, filenames and GLB byte size. Its effect text describes upgrade definitions, not a guarantee that those effects are wired into gameplay.
 
 To change these assets, edit the relevant builder in [`upgrade-models/fishing.ts`](../game/src/upgrade-models/fishing.ts), [`marine.ts`](../game/src/upgrade-models/marine.ts) or [`diving.ts`](../game/src/upgrade-models/diving.ts), rebuild, and regenerate the affected PNG/GLB files and the index. The class list and reference effects come from `UPGRADES` in `upgrades.ts`.

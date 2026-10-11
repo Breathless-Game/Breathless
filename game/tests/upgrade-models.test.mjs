@@ -39,7 +39,7 @@ function count(model, name) {
 }
 
 test('all 27 display models are centred, finite, and fit the two-unit workbench API', () => {
-  assert.equal(UPGRADES.length, 9);
+  assert.equal(UPGRADES.length, 10);
   for (const definition of UPGRADES) {
     for (const level of [1, 2, 3]) {
       const model = buildUpgradeModel(definition.id, level);

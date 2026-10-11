@@ -56,6 +56,24 @@ function spinningReel(parent: THREE.Group, level: UpgradeLevel, colors: ReturnTy
   return [1.059, y + radius * 0.65, radius * 0.55] as Point;
 }
 
+/** Stand-alone recovery reel: a side-mounted spool, a gear body and a crank handle. */
+export function buildReel(level: UpgradeLevel): THREE.Group {
+  const group = asset('reel', level);
+  const colors = palette(level);
+  const radius = 0.16 + level * 0.025;
+  const spool = mesh(group, new THREE.CylinderGeometry(radius, radius, 0.12, 8), colors.metal, [0, 0.08, 0], 'Reel_Spool');
+  spool.rotation.x = Math.PI / 2;
+  const core = mesh(group, new THREE.CylinderGeometry(radius * 0.62, radius * 0.62, 0.15, 8), colors.line, [0, 0.08, 0], 'Wound_Line');
+  core.rotation.x = Math.PI / 2;
+  ring(group, radius * 0.82, 0.025, colors.accent, [0, 0.08, 0.07], 'z', 10).name = 'Spool_Rim';
+  mesh(group, new THREE.BoxGeometry(0.12 + level * 0.03, 0.08, 0.28), colors.body, [0, -0.1, 0], 'Reel_Body');
+  const handle = mesh(group, new THREE.BoxGeometry(0.22, 0.035, 0.035), colors.accent, [radius + 0.1, 0.08, 0.1], 'Crank_Handle');
+  handle.rotation.z = -0.4;
+  mesh(group, new THREE.IcosahedronGeometry(0.04, 0), level === 1 ? colors.wood : colors.rubber, [radius + 0.2, 0.04, 0.1], 'Crank_Grip');
+  beam(group, [-0.25, -0.1, 0], [0.25, -0.1, 0], 0.025, colors.metal, 5).name = 'Clutch_Bar';
+  return group;
+}
+
 /** Continuous tapered blanks, correctly seated guides, and an unbroken line. */
 export function buildRod(level: UpgradeLevel): THREE.Group {
   const group = asset('rod', level);

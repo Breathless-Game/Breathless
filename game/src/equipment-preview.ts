@@ -102,7 +102,7 @@ function sheet(): string {
   ctx.fillStyle = '#eeeee6'; ctx.font = 'bold 32px system-ui';
   ctx.fillText('HACKRU · 多面体装备 / 哑光材质', 32, 48);
   ctx.fillStyle = '#b5b5a7'; ctx.font = '18px system-ui';
-  ctx.fillText('现实装备结构参考 · 大切面 / 硬轮廓 · 9 类 × 3 档', 32, 82);
+  ctx.fillText(`现实装备结构参考 · 大切面 / 硬轮廓 · ${UPGRADES.length} 类 × 3 档`, 32, 82);
   UPGRADES.forEach((definition, row) => {
     const y = 130 + row * 340;
     ctx.fillStyle = '#eeeee6'; ctx.font = 'bold 22px system-ui';
@@ -145,7 +145,7 @@ async function previews() {
   studio.dispose();
   const link = fileLink('equipment-contact-sheet.png', sheet(), '下载全部装备对照 PNG');
   link.className = 'download'; exports.append(link);
-  document.querySelector('#status')!.textContent = '27 / 27 模型预览完成';
+  document.querySelector('#status')!.textContent = `${UPGRADES.length * 3} / ${UPGRADES.length * 3} 模型预览完成`;
 }
 const ready = previews();
 document.querySelector<HTMLButtonElement>('#export-all')!.addEventListener('click', async (event) => {
@@ -177,7 +177,7 @@ document.querySelector<HTMLButtonElement>('#export-all')!.addEventListener('clic
     const data = await blobDataUrl(new Blob([JSON.stringify({ format: 'HackRU-equipment-v1', style: 'faceted-matte', displayUnits: 'longest-axis-2', assets: manifest }, null, 2)], { type: 'application/json' }));
     const old = document.querySelector('#manifest-link'); old?.remove();
     const link = fileLink('manifest.json', data, '下载素材索引'); link.id = 'manifest-link'; link.style.display = 'inline-block'; link.className = 'download'; exports.append(link);
-    status.textContent = '27 / 27 PNG + GLB 素材生成完成';
+    status.textContent = `${UPGRADES.length * 3} / ${UPGRADES.length * 3} PNG + GLB 素材生成完成`;
     button.textContent = '重新生成全部素材';
   } catch (error) {
     status.textContent = `素材导出失败：${error instanceof Error ? error.message : String(error)}`;
