@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildUpgradeModel, type UpgradeDef, type UpgradeLevel } from './upgrades';
+import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 
 // A closer look at one piece of gear from the workbench: it grows from where it
 // lies on the table to the middle of the screen over the blurred table, turning
@@ -23,6 +24,8 @@ export interface InspectHooks {
   isReady(def: UpgradeDef): boolean;
   /** Put it in the ready tray, or back on the table (dive gear only). */
   setReady(def: UpgradeDef, ready: boolean): void;
+  /** Apply the sonar beacon color to the live dive model. */
+  sonarColor?(color: string): void;
   closed(): void;
 }
 
@@ -65,6 +68,12 @@ export class GearInspector {
       if (!this.def) return;
       this.hooks.setReady(this.def, !this.hooks.isReady(this.def));
       this.renderInfo();
+    });
+    $('wb-inspect-sonar-input').addEventListener('input', (e) => {
+      const color = (e.target as HTMLInputElement).value;
+      const saved = saveSonarConfig({ ...loadSonarConfig(), color });
+      (e.target as HTMLInputElement).value = saved.color;
+      this.hooks.sonarColor?.(saved.color);
     });
     // Clicking the blurred table around it puts it down.
     this.root.addEventListener('click', (e) => {
@@ -188,6 +197,11 @@ export class GearInspector {
     $('wb-inspect-level').textContent = `Level ${lv} / 3${unlocked ? '' : ' · locked'}`;
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
     $('wb-inspect-effect').textContent = def.effects[lv - 1];
+    const sonarColor = $<HTMLLabelElement>('wb-inspect-sonar-color');
+    const sonarInput = $<HTMLInputElement>('wb-inspect-sonar-input');
+    const isSonar = def.id === 'sonar';
+    sonarColor.classList.toggle('hidden', !isSonar);
+    if (isSonar) sonarInput.value = loadSonarConfig().color;
     // Every level's line, so you can compare them; the one you're looking at is marked.
     $('wb-inspect-levels').replaceChildren(
       ...LEVELS.map((l) => {

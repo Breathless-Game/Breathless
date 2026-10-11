@@ -13,7 +13,7 @@ import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
 import { Aquarium } from './aquarium';
-import { Workbench } from './workbench';
+import { Workbench, type WorkbenchConditions } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
@@ -740,6 +740,33 @@ function setTimeOfDay(mode: TimeOfDay) {
   hud.message(labels[mode]);
 }
 
+const WEATHER_LABELS = {
+  clear: 'Clear · 晴朗',
+  cloudy: 'Cloudy · 多云',
+  rain: 'Rain · 降雨',
+  storm: 'Storm · 暴风雨',
+} as const;
+
+/** The live field note shown while a map is being prepared on the workbench. */
+function workbenchConditions(id: MapId): WorkbenchConditions {
+  const map = MAPS[id];
+  const lighting = world.dayCycle.state;
+  const weather = world.weather.state;
+  const minute = Math.round(lighting.hour * 60) % (24 * 60);
+  const temperatureC = map.surfaceTempC
+    + (lighting.daylight - 1) * 3
+    - weather.cloud * 1.2
+    - weather.rain * 0.8
+    - weather.wind * 0.4;
+  return {
+    time: `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`,
+    temperatureC: Math.round(temperatureC * 10) / 10,
+    weather: WEATHER_LABELS[weather.kind],
+    wind: `${Math.round(4 + weather.wind * 30)} km/h`,
+    rain: weather.rain < 0.05 ? 'Dry · 无雨' : `${Math.round(weather.rain * 18 * 10) / 10} mm/h`,
+  };
+}
+
 function carrySonarForDive() {
   if (!loadout.includes('sonar')) {
     sonar.group.visible = false;
@@ -1317,6 +1344,7 @@ const workbench = new Workbench({
   },
   // Only the net (equipment.ts's rod tiers) can be upgraded so far; the rest is starting gear.
   owned: (id) => (id === 'net' ? equipment.rodLevel : 1),
+  conditions: workbenchConditions,
   sonarColor(color) {
     sonar.setColor(color);
   },
