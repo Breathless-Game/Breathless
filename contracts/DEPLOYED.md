@@ -43,3 +43,31 @@ it for 375 PEARL with the oracle co-signing:
 - Fish (now burned, a 1-byte tombstone): [`svqxg366t8nZ1ccbC1et1rZsBhiw2TXJvd7vMe7vx8N`](https://explorer.solana.com/address/svqxg366t8nZ1ccbC1et1rZsBhiw2TXJvd7vMe7vx8N?cluster=devnet)
 - `sell_fish(375)`: [`7qPHmnR1…h3D`](https://explorer.solana.com/tx/7qPHmnR1fWmBnZTZubAm2YaMSs4KChJvpeLsjBuLktt8f1okJtbbLKpcKLFaz6HTbrLruMd133zbKxuUkKJbh3D?cluster=devnet), 39,726 CU (fits the default 200k limit, including creating the ATA)
 - Player's PEARL ATA, balance 375: [`G5khBJFrRAAGLec5a3x4s1wM5XwUySrxpaBVbgo6Pykq`](https://explorer.solana.com/address/G5khBJFrRAAGLec5a3x4s1wM5XwUySrxpaBVbgo6Pykq?cluster=devnet)
+
+# player_state on devnet
+
+Cluster: **devnet**. Deployed 2026-10-11 from `main` 28689d8.
+
+| what | address |
+| --- | --- |
+| Program id | [`EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`](https://explorer.solana.com/address/EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ?cluster=devnet) |
+| ProgramData | [`F3t9gekMBdbBatNqdHWYPGccJK3wi7wfjX8fR2373jDp`](https://explorer.solana.com/address/F3t9gekMBdbBatNqdHWYPGccJK3wi7wfjX8fR2373jDp?cluster=devnet) |
+| `config` PDA (`["config"]`) | [`3xrnDesVHmrpYZi6R52ux7FmoxaWL5ege53iFN44DtMj`](https://explorer.solana.com/address/3xrnDesVHmrpYZi6R52ux7FmoxaWL5ege53iFN44DtMj?cluster=devnet) |
+| Deployer = admin = upgrade authority | [`EA77L4HGz15Urk1Ycohju77Ufb1hJCa4g5z4Xfdwz9To`](https://explorer.solana.com/address/EA77L4HGz15Urk1Ycohju77Ufb1hJCa4g5z4Xfdwz9To?cluster=devnet) |
+| Oracle (market wallet) | [`12b3GY2Pbh4HnNaLqL7GszmeFrcrfiULwfLz5HcF7gRd`](https://explorer.solana.com/address/12b3GY2Pbh4HnNaLqL7GszmeFrcrfiULwfLz5HcF7gRd?cluster=devnet) |
+| PEARL mint | [`3aX1muNxajg9VuxfigrVk2f7dGdCedJ67kUsAqCc9drp`](https://explorer.solana.com/address/3aX1muNxajg9VuxfigrVk2f7dGdCedJ67kUsAqCc9drp?cluster=devnet) |
+| Token program (owner of the mint) | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+
+Config (version 1) holds the game's price table, `GAME_PRICE_TABLE` in
+`game/src/player-state.ts`; change it with `update_prices` (admin only).
+
+Secret keys (git-ignored, never commit): `contracts/.keys/player_state-program.json`,
+`contracts/.keys/player_state-deployer.json`.
+
+Deployed binary: `target/deploy/player_state.so`, 381848 bytes, sha256
+`e518da31c305ce237df2bce34b10da52725923a67de7244ce9481b895559829e`.
+
+## Transactions
+
+- Deploy: [`s2tWGwYA…bHN`](https://explorer.solana.com/tx/s2tWGwYAVrggMgPkbmeXkJnVCC1MSwkQ2TozEVf2Eq3fShrxZQ7YTcaF8ZvDLXuZnoderR9qyuPQPdCNH748bHN?cluster=devnet)
+- `initialize_config` (scripts/init-player-state.ts): [`5k4zWmB9…yM9M`](https://explorer.solana.com/tx/5k4zWmB9WRBswmkKUicjM7NmVWWvDk6wMbZGyafgcBiZ4ReKvTMzQu6BeWyKJwwhUnDvPQwJYCc5r2xu2KdryM9M?cluster=devnet)
