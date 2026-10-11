@@ -15,6 +15,7 @@ import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps'
 import { SoftPaper } from './paper';
 import { GearInspector } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
+import { loadSonarConfig, saveSonarConfig, sonarLengthMeters } from './sonar-config';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -31,10 +32,16 @@ export interface WorkbenchHooks {
   dive(map: MapId, gear: UpgradeId[]): void;
   /** The highest level owned of a piece of gear (1 = the starting gear). */
   owned(id: UpgradeId): number;
+  /** The ready-room color for the deep sonar beacon. */
+  sonarColor?(color: string): void;
 }
 
-// The dive gear, and a model of the boat (for upgrading the boat; it never goes in the ready tray).
-const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'boat', 'net'];
+// The six dive-loadout slots plus the deployable deep sonar, and a model of the
+// boat (for upgrading the boat; it never goes in the ready tray). The rod carries
+// the net and the reel changes its recovery; bait is a boat upgrade and is not
+// packed on this workbench.
+const GEAR: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel', 'sonar', 'boat'];
+
 /** Where each piece lands, in table units (x right, z toward the camera). */
 // Kept off the back strip of the table: the title fish hang over it and would take the clicks.
 const SPOTS: [number, number][] = [
@@ -43,18 +50,22 @@ const SPOTS: [number, number][] = [
   [-3.6, 1.8],
   [1.5, -0.65],
   [1.55, 0.8],
+  [-0.9, 1.95],
+  [1.05, 1.95],
+  [-0.6, -1.75], // the boat, behind the chart
 ];
 
 const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
 const TRAY = { x0: 2.55, x1: 4.85, z0: -2.5, z1: 2.5 };
 // Toward the front of the tray: the SETTINGS fish hangs over its back.
 const SLOTS: [number, number][] = [
-  [3.15, -0.5],
-  [4.25, -0.5],
-  [3.15, 0.6],
-  [4.25, 0.6],
-  [3.15, 1.7],
-  [4.25, 1.7],
+  [3.15, -0.55],
+  [4.25, -0.55],
+  [3.15, 0.3],
+  [4.25, 0.3],
+  [3.15, 1.15],
+  [4.25, 1.15],
+  [3.15, 2.0],
 ];
 const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
 const MAP_W = 2.9;
@@ -69,12 +80,12 @@ const BOUNCE_MIN = 2.2; // slower than this and it just settles
 const HOLD_Y = 0.85;
 // Rigid-body contact with the tabletop (workbench.contact).
 const CONTACT_EPS = 0.02; // points this close to the lowest one share the load
-const CONTACT_ITERS = 4;
+const CONTACT_ITERS = 6;
 const MU = 0.55; // friction
 const ROLL_DAMP = 2.6; // turning slows while it touches, 1/s
 const SLIDE_DAMP = 1.2;
-const SLEEP_V = 0.14; // slower than this (and turning slower than SLEEP_W) …
-const SLEEP_W = 0.3;
+const SLEEP_V = 0.18; // slower than this (and turning slower than SLEEP_W) …
+const SLEEP_W = 0.4;
 const SLEEP_S = 0.35; // … for this long, and it comes to rest
 // Carried pieces hang this far under the hand and swing like a pendulum.
 const SWING_L = 0.35;
@@ -164,6 +175,8 @@ export class Workbench {
   private pinsEl = $('wb-pins');
   private placeEl = $('wb-place');
   private previewBox = $('wb-place-preview');
+  private sonarColorInput = $<HTMLInputElement>('wb-sonar-color');
+  private sonarLength = $('wb-sonar-length');
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -253,6 +266,13 @@ export class Workbench {
       if (this.state === 'chart' && (e.target === this.chartEl || e.target === this.chartBg)) this.closeChart();
     });
     $('wb-dive').addEventListener('click', () => this.state === 'chart' && this.picked && this.dive());
+    const sonar = loadSonarConfig();
+    this.sonarColorInput.value = sonar.color;
+    this.sonarColorInput.addEventListener('input', () => {
+      const saved = saveSonarConfig({ ...loadSonarConfig(), color: this.sonarColorInput.value });
+      this.sonarColorInput.value = saved.color;
+      this.hooks.sonarColor?.(saved.color);
+    });
     window.addEventListener('resize', () => this.visible && this.resize());
   }
 
@@ -558,7 +578,7 @@ export class Workbench {
         if (vp.y >= 0) continue;
         // Normal impulse: stop (or bounce) the point, through both the push and the turn it causes.
         rn.set(r.z, 0, -r.x); // r × up
-        const jn = (-(1 + (iter === 0 ? bounce : 0)) * vp.y) / (1 + p.invI * rn.lengthSq()) / touch.length;
+        const jn = (-(1 + (iter === 0 ? bounce : 0)) * vp.y) / (1 + p.invI * rn.lengthSq());
         // Friction against the sliding part, at most MU times the normal push.
         const tx = vp.x;
         const tz = vp.z;
@@ -567,7 +587,7 @@ export class Workbench {
         if (slide > 1e-5) {
           const t = new THREE.Vector3(tx / slide, 0, tz / slide);
           const rt = new THREE.Vector3().crossVectors(r, t);
-          const jt = Math.min(slide / (1 + p.invI * rt.lengthSq()) / touch.length, MU * jn);
+          const jt = Math.min(slide / (1 + p.invI * rt.lengthSq()), MU * jn);
           J.addScaledVector(t, -jt);
         }
         p.vel.add(J);
@@ -1273,6 +1293,9 @@ export class Workbench {
     }
     const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
     $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
+    const sonar = loadSonarConfig();
+    this.sonarColorInput.value = sonar.color;
+    this.sonarLength.textContent = `${sonarLengthMeters(sonar.lengthLevel)} m cable`;
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
   }
 

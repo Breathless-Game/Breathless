@@ -1,3 +1,5 @@
+@import './scrollbar.css';
+
 :root {
   --ink: #eaf8ff;
   --muted: rgba(234, 248, 255, 0.6);
@@ -313,6 +315,179 @@ body {
   background: linear-gradient(90deg, var(--danger), #ffb36b);
 }
 
+/* A standing warning (the boat is capsized), under the emergency bar. */
+#alert {
+  position: absolute;
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: rgba(40, 14, 10, 0.72);
+  border: 1px solid rgba(255, 179, 107, 0.55);
+  color: #ffd9b0;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+#alert b {
+  color: #fff;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* Heaving a capsized boat upright: a big key in the middle of the screen, a ring that fills. */
+#mash {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  pointer-events: none;
+}
+
+#mash .ring {
+  position: relative;
+  width: 136px;
+  height: 136px;
+  animation: mash-beckon 0.7s ease-in-out infinite;
+}
+
+#mash.hit .ring {
+  animation: mash-hit 0.13s ease-out;
+}
+
+#mash svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+#mash .track {
+  fill: rgba(6, 16, 28, 0.62);
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 8;
+}
+
+#mash .arc {
+  fill: none;
+  stroke: #ffb340;
+  stroke-width: 8;
+  stroke-linecap: round;
+  /* The circumference of r = 52. */
+  stroke-dasharray: 326.73;
+  stroke-dashoffset: 326.73;
+  transition: stroke-dashoffset 0.07s linear;
+}
+
+#mash .key {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 68px;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.65);
+}
+
+#mash .label {
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  color: #ffd9b0;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.75);
+  white-space: nowrap;
+}
+
+/* The key has the middle of the screen: messages move up out of its way. */
+#mash:not(.hidden) ~ #center-msg {
+  top: 20%;
+}
+
+@keyframes mash-beckon {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.07); }
+}
+
+@keyframes mash-hit {
+  0% { transform: scale(1.24); }
+  100% { transform: scale(1); }
+}
+
+/* Sharks in the water: the pulse they hunt by and how worked up they are. */
+#shark {
+  position: absolute;
+  top: 118px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(6, 16, 28, 0.7);
+  border: 1px solid var(--line);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+#shark .bar {
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+#shark-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #5fd38d, #ffb340 55%, var(--danger));
+}
+
+#shark-ask {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 18, 0.72);
+  padding: 16px;
+}
+
+#shark-ask .card {
+  max-width: 520px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 30px 32px;
+  backdrop-filter: blur(10px);
+}
+
+#shark-ask h2 {
+  margin: 0 0 12px;
+  font-size: 26px;
+  font-weight: 900;
+}
+
+#shark-ask ul {
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+#shark-ask li {
+  margin: 8px 0;
+}
+
 #center-msg {
   position: absolute;
   top: 38%;
@@ -360,6 +535,34 @@ body {
   position: absolute;
   bottom: 16px;
   left: 16px;
+}
+
+#active-gear {
+  position: absolute;
+  bottom: 110px;
+  left: 16px;
+  min-width: 176px;
+  border-color: rgba(62, 240, 168, 0.45);
+  box-shadow: 0 0 20px rgba(62, 240, 168, 0.08);
+}
+
+#active-gear strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+}
+
+#active-gear-hint {
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+#active-gear.unavailable {
+  border-color: rgba(255, 77, 94, 0.55);
+}
+
+#active-gear.unavailable strong {
+  color: var(--danger);
 }
 
 #net-slots {
@@ -420,6 +623,126 @@ body {
   transform: translateX(-50%);
   font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- Tomb Raider style hold-to-select wheel --------------------------- */
+.loadout-wheel {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+}
+
+.loadout-wheel:not(.hidden)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(5, 20, 35, 0.18), rgba(2, 8, 18, 0.62));
+  backdrop-filter: blur(2px);
+}
+
+.loadout-wheel-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 142px;
+  height: 142px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-content: center;
+  text-align: center;
+  border: 1px solid rgba(160, 230, 255, 0.38);
+  border-radius: 50%;
+  background: rgba(3, 15, 27, 0.9);
+  box-shadow: 0 0 42px rgba(46, 206, 255, 0.2), inset 0 0 34px rgba(106, 184, 255, 0.08);
+  pointer-events: auto;
+}
+
+.loadout-wheel-center strong {
+  font-size: 18px;
+  color: var(--hold);
+}
+
+.loadout-wheel-center small {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.loadout-wheel-slots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loadout-wheel-slot {
+  --angle: calc(var(--slot-index) * 60deg - 90deg);
+  --counter-angle: calc(90deg - var(--slot-index) * 60deg);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 104px;
+  min-height: 82px;
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-min(22vw, 190px)) rotate(var(--counter-angle));
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1px;
+  padding: 9px 6px;
+  color: var(--ink);
+  border: 1px solid rgba(160, 230, 255, 0.25);
+  border-radius: 14px;
+  background: rgba(4, 18, 34, 0.9);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.36);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.13s ease, border-color 0.13s ease, background 0.13s ease, opacity 0.13s ease;
+}
+
+.loadout-wheel-slot:hover,
+.loadout-wheel-slot.highlighted {
+  border-color: var(--hold);
+  background: rgba(14, 59, 65, 0.96);
+  box-shadow: 0 0 26px rgba(62, 240, 168, 0.3);
+}
+
+.loadout-wheel-slot.active {
+  outline: 1px solid rgba(106, 184, 255, 0.7);
+}
+
+.loadout-wheel-slot.unavailable {
+  opacity: 0.34;
+  filter: grayscale(0.65);
+}
+
+.loadout-wheel-key {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.loadout-wheel-icon {
+  font-size: 25px;
+  line-height: 1;
+}
+
+.loadout-wheel-name {
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.loadout-wheel-caption {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 102px);
+  transform: translateX(-50%);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
   white-space: nowrap;
 }
 
@@ -939,6 +1262,51 @@ button.link {
   margin-bottom: 14px;
 }
 
+#wb-sonar-config {
+  margin: 0 0 14px;
+  padding: 11px 12px 10px;
+  border: 1px solid rgba(119, 239, 214, 0.3);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(50, 164, 153, 0.13), rgba(20, 58, 76, 0.16));
+}
+
+.wb-sonar-heading,
+.wb-sonar-color {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wb-sonar-heading {
+  color: #9df7e4;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+}
+
+.wb-sonar-color {
+  margin-top: 9px;
+  color: var(--ink);
+}
+
+#wb-sonar-color {
+  width: 38px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid rgba(157, 247, 228, 0.55);
+  border-radius: 6px;
+  background: rgba(3, 26, 34, 0.85);
+  cursor: pointer;
+}
+
+.wb-sonar-note {
+  margin: 7px 0 0;
+  color: rgba(214, 246, 244, 0.62);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 #wb-dive {
   width: 100%;
 }
@@ -1052,6 +1420,8 @@ a.button.primary {
   place-items: center;
   background: rgba(2, 8, 18, 0.6);
   padding: 16px;
+  /* Settings run taller than a short phone screen: scroll rather than cut off Back. */
+  overflow-y: auto;
 }
 
 #pause .card {
@@ -1090,17 +1460,9 @@ button.danger {
   cursor: pointer;
 }
 
-.setting select {
-  font: inherit;
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 8px;
-}
-
-.setting select option {
-  background: #04121f;
+/* On a narrow screen the dropdown's value is cut short (…) before the setting's name wraps. */
+.setting > span:first-child {
+  flex-shrink: 0;
 }
 
 .setting input[type='checkbox'] {
@@ -1218,6 +1580,13 @@ button:disabled {
   gap: 6px;
 }
 
+/* A fish's number (#0042): dimmed and monospace, in the collection and on toasts. */
+.serial {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  opacity: 0.6;
+}
+
 #collection-grid .onchain {
   font-weight: 800;
   color: var(--hold);
@@ -1227,6 +1596,17 @@ button:disabled {
 #collection-grid .err {
   width: 100%;
   color: var(--danger);
+}
+
+#collection-grid .explorer,
+#wallet .explorer {
+  font-size: 12px;
+  text-decoration: none;
+}
+
+#collection-grid .explorer:hover,
+#wallet .explorer:hover {
+  text-decoration: underline;
 }
 
 #market-bar {
@@ -1284,15 +1664,180 @@ button:disabled {
 /* ---- gear workshop ---- */
 #gear-panel {
   position: fixed;
-  inset: 12vh auto auto 50%;
+  inset: 12px auto auto 50%;
   transform: translateX(-50%);
   z-index: 35;
-  width: min(520px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - 32px));
   background: rgba(3, 12, 24, 0.97);
   border: 1px solid rgba(62, 240, 168, 0.35);
   border-radius: 20px;
   padding: 22px 24px;
   box-shadow: 0 18px 70px rgba(0, 0, 0, 0.45), 0 0 40px rgba(62, 240, 168, 0.08);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  /* One scroll area, not two nested ones: the slot grid takes the height the rest leaves. */
+  display: flex;
+  flex-direction: column;
+}
+
+.gear-slots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+  /* Shrinks to fit the panel and scrolls inside it; the module and upgrade cards stay in view. */
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+/* Too short or narrow for a useful slot list beside the cards: the panel scrolls as a whole instead. */
+@media (max-height: 700px), (max-width: 640px) {
+  .gear-slots {
+    flex-shrink: 0;
+    overflow: visible;
+  }
+}
+
+.gear-slot-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, box-shadow 0.16s, transform 0.16s;
+}
+
+.gear-slot-card:hover,
+.gear-slot-card:focus-visible {
+  border-color: rgba(106, 184, 255, 0.6);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.gear-slot-card.selected {
+  border-color: rgba(62, 240, 168, 0.72);
+  background: rgba(62, 240, 168, 0.08);
+  box-shadow: 0 0 22px rgba(62, 240, 168, 0.1);
+}
+
+.gear-slot-head,
+.gear-slot-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gear-slot-head {
+  justify-content: flex-start;
+}
+
+.gear-slot-icon {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: var(--hold);
+  border: 1px solid rgba(62, 240, 168, 0.45);
+  border-radius: 9px;
+  font-size: 19px;
+}
+
+.gear-slot-title {
+  font-weight: 800;
+  min-width: 0;
+}
+
+.gear-slot-level {
+  margin-left: 6px;
+  color: var(--gold);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.gear-slot-current,
+.gear-slot-next,
+.gear-slot-tradeoff {
+  line-height: 1.35;
+}
+
+.gear-slot-current {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gear-slot-tradeoff {
+  min-height: 34px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gear-paths {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.gear-path-label {
+  flex: 1 0 100%;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gear-path-button {
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: rgba(106, 184, 255, 0.08);
+}
+
+.gear-path-button.selected {
+  color: #032417;
+  background: var(--hold);
+  border-color: transparent;
+}
+
+.gear-path-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.gear-path-summary {
+  flex: 1 0 100%;
+  color: var(--hold);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.gear-slot-footer {
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.gear-slot-next {
+  color: var(--gold);
+  font-size: 11px;
+}
+
+.gear-slot-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .gear-slots {
+    grid-template-columns: 1fr;
+  }
 }
 
 .gear-head {
@@ -1354,6 +1899,14 @@ button:disabled {
 .gear-next {
   margin-top: 5px;
   font-weight: 800;
+}
+
+.gear-compare {
+  min-height: 18px;
+  margin: -2px 0 12px;
+  color: var(--hold);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 #gear-progress {
@@ -2053,4 +2606,225 @@ button:disabled {
   background: rgba(20, 10, 2, 0.45);
   color: rgba(255, 240, 210, 0.85);
   text-align: center;
+}
+
+/* ---- wallet: log out (pause menu, collection, title chip) ---- */
+.wallet-pause {
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+  font-size: 13px;
+}
+
+.wallet-collection {
+  margin-left: auto;
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+/* The status lines beside it can run long (waiting for fish numbers): the row keeps its width. */
+.wallet-collection:not(.wallet-confirming) {
+  flex-shrink: 0;
+}
+
+.wallet-row .wallet-addr,
+.wallet-row button {
+  white-space: nowrap;
+}
+
+.wallet-chip {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  max-width: calc(100vw - 32px);
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  font-size: 13px;
+}
+
+.wallet-chip.wallet-confirming {
+  border-radius: 14px;
+}
+
+.wallet-row .wallet-question {
+  color: var(--gold);
+  font-size: 12px;
+  max-width: 300px;
+}
+
+.wallet-confirming {
+  flex-wrap: wrap;
+}
+
+.wallet-row button.wallet-logout:hover,
+.wallet-row button.wallet-logout:focus-visible {
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.wallet-row .wallet-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  flex: none;
+}
+
+/* ---- wallet picker (login gate) ---- */
+/* Room for Phantom, MetaMask, Solflare, Backpack and one more in a row. */
+#login .card:has(.wallet-pick) {
+  max-width: 580px;
+}
+
+.wallet-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 12px;
+  margin: 22px 0 6px;
+}
+
+.wallet-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 6px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 13px;
+  font-weight: 700;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.wallet-tile:hover,
+.wallet-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(62, 240, 168, 0.7);
+  background: rgba(62, 240, 168, 0.08);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(62, 240, 168, 0.35);
+  outline: none;
+}
+
+.wallet-tile:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.wallet-tile .wallet-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+}
+
+.wallet-tile .wallet-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+
+.wallet-logo-letter {
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ink);
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.wallet-row .wallet-logo-letter {
+  font-size: 12px;
+}
+
+.wallet-tile .wallet-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.wallet-tile .wallet-tag {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  background: #22364a;
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.wallet-tile .wallet-tag-last {
+  background: var(--hold);
+  color: #032417;
+}
+
+.wallet-tile .wallet-tag-warn {
+  background: #3a3216;
+  color: var(--gold);
+}
+
+.wallet-tile.missing .wallet-logo,
+.wallet-tile.missing .wallet-name {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.wallet-tile.missing:hover .wallet-logo,
+.wallet-tile.missing:focus-visible .wallet-logo {
+  opacity: 0.75;
+  filter: none;
+}
+
+.wallet-tile[aria-disabled='true'] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.wallet-tile.busy {
+  border-color: rgba(62, 240, 168, 0.7);
+  cursor: progress;
+}
+
+.wallet-tile.busy .wallet-logo {
+  opacity: 0.5;
+}
+
+.wallet-spinner {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 3px solid rgba(62, 240, 168, 0.25);
+  border-top-color: var(--hold);
+  animation: wallet-spin 0.8s linear infinite;
+}
+
+@keyframes wallet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wallet-tile,
+  .wallet-tile:hover,
+  .wallet-tile:focus-visible {
+    transition: none;
+    transform: none;
+  }
+  .wallet-spinner {
+    animation-duration: 2.4s;
+  }
 }

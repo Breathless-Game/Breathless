@@ -2,26 +2,39 @@ import { fishValue, zoneForDepth } from './fish';
 import { MAPS, type MapId } from './maps';
 import { bulkSellable, isFundsError, needsConfirm, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
+import { formatSerial, nftName } from './nft-uri';
 import { fishCard } from './portrait';
 import { sessionBalance, topUpSession, walletState } from './wallet';
 import { isUserRejection } from './wallet-storage';
 
 // The collection panel: banked fish as NFT cards, the devnet wallets, and selling.
-// Phantom owns the fish and signs sales; the game wallet pays mint fees without
+// The player's wallet owns the fish and signs sales; the game wallet pays mint fees without
 // prompts. Chain code is loaded lazily (through the queue), so a Solana hiccup
 // can never break the dive itself.
 
-/** Below this the game wallet can't cover a mint (the queue's MIN_MINT_SOL): offer a Phantom top-up. */
+/** Below this the game wallet can't cover a mint (the queue's MIN_MINT_SOL): offer a top-up from the player's wallet. */
 const FUND_BELOW_SOL = 0.02;
 const FUND_SOL = 0.1;
 
 const $ = (id: string) => document.getElementById(id)!;
 
+/** The wallet app the player logged in with ("Phantom", "MetaMask", …). Plain text: never put it in innerHTML. */
+const walletName = () => walletState().wallet?.name ?? 'Your wallet';
+
 const STEP_LABEL = {
-  'upload-image': 'Uploading art…',
-  'upload-metadata': 'Uploading metadata…',
   mint: 'Minting on Solana…',
 };
+
+/** Solana Explorer on devnet. Pure, so the panel needs no chain code to link an address. */
+const explorerAddress = (a: string) => `https://explorer.solana.com/address/${a}?cluster=devnet`;
+
+function explorerLink(address: string, label = 'View on Explorer ↗') {
+  const a = el('a', 'explorer', label);
+  a.href = explorerAddress(address);
+  a.target = '_blank';
+  a.rel = 'noopener';
+  return a;
+}
 
 const SELL_LABEL = {
   verify: 'Market verifying…',
@@ -48,7 +61,7 @@ export class Vault {
   private grid = $('collection-grid');
   private walletEl = $('wallet');
   private marketEl = $('market-bar');
-  private cards = new WeakMap<BankedFish, { fig: HTMLElement; cap: HTMLElement }>();
+  private cards = new WeakMap<BankedFish, { fig: HTMLElement; cap: HTMLElement; img: HTMLImageElement; serial?: number }>();
   private confirming: BankedFish | null = null;
   private confirmTimer = 0;
 
@@ -77,10 +90,11 @@ export class Vault {
   private async refreshWallet(note = '') {
     const { owner, session } = walletState();
     if (!owner || !session) {
-      this.walletEl.textContent = 'Connect Phantom to mint.';
+      this.walletEl.textContent = 'Connect a wallet to mint.';
       return;
     }
-    this.walletEl.textContent = 'Connecting to Solana devnet…';
+    const ownerLink = () => explorerLink(owner, 'View wallet on Explorer ↗');
+    this.walletEl.replaceChildren('Connecting to Solana devnet… ', ownerLink());
     try {
       const c = await this.queue.loadChain();
       let sol: number | null = null;
@@ -90,20 +104,22 @@ export class Vault {
       const bal = sol == null ? 'balance unavailable' : `${sol.toFixed(3)} SOL`;
       const link = (a: string) => `<a target="_blank" rel="noopener" href="${c.explorer('address', a)}">${short(a)}</a>`;
       const fund = sol != null && sol < FUND_BELOW_SOL ? ` <button id="fund" class="mini primary">Fund game wallet (${FUND_SOL} SOL)</button>` : '';
-      this.walletEl.innerHTML = `Phantom ${link(owner)} · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+      this.walletEl.innerHTML = `<span class="owner-name"></span> ${link(owner)} <span class="owner-explorer"></span> · Game wallet ${link(session)} · <b>${bal}</b>${fund} <button id="airdrop" class="mini">Airdrop 1 SOL</button> <span class="note"></span>`;
+      this.walletEl.querySelector('.owner-name')!.textContent = walletName();
+      this.walletEl.querySelector('.owner-explorer')!.replaceWith(ownerLink());
       this.walletEl.querySelector('.note')!.textContent = note;
       $('airdrop').addEventListener('click', () => this.airdrop());
       if (fund) $('fund').addEventListener('click', () => this.fund());
     } catch (e) {
-      this.walletEl.textContent = `Solana unavailable: ${(e as Error).message}`;
+      this.walletEl.replaceChildren(`Solana unavailable: ${(e as Error).message} `, ownerLink());
     }
   }
 
-  /** Phantom sends devnet SOL to the game wallet (one prompt). */
+  /** The player's wallet sends devnet SOL to the game wallet (one prompt). */
   private async fund() {
     const btn = $('fund') as HTMLButtonElement;
     btn.disabled = true;
-    btn.textContent = 'Approve in Phantom…';
+    btn.textContent = `Approve in ${walletName()}…`;
     try {
       await topUpSession(FUND_SOL);
       await this.refreshWallet('Game wallet funded.');
@@ -115,7 +131,7 @@ export class Vault {
         isUserRejection(e)
           ? 'Top-up cancelled.'
           : /insufficient|debit an account|0x1\b/i.test(msg)
-            ? 'Your Phantom wallet needs devnet SOL (faucet.solana.com), and Phantom must be on Devnet.'
+            ? `${walletName()} needs devnet SOL (faucet.solana.com) and must be on Devnet.`
             : `Top-up failed: ${msg.slice(0, 100)}`,
       );
     }
@@ -155,9 +171,11 @@ export class Vault {
       parts.push(el('span', 'paused', '⏸ Minting paused: the game wallet needs devnet SOL. Use Fund game wallet above. Checking again every minute.'));
     } else if (q.funds === 'offline' && waiting) {
       parts.push(el('span', 'paused', '⏸ Solana devnet is not answering. Retrying every minute.'));
+    } else if (q.serials === 'waiting' && queued) {
+      parts.push(el('span', 'paused', '⏸ Waiting for fish numbers: the game server is not answering. Retrying shortly.'));
     } else if (q.minting) {
       const step = q.minting.step ? STEP_LABEL[q.minting.step] : 'Starting…';
-      parts.push(el('span', '', `Minting ${q.minting.fish.name}: ${step}${queued ? ` · ${queued} more queued` : ''}`));
+      parts.push(el('span', '', `Minting ${nftName(q.minting.fish)}: ${step}${queued ? ` · ${queued} more queued` : ''}`));
     } else if (queued) {
       parts.push(el('span', '', `${queued} NFT${queued > 1 ? 's' : ''} queued`));
     }
@@ -191,8 +209,13 @@ export class Vault {
       img.src = fishCard(f);
       const cap = document.createElement('figcaption');
       fig.append(img, cap);
-      card = { fig, cap };
+      card = { fig, cap, img, serial: f.serial };
       this.cards.set(f, card);
+    }
+    // The number arrives after the first render (just before the mint, or with a repair): redraw once.
+    if (card.serial !== f.serial) {
+      card.serial = f.serial;
+      card.img.src = fishCard(f);
     }
     this.caption(f, card.cap);
     return card.fig;
@@ -203,18 +226,21 @@ export class Vault {
     const meta = document.createElement('span');
     const where = f.map && f.map in MAPS ? MAPS[f.map as MapId].name : zoneForDepth(f.depthM).name;
     meta.textContent = `${where} · ${f.depthM} m · ${fishValue(f)} pts · seed ${f.id}`;
+    if (f.serial) meta.prepend(el('span', 'serial', formatSerial(f.serial)), ' · ');
     const row = el('div', 'nft-row');
     row.append(this.nftBadge(f), this.sellControl(f));
     cap.replaceChildren(meta, row);
+    // The chain is the source of truth: a direct link works even when a wallet hides the NFT.
+    if (f.nft === 'minted' && f.assetId) cap.appendChild(explorerLink(f.assetId));
     const err = q.sellErrors.get(f) ?? (f.nft === 'failed' ? f.mintError : undefined);
     if (err) {
       const sale = q.sellErrors.has(f);
       const line = el('div', 'err', sale ? `Sale failed: ${err}` : `Mint failed: ${err}`);
-      // Mints are paid by the game wallet, sales by the player's Phantom wallet.
-      if (sale && isUserRejection({ message: err })) line.textContent = 'Sale cancelled in Phantom.';
+      // Mints are paid by the game wallet, sales by the player's own wallet.
+      if (sale && isUserRejection({ message: err })) line.textContent = `Sale cancelled in ${walletName()}.`;
       else if (isFundsError(err)) {
         line.textContent = sale
-          ? 'Your Phantom wallet needs devnet SOL for the sale fee (faucet.solana.com), and Phantom must be on Devnet.'
+          ? `${walletName()} needs devnet SOL for the sale fee (faucet.solana.com) and must be on Devnet.`
           : 'The game wallet is out of devnet SOL. Fund it above.';
       }
       cap.appendChild(line);
@@ -235,7 +261,8 @@ export class Vault {
       return el('span', 'nft-status busy', step);
     }
     if (f.nft === 'pending') {
-      return el('span', 'nft-status', q.funds === 'needs-sol' ? 'NFT queued · needs SOL' : 'NFT queued');
+      const why = q.funds === 'needs-sol' ? ' · needs SOL' : q.serials === 'waiting' && !f.serial ? ' · waiting for number' : '';
+      return el('span', 'nft-status', `NFT queued${why}`);
     }
     if (f.nft === 'failed') {
       const wrap = el('span', 'nft-status failed', f.retryAt ? 'Mint failed · retrying soon ' : 'Mint failed ');
@@ -280,7 +307,7 @@ export class Vault {
     const verb = quote.mintFirst ? 'Mint & sell' : 'Sell';
     if (this.confirming === f) {
       const wrap = el('span', 'sell-confirm', '');
-      const yes = el('button', 'mini primary', `Confirm · ${quote.pearls} Pearls`);
+      const yes = el('button', 'mini primary', `Confirm${f.serial ? ` ${formatSerial(f.serial)}` : ''} · ${quote.pearls} Pearls`);
       const no = el('button', 'mini', 'Cancel');
       yes.addEventListener('click', () => {
         this.setConfirming(null);

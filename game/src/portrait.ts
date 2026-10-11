@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildFishMesh, FishSpec, RARITY } from './fish';
+import { formatSerial, isSerial, type Numbered } from './nft-uri';
 
 // One small offscreen renderer that draws a fish on demand. The 512px card is
 // the NFT image: it is a pure function of the fish seed, so anyone can
@@ -62,8 +63,8 @@ export function fishIcon(spec: FishSpec): string {
   return url;
 }
 
-/** Full NFT card art: rarity backdrop, low-poly shards, the fish, its stats. */
-export function fishCard(spec: FishSpec): string {
+/** Full NFT card art: rarity backdrop, low-poly shards, the fish, its stats, and its number once it has one. */
+export function fishCard(spec: FishSpec & Numbered): string {
   const S = 512;
   const out = document.createElement('canvas');
   out.width = S;
@@ -97,12 +98,20 @@ export function fishCard(spec: FishSpec): string {
   ctx.fillStyle = rc;
   ctx.font = '700 15px "Inter", system-ui, sans-serif';
   ctx.fillText(RARITY[spec.rarity].label.toUpperCase(), 24, S - 62);
+  if (isSerial(spec.serial)) {
+    // The fish's number, small and dimmed, across from the rarity.
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = '600 15px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(formatSerial(spec.serial), S - 24, S - 62);
+    ctx.textAlign = 'left';
+  }
   ctx.fillStyle = '#ffffff';
   ctx.font = '800 26px "Inter", system-ui, sans-serif';
   ctx.fillText(spec.name, 24, S - 32);
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '500 14px "Inter", system-ui, sans-serif';
-  ctx.fillText(`${spec.lengthCm} cm · ${spec.weightKg} kg · caught at ${spec.depthM} m · #${spec.id}`, 24, S - 12);
+  ctx.fillText(`${spec.lengthCm} cm · ${spec.weightKg} kg · caught at ${spec.depthM} m · seed ${spec.id}`, 24, S - 12);
   ctx.strokeStyle = rc;
   ctx.lineWidth = 6;
   ctx.strokeRect(3, 3, S - 6, S - 6);

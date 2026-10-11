@@ -20,6 +20,8 @@ export function buildFishingBoat(): THREE.Group {
   const ropeMat = flatMat('#8c7353');
   const lampMat = flatMat('#ffcc4d', { emissive: '#ff9e3d', emissiveIntensity: 1.8 });
   const redLampMat = flatMat('#ef5b52', { emissive: '#ef3028', emissiveIntensity: 1.2 });
+  // The map's lighting drives these (world.ts): lit at night, dim by day.
+  boat.userData.lamps = [lampMat, redLampMat];
 
   // A side-profile extrusion gives the hull a readable pointed bow and a
   // deep keel, while keeping the same flat-shaded low-poly language.

@@ -1,8 +1,8 @@
-# 素材库 · 鱼和鱼竿
+# 素材库 · 鱼和装备
 
 [English](README.md) · **简体中文**
 
-《屏息 Breathless》里的每条鱼和鱼竿都是用代码生成的低多边形模型，游戏不带任何模型文件和贴图。这个目录是这些素材的目录册：每个素材一张图、决定它外形的参数，以及怎么重新渲染、怎么加新的。
+《屏息 Breathless》里的每条鱼和鱼竿都用代码生成。鱼竿增加了更完整的五金结构和 PBR 材质，同时保留多面体着色。这个目录记录素材的渲染图、建模参数、可复用的 Lv1 抄网 GLB，以及 27 个装备升级展示模型。游戏实时生成模型，导出文件可供其他项目使用。
 
 ---
 
@@ -14,6 +14,7 @@
 4. [怎么用这些素材](#4-怎么用这些素材)
 5. [重新渲染图片](#5-重新渲染图片)
 6. [新增或修改素材](#6-新增或修改素材)
+7. [装备升级模型](#7-装备升级模型)
 
 ---
 
@@ -24,7 +25,17 @@ assets/
 ├── README.md            本页的英文版
 ├── README.zh-CN.md      本页
 ├── fish/                17 张鱼的图，每个鱼种一张：512 × 512 PNG，透明背景
-├── gear/                鱼竿：1024 × 512 PNG，透明背景和深色水底各一张
+├── gear/                鱼竿渲染图和可复用的 Lv1 GLB
+│   ├── fishing-net.png                  1024 × 512 PNG，透明背景
+│   ├── fishing-net-dark.png             1024 × 512 PNG，深色水底
+│   ├── fishing-net-faceted-preview.png  模型检查预览图
+│   └── fishing-net-faceted.glb          基础 Lv1 模型，含逐面法线
+├── upgrades/            9 类装备 × 3 档等级：PNG 和 GLB
+│   ├── <id>-lv1.png / <id>-lv1.glb      基础展示模型
+│   ├── <id>-lv2.png / <id>-lv2.glb      强化展示模型
+│   ├── <id>-lv3.png / <id>-lv3.glb      高级展示模型
+│   ├── equipment-contact-sheet.png     全部 27 个模型对照图
+│   └── manifest.json                   文件名及等级索引
 └── cards/               一张 NFT 卡牌示例：512 × 512 PNG
 ```
 
@@ -35,7 +46,12 @@ assets/
 | 鱼的模型 | `buildFishMesh(spec)` | [`game/src/fish.ts`](../game/src/fish.ts) |
 | 鱼的图片、图标和 NFT 卡牌 | `fishSprite` / `fishIcon` / `fishCard` | [`game/src/portrait.ts`](../game/src/portrait.ts) |
 | 鱼竿 | `buildFishingNetMesh()` | [`game/src/gear.ts`](../game/src/gear.ts) |
+| 13 款水下装备与配件 | `buildAccessoryModel(id, level)` | [`game/src/accessories.ts`](../game/src/accessories.ts)、[`design/diving-gear-accessories-model.md`](../design/diving-gear-accessories-model.md) |
+| 配件 3D 工坊预览与导出 | `accessory-preview.html` | [`game/accessory-preview.html`](../game/accessory-preview.html)、[`game/src/accessory-preview.ts`](../game/src/accessory-preview.ts) |
 | 预览页 | `asset-library.html` | [`game/asset-library.html`](../game/asset-library.html)、[`game/src/asset-library.ts`](../game/src/asset-library.ts) |
+| 鱼竿检查与导出 | `gear-preview.html` | [`game/gear-preview.html`](../game/gear-preview.html)、[`game/src/gear-preview.ts`](../game/src/gear-preview.ts) |
+| 装备升级展示模型 | `buildUpgradeModel(id, level)` | [`game/src/upgrades.ts`](../game/src/upgrades.ts)、[`game/src/upgrade-models/`](../game/src/upgrade-models/) |
+| 装备检查与导出 | `equipment-preview.html` | [`game/equipment-preview.html`](../game/equipment-preview.html)、[`game/src/equipment-preview.ts`](../game/src/equipment-preview.ts) |
 
 ---
 
@@ -231,26 +247,41 @@ assets/
 
 ## 3. 鱼竿
 
-<img src="gear/fishing-net-dark.png" width="720" alt="鱼竿，在水下当抄网用">
+<img src="gear/fishing-net-dark.png" width="720" alt="保留多面体着色的鱼竿，在水下当抄网用">
 
-策划案里这件道具叫鱼竿。在水下，游戏把它当抄网用：保留鱼竿的握把、线轮、杆身和金属箍，前端装一个网圈和网兜。`buildFishingNetMesh()` 返回模型 `group` 和一个叫 `tip` 的标记点。
+[模型检查预览图](gear/fishing-net-faceted-preview.png) · [下载 Lv1 GLB](gear/fishing-net-faceted.glb)
+
+策划案里这件道具叫鱼竿。在水下，游戏把它当抄网用：碳纤维杆身、EVA 风格握把、纺车轮和导环连接前端的椭圆网圈与细尼龙网兜。`buildFishingNetMesh()` 返回完整模型 `group`、升级轴心 `mouth` 和抓鱼标记点 `tip`。网格材质使用 `flatShading: true`，通过金属度、粗糙度和清漆表现部件，不依赖贴图。GLB 是基础 Lv1 素材，导出时烘焙逐面法线，在其他查看器里也保留多面体效果。
 
 | 部件 | 几何体 | 尺寸（模型单位） | 颜色 | 沿杆方向的位置（x） |
 | --- | --- | --- | --- | --- |
 | 手臂 | 长方体 | 0.7 × 0.14 × 0.14 | `#1d2b3a`，潜水服的颜色 | 0–0.7 |
-| 握把 | 六边柱 | 半径 0.09–0.12，长 0.38 | `#7e4c32` | 0.59–0.97 |
-| 线轮 | 八边柱 | 半径 0.14，厚 0.1 | `#344956`，金属质感 | 0.98，在杆身下方 |
-| 线轮摇柄 | 长方体 | 0.22 × 0.035 × 0.035 | `#344956`，金属质感 | 1.1 |
-| 杆身 | 六边柱，一头细 | 半径 0.035–0.06，长 1.35 | `#c9d2d7`，金属质感 | 0.585–1.935 |
-| 金属箍 | 圆环 | 半径 0.07，管径 0.018 | `#ffd166` | 1.55 |
-| 网圈 | 十二边圆环 | 半径 0.42，管径 0.04 | `#ffd166` | 2.0 |
-| 网兜 | 线段 | 从半径 0.1 到半径 0.42 的圆锥 | `#dffaf7`，不透明度 58% | 1.45–2.0 |
-| `tip` | 空的标记点 | – | – | 2.0，网圈正中 |
+| 尾盖 | 十二边柱 | 半径 0.105–0.12，长 0.1 | `#142027` | 0.61–0.71 |
+| 握把与箍环 | 十二边锥柱、圆环 | 握把半径 0.105–0.135，长 0.46；箍环半径 0.12 | `#9b5d3c`，箍环 `#142027` | 握把 0.68–1.14；箍环 0.72 和 1.1 |
+| 轮座与金属箍 | 十二边锥柱、圆环 | 半径 0.073–0.082，长 0.28；金属箍半径 0.084 | `#46616a`，金属箍 `#9eafb2` | 轮座 1.12–1.4；金属箍 1.4 |
+| 线轮主体 | 球体，16 × 10 分段 | 半径 0.17，缩放 (0.82, 1.18, 0.78) | `#263b46` | 1.25，在杆身下方 |
+| 线轮侧板、线杯与导线环 | 十六边柱、圆环 | 侧板半径 0.185，厚 0.035；线杯半径 0.135，长 0.13；导线环半径 0.19 | `#9eafb2`，线杯 `#a9b6b8` | 1.25–1.3 |
+| 线轮摇柄与握球 | 八边柱、球体 | 摇柄半径 0.014；握球半径 0.045 | `#9eafb2`，握球 `#263b46` | 摇柄 1.34–1.53；握球 1.55 |
+| 碳纤维杆身与强调条 | 十二边锥柱、八边强调条 | 杆身半径 0.022–0.068，长 1.34；强调条半径 0.008–0.011，长 1.15 | `#17242d`，强调条 `#46616a` | 杆身 1.31–2.65；强调条 1.505–2.655 |
+| 导环 | 十二边圆环 | 半径 0.065、0.052、0.042、0.033；管半径 0.009 | `#9eafb2` | 1.67、1.93、2.18、2.4 |
+| 网圈与内圈护框 | 椭圆管，路径 32 段 × 横截面 8 段 | 网圈 y/z 半径 0.52/0.47；护框 0.47/0.42；管半径 0.038 | `#6f9698`，护框 `#46616a` | 2.7 |
+| 网兜 | 菱形编织线段 | 深 0.78；收口半径 0.075，扩至网圈半径 0.52/0.47 | `#b9d6d7`，不透明度 38% | 1.92–2.7 |
+| 网口支撑 | 八边柱 | 半径 0.014，从杆身连至 y ±0.52 | `#6f9698` | 2.5–2.7 |
+| `tip` / `Catch_Centre` | 空的标记点 | – | – | 2.7，网圈正中 |
 
 - **轴心**：模型的原点是潜水员的肩膀，鱼竿指向 +x。`diver.ts` 把它挂在身体的 `(0.6, 0, 0.3)` 处，挥动时整个 group 一起转。
-- **抓鱼点**：按 `Space` 挥竿。离 `tip` 最近、并且在当前渔网等级的收网范围以内的那条鱼被抓住，网里最多装这一等级的容量那么多条鱼。等级定义在 [`game/src/equipment.ts`](../game/src/equipment.ts) 的 `ROD_TIERS`：Lv1 是 2.4 m、6 条，Lv2 是 2.8 m、8 条，Lv3 是 3.2 m、10 条。`Diver.setNetLevel()` 让整个模型在 Lv1 之上每升一级放大 12%。
-- **网兜**：108 条线段，一次绘制调用（5 圈、每圈 12 个点，加上沿圆锥方向的 12 条线）。它用线来画，没有用实心圆锥，这样从任何角度看都像网。
-- **还没做的**：[策划案](../design/game-design-document.md#7-经济与升级)第 7.1 节里鱼竿、鱼饵、船的升级目前只有设计。上面的渔网等级是游戏里唯一的升级，三个等级共用这一个模型，只是放大。
+- **抓鱼点**：按 `Space` 挥竿。离 `tip` 最近、并且在当前渔网等级的收网范围以内的那条鱼被抓住，网里最多装这一等级的容量那么多条鱼。等级定义在 [`game/src/equipment.ts`](../game/src/equipment.ts) 的 `ROD_TIERS`：Lv1 是 2.4 m、6 条，Lv2 是 2.8 m、8 条，Lv3 是 3.2 m、10 条。
+- **网兜**：224 条线段，一次绘制调用。7 圈、每圈 16 个点交替错开半个网格，成对的斜线形成菱形，仅收口和边缘保留环形缝线。
+- **还没做的**：[策划案](../design/game-design-document.md#7-经济与升级)第 7.1 节里鱼竿、鱼饵、船的升级目前只有设计。渔网等级是游戏里唯一的升级。
+- **升级**：已实现三档。`Diver.setNetLevel()` 只缩放 `mouth`（网圈、护框、网兜和支撑），在 Lv1 之上每升一级放大 15%；握把、线轮、杆身与抓鱼中心位置保持不变。
+
+| 等级 | 网容量 | 抓鱼半径 | 网口缩放 |
+| --- | --- | --- | --- |
+| Lv1 · Basic Net | 6 条 | 2.4 | 1.00 |
+| Lv2 · Reinforced Net | 8 条 | 2.8 | 1.15 |
+| Lv3 · Abyssal Net | 10 条 | 3.2 | 1.30 |
+
+执行 `npm run game` 后，打开 <http://localhost:5173/gear-preview.html>，即可旋转、缩放实际游戏模型，检查三档等级，并导出 PNG 或 GLB。PNG 保存当前视角和等级；GLB 始终导出基础 Lv1 模型，不包含预览地面、灯光和相机。
 
 ---
 
@@ -336,3 +367,31 @@ scene.add(rod.group);                       // rod.tip 是网圈正中的标记�
 改 `gear.ts` 里的 `buildFishingNetMesh()`。原点留在肩膀、鱼竿沿 +x，`tip` 留在网圈正中，因为抓鱼的距离是从它算的。然后重新渲染 `gear/`。
 
 **改完以后**，执行 `npm --prefix game run build`，重新渲染图片，并更新这里两份 README 里的表格。
+
+---
+
+## 7. 装备升级模型
+
+9 类装备各有 3 档独立模型，共 **27 个大切面哑光 PBR 展示模型**，采用写实比例，等级提升会改变实体结构和材质。[`buildUpgradeModel(id, level)`](../game/src/upgrades.ts) 现在供工作台及装备目录显示。它们属于展示素材；生成和导出模型本身不会接通购买、船只旅行、脚蹼速度、储备空气或头灯照明效果。潜水员已使用的抄网模型仍由 [`gear.ts`](../game/src/gear.ts) 生成。
+
+<img src="upgrades/equipment-contact-sheet.png" width="1080" alt="全部九类装备的 Lv1、Lv2、Lv3 对照图">
+
+[完整对照 PNG](upgrades/equipment-contact-sheet.png) · [素材索引](upgrades/manifest.json)
+
+下表每格链接对应 `assets/upgrades/` 内的 PNG 和 GLB。文件名为 `<id>-lv1.png` / `<id>-lv1.glb`，另外两档使用 `lv2` 和 `lv3`；ID 保留大小写，包括 `boatSpeed`、`boatHull` 和 `boatDeck`。PNG 为 768 × 512 透明背景。GLB 包含模型、材质和逐面法线，不含摄影棚灯光、地面或相机。展示导出统一居中，最长轴为 2 个模型单位，这是展示比例，不能当作米制尺寸。
+
+| 装备 / ID | Lv1 · 基础 | Lv2 · 强化 | Lv3 · 高级 |
+| --- | --- | --- | --- |
+| 鱼竿 / `rod` | 短杆身、木握把和纺车轮<br>[PNG](upgrades/rod-lv1.png) · [GLB](upgrades/rod-lv1.glb) | 加长杆身、分段 EVA 握把和导环支撑<br>[PNG](upgrades/rod-lv2.png) · [GLB](upgrades/rod-lv2.glb) | 长碳纤维杆身与可调泄力结构<br>[PNG](upgrades/rod-lv3.png) · [GLB](upgrades/rod-lv3.glb) |
+| 鱼饵 / `bait` | 弯曲软虫和单钩<br>[PNG](upgrades/bait-lv1.png) · [GLB](upgrades/bait-lv1.glb) | 带压水舌的硬鱼型拟饵<br>[PNG](upgrades/bait-lv2.png) · [GLB](upgrades/bait-lv2.glb) | 金属振动饵和两组三本钩<br>[PNG](upgrades/bait-lv3.png) · [GLB](upgrades/bait-lv3.glb) |
+| 船 · 速度 / `boatSpeed` | 一对有桨叶形状的木桨<br>[PNG](upgrades/boatSpeed-lv1.png) · [GLB](upgrades/boatSpeed-lv1.glb) | 单台舷外机、操纵柄和螺旋桨<br>[PNG](upgrades/boatSpeed-lv2.png) · [GLB](upgrades/boatSpeed-lv2.glb) | 双舷外机和转向联杆<br>[PNG](upgrades/boatSpeed-lv3.png) · [GLB](upgrades/boatSpeed-lv3.glb) |
+| 船 · 耐久 / `boatHull` | 开口木船壳、内骨架和座位<br>[PNG](upgrades/boatHull-lv1.png) · [GLB](upgrades/boatHull-lv1.glb) | 侧面加强筋和加固艉板<br>[PNG](upgrades/boatHull-lv2.png) · [GLB](upgrades/boatHull-lv2.glb) | 防撞护舷与更多舷缘加固件<br>[PNG](upgrades/boatHull-lv3.png) · [GLB](upgrades/boatHull-lv3.glb) |
+| 船 · 鱼台 / `boatDeck` | 低式鱼台、艉板支架和 1 个空心竿座<br>[PNG](upgrades/boatDeck-lv1.png) · [GLB](upgrades/boatDeck-lv1.glb) | 扩大鱼台、2 个竿座和备饵台<br>[PNG](upgrades/boatDeck-lv2.png) · [GLB](upgrades/boatDeck-lv2.glb) | 3 个竿座、备饵台和鱼箱<br>[PNG](upgrades/boatDeck-lv3.png) · [GLB](upgrades/boatDeck-lv3.glb) |
+| 渔网 / `net` | 八边勺形网口、深色尼龙与宽平网底<br>[PNG](upgrades/net-lv1.png) · [GLB](upgrades/net-lv1.glb) | 扩大网口并加强接头<br>[PNG](upgrades/net-lv2.png) · [GLB](upgrades/net-lv2.glb) | 最大网口和额外侧向支撑<br>[PNG](upgrades/net-lv3.png) · [GLB](upgrades/net-lv3.glb) |
+| 脚蹼 / `fins` | 短橡胶薄刃、空心脚袋和排水槽<br>[PNG](upgrades/fins-lv1.png) · [GLB](upgrades/fins-lv1.glb) | 加宽通道式薄刃和成型加强筋<br>[PNG](upgrades/fins-lv2.png) · [GLB](upgrades/fins-lv2.glb) | 长碳纤维薄刃和细加强筋<br>[PNG](upgrades/fins-lv3.png) · [GLB](upgrades/fins-lv3.glb) |
+| 应急气瓶 / `tank` | 空背带和气瓶夹具，**没有瓶体或储备空气**<br>[PNG](upgrades/tank-lv1.png) · [GLB](upgrades/tank-lv1.glb) | 圆肩单瓶、阀门、软管和口器<br>[PNG](upgrades/tank-lv2.png) · [GLB](upgrades/tank-lv2.glb) | 双瓶连阀和带指针压力表<br>[PNG](upgrades/tank-lv3.png) · [GLB](upgrades/tank-lv3.glb) |
+| 头灯 / `lamp` | 单光头、头带和后置电池<br>[PNG](upgrades/lamp-lv1.png) · [GLB](upgrades/lamp-lv1.glb) | 加大反光杯和防撞护圈<br>[PNG](upgrades/lamp-lv2.png) · [GLB](upgrades/lamp-lv2.glb) | 双光头和加大后置电池<br>[PNG](upgrades/lamp-lv3.png) · [GLB](upgrades/lamp-lv3.glb) |
+
+执行 `npm run game` 后，打开 <http://localhost:5173/equipment-preview.html>（[页面源码](../game/equipment-preview.html)）。选择装备与等级，拖动旋转、滚轮缩放，或重置视角；下方目录会渲染全部 27 档预览。点击**生成全部素材**，生成各个 GLB 下载链接和 `manifest.json`，再将每个 PNG、GLB 及对照图下载到 `assets/upgrades/`。索引记录 ID、等级、中英文名称、参考效果文字、文件名和 GLB 字节数。参考效果来自升级定义，不表示这些效果已全部接通游戏逻辑。
+
+修改装备时，编辑 [`upgrade-models/fishing.ts`](../game/src/upgrade-models/fishing.ts)、[`marine.ts`](../game/src/upgrade-models/marine.ts) 或 [`diving.ts`](../game/src/upgrade-models/diving.ts) 中对应的生成函数，构建后重新生成受影响的 PNG、GLB 和索引。装备列表与参考效果来自 `upgrades.ts` 内的 `UPGRADES`。
