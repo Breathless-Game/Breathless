@@ -305,6 +305,7 @@ export class DeepSonar implements DeepSonarMesh {
   }
 
   update(time: number, dt: number) {
+    if (!this.group.visible) return;
     if (this._mode === 'deploying') {
       this._deployProgress = Math.min(1, this._deployProgress + Math.max(0, dt) / this._deploySeconds);
       const smooth = this._deployProgress * this._deployProgress * (3 - 2 * this._deployProgress);
