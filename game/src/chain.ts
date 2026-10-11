@@ -1,7 +1,7 @@
 import './polyfills';
 import { generateSigner, publicKey, signerIdentity, sol, type Umi } from '@metaplex-foundation/umi';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { burn, create, fetchAsset, mplCore, update } from '@metaplex-foundation/mpl-core';
+import { burn, create, fetchAsset, fetchAssetsByOwner, mplCore, update } from '@metaplex-foundation/mpl-core';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { zoneName } from './depth-odds';
 import { ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
@@ -172,6 +172,15 @@ export const newGearKey = (): Uint8Array => gearOps.newGearKey(getUmi());
 export const mintGear = (req: GearMintRequest) => gearOps.mintGear(gearCtx(), req);
 export const updateGear = (req: GearUpdateRequest) => gearOps.updateGear(gearCtx(), req);
 export const readGear = (assetId: string) => gearOps.readGear(getUmi(), assetId);
+
+/**
+ * Every Core asset a wallet owns (one getProgramAccounts, owner memcmp). Only chain-fish-sync.ts's
+ * fallback calls this, when our server's relay (GET /api/market/fish) is unavailable. The fish's
+ * Attributes live on the asset itself, so the collections are not fetched.
+ */
+export async function listOwnedAssets(owner: string) {
+  return fetchAssetsByOwner(getUmi(), publicKey(owner), { skipDerivePlugins: true });
+}
 
 /** Burning is the sink: the NFT is destroyed on-chain. */
 export async function burnFish(assetId: string): Promise<string> {
