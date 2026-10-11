@@ -151,6 +151,11 @@ export class World {
   private snow: THREE.Points;
   private quality: RenderQuality;
   private lightingEffects = true;
+  /**
+   * Set while a world event plays its own lightning (see events.ts), so the
+   * storm's sheet lightning holds off and the two never flash together.
+   */
+  quietWeatherLightning = false;
   private lastDecorationTime = 0;
   readonly dayCycle = new DayCycle();
   readonly weather = new WeatherCycle();
@@ -225,7 +230,7 @@ export class World {
     this.surfaceTint.set(map.surface);
     this.surfaceTint.setRGB(this.surfaceTint.r / surfaceBase.r, this.surfaceTint.g / surfaceBase.g, this.surfaceTint.b / surfaceBase.b);
 
-    disposeTree(this.terrain);
+    disposeTree(this.terrain, this.scene);
     this.terrain.clear();
     this.rocks = null;
     this.kelp = null;
@@ -258,7 +263,7 @@ export class World {
 
     if (this.scenery) {
       this.scene.remove(this.scenery.group);
-      disposeTree(this.scenery.group);
+      disposeTree(this.scenery.group, this.scene);
     }
     this.scenery = buildScenery(map, this.quality.detail);
     this.scene.add(this.scenery.group);
@@ -629,7 +634,7 @@ export class World {
     if (detailChanged && this.scenery) {
       const { visible } = this.scenery.group;
       this.scene.remove(this.scenery.group);
-      disposeTree(this.scenery.group);
+      disposeTree(this.scenery.group, this.scene);
       this.scenery = buildScenery(this.map, quality.detail);
       this.colorGrade.apply(this.scenery.group);
       this.scenery.group.visible = visible;
@@ -906,6 +911,10 @@ export class World {
     this.weather.setMode(mode);
   }
 
+  get lightingEffectsEnabled(): boolean {
+    return this.lightingEffects;
+  }
+
   setLightingEffects(enabled: boolean) {
     this.lightingEffects = enabled;
     this.sun.visible = enabled;
@@ -940,6 +949,9 @@ export class World {
    * (paused, or a fresh map) re-poses it so a changed setting still shows.
    */
   updateLighting(time: number, cameraY: number, cameraX = 0, sceneryDt: number | null = 0) {
+    // Float on the sea clock even while the shipyard pauses gameplay physics.
+    this.boat.position.y = 0.25 + Math.sin(this.waveTime * 1.3) * 0.18 * this.swell() * this.map.waves;
+    this.boat.rotation.z = Math.sin(this.waveTime * 1.1) * 0.05 * this.swell() * this.map.waves;
     this.lastSceneTime = time;
     this.lastCameraY = cameraY;
     this.lastCameraX = cameraX;
@@ -1012,6 +1024,8 @@ export class World {
     if (!this.scenery) return;
     const env = this.sceneryEnv;
     env.weather = this.weather.state;
+    // `state` is a fresh copy, so silencing the storm here touches nothing else.
+    if (this.quietWeatherLightning) env.weather.storm = 0;
     env.lightingEffects = this.lightingEffects;
     env.waveTime = this.waveTime;
     env.swell = this.swell();
@@ -1024,13 +1038,6 @@ export class World {
   }
 
   private updateDecorations(dt: number, cameraY: number) {
-    // Waves.
-    const waveTime = this.waveTime;
-    const swell = this.swell();
-    const waves = this.map.waves;
-    this.boat.position.y = 0.25 + Math.sin(waveTime * 1.3) * 0.18 * swell * waves;
-    this.boat.rotation.z = Math.sin(waveTime * 1.1) * 0.05 * swell * waves;
-
     // Snow that falls out of the bottom of the camera's band re-enters at the top (80 m up
     // when deep, less near the surface). Snow left above the band when the camera sinks
     // fast wraps down the same way, so the band is never empty.
