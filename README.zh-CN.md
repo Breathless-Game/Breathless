@@ -66,10 +66,11 @@
 
 - **海沟**：每张图的海底都是一块大陆架，船正下方有一条没有底的海沟。所有地图都不限深度；潜得越深，鱼越稀有、捕获价值越高（见第 7 节）。地图在大陆架上没有开放的区域（比如峡湾 18 m 以下）只能顺着海沟下去。
 - **深度区**：Sunken Forest（沉没森林）是天池的第二个深度区。它就是 Coral Reef 的深度范围，只有外观和深度计上的标签不同；掉率只看深度。大陆架上只在地图开放的区域里放鱼，大陆架以下有一群海沟鱼跟着潜水员往下走。右侧的深度计先显示地图开放的区域，再从大陆架往下显示一段 Trench。
-- **解锁**：按历史上所有入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。卖鱼不会让它减少，所以地图不会重新上锁，进度也不会停滞。每张图都能顺着海沟潜到任意深度，所以解锁开放的是新场景和更深、更宽的大陆架，而不是更大的深度。某次下潜入库的鱼够开一张新图时，会有一条提示。
+- **解锁**（阈值已经定好，但 `player_state` v2 的链上校验是接下来要做的，目前所有地图都是开放的）：按历史上所有入库鱼的累计捕获价值解锁（见第 7 节的“捕获价值”）。卖鱼不会让它减少，所以地图不会重新上锁，进度也不会停滞。每张图都能顺着海沟潜到任意深度，所以解锁开放的是新场景和更深、更宽的大陆架，而不是更大的深度。某次下潜入库的鱼够开一张新图时，会有一条提示。
 - **演示开关**：地图卡片下面有一个勾选框 "Unlock all maps (demo)"，勾上后所有地图一次全部开放。它是给演示和测试用的。
-- **保存的进度**：选中的地图、历史累计入库价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。
+- **保存的进度**：选中的地图、历史累计入库价值和演示开关存在 localStorage 里，key 是 `deepbreath.maps`。按累计入库价值解锁的判定会随 player_state v2 搬到链上，这是接下来要做的；在那之前所有地图都是开放的。
 - **仍然只是设计，尚未实现**：夜间小怪（峡湾：野鹿、野熊；天池：野熊、巨人；汪洋：海浪、海怪）、各地图独立的白昼时段（峡湾白天 05:00–20:00）、由心率驱动的船上垂钓、船耐久，以及汪洋沉船后全部装备永久丢失。
+- **鱼卡图**：改了 `fish.ts`、`marine.ts` 或 `fish-card-geometry.ts` 之后，运行 `npm --prefix game run build:fish-card` 并提交结果。否则会有测试失败，CI 会拦住部署。
 - **升级**：鱼竿、鱼饵、船（速度 / 耐久 / 鱼台），加上一组潜水装备，见 [策划案第 7 节](design/game-design-document.md#7-经济与升级)。升级部件（鱼竿、鱼饵、船的引擎 / 船体 / 鱼台、网、脚蹼、应急氧气瓶、头灯）在 `game/src/upgrades.ts` 里都有低多边形模型，每种三个等级。工作台已显示这些模型，九类各三档的 PNG / GLB 已归档到[装备素材库](assets/README.zh-CN.md#7-装备升级模型)。其余装备的购买与潜水效果仍待玩法逻辑接入。
 
 ### 比赛定位
@@ -155,6 +156,8 @@ npm run game       # 游戏，http://localhost:5173
 
 ### 自托管 / Self-hosting
 
+线上版本在 <https://breathless.gotclass.xyz>，由自托管 runner 从 `main` 自动部署。项目约 594 个提交、约 55,000 行代码，有 409 个游戏测试、106 个传感器测试和 52 个合约测试。
+
 `npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏、憋气传感器（WebSocket 在 `/sensor`）和 PEARL 市场（`/api/market`，见第 8 节），前面只需要一条隧道或一个反向代理。
 
 ```bash
@@ -185,23 +188,30 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 
 ## 3. 操作方式
 
+所有下潜按键都可以在 **设置 → 操作**（设置桌，或任意一张桌子上）里改键。按键绑定按设备保存（`deepbreath.controls`）。默认值如下：
+
 | 键 | 作用 |
 | --- | --- |
-| `←` `→` `↑` `↓` / `WASD` | 游泳（在水面不憋气时不能下潜） |
-| `Space` | 挥网抓鱼 |
+| `←` `→` `↑` `↓` / `WASD` | 向左 / 右 / 上 / 下游（在水面不憋气时不能下潜） |
 | `Shift`（按住） | 憋气（键盘模式和模拟模式） |
-| `C` | 收藏和 NFT 面板 |
-| `G` | 鱼竿 / 渔网升级面板 |
-| `H` | 健康报告（只在你按的时候生成） |
-| `N` | 渐变切换上午 / 夜晚；自然循环与下午可在暂停设置中选择 |
+| `Space` | 挥网抓鱼 |
+| `Tab` | 把快捷栏翻到鱼袋，再按翻回来 |
+| `Q` / `E` | 上一件 / 下一件装备 |
+| `1`–`6` | 快速切换装备（固定，不能改键） |
+| `V` | 声纳 |
+| `F` | 在船边的水面上爬上船；连按可以把翻了的船推正（汪洋风暴） |
+| `N` | 渐变切换上午 / 夜晚；自然循环与下午可在设置中选择 |
 | `K` | 切换呼吸输入：presage → sim → keyboard |
-| `F` | 在船边的水面上连按，把翻了的船一下一下推正（汪洋风暴） |
-| `Esc` | 暂停菜单：继续、设置、回到主页面。先关闭打开的面板；在设置里按是返回上一层；校准时按直接回主页面 |
+| `C` | 收藏和 NFT 面板（可勾选批量卖出） |
+| `G` | 鱼竿 / 渔网升级面板 |
+| `B` | 插画潜水手册和新手教程 |
+| `H` | 健康报告（只在你按的时候生成） |
+| `Esc` | 上船 / 返回（固定）。先关闭打开的面板；下潜途中直接回到工作台，没有暂停菜单；在桌子上则退回上一步 |
 | `Enter`（主页面） | 等于点 START 鱼 |
 
 按 `B` 打开或合上插画潜水手册和新手教程。手册分成六章：工作台组装、装备打包、下潜、抓鱼、返航和深潜声纳。第一次进入时会询问是否开启全程引导；选择和已完成步骤会保存在本地。打开手册时游戏会暂停，按 `Esc` 或 `B` 合上。
 
-**主页面**：进入时一根绳子（两端都在屏幕外）从左边荡出、挂到右边，然后几条鱼从上方掉下来，用鱼线挂在绳子上。按钮名字印在鱼身上。名字长（4 个字符以上）的鱼用头、尾两根鱼线横着挂；两根线像滑轮一样自动调长短，所以绳子倾斜的地方鱼和字也保持水平。点金色的 **START** 鱼（或按 Enter）：镜头下移到工作台（绳子和鱼升到屏幕顶部，仍然可以拖）；紫色的 **SETTINGS** 鱼打开设置。鱼和绳子都能用鼠标拖、甩，划过时会被推开。系统开了"减少动态效果"时跳过入场动画。
+**主页面**：进入时一根绳子（两端都在屏幕外）从左边荡出、挂到右边，然后几条鱼从上方掉下来，用鱼线挂在绳子上。按钮名字印在鱼身上。名字长（4 个字符以上）的鱼用头、尾两根鱼线横着挂；两根线像滑轮一样自动调长短，所以绳子倾斜的地方鱼和字也保持水平。点金色的 **START** 鱼（或按 Enter）：镜头下移到工作台（绳子和鱼升到屏幕顶部，仍然可以拖）；其他的鱼通向各张桌子：**AQUARIUM**（你的鱼缸）、**HEALTH**（你的出海报告）和 **SETTINGS**（设置）。**GUIDE** 和 **TUTORIAL** 挂在它们后面的第二根绳子上。除了标题画面，屏幕上始终有一个可拖动的手册 / 教程入口。鱼和绳子都能用鼠标拖、甩，划过时会被推开。系统开了"减少动态效果"时跳过入场动画。
 
 **工作台**（`workbench.ts`，海图在 `chart.ts`）：斜视角的木桌（2.5D，单独的 Three.js 场景），中间放着一张折起来的海图，右边是准备区（READY）。
 - 装备（脚蹼、应急气瓶、头灯、鱼竿、渔网、鱼饵）以 3D 模型从上方掉下来砸在桌上：会弹起、扬起一圈灰、镜头震一下，旁边的东西也会跳起来。物理是手写的：重力、桌面反弹、桌面上的圆形碰撞。
@@ -212,7 +222,11 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 - 在空桌面上按 Esc，镜头移回主页面。
 - 带上的装备会传给游戏（`loadout`），但升级效果还没接进潜水玩法。
 
-**暂停的细节**：暂停时游戏玩法冻结，切走标签页也会自动暂停。在水下点"继续"会先倒数 3 秒，让玩家吸一口气再憋住，否则暂停时的换气会被直接判成"水下呼吸"。回到主页面会释放摄像头和 sensor 连接；网里有鱼时会先弹确认，鱼会丢失，但这次憋气仍然记进健康数据。
+**桌子与上船**：没有暂停菜单。切到别的浏览器标签页，或在下潜中按 `Esc` 或 `F`，都会让你上船回到工作台，下潜停在原处；在桌上按 `Esc` 继续下潜。在水下恢复时会先倒数 3 秒，让玩家吸一口气再憋住，否则离开期间的换气会被直接判成“水下呼吸”。AQUARIUM、HEALTH 和 SETTINGS 三张桌子在标题画面和任意一张桌子上都能用，包括下潜途中上船后：3D 玻璃鱼缸、健康桌（最新的出海报告摆在纸上，更早的放在罐子里）和设置桌（语言、操作、时间段、删除我的健康数据）。回到主页面会释放摄像头和 sensor 连接；网里有鱼时会先弹确认，鱼会丢失，但这次憋气仍然记进健康数据。
+
+**HUD**：快捷栏在屏幕底部中央（`Tab` 翻到鱼袋），摄像头预览在左上角，呼吸读数浮在潜水员头顶。没有 BANKED 面板。
+
+**语言**：设置里可以选语言，English 或 中文，一次只显示一种（`deepbreath.language`）。
 
 ---
 
@@ -241,6 +255,8 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 ```
 
 **为什么摄像头由浏览器打开，而不是 Node？** macOS 不会给从 IDE 或 Claude 启动的 node 进程摄像头权限，SDK 的 `useCamera` 一直收不到帧。所以浏览器抓帧，经 WebSocket 推给 sensor，sensor 再用 `useCustomInput` + `sendFrame` 交给 SDK。
+
+**玩家数据存在链上。** 装备、PEARL、鱼缸和进度都从 Solana 读取（`player-chain.ts`、`player-sync.ts`、`player-state.ts`）；服务器不存任何玩家数据，`localStorage` 只是缓存。健康和呼吸数据是例外：它们永远不离开浏览器（第 9 节）。
 
 ### WebSocket 协议（开发时 `ws://<host>:8787`，`npm start` 时同源 `/sensor`）
 
@@ -418,6 +434,8 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── gear-panel.ts   鱼竿 / 渔网升级面板
         ├── upgrades.ts     升级定义与工作台模型入口
         ├── fish.ts         稀有度表、区域名、物种名、rollFish(seed, depth)、按深度的捕获价值、鱼的网格、游动和逃跑 AI
+        ├── marine.ts        非鱼类物种：鲨鱼、章鱼、灯笼鮟鱇、海龟和水母（与 fish.ts 合计 35 个物种）
+        ├── fish-card-geometry.ts 绘制鱼卡；游戏内的卡和 NFT 图片共用这份代码（打包进 sensor/fish-card.gen.mjs）
         ├── depth-odds.ts   按深度的掉率（RARITY_BY_DEPTH）、zoneName(depth)；没有依赖，测试在 tests/depth-odds.test.mjs
         ├── rng.ts          mulberry32 种子随机数
         ├── portrait.ts     离屏渲染：fishIcon（192 px）和 fishCard（512 px，NFT 卡图）
@@ -427,12 +445,20 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── nft-queue.ts    后台铸造和卖鱼队列（懒加载 chain.ts 和 pearl.ts）
         ├── pearl.ts        PEARL 客户端：余额、卖鱼、消费（服务端是 sensor/market.mjs）
         ├── chain.ts        Umi、临时钱包、空投、mintFish、burnFish
+        ├── player-chain.ts  链上的玩家操作：装备、制作、合成和喂食在一笔交易里销毁 PEARL
+        ├── player-sync.ts   以链为准读取状态；localStorage 只是缓存
+        ├── player-state.ts  player_state 程序的客户端（PlayerState 和 Aquarium 账户）
         ├── polyfills.ts    Buffer 和 global 全局变量
         ├── health.ts       HealthLog：每次潜水记录憋气时长、心率、恢复时间
         ├── report.ts       健康报告：指标卡、两张图、解读文字、存 PDF、删除数据
+        ├── trip.ts          出海：从第一次下潜到回港的统计，然后生成出海报告
+        ├── health-desk.ts   健康桌：最新的出海报告摆在纸上，更早的放在罐子里
+        ├── controls.ts      可改键的操作（设置 → 操作），按设备保存
         ├── pause.ts        Esc 暂停菜单：继续（水下 3 秒倒数）、设置、回到主页面
         ├── title.ts        主页面：Verlet 绳子 + 鱼线挂鱼，鼠标拖拽和推动，START / SETTINGS 鱼是按钮
         ├── workbench.ts    工作台：2.5D 桌面场景、装备掉落物理、准备区、展开成三个地点的海图
+        ├── table-scene.ts   各张桌子：鱼缸、健康桌和设置桌，任意一张桌子上都能进入
+        ├── aquarium-tank.ts 3D 玻璃鱼缸和里面的鱼
         ├── chart.ts        海图绘制（折起的地图贴图和展开后的海图）
         ├── settings.ts     玩家设置（画质、光照效果、天气、摄像头小窗、操作提示），存 localStorage
         ├── render-quality.ts  自动画质：按设备选初始档位，持续掉帧时降档
@@ -526,7 +552,10 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
   2. 用 `uploadJson` 上传元数据：name、symbol `DIVE`、description、image、attributes（Rarity / Species / Zone / Map / Depth / Length / Weight / Catch value / Seed）。
   3. 用 mpl-core 的 `create` 铸造 Core asset，同时挂一个链上 **Attributes 插件**（rarity / species / depth / value / seed），方便以后的游戏逻辑直接在链上读稀有度，市场也按收藏里显示的捕获价值付款。记录的深度是抓到鱼时的深度，最多记 1000 m（`fish.ts` 的 `MAX_RECORDED_DEPTH_M`）；HUD 仍显示真实深度。
   4. 资产地址写回 `FishSpec.assetId`，持久化到 bank。卡片会显示 "✓ On-chain"，链接到 Solana Explorer。
+- **Metaplex Core 合集**：每条捕获的鱼都是 Breathless 合集里的一个 Metaplex Core NFT，由服务器共同签名铸造。
+- **画面一致**：NFT 图片与游戏内的卡由同一份代码绘制（`game/src/fish-card-geometry.ts`，打包进 `sensor/fish-card.gen.mjs`），所以你看到的卡就是你拥有的卡。6 个稀有度共 35 个物种（`fish.ts`、`marine.ts`）。
 - **卖鱼**（NFT 消耗）：`pearl.ts` 的 `sellToMarket` 把 NFT 卖给 PEARL 市场，市场销毁它并按捕获价值支付 PEARL（见下文「PEARL coin」）。
+- **鱼缸喂食**：给鱼缸里的鱼喂食会在链上销毁 PEARL，鱼会长大。
 - **可选环境变量**：`VITE_SOLANA_RPC`（默认是 `https://api.devnet.solana.com`）。注意：所有 `VITE_*` 变量都会打包进前端，**不能放密钥**。
 - **为什么 Vite 要加 polyfill**：Umi 和 Irys 依赖 Node 的 `Buffer`、`stream`、`crypto`，所以 `vite.config.ts` 用了 `vite-plugin-node-polyfills`。
 
@@ -543,6 +572,13 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
   - 在 `npm run dev` 旁边再跑 `npm run market`（端口 8795，可用 `MARKET_PORT` 改）。Vite 会把 `/api` 代理过去。`npm start` 自己就带市场（第 2 节「自托管」）。
   - 启动时会打印公钥。服务端模式下如果 airdrop 被限流，去 <https://faucet.solana.com> 给它领币。
   - 单元测试：`npm --prefix sensor test`。对着正在运行的市场在 devnet 上跑一遍卖鱼和消费：`npm --prefix sensor run market:e2e`。
+
+### player_state 程序
+
+`player_state` Anchor 程序（devnet `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`）把玩家数据存在链上。链是唯一的真相，localStorage 只是缓存。详情见 [contracts/DEPLOYED.md](contracts/DEPLOYED.md) 和 [contracts/README.md](contracts/README.md)。
+
+- **v1，已上线**：装备升级、制作、合成升级和鱼缸喂食都会销毁 PEARL，并在一笔交易里更新 PlayerState / Aquarium 账户。新玩家在第一次购买时批准一次钱包（账户初始化合并在里面）。路径选择和鲨鱼咬合由 session key 处理。
+- **v2，已部署到链上，游戏接入随后进行**：船部件（`buy_boat`）、船只（`set_ship`，按终身入库价值 0 / 50 / 150 / 500 / 1200 / 2500 解锁）、由预言机在每次铸鱼时通过 `record_catch` 记录的终身入库价值，以及地图门槛（天池 150，汪洋 1000）。这些目前都还没有在游戏里上线；今天所有地图仍然是开放的。
 
 ---
 
@@ -571,7 +607,9 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 
 有鲨鱼在水里的那些下潜（见第 11 节"鲨鱼"）会被标记。被追会让心率升高，所以报告里的静息心率、潜水反射、恢复时间和心率曲线都不用这些下潜，并写明排除了几次；它们的憋气时长、深度和渔获照常计入。
 
-隐私：数据只存在本机浏览器里。免责声明：只供健康参考，不是医疗建议；不要在水中或水边练习憋气。
+出海：统计从第一次下潜到回港，然后在健康桌上用纸张生成一份出海报告（最新的放在桌上，更早的放在罐子里）。健康报告、出海报告和健康桌都带有「仅供健康参考、不是医疗建议」的提示。
+
+隐私：健康和呼吸数据只存在浏览器的 localStorage 里，永远不会上链，也不会发到服务器。「删除我的健康数据」会删掉这台设备上所有的健康和出海数据，对所有钱包都生效。免责声明：只供健康参考，不是医疗建议；不要在水中或水边练习憋气。
 
 > 模拟模式下的心率是假的：静息约 72 bpm，憋气时降到约 58，换气后先冲到约 86 再回落。用来在没有摄像头时演示报告。
 
@@ -582,7 +620,9 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 | key | 内容 |
 | --- | --- |
 | `deepbreath.bank` | 入库的鱼（`FishSpec[]`，带捕获价值 `value`、地图 `map`、NFT 状态 `nft`，铸造后带 `assetId`，旧规则下已付过钱的鱼带 `legacy`） |
-| `deepbreath.health` | 潜水记录（`DiveRecord[]`，最多 300 条） |
+| `deepbreath.<owner>.<name>` | 按钱包地址分开存的数据，例如 `.trips`（出海报告）和 `.health`（潜水记录，`DiveRecord[]`，最多 300 条）；缓存的玩家状态也这样存 |
+| `deepbreath.controls` | 改过的按键（设置 → 操作），按设备保存 |
+| `deepbreath.language` | 语言：English 或 中文 |
 | `deepbreath.wallet` | devnet 临时钱包的私钥（数字数组） |
 | `deepbreath.equipment` | 鱼竿等级、缓存的 PEARL 余额和本地 legacy Pearls（`rodLevel`、`pearls`、`legacyPearls`） |
 | `deepbreath.pearl.pending` | 已发出的 PEARL 卖单，超时后重试会接着走，不会从头再来 |
@@ -738,11 +778,18 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 - 九类装备各三档的 PBR 多边体模型，已在工作台显示，带 PNG / GLB 素材和交互式装备预览
 - 鱼竿 / 渔网升级 MVP：三档容量和收网范围、可见网圈缩放、本地持久化
 - 鱼经济：入库的鱼自动铸成 NFT，卖鱼时销毁 NFT 换 Pearls，地图进度按历史累计价值
+- 链上购买：装备升级、制作、合成升级和鱼缸喂食通过 `player_state` 程序（v1）销毁 PEARL
+- 3D 鱼缸桌：玻璃鱼缸、健康桌和设置桌，在任何一张桌子上都能进入
+- 出海：统计从第一次下潜到回港，然后在纸上生成出海报告
+- 可改键的操作（设置 → 操作）和 English / 中文 语言
+- 收藏批量卖出：勾选框加全选
+- NFT 画面一致：NFT 图片与游戏内的卡由同一份代码绘制
+- 由自托管 runner 从 `main` 自动部署到 <https://breathless.gotclass.xyz>
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 
+- [ ] **player_state v2 接入**：船部件、船只、链上记录的终身入库价值和地图门槛（程序已部署；游戏接入进行中）
 - [ ] **真机测试 Presage 憋气检测**，并调阈值（第 5 节）
-- [ ] **游戏官方 Collection**：现在每条鱼都是独立 asset，Explorer 里 Verified Collection 显示 None。需要一个由服务端持有 authority 的 Collection，把鱼铸进去，市场才能按 Collection 筛选，也能防止伪造
 - [ ] **完整装备经济**：在鱼竿 / 渔网升级 MVP 之外，用 SOL 或 Pearl（SPL token）购买氧气瓶、脚蹼、头灯；装备有耐久度。低多边形模型已经有了，剩下的是在游戏里显示模型、购买和让效果生效
 - [ ] **更多 NFT 消耗（sink）**：卖鱼已完成；还剩用鱼合成鱼饵或道具、献祭给海怪、进化、集齐套装兑换
 - [ ] **夜晚海怪**：夜里高价值鱼出现，同时有海怪风险
