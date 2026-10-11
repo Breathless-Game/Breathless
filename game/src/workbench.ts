@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { CHART_H, CHART_W, PLACES, ROMAN, drawChart } from './chart';
 import { MAPS, MAP_ORDER, mapDepth, type MapId, type MapProgress } from './maps';
 import { SoftPaper } from './paper';
+import { Diver } from './diver';
 import { GearInspector, type ShipHooks } from './inspect';
 import { UPGRADES, buildUpgradeModel, type UpgradeDef, type UpgradeId } from './upgrades';
 import type { LessonId } from './tutorial';
@@ -49,6 +50,9 @@ export interface WorkbenchHooks {
   ship(): { key: number; model: THREE.Object3D | null };
   /** The ships the boat on the table opens on (in the inspector). */
   ships: ShipHooks;
+  /** The gear in the ready tray last time (null: never packed), and saving it whenever the tray changes. */
+  savedLoadout(): UpgradeId[] | null;
+  saveLoadout(gear: UpgradeId[]): void;
 }
 
 export interface WorkbenchConditions {
@@ -91,6 +95,12 @@ const SLOTS: [number, number][] = [
   [3.15, 1.0],
   [4.25, 1.0],
 ];
+// Packed until the player changes it (then whatever was in the tray last time):
+// the six loadout slots, so a first dive needs no packing. The sonar is extra.
+const DEFAULT_LOADOUT: UpgradeId[] = ['fins', 'tank', 'lamp', 'rod', 'net', 'reel'];
+// The diver figure stands at the back of the tray, behind the slots: it wears what's in them.
+const FIGURE_AT = new THREE.Vector3(3.7, 0.05, -1.82);
+const FIGURE_H = 1.25; // standing height, table units: its head stays under the SETTINGS fish
 const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
 const MAP_W = 2.9;
 const MAP_D = (MAP_W * CHART_H) / CHART_W;
@@ -240,12 +250,17 @@ export class Workbench {
   private last = 0;
   private raf = 0;
   private tweens: Tween[] = [];
-  private press: { piece: Piece | null; map: boolean; x: number; y: number; t: number } | null = null;
+  private press: { piece: Piece | null; map: boolean; figure: boolean; x: number; y: number; t: number } | null = null;
   private held: Piece | null = null;
   private holdTarget = new THREE.Vector3();
-  private hovered: Piece | 'map' | null = null;
+  private hovered: Piece | 'map' | 'figure' | null = null;
   private picked: MapId | null = null;
   private inspector: GearInspector;
+  // The diver figure on its stand (not a piece: it never moves). It wears what's in the tray.
+  private figure = new THREE.Group();
+  private figureDiver!: Diver;
+  private figureHit!: THREE.Mesh;
+  private figureHover = 0;
 
   constructor(private hooks: WorkbenchHooks) {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
@@ -271,6 +286,7 @@ export class Workbench {
     key.position.set(-4, 10, 5);
     this.chartScene.add(key);
     GEAR.forEach((id, i) => this.pieces.push(this.buildPiece(id, i)));
+    this.buildFigure();
     const piece = (def: UpgradeDef) => this.pieces.find((p) => p.def === def)!;
     this.inspector = new GearInspector({
       owned: (def) => this.hooks.owned(def.id),
@@ -293,6 +309,17 @@ export class Workbench {
       activePath: (def) => this.hooks.activePath(def.id),
       selectPath: (def, path) => this.hooks.selectPath(def.id, path),
       ships: this.hooks.ships,
+      diver: {
+        gear: () => this.pieces.filter((p) => p.def.group === 'dive').map((p) => p.def),
+        slots: SLOTS.length,
+        model: () => this.figureModel().group,
+        wearAll: () => {
+          for (const p of this.pieces) if (p.def.group === 'dive' && p.mode === 'free') this.makeReady(p);
+        },
+        takeOffAll: () => {
+          for (const p of this.pieces) if (p.mode === 'ready') this.unready(p);
+        },
+      },
       closed: () => {
         if (this.state === 'inspect') this.state = 'idle';
       },
@@ -483,6 +510,68 @@ export class Workbench {
     return mesh;
   }
 
+  /** The diver figure: the dive's own diver model, stood up on a little wooden stand. */
+  private buildFigure() {
+    const wood = new THREE.MeshStandardMaterial({ color: '#5a3a1e', roughness: 0.8 });
+    const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.46, 0.1, 24), wood);
+    stand.position.y = 0.05;
+    stand.castShadow = stand.receiveShadow = true;
+    const { group, diver } = this.figureModel();
+    group.position.y = 0.1 + FIGURE_H / 2;
+    this.figureDiver = diver;
+    this.figureHit = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, FIGURE_H + 0.1, 12), new THREE.MeshBasicMaterial({ visible: false }));
+    this.figureHit.position.y = (FIGURE_H + 0.1) / 2;
+    this.figure.add(stand, group, this.figureHit);
+    this.figure.position.copy(FIGURE_AT);
+    this.figure.rotation.y = 0.6; // facing us, the net out to the side
+    this.scene.add(this.figure);
+  }
+
+  /**
+   * A diver (diver.ts) wearing what's in the tray now, at the levels owned,
+   * standing up, centred and FIGURE_H tall. The workbench keeps one on its stand;
+   * the inspector asks for a fresh one each time it changes.
+   */
+  private figureModel(): { group: THREE.Group; diver: Diver } {
+    const diver = new Diver(new THREE.Scene());
+    diver.holdNetDown();
+    this.dress(diver);
+    const upright = new THREE.Group();
+    upright.add(diver.group);
+    // It's built lying along +x (head first, as it swims): head up, and facing us.
+    diver.group.rotation.z = Math.PI / 2;
+    upright.rotation.y = -Math.PI / 2;
+    upright.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true;
+    });
+    const group = new THREE.Group();
+    group.add(upright);
+    const box = new THREE.Box3().setFromObject(group);
+    const size = box.getSize(new THREE.Vector3());
+    const k = FIGURE_H / size.y;
+    upright.scale.setScalar(k);
+    upright.position.copy(box.getCenter(new THREE.Vector3())).multiplyScalar(-k);
+    return { group, diver };
+  }
+
+  /** What the diver has on: the packed gear at the level owned; the rest it goes without. */
+  private dress(d: Diver) {
+    const packed = new Set(this.packed);
+    const level = (id: UpgradeId) => (packed.has(id) ? Math.min(3, Math.max(1, this.hooks.owned(id))) : 1);
+    d.setFinsLevel(level('fins'));
+    d.setTankLevel(level('tank'));
+    d.setLampLevel(level('lamp'));
+    d.setNetLevel(level('net'));
+    d.setRodLevel(level('rod'));
+    d.setWorn({ fins: packed.has('fins'), tank: packed.has('tank'), lamp: packed.has('lamp'), net: packed.has('net') });
+  }
+
+  /** The tray changed: the figure wears what's in it now, and it's saved for next time. */
+  private trayChanged() {
+    this.dress(this.figureDiver);
+    this.hooks.saveLoadout(this.packed);
+  }
+
   private paintMap() {
     // Twice the chart's size: it is held up nearly screen-wide.
     // Every place is open from the chart: no locks painted on.
@@ -609,13 +698,22 @@ export class Workbench {
       if (this.hovered === old) this.hovered = null;
       this.pieces[i] = p;
     });
+    this.dress(this.figureDiver); // a level bought shows on the figure too
   }
 
-  /** Back to the starting layout. intro: everything waits above the table to drop in. */
+  /**
+   * Back to the starting layout, with last time's loadout (or the default one)
+   * already in the tray. intro: everything waits above the table to drop in, the
+   * packed gear straight into its slot.
+   */
   private scatter(intro: boolean) {
+    for (const ring of this.slotRings) this.lightSlot(ring, false);
+    const dive = new Set(this.pieces.filter((p) => p.def.group === 'dive').map((p) => p.id));
+    const packed = (this.hooks.savedLoadout() ?? DEFAULT_LOADOUT).filter((id) => dive.has(id)).slice(0, SLOTS.length);
     this.pieces.forEach((p, i) => {
-      const [x, z] = SPOTS[i];
-      p.slot = -1;
+      const slot = packed.indexOf(p.id);
+      const [x, z] = slot >= 0 ? SLOTS[slot] : SPOTS[i];
+      p.slot = slot;
       p.hover = 0;
       p.touching = false;
       p.still = 0;
@@ -624,14 +722,25 @@ export class Workbench {
       p.vel.set(0, 0, 0);
       p.spin.set(0, 0, 0);
       if (intro) {
+        // Packed gear falls straight down into its slot (dropInSlot); the rest tumbles onto the table.
+        const spread = slot >= 0 ? 0 : 0.4;
         p.mode = 'wait';
         p.obj.visible = false;
         p.dropAt = DROP_START_S + i * DROP_GAP_S;
-        p.pos.set(x + (Math.random() - 0.5) * 0.4, 6 + Math.random() * 2, z + (Math.random() - 0.5) * 0.4);
+        p.pos.set(x + (Math.random() - 0.5) * spread, 6 + Math.random() * 2, z + (Math.random() - 0.5) * spread);
         p.q.setFromEuler(new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6));
         p.spin.set((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 9);
         p.vel.set((Math.random() - 0.5) * 1.5, -2, (Math.random() - 0.5) * 1.5);
         p.grounded = false;
+      } else if (slot >= 0) {
+        p.mode = 'ready';
+        p.obj.visible = true;
+        p.yaw = 0;
+        p.tray = TRAY_SCALE;
+        p.pos.set(x, p.restY * TRAY_SCALE + 0.05, z);
+        p.q.copy(this.restQ(p, 0));
+        p.grounded = true;
+        this.lightSlot(this.slotRings[slot], true);
       } else {
         p.mode = 'free';
         p.obj.visible = true;
@@ -640,7 +749,7 @@ export class Workbench {
         p.grounded = true;
       }
     });
-    for (const ring of this.slotRings) this.lightSlot(ring, false);
+    this.dress(this.figureDiver);
   }
 
   /**
@@ -812,6 +921,8 @@ export class Workbench {
       p.obj.scale.setScalar(p.tray * (1 + p.hover * 0.08));
     }
     this.mapHover = lerp(this.mapHover, this.hovered === 'map' ? 1 : 0, 1 - Math.exp(-dt * 12));
+    this.figureHover = lerp(this.figureHover, this.hovered === 'figure' ? 1 : 0, 1 - Math.exp(-dt * 14));
+    this.figure.scale.setScalar(1 + this.figureHover * 0.06);
     this.mapMat.emissiveIntensity = this.mapHover * (0.12 + 0.06 * Math.sin(this.time * 6));
     for (const d of [...this.dust]) {
       d.t += dt;
@@ -880,8 +991,12 @@ export class Workbench {
     for (const p of this.pieces) {
       if (p.mode === 'wait') {
         if (this.time < p.dropAt) continue;
-        p.mode = 'free';
         p.obj.visible = true;
+        if (p.slot >= 0) {
+          this.dropInSlot(p);
+          continue;
+        }
+        p.mode = 'free';
       }
       if (p.mode === 'held') {
         this.swingHeld(p, dt);
@@ -1056,14 +1171,43 @@ export class Workbench {
         p.pos.y += Math.sin(u * Math.PI) * 1.3;
         p.q.slerpQuaternions(q0, q1, e);
       },
+      () => this.seated(p),
+    );
+  }
+
+  /** Packed last time: it falls straight down into its slot, squaring up as it comes. */
+  private dropInSlot(p: Piece) {
+    const [x, z] = SLOTS[p.slot];
+    const from = p.pos.clone();
+    const to = new THREE.Vector3(x, p.restY * TRAY_SCALE + 0.05, z);
+    const q0 = p.q.clone();
+    const q1 = this.restQ(p, 0);
+    p.mode = 'moving';
+    p.vel.set(0, 0, 0);
+    p.spin.set(0, 0, 0);
+    this.tween(
+      0.55,
+      (u) => {
+        p.pos.lerpVectors(from, to, u * u); // speeding up as it falls
+        p.q.slerpQuaternions(q0, q1, easeOut(u));
+      },
       () => {
-        p.mode = 'ready';
-        this.hooks.tutorial?.('pack');
-        p.yaw = 0;
-        this.puff(x, z, 0.5);
-        this.lightSlot(this.slotRings[slot], true);
+        this.shake = Math.min(0.22, this.shake + 0.05);
+        this.seated(p);
       },
     );
+  }
+
+  /** In its slot: the ring lights up, and the figure puts it on. */
+  private seated(p: Piece) {
+    p.mode = 'ready';
+    p.yaw = 0;
+    const [x, z] = SLOTS[p.slot];
+    this.puff(x, z, 0.5);
+    this.lightSlot(this.slotRings[p.slot], true);
+    this.trayChanged();
+    // The tutorial's "net in the READY tray": done however it got there (a first visit starts packed).
+    if (p.id === 'net') this.hooks.tutorial?.('pack');
   }
 
   /** Out of the tray: tossed back onto a free spot on the table. */
@@ -1078,6 +1222,7 @@ export class Workbench {
     p.vel.set((tx - p.pos.x) / t, 0.5 * GRAVITY * t, (tz - p.pos.z) / t);
     p.spin.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 8);
     p.yaw = (Math.random() - 0.5) * 1.6;
+    this.trayChanged();
   }
 
   private lightSlot(ring: THREE.Mesh, on: boolean) {
@@ -1096,12 +1241,14 @@ export class Workbench {
     this.ray.setFromCamera(new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1), this.camera);
   }
 
-  private pick(e: PointerEvent): Piece | 'map' | null {
+  private pick(e: PointerEvent): Piece | 'map' | 'figure' | null {
     this.setRay(e);
     const targets: THREE.Object3D[] = this.pieces.filter((p) => p.obj.visible && p.mode !== 'moving').map((p) => p.hit);
     if (this.map.visible) targets.push(this.mapMesh);
+    targets.push(this.figureHit);
     const hit = this.ray.intersectObjects(targets, false)[0];
     if (!hit) return null;
+    if (hit.object === this.figureHit) return 'figure';
     return hit.object === this.mapMesh ? 'map' : (this.pieces.find((p) => p.hit === hit.object) ?? null);
   }
 
@@ -1117,7 +1264,8 @@ export class Workbench {
     // defaultPrevented: the title fish or rope (hanging in front of the table) took it.
     if (this.blocked() || this.state !== 'idle' || !this.ours(e) || e.defaultPrevented) return;
     const hit = this.pick(e);
-    this.press = { piece: hit && hit !== 'map' ? hit : null, map: hit === 'map', x: e.clientX, y: e.clientY, t: performance.now() };
+    const piece = hit && hit !== 'map' && hit !== 'figure' ? hit : null;
+    this.press = { piece, map: hit === 'map', figure: hit === 'figure', x: e.clientX, y: e.clientY, t: performance.now() };
   }
 
   private onMove(e: PointerEvent) {
@@ -1138,9 +1286,11 @@ export class Workbench {
     if (press?.piece && Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_MOVE_PX) {
       // Picked up: a ready piece leaves its slot while it's carried.
       const p = press.piece;
-      if (p.slot >= 0) this.lightSlot(this.slotRings[p.slot], false);
+      const packed = p.slot >= 0;
+      if (packed) this.lightSlot(this.slotRings[p.slot], false);
       p.slot = -1;
       p.mode = 'held';
+      if (packed) this.trayChanged(); // the figure takes it off
       this.held = p;
       this.press = null;
       this.hovered = null;
@@ -1209,7 +1359,10 @@ export class Workbench {
     const click = Math.hypot(e.clientX - press.x, e.clientY - press.y) < CLICK_MOVE_PX && performance.now() - press.t < CLICK_MS;
     if (!click) return;
     if (press.map) this.openChart();
-    else if (press.piece) {
+    else if (press.figure) {
+      this.setHover(null, e);
+      this.inspectDiver();
+    } else if (press.piece) {
       this.setHover(null, e);
       this.inspect(press.piece);
     }
@@ -1227,7 +1380,16 @@ export class Workbench {
     else this.inspector.show(p.def, from);
   }
 
-  private setHover(hit: Piece | 'map' | null, e: PointerEvent) {
+  /** The diver figure, up close: dress it (what it wears goes in the tray, and down on the dive). */
+  private inspectDiver() {
+    this.state = 'inspect';
+    this.tip.classList.add('hidden');
+    document.body.style.cursor = '';
+    const at = this.figure.position.clone().setY(FIGURE_H / 2).project(this.camera);
+    this.inspector.showDiver({ x: ((at.x + 1) / 2) * window.innerWidth, y: ((1 - at.y) / 2) * window.innerHeight });
+  }
+
+  private setHover(hit: Piece | 'map' | 'figure' | null, e: PointerEvent) {
     this.hovered = hit;
     document.body.style.cursor = hit ? 'pointer' : '';
     if (!hit) {
@@ -1237,6 +1399,8 @@ export class Workbench {
     const lines =
       hit === 'map'
         ? ['Sea chart · 海图', 'Three places, one per chapter', 'Click to open']
+        : hit === 'figure'
+        ? ['Your diver · 潜水员', `Wearing ${this.packed.length} / ${SLOTS.length} · saved for next time`, 'Click to dress · drop gear on the tray to put it on']
         : [
             `${hit.def.name} · ${hit.def.nameZh}`,
             hit.id === 'boat' ? 'Your ship · 当前船只 — click to see the ships' : `Lv ${hit.key} · ${hit.def.effects[hit.key - 1]}`,
@@ -1421,7 +1585,7 @@ export class Workbench {
       $('wb-place-text').textContent = `${map.blurb} Zones: ${map.zoneLabels.join(', ')}, then the Trench with no bottom.`;
     }
     const ready = this.packed.map((g) => UPGRADES.find((u) => u.id === g)!.name);
-    $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
+    $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'Nothing packed: you dive with the basics';
     if (id) this.renderConditions(id);
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
   }
