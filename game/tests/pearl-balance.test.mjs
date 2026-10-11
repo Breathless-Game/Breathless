@@ -43,6 +43,46 @@ test('store: loading until a read lands, nudges only after, failures keep a know
   assert.equal(n, after, 'unsubscribed listeners hear nothing more');
 });
 
+test('store: a spend shows the post-burn balance, and a failed sync after it never regresses to loading', () => {
+  m.setPearlBalance(100);
+  m.nudgePearlBalance(95); // applyPearlSpend + refreshEquipment right after the burn
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
+  m.setPearlsUnavailable(new Error('429 Too Many Requests')); // the sync after the burn is rate limited
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
+  m.setPearlsUnavailable(new Error('PEARL balance read timed out')); // or never settles
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 95 });
+});
+
+test('epoch: a read that started before a spend, sale or nudge is dropped; one after it is kept', async () => {
+  m.setPearlBalance(100);
+  // syncPearls as main.ts runs it: guard first, then the read, then apply only if still current.
+  const sync = async (read) => {
+    const current = m.readGuard();
+    const value = await read;
+    if (!current()) return false;
+    m.setPearlBalance(value);
+    return true;
+  };
+  let land;
+  const early = sync(new Promise((r) => (land = r))); // started before the burn
+  m.nudgePearlBalance(90); // burn of 10 confirmed: applyPearlSpend + refreshEquipment
+  const late = sync(Promise.resolve(90)); // the read the spend triggers
+  assert.equal(await late, true);
+  land(100); // the early read lands last, with the pre-burn number
+  assert.equal(await early, false);
+  assert.deepEqual(m.pearlBalance(), { status: 'ok', value: 90 });
+
+  // A sale credited while a read is out (syncPearls(earned) bumps before nudging).
+  const before = m.readGuard();
+  m.bumpPearlEpoch();
+  assert.equal(before(), false);
+  // Nudges that change nothing (refreshEquipment after a read) do not bump.
+  const g = m.readGuard();
+  m.nudgePearlBalance(90);
+  m.setPearlBalance(90);
+  assert.equal(g(), true);
+});
+
 test('explainPearlError names the cause', () => {
   assert.match(m.explainPearlError(new Error('HTTP 429')), /rate limiting/);
   assert.match(m.explainPearlError(new Error('Failed to fetch')), /market is offline/);

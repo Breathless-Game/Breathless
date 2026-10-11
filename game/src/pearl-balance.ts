@@ -36,9 +36,27 @@ export function setPearlsUnavailable(error: unknown) {
   set({ status: 'unavailable', reason: explainPearlError(error) });
 }
 
+/**
+ * Local changes (a sale credited, a spend, any nudge) bump this epoch. A read that started before one
+ * may answer with the old balance after it: `readGuard()` taken before the read says whether its
+ * answer is still current, and an old one is dropped (the change already shows the newer number,
+ * and the read that change triggers brings the chain's).
+ */
+let epoch = 0;
+export function bumpPearlEpoch() {
+  epoch++;
+}
+export function readGuard(): () => boolean {
+  const started = epoch;
+  return () => epoch === started;
+}
+
 /** Mirror an optimistic cache change (sale, spend) once a real balance is on show. */
 export function nudgePearlBalance(value: number) {
-  if (current.status === 'ok' && current.value !== value) set({ status: 'ok', value });
+  if (current.status === 'ok' && current.value !== value) {
+    epoch++;
+    set({ status: 'ok', value });
+  }
 }
 
 /** 1234 -> "1,234". Anything not a finite non-negative number is "—". */
