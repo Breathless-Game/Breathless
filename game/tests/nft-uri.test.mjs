@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
-import { imagePath, parseImagePath, parseMetaPath } from '../../sensor/nft-meta.mjs';
+import { formatSerial as serverFormatSerial, imagePath, metadataJson, parseImagePath, parseMetaPath } from '../../sensor/nft-meta.mjs';
 
 // The game builds NFT metadata paths (src/nft-uri.ts); the server parses them (sensor/nft-meta.mjs).
 // These tests keep the two sides of the grammar in step.
@@ -10,7 +10,7 @@ const source = await readFile(new URL('../src/nft-uri.ts', import.meta.url), 'ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
-const { DEFAULT_NFT_ORIGIN, fishImagePath, fishMetaPath, isHostedMetaUri, nftOrigin } = await import(
+const { DEFAULT_NFT_ORIGIN, fishImagePath, fishMetaPath, formatSerial, isHostedMetaUri, isSerial, nftName, nftOrigin } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 
@@ -72,4 +72,52 @@ test('minted URIs never point at localhost or a LAN address', () => {
   assert.equal(nftOrigin(undefined, page('https://other-host.example.com')), 'https://other-host.example.com');
   assert.equal(nftOrigin('https://nft.example.com/', page('http://localhost:5173')), 'https://nft.example.com');
   assert.equal(nftOrigin(undefined, undefined), DEFAULT_NFT_ORIGIN);
+});
+
+test('fish numbers: at least four digits, never capped at 9999', () => {
+  for (const [n, text] of [
+    [1, '#0001'],
+    [42, '#0042'],
+    [9999, '#9999'],
+    [10000, '#10000'],
+    [123456, '#123456'],
+    [1234567, '#1234567'],
+    [999999999, '#999999999'],
+  ]) {
+    assert.equal(formatSerial(n), text);
+    assert.equal(serverFormatSerial(n), text, 'the server formats the same');
+  }
+  assert.equal(nftName({ name: 'Lively Striped Wrasse', serial: 42 }), 'Lively Striped Wrasse #0042');
+  assert.equal(nftName({ name: 'Lively Striped Wrasse', serial: 1234567 }), 'Lively Striped Wrasse #1234567');
+  // No number yet: just the name, never a made-up one.
+  assert.equal(nftName({ name: 'Lively Striped Wrasse' }), 'Lively Striped Wrasse');
+  for (const bad of [0, -1, 1.5, NaN, '42', 1_000_000_000, undefined, null]) assert.equal(isSerial(bad), false, String(bad));
+  for (const good of [1, 42, 10000, 999_999_999]) assert.equal(isSerial(good), true);
+});
+
+test('a numbered fish round-trips through v2 paths, and the JSON name carries the number', () => {
+  for (const [serial, text] of [
+    [42, '#0042'],
+    [10000, '#10000'],
+    [1234567, '#1234567'],
+  ]) {
+    const numbered = { ...fish, serial };
+    const path = fishMetaPath(numbered, { depthM: 8, value: 3, zone: 'Coral Reef' });
+    assert.ok(path.startsWith(`/api/nft/meta/v2/${serial}/c61cd89c/`), path);
+    const parsed = parseMetaPath(path);
+    assert.ok(parsed, path);
+    assert.equal(parsed.serial, serial);
+    assert.equal(parsed.name, fish.name);
+    assert.equal(imagePath(parsed), fishImagePath(numbered));
+    assert.equal(parseImagePath(fishImagePath(numbered)).serial, serial);
+    const json = metadataJson(parsed, DEFAULT_NFT_ORIGIN);
+    assert.equal(json.name, `Lively Striped Wrasse ${text}`);
+    assert.equal(json.name, nftName(numbered), 'the JSON name matches the on-chain name');
+    assert.ok(isHostedMetaUri(DEFAULT_NFT_ORIGIN + path));
+  }
+  // Without a number the game still builds v1, which the server still resolves (minted fish keep working).
+  const v1 = fishMetaPath(fish, { depthM: 8, value: 3, zone: 'Coral Reef' });
+  assert.ok(v1.startsWith('/api/nft/meta/v1/'));
+  assert.equal(parseMetaPath(v1).serial, undefined);
+  assert.equal(metadataJson(parseMetaPath(v1), DEFAULT_NFT_ORIGIN).name, 'Lively Striped Wrasse');
 });

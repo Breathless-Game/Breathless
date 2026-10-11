@@ -1,7 +1,8 @@
 // The NFT art for a fish, rendered on the server for /api/nft (nft-meta.mjs). Node has no WebGL,
 // so this is a tiny software renderer of the same low-poly mesh game/src/fish.ts builds, posed and
 // lit roughly like the card in game/src/portrait.ts: rarity gradient, seeded shards, the fish, a
-// rarity border. No text (there is no font rasteriser here); the wallet shows the name anyway.
+// rarity border. No font rasteriser here, so the only text is the fish's number (#0042), drawn
+// from a tiny bitmap font; the wallet shows the name anyway.
 import { encodePng } from './pearl-png.mjs';
 
 // ---- Mirrors of game/src/fish.ts. Keep in sync when species or shapes change.
@@ -167,6 +168,42 @@ class Raster {
   }
 }
 
+// ---- The fish number: a 5x7 bitmap font, '#' and digits only
+
+const GLYPHS = {
+  '#': ['.#.#.', '.#.#.', '#####', '.#.#.', '#####', '.#.#.', '.#.#.'],
+  0: ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+  1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+  3: ['#####', '...#.', '..#..', '...#.', '....#', '#...#', '.###.'],
+  4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+  5: ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+  6: ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
+  7: ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+  8: ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+  9: ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
+};
+
+/** "#0042": at least four digits, more when needed (nft-meta.mjs formatSerial). */
+const serialText = (serial) => `#${String(serial).padStart(4, '0')}`;
+
+/** Draw `str` (digits and '#') right-aligned at `right`, glyph tops at `top`, `cell` px per font pixel. */
+function bitmapText(r, str, right, top, cell, color, alpha) {
+  const advance = 6 * cell;
+  let x = right - (str.length * advance - cell);
+  for (const ch of str) {
+    const rows = GLYPHS[ch];
+    if (rows) {
+      for (let gy = 0; gy < 7; gy++) {
+        for (let gx = 0; gx < 5; gx++) {
+          if (rows[gy][gx] === '#') r.rect(x + gx * cell, top + gy * cell, x + (gx + 1) * cell, top + (gy + 1) * cell, color, alpha);
+        }
+      }
+    }
+    x += advance;
+  }
+}
+
 // ---- The fish mesh (fish.ts buildFishMesh), as coloured triangles in model space
 
 function fishMesh(look, profile) {
@@ -269,9 +306,10 @@ const GROUND = hex('#33415c');
 
 /**
  * 512x512 PNG card for a fish. `look` is { archetype, hue, sat, light, accentHue, stripes } as in
- * FishSpec (sat and light 0..1); `seed` is the fish seed (the shards on the in-game card).
+ * FishSpec (sat and light 0..1); `seed` is the fish seed (the shards on the in-game card); `serial`,
+ * when set, is the fish's number, drawn small in the bottom-right corner.
  */
-export function renderFishPng({ rarity, species, seed, look }, size = 512) {
+export function renderFishPng({ rarity, species, seed, look, serial }, size = 512) {
   const S = 512; // design space; the raster scales it to `size`
   const k = size / S;
   const r = new Raster(size, 2);
@@ -339,6 +377,15 @@ export function renderFishPng({ rarity, species, seed, look }, size = 512) {
     const d = 8 * k;
     r.tri([cx, cy - d], [cx + d, cy], [cx, cy + d], rc);
     r.tri([cx, cy - d], [cx, cy + d], [cx - d, cy], rc);
+  }
+  // The number, level with the pips. Nine digits (#999999999) still clear six pips.
+  if (serial !== undefined) {
+    const cell = 2.5 * k;
+    const text = serialText(serial);
+    const right = (S - 22) * k;
+    const top = (S - 34) * k - 3.5 * cell;
+    bitmapText(r, text, right + cell * 0.6, top + cell * 0.6, cell, [0, 0, 0], 0.45); // drop shadow
+    bitmapText(r, text, right, top, cell, [1, 1, 1], 0.82);
   }
   const b = 6 * k;
   r.rect(0, 0, size, b, rc);
