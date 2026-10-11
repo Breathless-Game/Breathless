@@ -51,6 +51,7 @@ jobs:
           node --check sensor/market-server-mode.mjs
           node --check sensor/pearl-png.mjs
           node --check sensor/nft-meta.mjs
+          node --check sensor/nft-serial.mjs
           node --check sensor/fish-png.mjs
 
       - uses: actions/upload-artifact@v4
