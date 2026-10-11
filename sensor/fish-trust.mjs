@@ -149,7 +149,7 @@ export function checkFish(facts, { legacy = false, tolerance = SPAWN_TOLERANCE_M
 // ---- The asset itself ------------------------------------------------------------------------
 
 /** Fields fetchAsset returns that are not plugins. */
-const BASE_FIELDS = new Set(['publicKey', 'header', 'key', 'owner', 'updateAuthority', 'name', 'uri', 'seq', 'attributes']);
+const BASE_FIELDS = new Set(['publicKey', 'header', 'pluginHeader', 'key', 'owner', 'updateAuthority', 'name', 'uri', 'seq', 'attributes']);
 
 /**
  * Anything on the asset besides its Attributes that could change it after the market checked it:

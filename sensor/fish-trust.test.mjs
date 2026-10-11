@@ -62,11 +62,12 @@ const attributesOf = (f) => [
   { key: 'seed', value: f.id },
 ];
 
-/** A Core asset as fetchAsset returns it. */
+/** A Core asset as fetchAsset returns it (mpl-core 1.10: an asset with plugins also has pluginHeader). */
 function asset({ attributeList, ua = { type: 'Collection', address: COLLECTION }, owner = SELLER, attrAuthority = 'UpdateAuthority', extra = {} }) {
   return {
     publicKey: ASSET,
     header: {},
+    pluginHeader: { key: 3, pluginRegistryOffset: 339n },
     key: 1,
     owner,
     updateAuthority: ua,
