@@ -27,7 +27,7 @@ const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.l
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 const nonNull = <T,>(xs: (T | null)[]) => xs.filter((x): x is T => x != null);
 
-interface Stats {
+export interface Stats {
   n: number;
   vitals: DiveRecord[];
   best: DiveRecord;
@@ -46,7 +46,7 @@ interface Stats {
   sharkDives: number;
 }
 
-function compute(dives: DiveRecord[]): Stats {
+export function compute(dives: DiveRecord[]): Stats {
   // A shark chase drives the pulse up: those dives say nothing about rest, the dive reflex or recovery.
   const steady = dives.filter((d) => !d.shark);
   const vitals = steady.filter((d) => d.pulse.length >= 3 && d.restPulse != null);

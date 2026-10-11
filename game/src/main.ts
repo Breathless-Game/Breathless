@@ -47,6 +47,7 @@ import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { FieldGuide } from './field-guide';
 import { isAction, keysFor, openControls } from './controls';
+import { Trip, TripReport } from './trip';
 import type { LessonId } from './tutorial';
 
 // ---- Tuning -------------------------------------------------------------
@@ -577,6 +578,9 @@ const aquarium = new Aquarium(bank, {
 });
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
+// One trip: the first dive off the title to the main menu again (trip.ts); its report at the end.
+const trip = new Trip();
+const tripReport = new TripReport();
 const report = new Report(health);
 const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => selectEquipmentPath(slot, path));
 gear.render(equipment);
@@ -903,6 +907,7 @@ function tryCatch() {
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
   const caught = { ...best.spec, depthM: recordedDepth(-best.pos.y), map: world.map.id };
   net.push(caught);
+  trip.catch(caught);
   fieldGuide?.mark('catch');
   hud.setNet(net, stats.netCapacity);
   hud.toast(caught);
@@ -919,6 +924,7 @@ function tryCatch() {
 function bankNet() {
   if (!net.length) return;
   bank.push(...net.map(bankEntry));
+  trip.bank(net.length);
   saveBank();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
   hud.message(`Banked ${net.length} fish · minting NFTs…`);
@@ -1019,6 +1025,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  trip.start(world.map.id); // the first dive starts a trip; later ones (another map) join it
   diver.group.visible = true;
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
   calmSea();
@@ -1300,7 +1307,8 @@ function labelStartFish(pan: number) {
 }
 
 function onEscape() {
-  if (shipyard.open) shipyard.close();
+  if (tripReport.open) tripReport.close();
+  else if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
   else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
@@ -1357,6 +1365,9 @@ function goToMenu() {
   camWrap.style.visibility = 'hidden';
   hud.hide();
   showTitle(true);
+  // Back at the main menu: the trip's over. Its report comes up over the title.
+  const record = trip.end(health.dives);
+  if (record) tripReport.show(record);
 }
 
 function applySettings(s: Settings) {
@@ -1450,6 +1461,9 @@ function setTablePan(which: 'bench' | 'desk', u: number, y: number) {
 
 const workbench = new Workbench({
   progress: () => mapProgress,
+  // Aboard mid-trip, the chart can sail home: the trip ends (its report), then the title.
+  canReturn: () => aboard != null,
+  returnHome: () => aboardToTitle(),
   pan(u, tableY) {
     setTablePan('bench', u, tableY);
     // Leaving the boat, the fish rise away off the top while the table sinks.
@@ -1744,6 +1758,7 @@ function update(dt: number, time: number) {
   const playing = phase === 'play';
   nowMs = time * 1000;
   health.tick(nowMs, s, depth, underwater && playing);
+  trip.sample(s);
 
   // Mid-jump off the bow, the jump moves the diver: no swimming, no water physics yet.
   const flying = diver.jumping || diver.seated;

@@ -38,6 +38,9 @@ export interface WorkbenchHooks {
   sonarColor?(color: string): void;
   /** Optional progress hooks for the action-driven field guide. */
   tutorial?(id: LessonId): void;
+  /** Aboard mid-trip: the chart offers "Return to port" (returnHome ends the trip). */
+  canReturn?(): boolean;
+  returnHome?(): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
   buy(id: UpgradeId): Promise<string | null>;
   pearls(): number;
@@ -312,6 +315,7 @@ export class Workbench {
       if (this.state === 'chart' && (e.target === this.chartEl || e.target === this.chartBg)) this.closeChart();
     });
     $('wb-dive').addEventListener('click', () => this.state === 'chart' && this.picked && this.dive());
+    $('wb-return').addEventListener('click', () => this.state === 'chart' && this.hooks.returnHome?.());
     window.addEventListener('resize', () => this.visible && this.resize());
   }
 
@@ -1424,6 +1428,7 @@ export class Workbench {
     $('wb-place-gear').textContent = ready.length ? `Ready: ${ready.join(', ')}` : 'No gear ready: you dive with the basics';
     if (id) this.renderConditions(id);
     ($('wb-dive') as HTMLButtonElement).disabled = !id;
+    $('wb-return').classList.toggle('hidden', !this.hooks.canReturn?.());
   }
 
   private renderConditions(id: MapId) {
