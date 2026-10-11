@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Shipyard, SHIPS } from './ships';
-import { BreathSource, type BreathMode } from './breath';
+import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { Diver } from './diver';
 import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
@@ -9,8 +9,10 @@ import { HealthLog } from './health';
 import { Report } from './report';
 import { BreathTest } from './breathtest';
 import { PauseMenu } from './pause';
+import { SettingsDesk } from './settings-desk';
 import { dropdownOpen } from './dropdown';
 import { TitleScreen } from './title';
+import { Aquarium } from './aquarium';
 import { Workbench } from './workbench';
 import type { UpgradeId } from './upgrades';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -69,7 +71,10 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 // The map you last played, unless it is no longer open (e.g. the demo switch was turned off).
 const mapProgress = loadMapProgress();
 if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
-const world = new World(renderQuality.settings, MAPS[mapProgress.selected]);
+// The title's backdrop is a random place at a random hour each visit. It isn't saved:
+// the workbench's chart (or a wallet's last map) decides where you actually dive.
+const backdropMap = MAP_ORDER[Math.floor(Math.random() * MAP_ORDER.length)];
+const world = new World(renderQuality.settings, MAPS[backdropMap]);
 // The generated terrain supports the full ±200 m safety corridor. Edges open
 // only when the diver is moving toward them, then ease back toward ±140 m.
 const worldBounds = createWorldBounds(HALF_WIDTH, MAX_HALF_WIDTH);
@@ -91,6 +96,18 @@ diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
 diver.setMaterialBinder((root) => world.colorGrade.apply(root));
 diver.setWaterSurface((x, z) => world.surfaceAt(x, z));
+// Between dives the diver sits on the bow (it rocks with the boat); a dive starts with a jump off it.
+const bowSeat = new THREE.Object3D();
+bowSeat.position.set(3.38, 0.66, 0);
+world.boat.add(bowSeat);
+diver.sit(bowSeat);
+const JUMP_OUT = 2.6; // where the jump lands: this far past the bow, and this deep
+const JUMP_DEPTH = 1.4;
+// Floating at the surface this close to the boat, F climbs aboard and goes back to the workbench.
+// Only once you've actually been down (BOARD_AFTER_M) on this dive, not straight after the jump.
+const BOARD_REACH = 6.5;
+const BOARD_AFTER_M = 3;
+let wentDown = false;
 const hud = new Hud();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
@@ -534,6 +551,12 @@ const nftQueue = new NftQueue(bank, saveBank, {
   },
 });
 const vault = new Vault(bank, nftQueue);
+const aquarium = new Aquarium(bank, {
+  pan(u) {
+    aquariumPan = u;
+    titleScreen.setLift(u);
+  },
+});
 // The queue starts once a wallet's bank is loaded (see loadWalletProgress).
 const health = new HealthLog();
 const report = new Report(health);
@@ -657,14 +680,14 @@ window.addEventListener('keydown', (e) => {
   // quick-slot shortcuts; consume them before movement/catch handling.
   if (loadoutWheel.handleKeyDown(e, phase === 'play' && !paused && !gear.open && !vault.open && !report.open)) return;
   if (paused) return;
-  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !loginGate.visible && !pauseMenu.open) {
+  if (e.key === 'Enter' && titleScreen.visible && !workbench.visible && !settingsDesk.visible && !loginGate.visible && !pauseMenu.open && !aquarium.open) {
     // Otherwise Enter also "clicks" whatever button still has focus (e.g. the card's Back).
     e.preventDefault();
     openWorkbench();
   }
   keys.add(e.key.toLowerCase());
   // Not on the workbench: the report would pop up over the table and the chart.
-  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible) report.toggle();
+  if (e.key.toLowerCase() === 'h' && phase !== 'calibrating' && !workbench.visible && !aquarium.open) report.toggle();
   if (e.key.toLowerCase() === 'g' && phase !== 'play' && phase !== 'calibrating') {
     e.preventDefault();
     gear.toggle();
@@ -681,6 +704,8 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key.toLowerCase() === 'g') {
     gear.toggle();
     if (gear.open) void syncPearls();
+  } else if (e.key.toLowerCase() === 'f' && canBoard()) {
+    climbAboard();
   } else if (e.key.toLowerCase() === 'n') {
     const nightSelected = world.dayCycle.mode === 'night'
       || (world.dayCycle.mode === 'cycle' && world.night);
@@ -934,6 +959,23 @@ function startGame() {
   hud.show();
   carrySonarForDive();
   hud.message('Hold your breath and dive!', 2400);
+  const bow = bowSeat.getWorldPosition(new THREE.Vector3());
+  diver.jumpTo(new THREE.Vector3(bow.x + JUMP_OUT, -JUMP_DEPTH, 0));
+  wentDown = false;
+}
+
+/** Beside the boat at the surface, not in trouble: close enough to climb aboard. */
+function canBoard() {
+  return (
+    phase === 'play' &&
+    wentDown &&
+    !paused &&
+    !diver.jumping &&
+    !outOfAir &&
+    !stormSea.capsized && // keel up, F is for righting it (heaveBoat)
+    -diver.pos.y <= SURFACE_DEPTH &&
+    Math.abs(diver.pos.x - world.boat.position.x) < BOARD_REACH
+  );
 }
 
 document.getElementById('start-live')!.addEventListener('click', async () => {
@@ -1024,23 +1066,118 @@ function pause() {
   pauseMenu.show();
 }
 
+// ---- Back aboard ---------------------------------------------------------
+// F beside the boat, or Esc anywhere in a dive, takes you to the workbench to
+// upgrade gear: the diver sits on the bow, the fish drop onto the rope from above
+// and the table rises. Aboard, the START fish reads MAIN MENU and ends the trip.
+// Esc on the table plays it backwards (the fish rise away, the table sinks) and the
+// dive carries on exactly where it was. Diving from the chart starts a fresh dive
+// off the bow.
+const START_FISH = 0; // its index in the title's fish
+const titleName = document.getElementById('title-name')!;
+let aboard: { pos: THREE.Vector3; vel: THREE.Vector3 } | null = null;
+let leavingBoat = false;
+
+function climbAboard() {
+  if (aboard) return;
+  aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
+  phase = 'menu';
+  keys.clear();
+  vault.toggle(false);
+  gear.toggle(false);
+  report.toggle(false);
+  hud.setBoardPrompt(false);
+  hud.hide();
+  diver.pos.set(0, -0.4, 0); // the camera goes back up to the boat
+  diver.vel.set(0, 0, 0);
+  diver.sit(bowSeat);
+  titleScreen.setLabel(START_FISH, 'MAIN MENU');
+  titleName.style.visibility = 'hidden'; // just the fish and the table, no title
+  benchPan = 0;
+  titleScreen.setPan(0);
+  titleScreen.setLift(0);
+  titleScreen.show('drop');
+  workbench.show(true);
+}
+
+/** Not aboard any more: START reads START again and the title comes back. */
+function leaveBoat() {
+  aboard = null;
+  leavingBoat = false;
+  titleScreen.setLabel(START_FISH, 'START');
+  titleScreen.setLift(0);
+  titleName.style.visibility = '';
+}
+
+/** Esc from the table: the fish rise away and the table sinks, then the dive resumes. */
+function backToWater() {
+  if (!aboard || leavingBoat) return;
+  leavingBoat = true;
+  workbench.leave(() => {
+    const at = aboard!;
+    leaveBoat();
+    titleScreen.hide();
+    titleScreen.setPan(0);
+    benchPan = 0;
+    diver.stand();
+    diver.pos.copy(at.pos);
+    diver.vel.copy(at.vel);
+    phase = 'play';
+    keys.clear();
+    breathSince = null; // time on the boat doesn't count as breathing underwater
+    hud.show();
+  });
+}
+
+/** MAIN MENU: the trip's over (an unbanked net is lost), back to the title. */
+function aboardToTitle() {
+  leaveBoat();
+  goToMenu();
+}
+
+/** The START fish: on the title it opens the workbench; as MAIN MENU (over a table, or aboard) it goes back to the title. */
+function startFish() {
+  if (aboard) aboardToTitle();
+  else if (workbench.visible) {
+    if (workbench.atRest) workbench.escape(); // pans back up to the title
+  } else if (settingsDesk.visible) settingsDesk.escape();
+  else openWorkbench();
+}
+
+/**
+ * The START fish reads START on the title only: as soon as the camera pans down
+ * to a table (the workbench, the settings desk, or aboard) it reads MAIN MENU,
+ * and back at the title it reads START again.
+ */
+function labelStartFish(pan: number) {
+  titleScreen.setLabel(START_FISH, pan > 0 || aboard ? 'MAIN MENU' : 'START');
+}
+
 function onEscape() {
   if (shipyard.open) shipyard.close();
   else if (pauseMenu.open) pauseMenu.back();
+  else if (aquarium.open) aquarium.close();
   else if (report.open) report.toggle(false);
   else if (vault.open) vault.toggle(false);
   else if (gear.open) gear.toggle(false);
   else if (breathTest.open) breathTest.stop();
   else if (loginGate.visible) showTitle(false);
+  else if (settingsDesk.visible) settingsDesk.escape();
+  // Aboard, Esc from the bare table goes back into the water, not to the title.
+  else if (aboard && phase === 'menu' && workbench.atRest) backToWater();
   else if (workbench.visible && phase === 'menu') workbench.escape();
-  else if (phase === 'play') pause();
+  // In a dive, Esc goes aboard to the workbench (the pause menu is for a hidden tab).
+  else if (phase === 'play') climbAboard();
   else if (phase === 'calibrating') goToMenu();
   else if (!overlay.classList.contains('hidden')) backFromStartCard();
 }
 
+/** Ends the dive: back to the title, with the diver sitting back on the bow. */
 function goToMenu() {
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
+  diver.sit(bowSeat);
+  hud.setBoardPrompt(false);
   calmSea();
   net = [];
   activeLoadout = null;
@@ -1130,9 +1267,9 @@ document.addEventListener('pointermove', (e) => {
 });
 // START pans the camera down to the workbench (gear + sea chart); the dive launches from the start card.
 const titleScreen = new TitleScreen(document.getElementById('title-canvas') as HTMLCanvasElement, [
-  { seed: 0x5eed01, rarity: 'legendary', hue: 40, sat: 0.95, light: 0.56, archetype: 'bulky', at: 0.32, label: 'START', onClick: openWorkbench },
-  { seed: 0x5eed02, rarity: 'common', hue: 35, sat: 0.18, light: 0.55, at: 0.52 },
-  { seed: 0x5eed03, rarity: 'epic', hue: 285, sat: 0.75, light: 0.56, archetype: 'bulky', at: 0.71, label: 'SETTINGS', onClick: () => pauseMenu.openSettings() },
+  { seed: 0x5eed01, rarity: 'legendary', species: 'Abyssal Sunfish', hue: 40, sat: 0.95, light: 0.56, at: 0.32, label: 'START', onClick: startFish }, // MAIN MENU while aboard
+  { seed: 0x5eed02, rarity: 'rare', species: 'Azure Tang', hue: 195, sat: 0.7, light: 0.55, at: 0.52, label: 'AQUARIUM', onClick: () => aquarium.show() },
+  { seed: 0x5eed03, rarity: 'epic', species: 'Violet Lionfish', hue: 285, sat: 0.75, light: 0.56, at: 0.71, label: 'SETTINGS', onClick: openSettingsDesk },
 ]);
 
 // Gear set in the workbench's READY tray for this dive. The selected slots are
@@ -1142,12 +1279,16 @@ let loadout: UpgradeId[] = [];
 // How far the sea camera sinks while the workbench is up, so the pan reads behind the table too.
 const BENCH_CAMERA_DROP = 1.4;
 let benchPan = 0;
+let aquariumPan = 0; // the aquarium pans the same way
 
 const workbench = new Workbench({
   progress: () => mapProgress,
   pan(u, tableY) {
     benchPan = u;
     titleScreen.setPan(u, tableY);
+    labelStartFish(u);
+    // Leaving the boat, the fish rise away off the top while the table sinks.
+    if (leavingBoat) titleScreen.setLift(1 - u);
   },
   preview: mapPreview,
   dive(id, gear) {
@@ -1163,8 +1304,15 @@ const workbench = new Workbench({
     // The preview frame expanding over the screen was taken from exactly here.
     benchPan = 0;
     snapToDiveCamera();
-    openStartCard();
+    if (aboard) {
+      // Mid-trip: the breath input is already set up, so straight back in off the bow.
+      leaveBoat();
+      titleScreen.hide();
+      startGame();
+    } else openStartCard();
   },
+  // Only the net (equipment.ts's rod tiers) can be upgraded so far; the rest is starting gear.
+  owned: (id) => (id === 'net' ? equipment.rodLevel : 1),
   sonarColor(color) {
     sonar.setColor(color);
   },
@@ -1174,20 +1322,47 @@ function showTitle(intro: boolean) {
   overlay.classList.add('hidden');
   loginGate.hide();
   workbench.hide();
+  settingsDesk.hide();
   benchPan = 0;
   titleScreen.setPan(0);
+  labelStartFish(0);
   titleScreen.show(intro);
 }
 
-// A wallet is required: START goes through the login gate unless one is connected.
+// A wallet is required, so START goes through the login gate unless a wallet is connected,
+// matching main since #68 (per-wallet saves, and NFT minting needs an owner).
+const REQUIRE_PHANTOM = true;
 const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
 mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, 'Not connected');
 for (const id of ['pause-wallet', 'collection-wallet', 'wallet-chip']) mountWalletRow(document.getElementById(id)!, logoutHooks);
 
+// SETTINGS pans down to a table like START's, with the settings as plaques on it (settings-desk.ts).
+const settingsDesk = new SettingsDesk({
+  settings: () => settings,
+  change: (patch) => pauseMenu.change(patch),
+  timeOfDay: () => world.dayCycle.mode,
+  setTimeOfDay,
+  connectWallet: () => loginGate.show(),
+  logOut: () => void logOut(),
+  pan(u, tableY) {
+    benchPan = u;
+    titleScreen.setPan(u, tableY);
+    labelStartFish(u);
+  },
+});
+
+function openSettingsDesk() {
+  if (!workbench.visible && !settingsDesk.visible && !loginGate.visible) settingsDesk.show();
+}
+
 function openWorkbench() {
-  if (workbench.visible || loginGate.visible) return;
+  if (workbench.visible || settingsDesk.visible || loginGate.visible) return;
+  if (!REQUIRE_PHANTOM) {
+    workbench.show(true);
+    return;
+  }
   // A silent reconnect may still be in flight.
   void walletRestored.then(() => {
     if (workbench.visible || loginGate.visible) return;
@@ -1235,7 +1410,8 @@ function loadWalletProgress() {
   Object.assign(mapProgress, loadMapProgress());
   if (!isUnlocked(MAPS[mapProgress.selected], mapProgress)) mapProgress.selected = 'fjord';
   health.reload();
-  applyMap(mapProgress.selected); // the same switch the map picker makes
+  // Still on the title: keep its random backdrop; the workbench sets the dive's map.
+  if (!titleScreen.visible) applyMap(mapProgress.selected); // the same switch the map picker makes
   hud.setBank(bank);
   refreshEquipment();
   mapPicker.render();
@@ -1313,7 +1489,9 @@ function update(dt: number, time: number) {
   nowMs = time * 1000;
   health.tick(nowMs, s, depth, underwater && playing);
 
-  if (playing) {
+  // Mid-jump off the bow, the jump moves the diver: no swimming, no water physics yet.
+  const flying = diver.jumping || diver.seated;
+  if (playing && !flying) {
     // Breathing underwater = out of air. You must make it up before it runs out.
     // A single noisy "breathing" frame shouldn't cost the net: it must persist.
     breathSince = underwater && !s.holding ? (breathSince ?? nowMs) : null;
@@ -1345,48 +1523,10 @@ function update(dt: number, time: number) {
     if (emergency <= 0 && phase === 'play') blackout();
   }
 
-  // Water drag, speed cap, and gentle buoyancy at the surface.
-  diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
-  // Fins (and the ship's bonus) improve ordinary swimming only. Emergency ascent keeps its own cap.
-  const cap = outOfAir ? 10 : currentStats().swimSpeed;
-  if (diver.vel.length() > cap) diver.vel.setLength(cap);
-  if (!s.holding && !outOfAir && depth < 3) diver.vel.y += 6 * dt;
-  // Below the shelf you're inside the trench; above it, the shelf is the floor
-  // everywhere except over the trench mouth. The shelf depth is per map.
-  const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench
-  // The trench walls follow where the diver was before this step: otherwise
-  // pressing down on the shelf would pull the diver sideways into the trench.
-  const wall = diver.pos.y < shelfY ? TRENCH_X : HALF_WIDTH;
-  diver.pos.addScaledVector(diver.vel, dt);
-  advanceWorldBounds(worldBounds, diver.pos.x, diver.vel.x, dt);
-  extendFishCoverage();
-  // Inside the trench its walls hold the diver; over the shelf the map edges do.
-  diver.pos.x = wall === TRENCH_X
-    ? THREE.MathUtils.clamp(diver.pos.x, -TRENCH_X, TRENCH_X)
-    : clampWorldXToBounds(diver.pos.x, worldBounds);
-  const floor = Math.abs(diver.pos.x) > TRENCH_X ? shelfY : -DEPTH_LIMIT;
-  diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
-
-  if (-diver.pos.y <= SURFACE_DEPTH) {
-    // Only in play: during the blackout the lift can still carry you up, and that's no rescue.
-    if (outOfAir && phase === 'play') {
-      outOfAir = false;
-      hud.message(net.length ? 'Made it!' : 'Phew.', 900);
-    }
-    if (phase === 'play') {
-      if (stormSea.capsized) {
-        // Nowhere to land the catch while the boat is keel up: it stays in the net.
-        health.end(nowMs, 'surfaced', 0);
-        if (net.length && time > capsizeHintAt) {
-          hud.message('The boat is capsized: right it to bank your catch', 2000);
-          capsizeHintAt = time + 8;
-        }
-      } else {
-        health.end(nowMs, net.length ? 'banked' : 'surfaced', net.length);
-        bankNet();
-      }
-    }
-  }
+  if (!flying) swimPhysics(dt, s);
+  if (playing && -diver.pos.y > BOARD_AFTER_M) wentDown = true;
+  hud.setBoardPrompt(canBoard());
+  const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench (as in swimPhysics)
 
   // Over the shelf the seabed is the sharks' floor; down the trench there is none.
   tendSharks(dt, s.pulse, s.holding, Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY ? -Infinity : world.seabedY);
@@ -1433,8 +1573,8 @@ function update(dt: number, time: number) {
   world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
 
-  // On the menu the camera sinks a little as the workbench pans in.
-  cameraTarget(camTarget, phase === 'menu' ? benchPan * BENCH_CAMERA_DROP : 0);
+  // On the menu the camera sinks a little as the workbench (or the aquarium) pans in.
+  cameraTarget(camTarget, phase === 'menu' ? Math.max(benchPan, aquariumPan) * BENCH_CAMERA_DROP : 0);
   camera.position.sub(shakeOffset);
   camera.position.lerp(camTarget, Math.min(1, dt * 3));
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
@@ -1475,6 +1615,51 @@ function update(dt: number, time: number) {
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
   if (phase === 'calibrating') updateCalibration();
+}
+
+/** Water drag, speed cap, buoyancy, the trench walls, and banking at the surface. */
+function swimPhysics(dt: number, s: BreathState) {
+  diver.vel.multiplyScalar(Math.exp(-DRAG * dt));
+  // Fins (and the ship's bonus) improve ordinary swimming only. Emergency ascent keeps its own cap.
+  const cap = outOfAir ? 10 : currentStats().swimSpeed;
+  if (diver.vel.length() > cap) diver.vel.setLength(cap);
+  if (!s.holding && !outOfAir && -diver.pos.y < 3) diver.vel.y += 6 * dt;
+  // Below the shelf you're inside the trench; above it, the shelf is the floor
+  // everywhere except over the trench mouth. The shelf depth is per map.
+  const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench
+  // The trench walls follow where the diver was before this step: otherwise
+  // pressing down on the shelf would pull the diver sideways into the trench.
+  const wall = diver.pos.y < shelfY ? TRENCH_X : HALF_WIDTH;
+  diver.pos.addScaledVector(diver.vel, dt);
+  advanceWorldBounds(worldBounds, diver.pos.x, diver.vel.x, dt);
+  extendFishCoverage();
+  // Inside the trench its walls hold the diver; over the shelf the map edges do.
+  diver.pos.x = wall === TRENCH_X
+    ? THREE.MathUtils.clamp(diver.pos.x, -TRENCH_X, TRENCH_X)
+    : clampWorldXToBounds(diver.pos.x, worldBounds);
+  const floor = Math.abs(diver.pos.x) > TRENCH_X ? shelfY : -DEPTH_LIMIT;
+  diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
+
+  if (-diver.pos.y <= SURFACE_DEPTH) {
+    // Only in play: during the blackout the lift can still carry you up, and that's no rescue.
+    if (outOfAir && phase === 'play') {
+      outOfAir = false;
+      hud.message(net.length ? 'Made it!' : 'Phew.', 900);
+    }
+    if (phase === 'play') {
+      if (stormSea.capsized) {
+        // Nowhere to land the catch while the boat is keel up: it stays in the net.
+        health.end(nowMs, 'surfaced', 0);
+        if (net.length && time > capsizeHintAt) {
+          hud.message('The boat is capsized: right it to bank your catch', 2000);
+          capsizeHintAt = time + 8;
+        }
+      } else {
+        health.end(nowMs, net.length ? 'banked' : 'surfaced', net.length);
+        bankNet();
+      }
+    }
+  }
 }
 
 /**
@@ -1557,6 +1742,7 @@ frame();
 // Exposed for quick debugging in the console: debugStep(2) simulates 2 s.
 Object.assign(window, {
   workbench,
+  settingsDesk,
   loadout: () => loadout,
   /** How far the camera is from where a dive starts (0 right after the workbench hands over). */
   diveCameraOffset: () => camera.position.distanceTo(cameraTarget(new THREE.Vector3(), 0)),
