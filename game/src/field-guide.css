@@ -23,6 +23,10 @@
 .guide-tabs button:nth-child(3n) { background: #a1bac0; }
 .guide-tabs button span { display: block; font-size: 10px; opacity: .65; margin-bottom: 4px; }
 .guide-tabs button.selected { width: 54px; background: #f5eacb; box-shadow: 2px 3px 1px #0003, inset 0 -4px #798f6e; }
+/* English names are longer than 2 Chinese characters: wider tabs, tighter type, never clipped. */
+:root[lang="en"] .guide-tabs { right: -66px; }
+:root[lang="en"] .guide-tabs button { width: 66px; padding: 5px 3px; font-size: 11px; letter-spacing: -.1px; white-space: nowrap; }
+:root[lang="en"] .guide-tabs button.selected { width: 72px; }
 .guide-pages { display: grid; grid-template-columns: 1fr 1fr; overflow-y: auto; min-height: 0; background: #ede3c7; background-image: repeating-linear-gradient(0deg, #72562a04 0 1px, transparent 1px 4px); transform-origin: left center; backface-visibility: hidden; }
 .guide-pages.page-turn-forward { animation: page-turn-forward .32s ease-out; }
 .guide-pages.page-turn-back { animation: page-turn-back .32s ease-out; transform-origin: right center; }
@@ -88,6 +92,10 @@
   .guide-tabs button { width: 37px; height: 48px; padding: 3px; font-size: 11px; }
   .guide-tabs button.selected { width: 40px; }
   .guide-tabs button span { font-size: 9px; }
+  :root[lang="en"] .field-guide { padding-right: 62px; }
+  :root[lang="en"] .guide-tabs { right: -54px; }
+  :root[lang="en"] .guide-tabs button { width: 54px; padding: 3px 2px; font-size: 10px; letter-spacing: -.2px; }
+  :root[lang="en"] .guide-tabs button.selected { width: 58px; }
   .guide-footer { padding: 10px; }
   .guide-footer button { font-size: 10px; padding: 6px; }
   .guide-launcher { right: 12px; bottom: 12px; }
