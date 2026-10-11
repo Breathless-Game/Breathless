@@ -1402,6 +1402,19 @@ a.button.primary {
   letter-spacing: 0.06em;
 }
 
+#pause-chain {
+  display: block;
+  margin: 2px 0 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--gold);
+}
+
+#pause-chain:hover,
+#pause-chain:focus-visible {
+  text-decoration: underline;
+}
+
 .menu-buttons {
   display: flex;
   flex-direction: column;
