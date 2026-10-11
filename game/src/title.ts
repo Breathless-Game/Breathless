@@ -6,7 +6,7 @@
 // themselves are real 3D models on a layer above it (title3d.ts), placed from
 // the physics every frame. The 3D sea keeps rendering behind.
 
-import { RARITY, rollFish, speciesProfile, type Archetype, type Rarity } from './fish';
+import { RARITY, rollFish, speciesProfile, type Archetype, type Rarity } from './title-fish-legacy';
 import { FishStage, type FishPose } from './title3d';
 
 // The title fish were picked by look under the old Abyss drop table. Keep rolling
