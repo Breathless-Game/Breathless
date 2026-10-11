@@ -1,0 +1,55 @@
+/* Themed scrollbars for every scroll area: a thin rounded glass thumb that lights
+   up teal under the pointer, and no track. Shared by the game (style.css),
+   the showcase and the dev pages, so the colours are literals, not style.css tokens. */
+
+:root {
+  /* Whatever is left unstyled (form controls, a scrollbar this file misses) renders dark, never white. */
+  color-scheme: dark;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Keeps the thumb clear of the panels' rounded corners. */
+::-webkit-scrollbar-track {
+  margin: 8px;
+}
+
+/* The transparent border insets the thumb, so it reads 4px wide inside a 10px gutter. */
+::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(160, 230, 255, 0.24) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background-color: rgba(62, 240, 168, 0.55);
+}
+
+::-webkit-scrollbar-thumb:active {
+  border-width: 2px;
+  background-color: rgba(62, 240, 168, 0.85);
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* Firefox has no ::-webkit-scrollbar. Chrome 121+ reads these standard properties
+   too and they switch its ::-webkit-scrollbar styling off, so only browsers
+   without it get them. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(160, 230, 255, 0.3) transparent;
+  }
+}
