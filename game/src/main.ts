@@ -30,7 +30,7 @@ import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
 import { applySlotUpgrade, deriveStats, loadEquipment, nextSlotTier, planSlotUpgrade, rodTier, saveEquipment, setEquipmentPath, totalPearls, type EquipmentPathId, type EquipmentState, type EquipmentSlot, type UpgradeSlot } from './equipment';
-import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, type BankedFish } from './market';
+import { addBankedValue, bankEntry, migrateBank, migrateUnlockProgress, pearls, type BankedFish } from './market';
 import { NftQueue } from './nft-queue';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { LoginGate, mountWalletRow } from './login';
@@ -168,7 +168,7 @@ function randomSeed(): number {
 
 function rollFor(depth: number): FishSpec {
   const a = rollFish(randomSeed(), depth);
-  if (!world.night) return a;
+  if (!world.night && !sharksOut()) return a;
   // Night: two rolls, keep the rarer. Better fish, but it's dark down there.
   // With sharks out it is three: the price of swimming with them.
   const rarer = (x: FishSpec, y: FishSpec) => (RARITY_ORDER.indexOf(y.rarity) > RARITY_ORDER.indexOf(x.rarity) ? y : x);
@@ -366,7 +366,7 @@ let lastHolding = false;
 let breathSince: number | null = null; // when the sensor last flipped to "breathing" underwater
 
 // ---- Sharks -------------------------------------------------------------
-// On a map with sharks (the Open Ocean), at night, if the player said yes (shark.ts).
+// On the Open Ocean, if the player said yes: one by day, two at night.
 const sharkPack = new SharkPack();
 const sharkFx = new SharkFx(scene);
 world.colorGrade.apply(sharkFx.group);
@@ -377,7 +377,7 @@ const sharkAsk = document.getElementById('shark-ask')!;
 
 /** Do sharks hunt right now? */
 function sharksOut() {
-  return settings.sharks === 'on' && world.map.sharks && world.night && phase === 'play';
+  return settings.sharks === 'on' && world.map.sharks && phase === 'play';
 }
 
 /** Before a dive on shark waters, the player chooses once; Settings can change it later. */
@@ -395,7 +395,7 @@ function answerSharks(on: boolean) {
   paused = false;
   // The pause was not a breath taken underwater.
   breathSince = null;
-  hud.message(on ? 'Sharks come out after dark. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
+  hud.message(on ? 'One shark by day, two at night. Keep your heart rate down.' : 'No sharks on this ocean.', 2600);
 }
 document.getElementById('shark-yes')!.addEventListener('click', () => answerSharks(true));
 document.getElementById('shark-no')!.addEventListener('click', () => answerSharks(false));
@@ -426,14 +426,14 @@ function tendSharks(dt: number, pulse: number | null, holding: boolean, floorY: 
   const bpm = pulse ?? pulseEstimate.tick(dt, diver.vel.length() / Math.max(1, currentStats().swimSpeed));
   const out = sharksOut();
   const intensity = out ? sharkIntensity(bpm, estimated ? SHARK.rest : restingPulse.bpm) : 0;
-  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents);
+  sharkPack.tick(dt, diver.pos, intensity, out, floorY, sharkEvents, world.night);
   for (const event of sharkEvents) {
     if (event === 'arrive') hud.message('Sharks are circling. Keep your heart rate down.', 3000);
     else if (event === 'bite') sharkBite(intensity);
   }
-  sharkFx.update(dt, sharkPack.sharks, intensity);
+  sharkFx.update(dt, sharkPack.sharks, intensity, world.dayCycle.state.nightMix, settings.lightingEffects);
   health.sharks = out;
-  hud.setSharks(out ? { count: sharkPack.sharks.length, bpm, estimated, intensity } : null);
+  hud.setSharks(out ? { count: sharkPack.sharks.filter(s => s.mode !== 'leave').length, bpm, estimated, intensity } : null);
 }
 
 function noSharks() {
@@ -550,7 +550,7 @@ const nftQueue = new NftQueue(bank, saveBank, {
   changed: () => vault.refresh(),
   sold(fish, result) {
     hud.setBank(bank);
-    hud.toast(fish, `SOLD · +${result.pearls} PEARLS`);
+    hud.toast(fish, `SOLD · +${pearls(result.pearls).toUpperCase()}`);
     void syncPearls(result.pearls);
   },
 });
@@ -626,8 +626,8 @@ async function buyNextUpgrade(slot: UpgradeSlot = 'net') {
   }
   const plan = planSlotUpgrade(equipment, slot);
   if (!plan) {
-    gear.showNotice(`Need ${next.cost - totalPearls(equipment)} more Pearls.`);
-    hud.message(`Need ${next.cost - totalPearls(equipment)} more Pearls`, 1500);
+    gear.showNotice(`Need ${pearls(next.cost - totalPearls(equipment))} more.`);
+    hud.message(`Need ${pearls(next.cost - totalPearls(equipment))} more`, 1500);
     return;
   }
   // Legacy local Pearls go first; the rest is burned on-chain, and the tier applies only once that lands.
@@ -1340,7 +1340,9 @@ const loginGate = new LoginGate(() => showTitle(false));
 // Log out from Settings, the pause menu, the collection, and a chip over the title and workbench.
 const logoutHooks = { warning: logoutWarning, logOut };
 mountWalletRow(document.getElementById('set-wallet')!, logoutHooks, 'Not connected');
-for (const id of ['pause-wallet', 'collection-wallet', 'wallet-chip']) mountWalletRow(document.getElementById(id)!, logoutHooks);
+mountWalletRow(document.getElementById('pause-wallet')!, logoutHooks);
+mountWalletRow(document.getElementById('collection-wallet')!, logoutHooks, { empty: 'Not connected', explorer: true });
+mountWalletRow(document.getElementById('wallet-chip')!, logoutHooks, { menu: true });
 
 // SETTINGS pans down to a table like START's, with the settings as plaques on it (settings-desk.ts).
 const settingsDesk = new SettingsDesk({

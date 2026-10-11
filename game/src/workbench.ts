@@ -59,13 +59,14 @@ const TABLE = { x0: -5.2, x1: 5.2, z0: -2.7, z1: 2.7 };
 const TRAY = { x0: 2.55, x1: 4.85, z0: -2.5, z1: 2.5 };
 // Toward the front of the tray: the SETTINGS fish hangs over its back.
 const SLOTS: [number, number][] = [
-  [3.15, -0.55],
-  [4.25, -0.55],
-  [3.15, 0.3],
-  [4.25, 0.3],
-  [3.15, 1.15],
-  [4.25, 1.15],
-  [3.15, 2.0],
+  // Keep the front strip clear for the label. Six slots are also the hard
+  // loadout limit: a seventh dive item cannot be packed onto the boat.
+  [3.15, -0.9],
+  [4.25, -0.9],
+  [3.15, 0.05],
+  [4.25, 0.05],
+  [3.15, 1.0],
+  [4.25, 1.0],
 ];
 const MAP_AT = new THREE.Vector3(-1.05, 0, 0.1);
 const MAP_W = 2.9;
@@ -291,7 +292,8 @@ export class Workbench {
     return this.pieces
       .filter((p) => p.slot >= 0)
       .sort((a, b) => a.slot - b.slot)
-      .map((p) => p.id);
+      .map((p) => p.id)
+      .slice(0, SLOTS.length);
   }
 
   /** intro: pan down from the title and drop the gear; otherwise come back to the table as it was. */
@@ -927,6 +929,7 @@ export class Workbench {
   // ---- Ready tray -------------------------------------------------------
 
   private makeReady(p: Piece) {
+    if (this.packed.length >= SLOTS.length) return;
     const used = new Set(this.pieces.map((q) => q.slot));
     const slot = SLOTS.findIndex((_, i) => !used.has(i));
     if (slot < 0) return;
@@ -1412,7 +1415,11 @@ function drawTray(w: number, d: number): HTMLCanvasElement {
   c.fillStyle = 'rgba(255, 240, 210, 0.8)';
   c.textAlign = 'center';
   c.font = '800 22px Inter, system-ui, sans-serif';
-  // Along the front edge: the title fish hang over the back of the table.
+  // Reserve a clean front strip for the label. The six rings stay above it,
+  // so the text never intersects a packed item in the oblique table view.
+  c.fillStyle = 'rgba(18, 47, 39, 0.82)';
+  c.fillRect(16, cv.height - 43, cv.width - 32, 33);
+  c.fillStyle = 'rgba(255, 240, 210, 0.86)';
   c.fillText('READY · 准备区', cv.width / 2, cv.height - 16);
   return cv;
 }
