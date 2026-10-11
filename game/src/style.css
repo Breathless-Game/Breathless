@@ -2216,3 +2216,224 @@ button:disabled {
 #overlay .card {
   margin: auto;
 }
+
+/* ---- wallet: log out (pause menu, collection, title chip) ---- */
+.wallet-pause {
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+  font-size: 13px;
+}
+
+.wallet-collection {
+  margin-left: auto;
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+/* The status lines beside it can run long (waiting for fish numbers): the row keeps its width. */
+.wallet-collection:not(.wallet-confirming) {
+  flex-shrink: 0;
+}
+
+.wallet-row .wallet-addr,
+.wallet-row button {
+  white-space: nowrap;
+}
+
+.wallet-chip {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  max-width: calc(100vw - 32px);
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  font-size: 13px;
+}
+
+.wallet-chip.wallet-confirming {
+  border-radius: 14px;
+}
+
+.wallet-row .wallet-question {
+  color: var(--gold);
+  font-size: 12px;
+  max-width: 300px;
+}
+
+.wallet-confirming {
+  flex-wrap: wrap;
+}
+
+.wallet-row button.wallet-logout:hover,
+.wallet-row button.wallet-logout:focus-visible {
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.wallet-row .wallet-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  flex: none;
+}
+
+/* ---- wallet picker (login gate) ---- */
+/* Room for Phantom, MetaMask, Solflare, Backpack and one more in a row. */
+#login .card:has(.wallet-pick) {
+  max-width: 580px;
+}
+
+.wallet-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 12px;
+  margin: 22px 0 6px;
+}
+
+.wallet-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 6px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 13px;
+  font-weight: 700;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.wallet-tile:hover,
+.wallet-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(62, 240, 168, 0.7);
+  background: rgba(62, 240, 168, 0.08);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(62, 240, 168, 0.35);
+  outline: none;
+}
+
+.wallet-tile:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.wallet-tile .wallet-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+}
+
+.wallet-tile .wallet-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+
+.wallet-logo-letter {
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ink);
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.wallet-row .wallet-logo-letter {
+  font-size: 12px;
+}
+
+.wallet-tile .wallet-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.wallet-tile .wallet-tag {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  background: #22364a;
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.wallet-tile .wallet-tag-last {
+  background: var(--hold);
+  color: #032417;
+}
+
+.wallet-tile .wallet-tag-warn {
+  background: #3a3216;
+  color: var(--gold);
+}
+
+.wallet-tile.missing .wallet-logo,
+.wallet-tile.missing .wallet-name {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.wallet-tile.missing:hover .wallet-logo,
+.wallet-tile.missing:focus-visible .wallet-logo {
+  opacity: 0.75;
+  filter: none;
+}
+
+.wallet-tile[aria-disabled='true'] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.wallet-tile.busy {
+  border-color: rgba(62, 240, 168, 0.7);
+  cursor: progress;
+}
+
+.wallet-tile.busy .wallet-logo {
+  opacity: 0.5;
+}
+
+.wallet-spinner {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 3px solid rgba(62, 240, 168, 0.25);
+  border-top-color: var(--hold);
+  animation: wallet-spin 0.8s linear infinite;
+}
+
+@keyframes wallet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wallet-tile,
+  .wallet-tile:hover,
+  .wallet-tile:focus-visible {
+    transition: none;
+    transform: none;
+  }
+  .wallet-spinner {
+    animation-duration: 2.4s;
+  }
+}

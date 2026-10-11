@@ -95,6 +95,8 @@
         <div class="title-hint">Grab the fish · click <b>START</b> or press Enter</div>
         <div class="title-hint">点击船只升级 · Click the boat to upgrade</div>
       </div>
+      <!-- Over the title and the workbench (which sits under this layer): who is logged in, and Log out. -->
+      <div id="wallet-chip" class="wallet-row wallet-chip hidden"></div>
     </div>
 
     <div id="workbench" class="hidden">
@@ -137,14 +139,12 @@
 
     <div id="login" class="hidden">
       <div class="card">
-        <h2>Connect Phantom</h2>
-        <p class="tagline">Your Phantom wallet is your account. Fish you mint belong to it.</p>
-        <div class="buttons">
-          <button id="login-connect" class="primary">Connect Phantom</button>
-          <a id="login-install" class="button primary hidden" href="https://phantom.app" target="_blank" rel="noopener">Get Phantom ↗</a>
-        </div>
-        <p id="login-status" class="small"></p>
-        <p class="small muted">Devnet only. Phantom → Settings → Developer Settings → Testnet Mode → Solana Devnet</p>
+        <h2>Connect a wallet</h2>
+        <p class="tagline">Your wallet is your account. Fish you mint belong to it.</p>
+        <!-- One logo tile per wallet (login.ts): installed ones connect, the others link to their site. -->
+        <div id="login-wallets" class="wallet-pick" role="group" aria-label="Wallets"></div>
+        <p id="login-status" class="small" role="status"></p>
+        <p id="login-hint" class="small muted"></p>
         <button id="login-back" class="link">← Back</button>
       </div>
     </div>
@@ -216,6 +216,7 @@
             <button id="pause-settings">Settings</button>
             <button id="pause-menu">Main menu</button>
           </div>
+          <div id="pause-wallet" class="wallet-row wallet-pause hidden"></div>
           <p class="small muted">Esc to resume</p>
         </div>
 
@@ -261,7 +262,7 @@
               <option value="off">Off</option>
             </select>
           </label>
-          <div class="setting"><span>Phantom wallet</span><span id="set-wallet" class="wallet-row"></span></div>
+          <div class="setting"><span>Wallet</span><span id="set-wallet" class="wallet-row"></span></div>
           <div class="menu-buttons">
             <button id="settings-back">Back</button>
           </div>
@@ -291,6 +292,7 @@
           <div id="wallet" class="small"></div>
           <div id="market-bar" class="small"></div>
         </div>
+        <div id="collection-wallet" class="wallet-row wallet-collection hidden"></div>
         <button id="collection-close">Close (C)</button>
       </div>
       <div id="collection-grid"></div>
