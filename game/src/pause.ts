@@ -72,12 +72,12 @@ export class PauseMenu {
 
     this.input.addEventListener('change', () => hooks.setBreathMode(this.input.value as BreathMode));
     this.timeOfDay.addEventListener('change', () => hooks.setTimeOfDay(this.timeOfDay.value as TimeOfDay));
-    this.lighting.addEventListener('change', () => this.update({ lightingEffects: this.lighting.checked }));
-    this.weather.addEventListener('change', () => this.update({ weather: this.weather.value as WeatherMode }));
-    this.quality.addEventListener('change', () => this.update({ quality: this.quality.value as Quality }));
-    this.camera.addEventListener('change', () => this.update({ showCamera: this.camera.checked }));
-    this.help.addEventListener('change', () => this.update({ showHelp: this.help.checked }));
-    this.sharks.addEventListener('change', () => this.update({ sharks: this.sharks.value as SharkChoice }));
+    this.lighting.addEventListener('change', () => this.change({ lightingEffects: this.lighting.checked }));
+    this.weather.addEventListener('change', () => this.change({ weather: this.weather.value as WeatherMode }));
+    this.quality.addEventListener('change', () => this.change({ quality: this.quality.value as Quality }));
+    this.camera.addEventListener('change', () => this.change({ showCamera: this.camera.checked }));
+    this.help.addEventListener('change', () => this.change({ showHelp: this.help.checked }));
+    this.sharks.addEventListener('change', () => this.change({ sharks: this.sharks.value as SharkChoice }));
     hooks.applySettings(settings);
   }
 
@@ -159,7 +159,8 @@ export class PauseMenu {
     this.show('settings');
   }
 
-  private update(patch: Partial<Settings>) {
+  /** Changes, saves and applies settings; also what the title's settings table (settings-desk.ts) uses. */
+  change(patch: Partial<Settings>) {
     Object.assign(this.settings, patch);
     saveSettings(this.settings);
     this.hooks.applySettings(this.settings);
