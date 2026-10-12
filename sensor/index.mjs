@@ -30,6 +30,7 @@ import {
 } from '@smartspectra/node-sdk';
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector, parseSeedBaseline } from './breath-detector.mjs';
+import { ClientStatsWindow, parseClientStats } from './client-stats.mjs';
 import { loadJpegDecoder } from './decode.mjs';
 import { FrameFormat, LatestFrameDecoder, parseFrame } from './frames.mjs';
 import { createGearHandler } from './nft-gear.mjs';
@@ -133,6 +134,7 @@ class Session {
     this.noJpegNotified = false;
     this.sdkStartedAt = -Infinity;
     this.rx = this.#newRx();
+    this.clientStats = new ClientStatsWindow();
     this.statsTick = setInterval(() => this.#logFrameStats(), 60_000);
     if (this.sim) this.#startSim();
   }
@@ -292,7 +294,8 @@ class Session {
 
   // Also the landing point for decoded JPEG frames, which may finish after the SDK
   // restarted or the session left live mode.
-  #sendFrame(tsUs, rgba, width, height) {
+  // Raw frames are RGBA; decoded JPEGs are RGB (decode.mjs).
+  #sendFrame(tsUs, pixels, width, height) {
     if (this.sim || !this.sdk || tsUs <= this.lastFrameUs) return;
     // A long stall (tab hidden) makes Presage reject the gap; start a fresh pipeline.
     if (this.lastFrameUs && tsUs - this.lastFrameUs > 2_000_000) {
@@ -300,7 +303,8 @@ class Session {
       return;
     }
     try {
-      this.sdk.sendFrame(rgba, width, height, width * 4, PixelFormat.kRGBA, tsUs);
+      const channels = pixels.byteLength / (width * height);
+      this.sdk.sendFrame(pixels, width, height, width * channels, channels === 3 ? PixelFormat.kRGB : PixelFormat.kRGBA, tsUs);
       this.lastFrameUs = tsUs;
       this.frames++;
     } catch (e) {
@@ -318,6 +322,7 @@ class Session {
     const { raw, jpeg, jpegBytes, backlog, since, sdkFrames } = this.rx;
     this.rx = this.#newRx();
     const decode = this.jpeg?.summary(true);
+    const client = this.clientStats.summary(true);
     if (!raw && !jpeg) return;
     const secs = Math.max(1, (Date.now() - since) / 1000);
     let line = `frames, last ${secs.toFixed(0)} s: ${raw} raw, ${jpeg} JPEG`;
@@ -330,7 +335,7 @@ class Session {
     if (decode) {
       line += `; decoded ${decode.decoded} (avg ${decode.avgMs.toFixed(1)} ms, p95 ${decode.p95Ms.toFixed(1)}, max ${decode.maxMs.toFixed(1)}), ${decode.dropped} dropped behind, ${decode.failed} bad`;
     }
-    log(`${line}; ${this.frames - sdkFrames} to Presage`);
+    log(`${line}; ${this.frames - sdkFrames} to Presage${client ? `; ${client}` : ''}`);
   }
 
   // ---- Simulator --------------------------------------------------------
@@ -393,6 +398,12 @@ class Session {
   //                               [0.001, 1000] trace units per second (breath-detector.mjs);
   //                               anything else is ignored. Kept in memory only: never
   //                               logged, recorded or sent anywhere but back in `state`.
+  //   { t: 'stats', pipe, camFps, capFps, rvfcFps, renderFps, sentFps, skippedEncoder,
+  //     skippedBackpressure, encodeMsAvg, quality }
+  //                               every ~10 s while live: the game's camera pipeline numbers
+  //                               (game/src/frame-pump.ts). Performance only, never breath or
+  //                               health data. Validated (client-stats.mjs: known fields, finite,
+  //                               clamped) and only appended to the "frames, last N s" log line.
   onCommand(msg) {
     if (msg.t === 'sim') {
       const on = Boolean(msg.on) || !API_KEY;
@@ -420,6 +431,8 @@ class Session {
       this.rec.write({ k: 'label', ts: msg.ts, holding: Boolean(msg.holding) });
     } else if (msg.t === 'calib' && !this.sim) {
       this.rec.write({ k: 'calib', ts: msg.ts, phase: msg.phase });
+    } else if (msg.t === 'stats') {
+      this.clientStats.add(parseClientStats(msg));
     } else if (msg.t === 'seed' || msg.type === 'seed') {
       const b = parseSeedBaseline(msg.baseline);
       if (b != null && this.#knownLiveBaseline() == null) {

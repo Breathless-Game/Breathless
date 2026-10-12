@@ -44,7 +44,7 @@ test('sharp loads', () => {
   assert.equal(typeof decodeJpeg, 'function');
 });
 
-test('JPEG round trip: encode in Node, parse the frame, decode to RGBA close to the source', async () => {
+test('JPEG round trip: encode in Node, parse the frame, decode to RGB close to the source', async () => {
   const rgb = testCard();
   const jpeg = await sharp(rgb, { raw: { width: W, height: H, channels: 3 } })
     .jpeg({ quality: 70, chromaSubsampling: '4:2:0' })
@@ -55,14 +55,13 @@ test('JPEG round trip: encode in Node, parse the frame, decode to RGBA close to 
   assert.equal(frame.format, FrameFormat.JPEG);
   assert.equal(frame.tsUs, 1_234_500);
 
-  const rgba = await decodeJpeg(frame.payload, frame.width, frame.height);
-  assert.equal(rgba.length, W * H * 4);
+  const out = await decodeJpeg(frame.payload, frame.width, frame.height);
+  assert.equal(out.length, W * H * 3, 'RGB, no alpha: the SDK takes PixelFormat.kRGB');
 
   let sumErr = 0;
   let maxQuadErr = 0;
   for (let p = 0; p < W * H; p++) {
-    assert.equal(rgba[p * 4 + 3], 255, 'opaque alpha');
-    for (let c = 0; c < 3; c++) sumErr += Math.abs(rgba[p * 4 + c] - rgb[p * 3 + c]);
+    for (let c = 0; c < 3; c++) sumErr += Math.abs(out[p * 3 + c] - rgb[p * 3 + c]);
   }
   // Centres of the flat quadrants, away from the 8x8 blocks on the edges.
   for (const [x, y] of [
@@ -72,7 +71,7 @@ test('JPEG round trip: encode in Node, parse the frame, decode to RGBA close to 
     [480, 300],
   ]) {
     const p = y * W + x;
-    for (let c = 0; c < 3; c++) maxQuadErr = Math.max(maxQuadErr, Math.abs(rgba[p * 4 + c] - rgb[p * 3 + c]));
+    for (let c = 0; c < 3; c++) maxQuadErr = Math.max(maxQuadErr, Math.abs(out[p * 3 + c] - rgb[p * 3 + c]));
   }
   const meanErr = sumErr / (W * H * 3);
   assert.ok(meanErr < 3, `mean abs error ${meanErr.toFixed(2)}`);

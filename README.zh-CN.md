@@ -249,7 +249,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
                          ┌────────── sensor/ (Node, :8787) ─────┴────┐
                          │  Session per WS connection                 │
                          │  SmartSpectraSDK.useCustomInput()          │
-                         │    └─ sendFrame(RGBA) ─► Presage cloud     │
+                         │    └─ sendFrame(RGB) ──► Presage cloud     │
                          │  metrics ─► BreathDetector ─► state        │
                          └────────────────────────────────────────────┘
 ```
@@ -269,9 +269,10 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
   | 8 | u16 | 第 0–11 位：宽（640）。第 12–15 位：格式，`0` = 原始 RGBA，`1` = JPEG |
   | 10 | u16 | 高（480） |
   | 12… | u8[] | 原始：RGBA，宽 × 高 × 4。JPEG：一张宽 × 高的 JPEG 图像 |
-  - 格式 0 的宽字段和以前完全一样，所以原始帧与旧协议逐字节相同。sensor 把 JPEG 解码成 RGBA，交给 Presage 的数据和原始帧完全一致。解码一次只做一帧，另外最多有一帧排队；排队时又来新帧就替换掉旧的，所以服务器跟不上时丢帧，而不是无限排队。
-  - 背压：`ws.bufferedAmount` 超过 100 kB（JPEG）或 4 帧（原始）时浏览器跳过帧；JPEG 一次只编码一帧。
-- **JSON 命令**：`{ "t": "sim", "on": true }` 开关模拟；`{ "t": "simHold", "holding": true }` 设置模拟憋气；`{ "t": "seed", "baseline": 0.8 }`（也接受 `"type": "seed"`）把之前连接 `state` 里的实时基线交回来（模拟模式下 `baseline` 永远是 null）。只有本连接还没有基线、且它是 [0.001, 1000] 内的有限数时才采用，否则忽略。只留在内存里：不打日志、不写盘。
+  - 格式 0 的宽字段和以前完全一样，所以原始帧与旧协议逐字节相同。sensor 把 JPEG 解码成 RGB，以 `PixelFormat.kRGB` 交给 Presage（原始帧仍按 RGBA 交）。解码一次只做一帧，另外最多有一帧排队；排队时又来新帧就替换掉旧的，所以服务器跟不上时丢帧，而不是无限排队。
+  - 背压：`ws.bufferedAmount` 超过 100 kB（JPEG）或 4 帧（原始）时浏览器跳过帧；最多每秒发 30 帧；JPEG 最多同时编码两帧，按采集顺序发出（`game/src/frame-pump.ts`）。
+  - 采集（`game/src/breath.ts`、`camera-encoder.worker.ts`）：Chrome 和 Edge 把 `MediaStreamTrackProcessor` 交给 worker，由 worker 用 `OffscreenCanvas.convertToBlob` 编码，所以发送帧率跟着摄像头走，不受游戏渲染帧率限制。Safari 和 Firefox 把页面每次呈现的视频帧以 `ImageBitmap` 交给同一个 worker。没有 worker 时页面用 `canvas.toBlob` 编码；Chrome 只在主线程空闲时才执行它，繁忙的 three.js 页面最低只能得到约每秒 1 帧。
+- **JSON 命令**：`{ "t": "sim", "on": true }` 开关模拟；`{ "t": "simHold", "holding": true }` 设置模拟憋气；`{ "t": "seed", "baseline": 0.8 }`（也接受 `"type": "seed"`）把之前连接 `state` 里的实时基线交回来（模拟模式下 `baseline` 永远是 null）。只有本连接还没有基线、且它是 [0.001, 1000] 内的有限数时才采用，否则忽略。只留在内存里：不打日志、不写盘。`{ "t": "stats", "pipe": "mstp", "camFps": 30, "capFps": 29.9, "rvfcFps": 14.2, "renderFps": 14.1, "sentFps": 29.8, "skippedEncoder": 0, "skippedBackpressure": 2, "encodeMsAvg": 5.1, "quality": 0.7 }` 在实时模式下每 ~10 s 发一次：摄像头管线的性能数字（摄像头自报帧率 `getSettings().frameRate`、采集到的帧、`requestVideoFrameCallback` 和渲染帧率、发出和跳过的帧、编码耗时、JPEG 质量），绝不含呼吸或健康数据。sensor 只保留这些字段，且必须是有限数并截到合理范围（`sensor/client-stats.mjs`），只追加到每分钟一行的 `frames, last 60 s` 日志里，不录制、不另存。
 
 **sensor → 浏览器**（每 80 ms 一次）
 
