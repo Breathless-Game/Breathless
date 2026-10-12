@@ -131,3 +131,31 @@ test('breath.ts: the frame pump re-arms before sending, so a throw cannot end it
   assert.ok(pump.indexOf('requestVideoFrameCallback(push)') < pump.indexOf('this.sendFrame('), 're-armed first');
   assert.match(pump, /try \{[\s\S]*this\.sendFrame\(/);
 });
+
+test('no frames from a background tab: Presage bills per measurement', () => {
+  const ok = { presage: true, socketOpen: true, cameraLive: true, hidden: false };
+  assert.equal(r.canSendFrames(ok), true);
+  assert.equal(r.canSendFrames({ ...ok, hidden: true }), false);
+  for (const k of ['presage', 'socketOpen', 'cameraLive']) assert.equal(r.canSendFrames({ ...ok, [k]: false }), false, k);
+});
+
+test('a hidden tab (not sending on purpose) or a re-acquire is never a stalled camera', () => {
+  assert.equal(r.stallCheckApplies({ hidden: false, reacquiring: false }), true);
+  assert.equal(r.stallCheckApplies({ hidden: true, reacquiring: false }), false);
+  assert.equal(r.stallCheckApplies({ hidden: false, reacquiring: true }), false);
+});
+
+test('breath.ts: every pipe asks canSendFrames, and visibility changes reach the worker', () => {
+  const wanted = breath.slice(breath.indexOf('  private framesWanted() {'), breath.indexOf('  private cameraLive() {'));
+  assert.match(wanted, /canSendFrames\(\{[\s\S]*hidden: document\.hidden/);
+  for (const fn of ['  private sendFrame(', '  private sendJpeg(', '  private syncGate(']) {
+    const at = breath.indexOf(fn);
+    assert.ok(at >= 0, fn.trim());
+    assert.match(breath.slice(at, breath.indexOf('\n  }\n', at)), /this\.framesWanted\(\)/, fn.trim());
+  }
+  const vis = breath.slice(breath.indexOf("addEventListener('visibilitychange'"), breath.indexOf('setInterval(() => this.watchdog()'));
+  assert.match(vis, /this\.syncGate\(\)/, 'the mstp worker closes its gate when hidden and reopens it');
+  assert.match(vis, /this\.lastFrameAt = performance\.now\(\)/, 'the stall clock restarts on return');
+  const dog = breath.slice(breath.indexOf('  private watchdog() {'), breath.indexOf('  setMode('));
+  assert.match(dog, /stallCheckApplies\(\{ hidden: document\.hidden/);
+});

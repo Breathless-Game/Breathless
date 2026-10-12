@@ -5,11 +5,23 @@
 // Keyboard mode (hold Shift) exists so the game is playable without a camera.
 
 import { HEADER_BYTES, JpegQuality, pickFrameFormat, writeFrameHeader, type FrameFormat } from './frame-codec';
+import {
+  FramePacer,
+  FrameStats,
+  InOrderQueue,
+  pickCapturePipe,
+  SEND_FPS,
+  type CapturePipe,
+  type FromEncoder,
+  type ToEncoder,
+} from './frame-pump';
 import { isAction, keyLabel } from './controls';
 import { t } from './i18n';
 import {
+  BUSY_FRAME_MS,
   busyFrameDue,
   canReacquire,
+  canSendFrames,
   detectorReady,
   frameStalled,
   holdOver,
@@ -18,6 +30,7 @@ import {
   recovering,
   seedMessage,
   sensorSilent,
+  stallCheckApplies,
   usableBaseline,
 } from './camera-recovery';
 
@@ -64,6 +77,22 @@ const FRAME_FORMAT = pickFrameFormat({
 // skips frames (and JpegQuality lowers the quality) instead of building up lag.
 const MAX_BUFFERED: Record<FrameFormat, number> = { raw: 4 * FRAME_W * FRAME_H * 4, jpeg: 100_000 };
 
+// Chrome and Edge only, so not in TypeScript's DOM types.
+declare const MediaStreamTrackProcessor:
+  | (new (init: { track: MediaStreamTrack }) => { readable: ReadableStream<VideoFrame> })
+  | undefined;
+
+/** A finished JPEG waiting for its turn on the socket. */
+interface EncodedFrame {
+  ts: number;
+  /** From the main-thread canvas: the JPEG alone (the header is added when sent). */
+  jpeg?: Blob;
+  /** From the worker: header and JPEG, ready to send. */
+  wire?: ArrayBuffer;
+  /** Capture to finished JPEG. */
+  encodeMs: number;
+}
+
 export class BreathSource {
   state: BreathState = {
     mode: 'keyboard',
@@ -94,7 +123,22 @@ export class BreathSource {
   /** How frames go to the sensor; drops to raw if the sensor can't decode JPEG. */
   frameFormat: FrameFormat = FRAME_FORMAT;
   readonly jpegQuality = new JpegQuality();
-  private encoding = false;
+  // JPEG encoding (frame-pump.ts): a worker when the browser allows one (camera-encoder.worker.ts),
+  // up to MAX_ENCODES_IN_FLIGHT at once, sent in capture order, paced to SEND_FPS.
+  private encoder: Worker | null = null;
+  /** Whether the worker can make JPEGs; null until it says. */
+  private encoderReady: boolean | null = null;
+  /** How frames are captured and encoded right now. */
+  pipe: CapturePipe = 'canvas';
+  /** The camera track's clone feeding the worker ('mstp'); stopped with the pipeline. */
+  private processorTrack: MediaStreamTrack | null = null;
+  private readonly order = new InOrderQueue<EncodedFrame>();
+  private readonly pacer = new FramePacer();
+  private gateKey = '';
+  private lastSentTs = 0;
+  /** Performance numbers for `{ t: 'stats' }`; never breath or health data. */
+  private stats = new FrameStats(performance.now());
+  private countingRenders = false;
   /** The player chose the camera (startLive) and hasn't left: a lost camera can be reconnected from the K key. */
   liveWanted = false;
   // Bumped by stopLive, so a camera re-acquire still awaiting getUserMedia doesn't turn it back on.
@@ -142,8 +186,14 @@ export class BreathSource {
     // A paused <video> presents no frames, so requestVideoFrameCallback never fires and the
     // pump stops with it: play it again (the tab coming back, the OS or browser pausing it).
     video.addEventListener('pause', () => this.resumeVideo());
+    // Hidden: no frames go out (canSendFrames). Visible again: they resume, and the stall clock
+    // restarts so the watchdog doesn't mistake the deliberate gap for a dead camera.
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) this.resumeVideo();
+      if (!document.hidden) {
+        this.lastFrameAt = performance.now();
+        this.resumeVideo();
+      }
+      this.syncGate();
     });
     setInterval(() => this.watchdog(), 1000);
   }
@@ -153,11 +203,14 @@ export class BreathSource {
   }
 
   private emit() {
+    this.syncGate();
     for (const fn of this.listeners) fn(this.state);
   }
 
   async startLive(): Promise<void> {
     this.state.error = '';
+    // Started before the camera, so it has said what it can do by the time frames flow.
+    this.startEncoder();
     await this.openCamera();
     this.liveWanted = true;
     this.hadSlot = false;
@@ -172,7 +225,9 @@ export class BreathSource {
       this.send({ t: 'sim', on: false });
       this.sendSeed();
     }
+    this.stats = new FrameStats(performance.now());
     this.pumpFrames();
+    this.countRenders();
   }
 
   /**
@@ -253,10 +308,14 @@ export class BreathSource {
     this.watchTrack(stream);
     await this.video.play();
     this.lastFrameAt = performance.now();
+    const s = stream.getVideoTracks()[0]?.getSettings();
+    // Presage needs ~30 fps; a dim room can make a camera drop to 12-15.
+    console.info(`[breath] camera ${s?.width}x${s?.height} at ${s?.frameRate} fps`);
   }
 
   private releaseCamera() {
     this.pumpGen++;
+    this.stopCapture();
     this.clearMuteTimer();
     this.stream?.getTracks().forEach((tr) => tr.stop());
     this.stream = null;
@@ -344,6 +403,8 @@ export class BreathSource {
     if (this.state.recovering) this.emit();
     if (!this.stream) return;
     const now = performance.now();
+    this.syncGate();
+    this.sendStats(now);
     const ws = this.ws;
     if (ws?.readyState === WebSocket.OPEN && sensorSilent(this.lastMessageAt, now)) {
       console.warn('[breath] the breath sensor went silent, reconnecting');
@@ -355,7 +416,7 @@ export class BreathSource {
       this.emit();
       this.connect();
     }
-    if (document.hidden || this.reacquiring) return;
+    if (!stallCheckApplies({ hidden: document.hidden, reacquiring: this.reacquiring })) return;
     const track = this.stream.getVideoTracks()[0];
     if (track?.readyState === 'live' && !track.muted && frameStalled(this.lastFrameAt, now)) {
       console.warn('[breath] no camera frames, restarting the video');
@@ -447,6 +508,7 @@ export class BreathSource {
     // A sensor that can't decode JPEG (sharp not installed): raw frames still work on a LAN.
     if (msg.code === 'frames') {
       this.frameFormat = 'raw';
+      if (this.stream) this.pumpFrames();
       return;
     }
     if (msg.code === 'busy' && this.state.mode === 'presage') {
@@ -476,11 +538,20 @@ export class BreathSource {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
   }
 
+  /**
+   * (Re)starts frame capture for the current camera: the capture pipeline, plus this
+   * requestVideoFrameCallback loop. The loop fires once per frame the page presents, which a
+   * busy render loop caps at the game's frame rate; it captures raw frames, and JPEG frames
+   * on browsers without MediaStreamTrackProcessor ('bitmap', 'canvas'). With one ('mstp')
+   * the worker captures at the camera's rate and this loop only counts.
+   */
   private pumpFrames() {
     const gen = ++this.pumpGen;
+    this.startCapture(gen);
     const push = () => {
       if (gen !== this.pumpGen) return;
-      this.lastFrameAt = performance.now();
+      // The worker's ticks keep this up to date while it captures.
+      if (this.pipe !== 'mstp') this.lastFrameAt = performance.now();
       // Re-armed first: a throw while sending must not end the loop for good.
       if ('requestVideoFrameCallback' in this.video) this.video.requestVideoFrameCallback(push);
       else setTimeout(push, 33);
@@ -494,13 +565,12 @@ export class BreathSource {
   }
 
   private sendFrame(gen: number) {
-    const ws = this.ws;
-    if (this.state.mode !== 'presage' || ws?.readyState !== WebSocket.OPEN || this.video.readyState < 2) return;
-    // A muted or ended track shows black (or a frozen frame): a flat trace the detector would
-    // read as a HOLD. Send nothing until the camera is back.
-    const track = this.stream?.getVideoTracks()[0];
-    if (!track || track.readyState !== 'live' || track.muted || this.reacquiring) return;
+    this.stats.rvfc++;
     const format = this.frameFormat;
+    if (this.pipe === 'mstp' && format === 'jpeg') return;
+    const ws = this.ws;
+    if (this.video.readyState < 2 || !this.framesWanted() || !ws) return;
+    this.stats.captured++;
     // Waiting for the slot back: a frame a second is enough to keep claiming it.
     if (this.busySince) {
       const now = performance.now();
@@ -509,40 +579,253 @@ export class BreathSource {
     }
     if (ws.bufferedAmount >= MAX_BUFFERED[format]) {
       if (format === 'jpeg') this.jpegQuality.skipped(performance.now());
+      this.stats.skippedBackpressure++;
       return;
     }
-    // One JPEG encode at a time keeps frames in order and stops a slow machine piling them up.
-    if (format === 'jpeg' && this.encoding) return;
-    this.ctx.drawImage(this.video, 0, 0, FRAME_W, FRAME_H);
     const ts = performance.timeOrigin + performance.now();
     if (format === 'raw') {
+      this.ctx.drawImage(this.video, 0, 0, FRAME_W, FRAME_H);
       const img = this.ctx.getImageData(0, 0, FRAME_W, FRAME_H);
       const buf = new ArrayBuffer(HEADER_BYTES + img.data.byteLength);
       writeFrameHeader(new DataView(buf), ts, FRAME_W, FRAME_H, 'raw');
       new Uint8Array(buf, HEADER_BYTES).set(img.data);
       ws.send(buf);
+      this.lastSentTs = ts;
+      this.stats.sent++;
       return;
     }
-    this.encoding = true;
+    // Up to MAX_ENCODES_IN_FLIGHT JPEGs at once; a slow machine drops frames instead of piling them up.
+    if (this.order.inFlight >= this.order.max) {
+      this.stats.skippedEncoder++;
+      return;
+    }
+    if (!this.pacer.admit(performance.now())) return;
+    const seq = this.order.begin()!;
+    if (this.pipe === 'bitmap' && this.encoder) {
+      const encoder = this.encoder;
+      createImageBitmap(this.video).then(
+        (bitmap) => {
+          if (gen !== this.pumpGen || encoder !== this.encoder) {
+            bitmap.close();
+            return this.encoded(gen, seq, null);
+          }
+          const msg: ToEncoder = { t: 'bitmap', gen, seq, ts, bitmap, width: FRAME_W, height: FRAME_H, quality: this.jpegQuality.quality };
+          try {
+            encoder.postMessage(msg, [bitmap]);
+          } catch {
+            // Never posted, so no answer comes: free its slot, or two of these stop the pump.
+            bitmap.close();
+            this.encoded(gen, seq, null);
+          }
+        },
+        () => this.encoded(gen, seq, null),
+      );
+      return;
+    }
+    // The last resort, on the main thread. Chrome runs toBlob as an idle task, so a busy page gets few.
+    this.ctx.drawImage(this.video, 0, 0, FRAME_W, FRAME_H);
     this.canvas.toBlob(
       (blob) => {
-        this.encoding = false;
-        if (gen !== this.pumpGen || ws !== this.ws || ws.readyState !== WebSocket.OPEN || this.frameFormat !== 'jpeg') {
-          return;
-        }
         // toBlob quietly falls back to PNG for a type it can't encode.
-        if (!blob || blob.type !== 'image/jpeg') {
+        if (blob && blob.type !== 'image/jpeg') {
           this.frameFormat = 'raw';
-          return;
+          this.pipe = 'raw';
+          return this.encoded(gen, seq, null);
         }
-        const header = new ArrayBuffer(HEADER_BYTES);
-        writeFrameHeader(new DataView(header), ts, FRAME_W, FRAME_H, 'jpeg');
-        ws.send(new Blob([header, blob]));
-        this.jpegQuality.sent(blob.size, performance.now());
+        this.encoded(gen, seq, blob && { ts, jpeg: blob, encodeMs: performance.timeOrigin + performance.now() - ts });
       },
       'image/jpeg',
       this.jpegQuality.quality,
     );
+  }
+
+  /**
+   * Frames may go out: presage mode, an open socket, a live camera, a visible tab. A muted or
+   * ended track shows black (or a frozen frame): a flat trace the detector would read as a HOLD.
+   */
+  private framesWanted() {
+    return canSendFrames({
+      presage: this.state.mode === 'presage',
+      socketOpen: this.ws?.readyState === WebSocket.OPEN,
+      cameraLive: this.cameraLive(),
+      hidden: document.hidden,
+    });
+  }
+
+  /** The camera track is live and showing a picture, and no re-acquire is under way. */
+  private cameraLive() {
+    const track = this.stream?.getVideoTracks()[0];
+    return Boolean(track && !(track.readyState !== 'live' || track.muted) && !this.reacquiring);
+  }
+
+  /** A main-thread-captured encode finished (null: it failed); frames go out in capture order. */
+  private encoded(gen: number, seq: number, frame: EncodedFrame | null) {
+    if (gen !== this.pumpGen) return;
+    for (const f of this.order.complete(seq, frame)) this.sendJpeg(f, false);
+  }
+
+  /**
+   * Sends one finished JPEG. `gated`: it was captured by the worker, so the checks sendFrame
+   * makes before capturing (busy wait, backpressure) are made here instead.
+   */
+  private sendJpeg(f: EncodedFrame, gated: boolean) {
+    this.stats.encodedIn(f.encodeMs);
+    const ws = this.ws;
+    if (!ws || !this.framesWanted() || this.frameFormat !== 'jpeg' || f.ts <= this.lastSentTs) return;
+    const now = performance.now();
+    if (gated) {
+      if (this.busySince) {
+        if (!busyFrameDue(this.lastBusyFrame, now)) return;
+        this.lastBusyFrame = now;
+      }
+      if (ws.bufferedAmount >= MAX_BUFFERED.jpeg) {
+        this.jpegQuality.skipped(now);
+        this.stats.skippedBackpressure++;
+        return;
+      }
+    }
+    let bytes: number;
+    if (f.wire) {
+      ws.send(f.wire);
+      bytes = f.wire.byteLength - HEADER_BYTES;
+    } else if (f.jpeg) {
+      const header = new ArrayBuffer(HEADER_BYTES);
+      writeFrameHeader(new DataView(header), f.ts, FRAME_W, FRAME_H, 'jpeg');
+      ws.send(new Blob([header, f.jpeg]));
+      bytes = f.jpeg.size;
+    } else return;
+    this.lastSentTs = f.ts;
+    this.jpegQuality.sent(bytes, now);
+    this.stats.sent++;
+    this.syncGate();
+  }
+
+  /** Starts the JPEG worker once; breath works without it (main-thread canvas). */
+  private startEncoder() {
+    if (this.encoder || this.encoderReady === false) return;
+    try {
+      const worker = new Worker(new URL('./camera-encoder.worker.ts', import.meta.url), { type: 'module' });
+      worker.onmessage = (e: MessageEvent<FromEncoder>) => this.onEncoderMessage(worker, e.data);
+      worker.onerror = (e) => {
+        e.preventDefault();
+        this.encoderFailed(worker, e.message || 'the JPEG worker failed to load');
+      };
+      this.encoder = worker;
+    } catch (err) {
+      this.encoderReady = false;
+      console.warn('[breath] no JPEG worker, encoding on the main thread', err);
+    }
+  }
+
+  private onEncoderMessage(worker: Worker, msg: FromEncoder) {
+    if (worker !== this.encoder) return;
+    if (msg.t === 'caps') {
+      this.encoderReady = msg.encode;
+      if (!msg.encode) return this.encoderFailed(worker, "this browser can't make JPEGs in a worker");
+      // Frames may already flow on the main thread: move them to the worker.
+      if (this.stream) this.pumpFrames();
+    } else if (msg.t === 'fail') {
+      if (msg.gen === this.pumpGen) this.encoderFailed(worker, msg.message);
+    } else if (msg.gen !== this.pumpGen) {
+      // A pipeline that has been replaced.
+    } else if (msg.t === 'tick') {
+      if (this.pipe !== 'mstp') return;
+      this.stats.captured += msg.captured;
+      this.stats.skippedEncoder += msg.skippedEncoder;
+      if (msg.captured) this.lastFrameAt = performance.now();
+      this.syncGate();
+    } else if (msg.t === 'frame') {
+      const frame = msg.wire && { ts: msg.ts, wire: msg.wire, encodeMs: msg.encodeMs };
+      if (this.pipe === 'mstp') {
+        if (frame) this.sendJpeg(frame, true);
+      } else if (this.pipe === 'bitmap') {
+        if (frame) frame.encodeMs = performance.timeOrigin + performance.now() - msg.ts;
+        this.encoded(msg.gen, msg.seq, frame);
+      }
+    }
+  }
+
+  /** The worker can't encode: back to the main-thread canvas for the rest of the page's life. */
+  private encoderFailed(worker: Worker, message: string) {
+    if (worker !== this.encoder) return;
+    console.warn(`[breath] JPEG worker off, encoding on the main thread: ${message}`);
+    this.stopCapture();
+    worker.terminate();
+    this.encoder = null;
+    this.encoderReady = false;
+    if (this.stream) this.pumpFrames();
+  }
+
+  /** Picks the capture pipeline for the current camera and starts it (pumpFrames). */
+  private startCapture(gen: number) {
+    this.stopCapture();
+    this.pipe = pickCapturePipe({
+      format: this.frameFormat,
+      worker: Boolean(this.encoder),
+      workerCanEncode: this.encoderReady === true,
+      trackProcessor: typeof MediaStreamTrackProcessor === 'function',
+      imageBitmap: typeof createImageBitmap === 'function',
+    });
+    const track = this.stream?.getVideoTracks()[0];
+    if (this.pipe === 'mstp' && this.encoder && track && MediaStreamTrackProcessor) {
+      // A clone, so ending the processor never ends the camera the player sees.
+      const clone = track.clone();
+      try {
+        const { readable } = new MediaStreamTrackProcessor({ track: clone });
+        const msg: ToEncoder = { t: 'stream', gen, readable, width: FRAME_W, height: FRAME_H };
+        this.encoder.postMessage(msg, [readable]);
+        this.processorTrack = clone;
+      } catch (err) {
+        clone.stop();
+        console.warn('[breath] MediaStreamTrackProcessor unavailable, capturing frames on the page', err);
+        this.pipe = 'bitmap';
+      }
+    }
+    this.syncGate();
+  }
+
+  private stopCapture() {
+    this.processorTrack?.stop();
+    this.processorTrack = null;
+    this.encoder?.postMessage({ t: 'stop' } satisfies ToEncoder);
+    this.order.reset();
+    this.gateKey = '';
+  }
+
+  /** Tells the worker whether to encode the frames it reads, how often, and at what quality. */
+  private syncGate() {
+    const encoder = this.encoder;
+    if (!encoder || this.pipe !== 'mstp') return;
+    const open = this.frameFormat === 'jpeg' && this.framesWanted();
+    const intervalMs = this.busySince ? BUSY_FRAME_MS : 1000 / SEND_FPS;
+    const quality = this.jpegQuality.quality;
+    const key = `${open} ${intervalMs} ${quality}`;
+    if (key === this.gateKey) return;
+    this.gateKey = key;
+    encoder.postMessage({ t: 'gate', open, intervalMs, quality } satisfies ToEncoder);
+  }
+
+  /** Counts the game's rendered frames (requestAnimationFrame) while live, for the stats. */
+  private countRenders() {
+    if (this.countingRenders) return;
+    this.countingRenders = true;
+    const tick = () => {
+      if (this.state.mode !== 'presage') {
+        this.countingRenders = false;
+        return;
+      }
+      this.stats.render++;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  /** Every STATS_INTERVAL_MS while live: the camera pipeline's numbers to the sensor's log. */
+  private sendStats(now: number) {
+    if (!this.stats.due(now)) return;
+    const camFps = this.stream?.getVideoTracks()[0]?.getSettings().frameRate ?? 0;
+    const msg = this.stats.snapshot(now, { pipe: this.pipe, camFps, quality: this.jpegQuality.quality });
+    if (this.state.mode === 'presage') this.send(msg);
   }
 
   private tickKeyboard() {

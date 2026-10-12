@@ -32,6 +32,7 @@ export async function loadJpegDecoder() {
       limitInputPixels: width * height,
       sequentialRead: true,
     })
+      // The SDK also takes PixelFormat.kRGB (no ensureAlpha), but that is untested on the real SDK.
       .ensureAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
