@@ -3,6 +3,8 @@
 // frame-codec.ts) to the sensor bridge, which runs Presage SmartSpectra and
 // answers with HOLD / BREATHE.
 // Keyboard mode (hold Shift) exists so the game is playable without a camera.
+// With Presage switched off (features.ts) keyboard mode is all there is: startLive refuses,
+// so the camera, the frame pump, the JPEG worker and the stall checks never start.
 
 import { HEADER_BYTES, JpegQuality, pickFrameFormat, writeFrameHeader, type FrameFormat } from './frame-codec';
 import {
@@ -16,6 +18,7 @@ import {
   type ToEncoder,
 } from './frame-pump';
 import { isAction, keyLabel } from './controls';
+import { PRESAGE_ENABLED } from './features';
 import { t } from './i18n';
 import {
   BUSY_FRAME_MS,
@@ -195,7 +198,7 @@ export class BreathSource {
       }
       this.syncGate();
     });
-    setInterval(() => this.watchdog(), 1000);
+    if (PRESAGE_ENABLED) setInterval(() => this.watchdog(), 1000);
   }
 
   onChange(fn: (s: BreathState) => void) {
@@ -208,6 +211,8 @@ export class BreathSource {
   }
 
   async startLive(): Promise<void> {
+    // Every caller catches this and plays on the keyboard.
+    if (!PRESAGE_ENABLED) throw new Error('camera breath detection is turned off in this build');
     this.state.error = '';
     // Started before the camera, so it has said what it can do by the time frames flow.
     this.startEncoder();
@@ -502,7 +507,7 @@ export class BreathSource {
   // will process and fall back to the keyboard, which always works. On a reconnect the
   // slot is most likely still held by this game's own dead socket, which the sensor
   // frees once it notices that socket is gone: keep the camera and wait (onBusy).
-  private onSensorError(msg: { code?: string; message?: string }) {
+  private onSensorError(msg: { code?: string; reason?: string; message?: string }) {
     const message = msg.message || 'Breath sensor error';
     console.warn(`[breath] ${message}`);
     // A sensor that can't decode JPEG (sharp not installed): raw frames still work on a LAN.
@@ -512,6 +517,8 @@ export class BreathSource {
       return;
     }
     if (msg.code === 'busy' && this.state.mode === 'presage') {
+      // The server has Presage switched off (PRESAGE_ENABLED): no slot will ever free up.
+      if (msg.reason === 'off') return this.giveUpCamera(offMessage());
       const now = performance.now();
       if (!this.busySince) this.busySince = now;
       if (onBusy(this.hadSlot, this.busySince, now) === 'wait') return;
@@ -848,6 +855,13 @@ export class BreathSource {
 function cameraLostMessage() {
   const key = keyLabel('breathInput');
   return t(`Camera lost: playing with the keyboard. Press ${key} to reconnect`, `摄像头已断开：改用键盘。按 ${key} 重新连接`);
+}
+
+function offMessage() {
+  return t(
+    'Camera breath detection is turned off on this server. Playing with the keyboard: hold Shift to dive',
+    '服务器已关闭摄像头呼吸检测。改用键盘：按住 Shift 下潜',
+  );
 }
 
 function busyMessage() {

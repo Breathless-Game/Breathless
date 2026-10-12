@@ -6,6 +6,9 @@
 // them, push them into Presage SmartSpectra, turn the breathing trace into
 // HOLD / BREATHE, and stream state back.
 //
+// Presage is off unless PRESAGE_ENABLED=1 (presage-flag.mjs): then the SDK is never loaded,
+// the API key is ignored, camera frames are dropped and only the simulator answers.
+//
 //   node index.mjs                 live Presage mode (dev: ws://<host>:8787, next to Vite)
 //   node index.mjs --sim           no camera, synthetic breathing (hold via the game's debug key)
 //   node index.mjs --serve <dir>   production: serves the built game from <dir>, the sensor
@@ -19,16 +22,6 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { sweepDead, watchAlive } from './heartbeat.mjs';
-import {
-  SmartSpectraSDK,
-  FrameTransform,
-  PixelFormat,
-  MetricType,
-  ProcessingStatus,
-  ValidationCode,
-  breathingMetrics,
-} from '@smartspectra/node-sdk';
-import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { BreathDetector, parseSeedBaseline } from './breath-detector.mjs';
 import { ClientStatsWindow, parseClientStats } from './client-stats.mjs';
 import { loadJpegDecoder } from './decode.mjs';
@@ -39,10 +32,26 @@ import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
 import { staticHandler } from './static.mjs';
 import { guardProcess } from './process-guard.mjs';
+import { presageEnabled } from './presage-flag.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 // One stray rejection (e.g. an RPC 429 inside a library) must not drop every player's session.
 guardProcess({ log });
+
+// Off by default (presage-flag.mjs). Off, the SmartSpectra SDK is never even imported.
+const PRESAGE_ENABLED = presageEnabled();
+const {
+  SmartSpectraSDK,
+  FrameTransform,
+  PixelFormat,
+  MetricType,
+  ProcessingStatus,
+  ValidationCode,
+  breathingMetrics,
+  decodeMetrics,
+} = PRESAGE_ENABLED
+  ? { ...(await import('@smartspectra/node-sdk')), ...(await import('@smartspectra/node-sdk/messages')) }
+  : {};
 
 const serveAt = process.argv.indexOf('--serve');
 const SERVE_DIR = serveAt >= 0 ? process.argv[serveAt + 1] : undefined;
@@ -55,13 +64,15 @@ const SERVE = SERVE_DIR !== undefined;
 // and never opens the dev port 8787.
 const PORT = SERVE ? Number(process.env.PORT || 8794) : Number(process.env.SENSOR_PORT ?? 8787);
 const HOST = SERVE ? process.env.HOST || '127.0.0.1' : undefined;
-const API_KEY = process.env.PRESAGE_API_KEY;
+// Ignored while Presage is off, even if .env still holds one: every session is then the simulator.
+const API_KEY = PRESAGE_ENABLED ? process.env.PRESAGE_API_KEY : undefined;
 const FORCE_SIM = process.argv.includes('--sim');
 // One raw 640x480 RGBA frame is 1,228,812 bytes (a JPEG one ~10-40 kB); serve mode allows
 // a raw frame with headroom.
 const MAX_PAYLOAD = SERVE ? 2 * 1024 * 1024 : 8 * 1024 * 1024;
 // JPEG frames need sharp; without it the server says so once and the game falls back to raw.
-const { decodeJpeg, error: jpegError } = await loadJpegDecoder();
+// With Presage off no frame is decoded, so sharp isn't loaded for them.
+const { decodeJpeg, error: jpegError } = PRESAGE_ENABLED ? await loadJpegDecoder() : {};
 const NO_JPEG_MESSAGE = "This breath sensor can't decode JPEG frames; sending raw frames instead.";
 const STARTUP_BACKLOG_MS = 250; // see onFrame
 // Recordings are physiological data. Dev records live sessions for analyze.mjs;
@@ -71,20 +82,22 @@ const NO_RECORDER = { write() {}, close() {} };
 // The SmartSpectra SDK's native state is process-global; its own Electron host says
 // "two SmartSpectra sessions must never run concurrently" (node-sdk js/main/index.js).
 // So one live Presage session at a time; more would need one process per session.
-const MAX_LIVE = envInt('MAX_LIVE_SESSIONS', 1);
+// Presage off: no live slots at all.
+const MAX_LIVE = PRESAGE_ENABLED ? envInt('MAX_LIVE_SESSIONS', 1) : 0;
 const MAX_PER_IP = envInt('MAX_CONN_PER_IP', 8); // serve mode only
 const BUSY_MESSAGE =
   MAX_LIVE > 0
     ? `Server busy: live breath sensing is in use by another player (${MAX_LIVE} at a time). Try again later.`
     : 'Live breath sensing is turned off on this server.';
+const PRESAGE_OFF_MESSAGE = 'Camera breath detection is turned off on this server: play with the keyboard (hold Shift).';
 
 // Sessions holding a live Presage slot, and native teardowns still in flight. A new
 // native session must not start until every old one has finished tearing down.
 const liveSessions = new Set();
 let teardowns = 0;
 
-const STATUS_NAMES = Object.fromEntries(Object.entries(ProcessingStatus).map(([k, v]) => [v, k.slice(1).toLowerCase()]));
-const HINTS = {
+const STATUS_NAMES = Object.fromEntries(Object.entries(ProcessingStatus ?? {}).map(([k, v]) => [v, k.slice(1).toLowerCase()]));
+const HINTS = !ValidationCode ? {} : {
   [ValidationCode.kOk]: '',
   [ValidationCode.kNoFaceFound]: 'No face found',
   [ValidationCode.kMultipleFacesFound]: 'Only one face, please',
@@ -125,6 +138,7 @@ class Session {
     this.tick = setInterval(() => this.#broadcast(), 80);
     this.rec = RECORD ? new Recorder((path) => log(`recording to ${path}`)) : NO_RECORDER;
     this.busyNotified = false;
+    this.offNotified = false;
     this.framesAtLastSecond = 0;
     this.fpsTick = setInterval(() => {
       const n = this.frames - this.framesAtLastSecond;
@@ -259,7 +273,8 @@ class Session {
   }
 
   onFrame(data) {
-    if (this.sim || !this.#claimLive()) return;
+    // Presage off: every session is the simulator, so frames are dropped unread.
+    if (!PRESAGE_ENABLED || this.sim || !this.#claimLive()) return;
     this.#ensureSdk();
     if (!this.sdk) return;
     // Building and starting the SDK blocks the event loop for 1-3 s, so the frames that
@@ -387,7 +402,8 @@ class Session {
     return this.liveBaseline ?? (this.sim ? null : this.detector.baseline);
   }
 
-  // Client -> server JSON messages (binary messages are camera frames):
+  // Client -> server JSON messages (binary messages are camera frames). With Presage off
+  // (PRESAGE_ENABLED unset) only 'sim', 'simHold' and 'stats' do anything:
   //   { t: 'sim', on }            simulator on/off; sent on connect
   //   { t: 'simHold', holding }   the simulator's Shift key
   //   { t: 'label', holding, ts } ground truth for the recording (live only)
@@ -425,6 +441,12 @@ class Session {
       }
       // The game sends this on connect: claim a slot now, so a full server says so before any frame.
       if (!on) this.#claimLive();
+      // Presage off and a game still asking for the camera: tell it once, as "busy", which every
+      // build of the game answers by playing on the keyboard; `reason` says why.
+      else if (!msg.on && !PRESAGE_ENABLED && !this.offNotified) {
+        this.offNotified = true;
+        this.#send({ t: 'error', code: 'busy', reason: 'off', message: PRESAGE_OFF_MESSAGE });
+      }
     } else if (msg.t === 'simHold') {
       this.simHolding = Boolean(msg.holding);
     } else if (msg.t === 'label' && !this.sim) {
@@ -434,7 +456,7 @@ class Session {
       this.rec.write({ k: 'calib', ts: msg.ts, phase: msg.phase });
     } else if (msg.t === 'stats') {
       this.clientStats.add(parseClientStats(msg));
-    } else if (msg.t === 'seed' || msg.type === 'seed') {
+    } else if (PRESAGE_ENABLED && (msg.t === 'seed' || msg.type === 'seed')) {
       const b = parseSeedBaseline(msg.baseline);
       if (b != null && this.#knownLiveBaseline() == null) {
         this.liveBaseline = b;
@@ -561,7 +583,11 @@ async function startMarket() {
   }
 }
 
-const mode = FORCE_SIM || !API_KEY ? 'simulator' : `Presage live, max ${MAX_LIVE} at a time`;
+const mode = !PRESAGE_ENABLED
+  ? 'Presage disabled, simulator only'
+  : FORCE_SIM || !API_KEY
+    ? 'simulator'
+    : `Presage live, max ${MAX_LIVE} at a time`;
 let wss;
 if (SERVE) {
   // One port for the tunnel: the built game over HTTP, the sensor WebSocket at /sensor.
@@ -638,9 +664,13 @@ if (SERVE) {
   wss.on('connection', onConnection);
   log(`listening on ws://localhost:${PORT} (${mode})`);
 }
-if (!API_KEY) log('PRESAGE_API_KEY missing in .env: running simulator only');
-if (jpegError) log(`JPEG frames off, raw only (run npm --prefix sensor install): ${jpegError}`);
-if (MAX_LIVE > 1) log(`warning: MAX_LIVE_SESSIONS=${MAX_LIVE}, but the Presage SDK can't run two sessions in one process`);
+if (!PRESAGE_ENABLED) {
+  log('Presage SmartSpectra is disabled: camera frames are ignored, players use the keyboard. Set PRESAGE_ENABLED=1 to enable it.');
+} else {
+  if (!API_KEY) log('PRESAGE_API_KEY missing in .env: running simulator only');
+  if (jpegError) log(`JPEG frames off, raw only (run npm --prefix sensor install): ${jpegError}`);
+  if (MAX_LIVE > 1) log(`warning: MAX_LIVE_SESSIONS=${MAX_LIVE}, but the Presage SDK can't run two sessions in one process`);
+}
 
 // Also drops half-open sockets (heartbeat.mjs), so a player's reconnect gets their old Presage slot back.
 setInterval(() => {

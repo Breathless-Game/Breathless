@@ -174,7 +174,8 @@ export class PauseMenu {
     this.camera.checked = this.settings.showCamera;
     this.help.checked = this.settings.showHelp;
     this.language.value = lang();
-    $('set-input-row').classList.remove('hidden');
+    // One input (Presage off, features.ts: the keyboard) is no choice: no row.
+    $('set-input-row').classList.toggle('hidden', this.input.options.length < 2);
     this.show('settings');
   }
 

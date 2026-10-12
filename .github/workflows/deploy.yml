@@ -34,6 +34,11 @@ jobs:
         run: npm test
 
       - name: Build (typecheck + vite build)
+        env:
+          # Presage camera breath detection is off unless the repository variable
+          # VITE_PRESAGE_ENABLED is 1 (Settings → Secrets and variables → Actions → Variables);
+          # the server needs PRESAGE_ENABLED=1 in its .env as well (deploy/SETUP.md).
+          VITE_PRESAGE_ENABLED: ${{ vars.VITE_PRESAGE_ENABLED || '' }}
         run: npm run build
 
       # index.mjs imports the PEARL market (market.mjs and its modules) lazily, so a

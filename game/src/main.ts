@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { pathEffect, pathSummary } from './equipment-i18n';
 import { setShipThresholds, Shipyard, shipThreshold, SHIPS, SHIP_INTROS_EN } from './ships';
 import { BreathSource, type BreathMode, type BreathState } from './breath';
+import { PRESAGE_ENABLED, breathModeList } from './features';
 import { sensorNotReady } from './camera-recovery';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
@@ -1440,7 +1441,9 @@ window.addEventListener('keydown', (e) => {
 
 function breathModes(): BreathMode[] {
   // liveWanted: the camera was lost or the sensor stayed busy; K tries the camera again.
-  return breath.video.srcObject || breath.liveWanted ? ['presage', 'sim', 'keyboard'] : ['sim', 'keyboard'];
+  // Presage off: keyboard only (plus the simulator in dev); see features.ts.
+  const camera = Boolean(breath.video.srcObject) || breath.liveWanted;
+  return breathModeList({ presage: PRESAGE_ENABLED, camera, dev: import.meta.env.DEV });
 }
 
 async function reconnectCamera() {
@@ -1768,7 +1771,7 @@ function startGame() {
   workbench.hide();
   hud.show();
   carrySonarForDive();
-  hud.message(t('Hold your breath and dive!', '屏住呼吸，下潜！'), 2400);
+  hud.message(breath.state.mode === 'keyboard' ? t('Hold Shift to dive!', '按住 Shift 下潜！') : t('Hold your breath and dive!', '屏住呼吸，下潜！'), 2400);
   const bow = bowSeat.getWorldPosition(new THREE.Vector3());
   diver.jumpTo(new THREE.Vector3(bow.x + JUMP_OUT, -JUMP_DEPTH, 0));
   visitSkinMap(world.map.id);
@@ -1790,7 +1793,19 @@ function canBoard() {
   );
 }
 
+// Presage off (features.ts): the start card offers the keyboard only and says how to dive. The
+// camera's button, credit line and preview setting stay in the page, hidden ([data-presage]).
+for (const el of document.querySelectorAll<HTMLElement>('[data-presage]')) {
+  el.classList.toggle('hidden', (el.dataset.presage === 'on') !== PRESAGE_ENABLED);
+}
+if (!PRESAGE_ENABLED) document.getElementById('start-keys')!.classList.add('primary');
+
 document.getElementById('start-live')!.addEventListener('click', async () => {
+  // Hidden while Presage is off; no camera, no calibration, straight into the dive.
+  if (!PRESAGE_ENABLED) {
+    breath.setMode('keyboard');
+    return startGame();
+  }
   try {
     await breath.startLive();
     document.getElementById('cam-wrap')!.style.visibility = 'visible';

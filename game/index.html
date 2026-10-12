@@ -288,10 +288,12 @@
         </ol>
         <div id="map-picker"></div>
         <div class="buttons">
-          <button id="start-live" class="primary" data-zh="用摄像头开始">Start with camera</button>
+          <!-- data-presage: shown only with Presage on (on) or off (off); main.ts toggles them from features.ts. -->
+          <button id="start-live" class="primary" data-presage="on" data-zh="用摄像头开始">Start with camera</button>
           <button id="start-keys" data-zh="用键盘游玩">Play with keyboard</button>
         </div>
-        <p class="small muted" data-zh="呼吸检测由 Presage SmartSpectra 提供 · 请露出脸和胸口，光线充足">Breath detection by Presage SmartSpectra · face and chest visible, good light</p>
+        <p class="small muted" data-presage="on" data-zh="呼吸检测由 Presage SmartSpectra 提供 · 请露出脸和胸口，光线充足">Breath detection by Presage SmartSpectra · face and chest visible, good light</p>
+        <p class="small muted hidden" data-presage="off" data-zh-html="键盘模式：按住 &lt;b&gt;Shift&lt;/b&gt; 屏息下潜，松开就是换气。摄像头呼吸检测暂时关闭。">Keyboard mode: hold <b>Shift</b> to hold your breath and dive; let go and you breathe. Camera breath detection is turned off for now.</p>
         <div id="calib" class="hidden">
           <div id="calib-step">Connecting to breath sensor…</div>
           <div id="calib-sub" class="small muted"></div>
@@ -377,7 +379,7 @@
               <option value="low" data-zh="低">Low</option>
             </select>
           </label>
-          <label class="setting"><span data-zh="摄像头画面">Camera preview</span><input type="checkbox" id="set-camera" /></label>
+          <label class="setting" data-presage="on"><span data-zh="摄像头画面">Camera preview</span><input type="checkbox" id="set-camera" /></label>
           <!-- The on-screen key hint is gone (the keys are in Controls); pause.ts still wires the box. -->
           <label class="setting hidden"><span data-zh="操作提示">Controls hint</span><input type="checkbox" id="set-help" /></label>
           <div class="setting"><span data-zh="操作">Controls</span><button type="button" id="set-controls" class="mini" data-zh="查看 / 修改按键">View / change keys</button></div>
