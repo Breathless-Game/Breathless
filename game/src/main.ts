@@ -110,7 +110,7 @@ const renderQuality = new AdaptiveQuality({
   cores: navigator.hardwareConcurrency,
   memoryGB: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
 }, settings.quality);
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias, powerPreference: 'high-performance' });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 // The map you last played. Maps open on the lifetime banked value read from the chain

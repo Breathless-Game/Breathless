@@ -1,0 +1,122 @@
+{
+  "name": "breathless-desktop",
+  "productName": "Breathless",
+  "version": "0.1.0",
+  "private": true,
+  "description": "屏息 Breathless desktop app: a window onto breathless.gotclass.xyz",
+  "homepage": "https://breathless.gotclass.xyz",
+  "repository": "https://github.com/LucasYanzy/HackRU26-Breathless",
+  "author": {
+    "name": "Breathless team",
+    "url": "https://github.com/LucasYanzy/HackRU26-Breathless"
+  },
+  "license": "UNLICENSED",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir --publish never",
+    "dist": "electron-builder --publish never",
+    "check-package": "node scripts/check-package.mjs dist"
+  },
+  "devDependencies": {
+    "@electron/asar": "4.3.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.16.1"
+  },
+  "build": {
+    "appId": "xyz.gotclass.breathless",
+    "productName": "Breathless",
+    "copyright": "Copyright © 2026 Breathless team",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "package.json",
+      "src/**/*"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "protocols": [
+      {
+        "name": "Breathless",
+        "schemes": [
+          "breathless"
+        ]
+      }
+    ],
+    "publish": null,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.games",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "extendInfo": {
+        "NSCameraUsageDescription": "Breathless can read your breathing from the camera."
+      }
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}-${os}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${os}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Game",
+      "executableName": "breathless",
+      "icon": "build/icon.png",
+      "maintainer": "Breathless team <https://github.com/LucasYanzy/HackRU26-Breathless>",
+      "synopsis": "Breath-hold free-diving and fishing game"
+    }
+  }
+}
