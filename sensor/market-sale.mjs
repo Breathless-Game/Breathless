@@ -8,6 +8,7 @@
 // mint transaction, so a crash or timeout is resolved fish by fish, exactly as for one sale.
 
 import { HttpError, MAX_BATCH, checkTransferTx, mapLimit, parseSellBatchBody, parseSellBody, withLock } from './market-rules.mjs';
+import { isTransientRpcError } from './rpc-guard.mjs';
 
 /** Fish of one batch worked on at once: bounded so the RPC isn't flooded. */
 export const BATCH_CONCURRENCY = 4;
@@ -25,11 +26,16 @@ export async function poll(fn, ok, tries = 6, gapMs = 1000) {
   return last;
 }
 
-const errorOf = (assetId, e) => ({
-  assetId,
-  status: e instanceof HttpError ? e.status : 500,
-  error: String(e?.message ?? e).split('\n')[0].slice(0, 200),
-});
+/**
+ * One fish's failure in a batch. The RPC refusing us (429, timeout) is a 503 the game retries: its
+ * transfer stays pending on the client and the ledger decides, fish by fish, what is left to do.
+ */
+const errorOf = (assetId, e) => {
+  if (!(e instanceof HttpError) && isTransientRpcError(e)) {
+    return { assetId, status: 503, error: 'The Solana RPC is busy, try selling this fish again in a minute' };
+  }
+  return { assetId, status: e instanceof HttpError ? e.status : 500, error: String(e?.message ?? e).split('\n')[0].slice(0, 200) };
+};
 
 /**
  * deps:

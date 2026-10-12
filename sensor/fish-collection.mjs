@@ -46,6 +46,7 @@ import {
   readFacts,
 } from './fish-trust.mjs';
 import { fishSeedKey, playerStateProgramId, recordCatch } from './player-state-ix.mjs';
+import { isTransientRpcError } from './rpc-guard.mjs';
 
 export const REGISTRY_FILE = '.market-fish.jsonl';
 const COLLECTION_NEEDS_SOL = 0.005; // ~0.0014 SOL rent + fee, measured on a local validator
@@ -174,10 +175,15 @@ export function createFishCollection({
   const capBatch = (seller, result) => capQuotes(ledger.records, seller, result, capOpts);
 
   // ---- Chain helpers.
+  /**
+   * The asset, or null when it does not exist. An RPC failure (429, timeout) throws: read as "gone",
+   * it would let claim() co-sign a second mint of a fish that already has an NFT.
+   */
   async function loadAsset(id) {
     try {
       return await fetchAsset(u, publicKey(id));
-    } catch {
+    } catch (e) {
+      if (isTransientRpcError(e)) throw e;
       return null;
     }
   }
@@ -255,7 +261,7 @@ export function createFishCollection({
         await claim(owner, fishId, assetId);
         ok.push({ assetId, asset, fishId });
       } catch (e) {
-        rejected.push({ assetId, status: e instanceof HttpError ? e.status : 500, error: short(e) });
+        rejected.push({ assetId, status: e instanceof HttpError ? e.status : isTransientRpcError(e) ? 503 : 500, error: short(e) });
       }
     }
     if (ok.length) {
