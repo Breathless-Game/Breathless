@@ -6,19 +6,19 @@
 //
 // State in `dir`/.market-state.json (gitignored, public data): the PEARL mint
 // address and the sold set. Written via tmp + rename so a crash cannot truncate it.
+// That is the file store; on a serverless host the same state lives in Redis (market-store.mjs).
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
 import { createGenericFile, generateSigner, percentAmount, publicKey, sol, transactionBuilder } from '@metaplex-foundation/umi';
 import { burn, fetchAsset, fetchAssetsByOwner, fetchCollection } from '@metaplex-foundation/mpl-core';
 import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, SoldLedger, parseQuoteBatchBody, parseQuoteBody, singleFlight } from './market-rules.mjs';
+import { HttpError, parseQuoteBatchBody, parseQuoteBody, singleFlight } from './market-rules.mjs';
 import { createBurnRetry, createSweep } from './market-burn.mjs';
 import { createFishCollection } from './fish-collection.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
+import { createFileStore } from './market-store.mjs';
 import { renderPearlPng } from './pearl-png.mjs';
 import { isTransientRpcError, redactRpc } from './rpc-guard.mjs';
 
@@ -32,23 +32,37 @@ const FAUCET = 'https://faucet.solana.com';
 // payout's memo names the fish, a burn names its asset), and ~60 s of validity is left.
 const BLOCKHASH_REUSE_MS = 10_000;
 const COLLECTION_TTL_MS = 60_000;
+// Creating the PEARL mint or the fish collection (Irys upload, send, confirm) holds this lock across
+// instances (Redis store) for at most this long; one process needs no lock.
+const SETUP_LOCK_MS = 4 * 60_000;
 
 const sigStr = (bytes) => base58.deserialize(bytes)[0];
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
 
-/** `u` is a umi whose identity is the market keypair, with mplCore, mplToolbox and mplTokenMetadata installed. */
-export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
+/**
+ * `u` is a umi whose identity is the market keypair, with mplCore, mplToolbox and mplTokenMetadata installed.
+ * `store` (market-store.mjs) defaults to the file store in `dir`. `background: false` (a serverless
+ * host) runs no timers and no start-up work: no airdrop, no sweep on start or every 10 minutes, no
+ * in-memory burn retries; the host calls sweep() itself. `batchDeadlineMs`: see createSaleDesk.
+ */
+export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, store, background = true, batchDeadlineMs }) {
   const marketKey = u.identity.publicKey.toString();
-  const statePath = path.join(dir, '.market-state.json');
+  store ??= createFileStore({ dir });
+  const { state, ledger, save, refresh } = await store.openMarketState({ cluster: redactRpc(rpc) });
+  const shared = store.kind !== 'file'; // other instances write the same state
 
-  const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { cluster: redactRpc(rpc), mint: null, sold: {} };
-  state.sold ??= {};
-  const save = () => {
-    const tmp = `${statePath}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ ...state, sold: ledger.toJSON() }, null, 2));
-    renameSync(tmp, statePath);
-  };
-  const ledger = new SoldLedger(state.sold, save);
+  /** One setup step at a time across instances, on the newest state. One process: just run it. */
+  async function setupStep(name, fn) {
+    if (!shared) return fn();
+    const release = await store.lock(`setup:${name}`, SETUP_LOCK_MS);
+    if (!release) throw new HttpError(503, `The market's ${name} is being created by another instance, retry in a minute`);
+    try {
+      await refresh();
+      return await fn();
+    } finally {
+      await Promise.resolve(release()).catch(() => {});
+    }
+  }
 
   log(`[market] mode: server (PEARL minted by the market wallet; set FISH_MARKET_PROGRAM_ID for program mode)`);
   log(`[market] market wallet ${marketKey}  (${redactRpc(rpc)})`);
@@ -81,18 +95,19 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   let minting = null;
   function ensureMint() {
     if (state.mint) return Promise.resolve(state.mint);
-    minting ??= createPearlMint().finally(() => {
+    minting ??= setupStep('PEARL mint', createPearlMint).finally(() => {
       minting = null;
     });
     return minting;
   }
 
   async function createPearlMint() {
+    if (state.mint) return state.mint; // another instance made it (refreshed under the setup lock)
     // A crash between send and save leaves a pending mint address: adopt it if it landed.
     if (state.pendingMint && (await u.rpc.accountExists(publicKey(state.pendingMint)))) {
       state.mint = state.pendingMint;
       delete state.pendingMint;
-      save();
+      await save();
       return state.mint;
     }
     if ((await balanceSol(0)) < MINT_NEEDS_SOL) {
@@ -101,7 +116,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     const uri = await uploadMetadata();
     const mint = generateSigner(u);
     state.pendingMint = mint.publicKey.toString();
-    save();
+    await save();
     await createFungible(u, {
       mint,
       name: 'Pearl',
@@ -112,7 +127,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     }).sendAndConfirm(u);
     state.mint = state.pendingMint;
     delete state.pendingMint;
-    save();
+    await save();
     log(`[market] created PEARL mint ${state.mint}`);
     return state.mint;
   }
@@ -176,7 +191,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   }
 
   // The fish collection, the co-signed mint / migration routes and the one price gate (fish-collection.mjs).
-  const fish = createFishCollection({ u, state, save, dir, ledger, balanceSol, log, ...fishOptions });
+  const fish = createFishCollection({ u, state, save, registry: await store.openRegistry(), setupStep, ledger, balanceSol, log, ...fishOptions });
 
   /** Price check before the player hands the fish over, so the market never holds a fish it refuses. */
   async function quote(body) {
@@ -186,13 +201,16 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     if (asset.owner.toString() !== seller && asset.owner.toString() !== marketKey) {
       throw new HttpError(403, 'This fish is not owned by the seller');
     }
+    if (ledger.loadSeller) await ledger.loadSeller(seller); // Redis: this seller's last 24 h, for the cap
     return { pearls: fish.price(asset, seller) }; // only collection fish the generator agrees with; daily cap
   }
 
   /** POST /quote-batch: the same check for several fish at once. */
   async function quoteBatch(body) {
     const req = parseQuoteBatchBody(body);
-    return fish.capBatch(req.seller, await quoteMany(req, quote));
+    const quoted = await quoteMany(req, quote);
+    if (ledger.loadSeller) await ledger.loadSeller(req.seller);
+    return fish.capBatch(req.seller, quoted);
   }
 
   /**
@@ -232,7 +250,8 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     return singleFlight(burnFlights, assetId, async () => {
       const asset = await loadAsset(assetId); // throws on an RPC error: "not found" must really mean gone
       if (!asset) {
-        if (ledger.get(assetId)) ledger.burned(assetId, ledger.get(assetId).burnTx ?? '');
+        const r = await ledger.get(assetId);
+        if (r) await ledger.burned(assetId, r.burnTx ?? '');
         return '';
       }
       if (asset.owner.toString() !== marketKey) throw new Error(`the market does not own ${assetId}`);
@@ -240,13 +259,14 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
       const { signature, result } = await builder.sendAndConfirm(u);
       if (result?.value?.err) throw new Error(`burn transaction failed on-chain: ${JSON.stringify(result.value.err)}`);
       const sig = sigStr(signature);
-      if (ledger.get(assetId)) ledger.burned(assetId, sig);
+      if (await ledger.get(assetId)) await ledger.burned(assetId, sig);
       return sig;
     });
   }
 
   // A failed burn is retried in memory with backoff; the sweep (start-up + every 10 min) catches the rest.
-  const burnRetry = createBurnRetry({ burnOnce, log });
+  // A serverless instance may be frozen once it has answered, so its timers can't be trusted: there the sweep alone catches up.
+  const burnRetry = background ? createBurnRetry({ burnOnce, log }) : { retry() {} };
   const sweep = createSweep({
     listOwned: () => fetchAssetsByOwner(u, u.identity.publicKey, { skipDerivePlugins: true }),
     collection: () => state.fishCollection ?? null,
@@ -286,9 +306,12 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     pay: payout.pay,
     burnSold,
     log,
+    batchDeadlineMs,
   });
 
   async function info() {
+    // Another instance may have created the mint or the collection since this one loaded the state.
+    if (shared && (!state.mint || !state.fishCollection)) await refresh();
     let funded = false;
     try {
       funded = (await balanceSol()) >= FUNDED_SOL;
@@ -314,7 +337,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   }
 
   // Start-up: top up and create the mint in the background so the server can listen at once.
-  const ready = (async () => {
+  const ready = !background ? Promise.resolve() : (async () => {
     await topUp();
     try {
       await ensureMint();
@@ -329,7 +352,17 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     // Finish burns a crash or RPC hiccup left behind: the paid fish the market wallet still holds.
     await sweep.run();
   })();
-  sweep.start();
+  if (background) sweep.start();
 
-  return { info, quote, quoteBatch, sell: desk.sell, sellBatch: desk.sellBatch, cosignMint: fish.cosignMint, cosignMigrate: fish.cosignMigrate, ready };
+  return {
+    info,
+    quote,
+    quoteBatch,
+    sell: desk.sell,
+    sellBatch: desk.sellBatch,
+    cosignMint: fish.cosignMint,
+    cosignMigrate: fish.cosignMigrate,
+    ready,
+    sweep: sweep.run,
+  };
 }

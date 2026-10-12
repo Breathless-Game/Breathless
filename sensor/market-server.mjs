@@ -27,7 +27,8 @@ const DIR = process.env.MARKET_DIR
   : fileURLToPath(new URL('.', import.meta.url));
 mkdirSync(DIR, { recursive: true, mode: 0o700 });
 
-const market = await createMarket({ rpc: RPC, dir: DIR });
+// Always the file store, like the fish number counter below (Redis is for Vercel: api/index.mjs).
+const market = await createMarket({ rpc: RPC, dir: DIR, store: 'file' });
 
 // The fish NFT metadata host too, so the Vite proxy serves /api/nft in dev as `npm start` does.
 const nft = createNftHandler();
