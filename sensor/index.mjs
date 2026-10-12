@@ -294,8 +294,7 @@ class Session {
 
   // Also the landing point for decoded JPEG frames, which may finish after the SDK
   // restarted or the session left live mode.
-  // Raw frames are RGBA; decoded JPEGs are RGB (decode.mjs).
-  #sendFrame(tsUs, pixels, width, height) {
+  #sendFrame(tsUs, rgba, width, height) {
     if (this.sim || !this.sdk || tsUs <= this.lastFrameUs) return;
     // A long stall (tab hidden) makes Presage reject the gap; start a fresh pipeline.
     if (this.lastFrameUs && tsUs - this.lastFrameUs > 2_000_000) {
@@ -303,8 +302,7 @@ class Session {
       return;
     }
     try {
-      const channels = pixels.byteLength / (width * height);
-      this.sdk.sendFrame(pixels, width, height, width * channels, channels === 3 ? PixelFormat.kRGB : PixelFormat.kRGBA, tsUs);
+      this.sdk.sendFrame(rgba, width, height, width * 4, PixelFormat.kRGBA, tsUs);
       this.lastFrameUs = tsUs;
       this.frames++;
     } catch (e) {

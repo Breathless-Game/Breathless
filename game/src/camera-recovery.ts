@@ -36,6 +36,23 @@ export function busyFrameDue(lastSentAt: number, now: number): boolean {
   return now - lastSentAt >= BUSY_FRAME_MS;
 }
 
+/**
+ * Whether camera frames may go to the sensor now. Never from a background tab: Presage bills
+ * per measurement, and a hidden player isn't playing. The sensor keeps the baseline across the
+ * Presage restart that the gap causes, so coming back costs a short warm-up.
+ */
+export function canSendFrames(o: { presage: boolean; socketOpen: boolean; cameraLive: boolean; hidden: boolean }): boolean {
+  return o.presage && o.socketOpen && o.cameraLive && !o.hidden;
+}
+
+/**
+ * Whether the watchdog may call the camera stalled. A hidden tab sends nothing on purpose (and
+ * presents no video frames), so that is never a dead camera; nor is a re-acquire under way.
+ */
+export function stallCheckApplies(o: { hidden: boolean; reacquiring: boolean }): boolean {
+  return !o.hidden && !o.reacquiring;
+}
+
 /** Whether the camera pipeline has stalled: no frame for FRAME_STALL_MS. */
 export function frameStalled(lastFrameAt: number, now: number): boolean {
   return now - lastFrameAt >= FRAME_STALL_MS;

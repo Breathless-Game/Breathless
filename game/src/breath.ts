@@ -21,6 +21,7 @@ import {
   BUSY_FRAME_MS,
   busyFrameDue,
   canReacquire,
+  canSendFrames,
   detectorReady,
   frameStalled,
   holdOver,
@@ -29,6 +30,7 @@ import {
   recovering,
   seedMessage,
   sensorSilent,
+  stallCheckApplies,
   usableBaseline,
 } from './camera-recovery';
 
@@ -184,8 +186,14 @@ export class BreathSource {
     // A paused <video> presents no frames, so requestVideoFrameCallback never fires and the
     // pump stops with it: play it again (the tab coming back, the OS or browser pausing it).
     video.addEventListener('pause', () => this.resumeVideo());
+    // Hidden: no frames go out (canSendFrames). Visible again: they resume, and the stall clock
+    // restarts so the watchdog doesn't mistake the deliberate gap for a dead camera.
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) this.resumeVideo();
+      if (!document.hidden) {
+        this.lastFrameAt = performance.now();
+        this.resumeVideo();
+      }
+      this.syncGate();
     });
     setInterval(() => this.watchdog(), 1000);
   }
@@ -408,7 +416,7 @@ export class BreathSource {
       this.emit();
       this.connect();
     }
-    if (document.hidden || this.reacquiring) return;
+    if (!stallCheckApplies({ hidden: document.hidden, reacquiring: this.reacquiring })) return;
     const track = this.stream.getVideoTracks()[0];
     if (track?.readyState === 'live' && !track.muted && frameStalled(this.lastFrameAt, now)) {
       console.warn('[breath] no camera frames, restarting the video');
@@ -561,10 +569,7 @@ export class BreathSource {
     const format = this.frameFormat;
     if (this.pipe === 'mstp' && format === 'jpeg') return;
     const ws = this.ws;
-    if (this.state.mode !== 'presage' || ws?.readyState !== WebSocket.OPEN || this.video.readyState < 2) return;
-    // A muted or ended track shows black (or a frozen frame): a flat trace the detector would
-    // read as a HOLD. Send nothing until the camera is back.
-    if (!this.cameraLive()) return;
+    if (this.video.readyState < 2 || !this.framesWanted() || !ws) return;
     this.stats.captured++;
     // Waiting for the slot back: a frame a second is enough to keep claiming it.
     if (this.busySince) {
@@ -634,6 +639,19 @@ export class BreathSource {
     );
   }
 
+  /**
+   * Frames may go out: presage mode, an open socket, a live camera, a visible tab. A muted or
+   * ended track shows black (or a frozen frame): a flat trace the detector would read as a HOLD.
+   */
+  private framesWanted() {
+    return canSendFrames({
+      presage: this.state.mode === 'presage',
+      socketOpen: this.ws?.readyState === WebSocket.OPEN,
+      cameraLive: this.cameraLive(),
+      hidden: document.hidden,
+    });
+  }
+
   /** The camera track is live and showing a picture, and no re-acquire is under way. */
   private cameraLive() {
     const track = this.stream?.getVideoTracks()[0];
@@ -653,8 +671,7 @@ export class BreathSource {
   private sendJpeg(f: EncodedFrame, gated: boolean) {
     this.stats.encodedIn(f.encodeMs);
     const ws = this.ws;
-    if (this.state.mode !== 'presage' || ws?.readyState !== WebSocket.OPEN || this.frameFormat !== 'jpeg') return;
-    if (!this.cameraLive() || f.ts <= this.lastSentTs) return;
+    if (!ws || !this.framesWanted() || this.frameFormat !== 'jpeg' || f.ts <= this.lastSentTs) return;
     const now = performance.now();
     if (gated) {
       if (this.busySince) {
@@ -779,8 +796,7 @@ export class BreathSource {
   private syncGate() {
     const encoder = this.encoder;
     if (!encoder || this.pipe !== 'mstp') return;
-    const open =
-      this.state.mode === 'presage' && this.ws?.readyState === WebSocket.OPEN && this.frameFormat === 'jpeg' && this.cameraLive();
+    const open = this.frameFormat === 'jpeg' && this.framesWanted();
     const intervalMs = this.busySince ? BUSY_FRAME_MS : 1000 / SEND_FPS;
     const quality = this.jpegQuality.quality;
     const key = `${open} ${intervalMs} ${quality}`;
