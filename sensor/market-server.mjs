@@ -9,15 +9,17 @@ import { mkdirSync } from 'node:fs';
 import http from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMarket } from './market.mjs';
+import { createMarket, rpcEndpoint } from './market.mjs';
+import { guardProcess } from './process-guard.mjs';
 import { createGearHandler } from './nft-gear.mjs';
 import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
+guardProcess();
 
 const PORT = Number(process.env.MARKET_PORT ?? 8795);
-const RPC = process.env.SOLANA_RPC ?? process.env.VITE_SOLANA_RPC ?? 'https://api.devnet.solana.com';
+const RPC = rpcEndpoint(); // SOLANA_RPC, else VITE_SOLANA_RPC, else public devnet
 
 // MARKET_DIR is relative to the repo root, like MARKET_ORACLE_KEYPAIR; default sensor/.
 const DIR = process.env.MARKET_DIR

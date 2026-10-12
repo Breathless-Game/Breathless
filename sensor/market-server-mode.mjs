@@ -10,15 +10,17 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createGenericFile, generateSigner, percentAmount, publicKey, sol, transactionBuilder } from '@metaplex-foundation/umi';
-import { burn, fetchAsset, fetchCollection } from '@metaplex-foundation/mpl-core';
+import { burn, fetchAsset, fetchAssetsByOwner, fetchCollection } from '@metaplex-foundation/mpl-core';
 import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, SoldLedger, parseQuoteBatchBody, parseQuoteBody } from './market-rules.mjs';
+import { HttpError, SoldLedger, parseQuoteBatchBody, parseQuoteBody, singleFlight } from './market-rules.mjs';
+import { createBurnRetry, createSweep } from './market-burn.mjs';
 import { createFishCollection } from './fish-collection.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 import { renderPearlPng } from './pearl-png.mjs';
+import { isTransientRpcError, redactRpc } from './rpc-guard.mjs';
 
 const SYMBOL = 'PEARL';
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
@@ -26,6 +28,10 @@ const AIRDROP_BELOW_SOL = 0.5;
 const FUNDED_SOL = 0.02; // enough for a handful of sales (ATA rent ~0.002 + fees)
 const MINT_NEEDS_SOL = 0.02; // mint + metadata accounts + Irys upload
 const FAUCET = 'https://faucet.solana.com';
+// A payout or burn may reuse a blockhash this young: every such transaction is unique anyway (the
+// payout's memo names the fish, a burn names its asset), and ~60 s of validity is left.
+const BLOCKHASH_REUSE_MS = 10_000;
+const COLLECTION_TTL_MS = 60_000;
 
 const sigStr = (bytes) => base58.deserialize(bytes)[0];
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
@@ -35,7 +41,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   const marketKey = u.identity.publicKey.toString();
   const statePath = path.join(dir, '.market-state.json');
 
-  const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { cluster: rpc, mint: null, sold: {} };
+  const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { cluster: redactRpc(rpc), mint: null, sold: {} };
   state.sold ??= {};
   const save = () => {
     const tmp = `${statePath}.tmp`;
@@ -45,7 +51,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   const ledger = new SoldLedger(state.sold, save);
 
   log(`[market] mode: server (PEARL minted by the market wallet; set FISH_MARKET_PROGRAM_ID for program mode)`);
-  log(`[market] market wallet ${marketKey}  (${rpc})`);
+  log(`[market] market wallet ${marketKey}  (${redactRpc(rpc)})`);
   log(`[market] PEARL mint ${state.mint ?? '(not created yet)'}`);
 
   // ---- SOL balance (cached briefly) and the one start-up airdrop.
@@ -131,17 +137,42 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
   }
 
   // ---- Chain helpers.
+  /** The asset, or null when it does not exist (burned, never minted). An RPC failure (429, timeout) throws instead. */
   async function loadAsset(assetId) {
     try {
       return await fetchAsset(u, publicKey(assetId));
-    } catch {
+    } catch (e) {
+      if (isTransientRpcError(e)) throw e;
       return null;
     }
   }
 
+  // The fish collection account, which every burn names: fetched once a minute, not once per fish.
+  const collections = new Map(); // address -> { at, value }
+  const collectionFlights = new Map();
   async function collectionOf(asset) {
     const ua = asset.updateAuthority;
-    return ua?.type === 'Collection' && ua.address ? fetchCollection(u, ua.address) : undefined;
+    if (ua?.type !== 'Collection' || !ua.address) return undefined;
+    const key = ua.address.toString();
+    const hit = collections.get(key);
+    if (hit && Date.now() - hit.at < COLLECTION_TTL_MS) return hit.value;
+    return singleFlight(collectionFlights, key, async () => {
+      const value = await fetchCollection(u, ua.address);
+      collections.set(key, { at: Date.now(), value });
+      return value;
+    });
+  }
+
+  // One recent blockhash shared by the payouts and burns of a bulk sale (see BLOCKHASH_REUSE_MS).
+  let recentBlockhash = { at: 0, value: null };
+  const blockhashFlights = new Map();
+  function freshBlockhash() {
+    if (recentBlockhash.value && Date.now() - recentBlockhash.at < BLOCKHASH_REUSE_MS) return Promise.resolve(recentBlockhash.value);
+    return singleFlight(blockhashFlights, 'confirmed', async () => {
+      const value = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
+      recentBlockhash = { at: Date.now(), value };
+      return value;
+    });
   }
 
   // The fish collection, the co-signed mint / migration routes and the one price gate (fish-collection.mjs).
@@ -175,7 +206,7 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     ledger,
     async build(assetId, mint, seller, pearls) {
       const ata = findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(seller) });
-      const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
+      const blockhash = await freshBlockhash();
       const tx = await transactionBuilder()
         .add(createIdempotentAssociatedToken(u, { ata, mint: publicKey(mint), owner: publicKey(seller) }))
         .add(mintTokensTo(u, { mint: publicKey(mint), token: ata, amount: BigInt(pearls) }))
@@ -191,18 +222,47 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     getBlockHeight: () => u.rpc.call('getBlockHeight', [{ commitment: 'finalized' }]),
   });
 
+  /**
+   * Burn one sold fish and record it. Throws when the burn did not land (RPC error, expiry, an
+   * on-chain error). Only a fish the market owns is burned; one that is gone already counts as burned.
+   * Concurrent calls for one fish (a sale retry, the retry queue, the sweep) share one attempt.
+   */
+  const burnFlights = new Map();
+  function burnOnce(assetId) {
+    return singleFlight(burnFlights, assetId, async () => {
+      const asset = await loadAsset(assetId); // throws on an RPC error: "not found" must really mean gone
+      if (!asset) {
+        if (ledger.get(assetId)) ledger.burned(assetId, ledger.get(assetId).burnTx ?? '');
+        return '';
+      }
+      if (asset.owner.toString() !== marketKey) throw new Error(`the market does not own ${assetId}`);
+      const builder = burn(u, { asset, collection: await collectionOf(asset) }).setBlockhash(await freshBlockhash());
+      const { signature, result } = await builder.sendAndConfirm(u);
+      if (result?.value?.err) throw new Error(`burn transaction failed on-chain: ${JSON.stringify(result.value.err)}`);
+      const sig = sigStr(signature);
+      if (ledger.get(assetId)) ledger.burned(assetId, sig);
+      return sig;
+    });
+  }
+
+  // A failed burn is retried in memory with backoff; the sweep (start-up + every 10 min) catches the rest.
+  const burnRetry = createBurnRetry({ burnOnce, log });
+  const sweep = createSweep({
+    listOwned: () => fetchAssetsByOwner(u, u.identity.publicKey, { skipDerivePlugins: true }),
+    collection: () => state.fishCollection ?? null,
+    market: marketKey,
+    ledger,
+    burnOnce,
+    log,
+  });
+
+  /** The sale desk's burn: best effort, never throws. The player is already paid either way. */
   async function burnSold(assetId) {
     try {
-      const asset = await loadAsset(assetId);
-      if (!asset) {
-        ledger.burned(assetId, ledger.get(assetId).burnTx ?? '');
-        return;
-      }
-      const { signature } = await burn(u, { asset, collection: await collectionOf(asset) }).sendAndConfirm(u);
-      ledger.burned(assetId, sigStr(signature));
+      await burnOnce(assetId);
     } catch (e) {
-      // The player is already paid; a later retry of the same sale finishes the burn.
-      log(`[market] burn of ${assetId} failed: ${short(e)}`);
+      log(`[market] burn of ${assetId} failed, retrying later: ${short(e)}`);
+      burnRetry.retry(assetId);
     }
   }
 
@@ -266,9 +326,10 @@ export function createServerMode({ u, rpc, dir, log, fishOptions = {} }) {
     } catch (e) {
       log(`[market] fish collection not created yet: ${e.message}`);
     }
-    // Finish burns a crash or RPC hiccup left behind.
-    for (const [id, r] of Object.entries(ledger.records)) if (r.status === 'paid') await burnSold(id);
+    // Finish burns a crash or RPC hiccup left behind: the paid fish the market wallet still holds.
+    await sweep.run();
   })();
+  sweep.start();
 
   return { info, quote, quoteBatch, sell: desk.sell, sellBatch: desk.sellBatch, cosignMint: fish.cosignMint, cosignMigrate: fish.cosignMigrate, ready };
 }

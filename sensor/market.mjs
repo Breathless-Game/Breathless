@@ -31,6 +31,9 @@ import { fetchAssetsByOwner, mplCore } from '@metaplex-foundation/mpl-core';
 import { findAssociatedTokenPda, mplToolbox } from '@metaplex-foundation/mpl-toolbox';
 import { mplTokenMetadata } from '@metaplex-foundation/mpl-token-metadata';
 import { HttpError, RateLimiter, isAddress } from './market-rules.mjs';
+import { DEVNET, RPC_CONCURRENCY, guardRpc, isTransientRpcError, redactRpc, rpcEndpoint } from './rpc-guard.mjs';
+
+export { rpcEndpoint };
 
 /** A batch request counts as one sale-request per this many fish (at least one) against the trade limit. */
 const FISH_PER_TRADE_HIT = 5;
@@ -75,7 +78,9 @@ function loadIdl(file) {
 }
 
 export async function createMarket({
-  rpc = 'https://api.devnet.solana.com',
+  rpc = DEVNET,
+  // Market RPC calls in flight at once (rpc-guard.mjs); a paid RPC plan can raise it.
+  rpcConcurrency = Number(process.env.SOLANA_RPC_CONCURRENCY) || RPC_CONCURRENCY,
   dir,
   programId = process.env.FISH_MARKET_PROGRAM_ID,
   oracleKeypair = process.env.MARKET_ORACLE_KEYPAIR,
@@ -90,7 +95,16 @@ export async function createMarket({
   programId ||= null; // only the env var (or option) turns program mode on, so server mode stays the safe default
   if (programId && !isAddress(programId)) throw new Error(`FISH_MARKET_PROGRAM_ID is not an address: ${programId}`);
 
-  const u = createUmi(rpc, 'confirmed').use(mplCore()).use(mplToolbox()).use(mplTokenMetadata());
+  // Every Solana call the market makes goes through this one umi, and so through guardRpc: one
+  // concurrency limit, one 429 backoff (web3.js's own retry is off so the two don't stack), and
+  // confirmations polled over HTTP, never web3.js's confirmTransaction (see rpc-guard.mjs).
+  const u = createUmi(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true }).use(mplCore()).use(mplToolbox()).use(mplTokenMetadata());
+  u.use({
+    install(umi) {
+      umi.rpc = guardRpc(umi.rpc, { limit: rpcConcurrency, log });
+    },
+  });
+  log(`[market] Solana RPC ${redactRpc(rpc)}, at most ${rpcConcurrency} call(s) in flight`);
   let mode;
   if (programId) {
     idl ??= loadIdl(IDL_PATH);
@@ -251,9 +265,11 @@ export async function createMarket({
       if (req.method === 'POST' && !tradeLimiter.allow(ip)) throw new HttpError(429, 'Too many sales, slow down');
       send(res, 200, await fn(req, ip, url));
     } catch (e) {
-      const status = e instanceof HttpError ? e.status : 500;
+      // The RPC refusing us (429, timeout) is temporary: 503, so the game retries instead of giving up.
+      const busy = !(e instanceof HttpError) && isTransientRpcError(e);
+      const status = e instanceof HttpError ? e.status : busy ? 503 : 500;
       const error = e instanceof HttpError ? e.message : String(e?.message ?? e).split('\n')[0].slice(0, 200);
-      if (status === 500) log(`[market] ${route} failed: ${error}`);
+      if (status >= 500) log(`[market] ${route} failed: ${error}`);
       // e.extra: e.g. { code, retryAfterMs } on a limit, { assetId } on an already-minted fish.
       if (!res.headersSent) send(res, status, { ...(e instanceof HttpError ? e.extra : undefined), error });
       else res.end();

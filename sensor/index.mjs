@@ -37,8 +37,11 @@ import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
 import { staticHandler } from './static.mjs';
+import { guardProcess } from './process-guard.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
+// One stray rejection (e.g. an RPC 429 inside a library) must not drop every player's session.
+guardProcess({ log });
 
 const serveAt = process.argv.indexOf('--serve');
 const SERVE_DIR = serveAt >= 0 ? process.argv[serveAt + 1] : undefined;
@@ -534,9 +537,9 @@ async function startMarket() {
   try {
     const dir = marketDir();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const { createMarket } = await import('./market.mjs');
+    const { createMarket, rpcEndpoint } = await import('./market.mjs');
     market = await createMarket({
-      rpc: process.env.SOLANA_RPC || process.env.VITE_SOLANA_RPC || 'https://api.devnet.solana.com',
+      rpc: rpcEndpoint(), // SOLANA_RPC, else VITE_SOLANA_RPC, else public devnet
       dir,
       clientIp,
     });
