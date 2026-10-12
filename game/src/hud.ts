@@ -3,6 +3,7 @@ import { FishSpec, RARITY, fishValue } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { fishIcon } from './portrait';
 import { t, onLangChange } from './i18n';
+import { PRESAGE_ENABLED } from './features';
 import { spendablePearls, type EquipmentSlot, type EquipmentState, type RodTier } from './equipment';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -77,6 +78,8 @@ export class Hud {
 
   constructor() {
     this.buildDepthTicks();
+    // index.html's placeholder names Presage; with it switched off, the keyboard is the source.
+    if (!PRESAGE_ENABLED) this.source.textContent = sourceLabel('keyboard');
     onLangChange(() => {
       if (this.lastBreath) this.setBreath(this.lastBreath.s, this.lastBreath.danger);
       if (this.lastZones) this.setZones(...this.lastZones);

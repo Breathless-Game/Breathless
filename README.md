@@ -6,6 +6,8 @@
 
 > **Hold your real breath to dive and catch fish.** Your webcam, through Presage, detects whether you are holding your breath. The diver can only descend while you hold. The deeper you go, the rarer the fish. The moment you breathe underwater you have to race back to the surface, or you lose everything in your net. Fish you bring up can be minted as Solana NFTs and traded between players. The game also quietly records how long each hold lasted and your heart rate, and builds a health report whenever you ask for one.
 
+> **Presage is temporarily off.** Its credits ran out (HTTP 402), so camera breath detection is switched off for now and the game plays in **keyboard mode**: hold `Shift` to hold your breath and dive. All the camera code is still in place behind two switches, both off by default; see [Turning Presage back on](#turning-presage-back-on).
+
 Low-poly 2.5D, built with Three.js + TypeScript. Mostly front end, plus a local Node sensor service.
 
 ---
@@ -132,9 +134,9 @@ Open <http://localhost:5173>:
 
 | Entry | What it does | Needs |
 | --- | --- | --- |
-| **Start with camera** | Real mode: webcam → Presage → breath-hold detection | The sensor running, and a Presage key |
+| **Start with camera** (temporarily off: hidden unless the build sets `VITE_PRESAGE_ENABLED=1`) | Real mode: webcam → Presage → breath-hold detection | The sensor running with `PRESAGE_ENABLED=1`, and a Presage key |
 | **Play with keyboard** | Hold `Shift` to hold your breath | Nothing |
-| Simulation mode (press `K` in the game to switch) | The sensor generates a fake breathing waveform and heart rate; hold `Shift` to hold your breath | The sensor running; no key needed |
+| Simulation mode (press `K` in the game to switch; dev builds only while Presage is off) | The sensor generates a fake breathing waveform and heart rate; hold `Shift` to hold your breath | The sensor running; no key needed |
 
 ### Presage API key
 
@@ -142,6 +144,14 @@ Open <http://localhost:5173>:
 - Put it in `.env` at the repo root: `PRESAGE_API_KEY=...`
 - **`.env` is in `.gitignore`. Never commit it.** Share the key with teammates privately; do not paste it into code, issues or PRs.
 - With no key, the sensor switches to simulation mode by itself (`npm run sensor:sim` forces simulation).
+
+### Turning Presage back on
+
+Presage is **temporarily off**: there are two switches, one per side, and both are off unless set to `1` (or `true`).
+
+- **Server, `PRESAGE_ENABLED=1`** in the repo-root `.env` (or the environment). Off, the sensor never loads the SmartSpectra SDK, ignores `PRESAGE_API_KEY` even if `.env` still has one, drops camera frames and only runs the simulator; its startup log says `Presage SmartSpectra is disabled`. Market, NFT metadata and everything else on the server work the same either way.
+- **Game, `VITE_PRESAGE_ENABLED=1` at build time** (in `game/.env`, or on the command line: `VITE_PRESAGE_ENABLED=1 npm run build`). Off, the game never asks for the camera, hides **Start with camera** and the camera preview setting, skips calibration, and `K` offers the keyboard only (plus the simulator in a dev build). The health report keeps hold times, depth and outcomes; heart and breathing rate need the camera, so those tiles are hidden unless older camera dives have them.
+- Turn **both** on, then restart the sensor and rebuild the game. Production: add `PRESAGE_ENABLED=1` to the Dell's `.env` and set the repository variable `VITE_PRESAGE_ENABLED=1` (deploy/SETUP.md, step 2). With only the server on, the game stays keyboard-only; with only the game on, the server answers "turned off" and the game falls back to the keyboard.
 
 ### Testing breath detection on a real camera
 
@@ -167,7 +177,9 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. |
+| `PRESAGE_ENABLED` | off | `1` turns Presage live sensing on. **Temporarily off**: unset, the server ignores `PRESAGE_API_KEY` and never loads the SDK ([Turning Presage back on](#turning-presage-back-on)). |
+| `VITE_PRESAGE_ENABLED` | off | Build time, for the game: `1` brings back the camera option. Production sets it from the repository variable of the same name (deploy/SETUP.md). |
+| `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. Ignored unless `PRESAGE_ENABLED=1`. |
 | `PORT` | `8794` | HTTP + WebSocket port. Dev mode (`npm run sensor`) keeps `SENSOR_PORT`, 8787. |
 | `HOST` | `127.0.0.1` | Bind address. Loopback, because the tunnel / proxy on the same machine is the only way in. |
 | `MAX_LIVE_SESSIONS` | `1` | Players using live Presage at the same time. The SDK's native state is process-global, so it can't run two sessions in one process; `0` turns live sensing off. Anyone over the cap sees "Server busy" and plays with the keyboard. |
@@ -202,7 +214,7 @@ Every dive key can be rebound in **Settings → Controls** (on the Settings desk
 | `V` | Sonar |
 | `F` | Climb aboard from the surface beside the boat; mash it to heave a capsized boat upright (Open Ocean storms) |
 | `N` | Gradually switch morning / night; natural cycle and afternoon are available in settings |
-| `K` | Cycle the breath input: presage → sim → keyboard |
+| `K` | Cycle the breath input: presage → sim → keyboard (Presage off: keyboard only; sim too in a dev build) |
 | `C` | Collection and NFT panel (tick-box bulk sell) |
 | `G` | Rod / net upgrade panel |
 | `B` | Illustrated field guide and first-dive tutorial |
@@ -293,7 +305,7 @@ Every dive key can be rebound in **Settings → Controls** (on the Settings desk
 }
 ```
 
-Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard. `"code": "frames"` means the sensor can't decode JPEG (sharp isn't installed): the game switches to raw frames.
+Errors arrive as `{ "t": "error", "message": "…" }`. `"code": "busy"` means every live Presage slot (`MAX_LIVE_SESSIONS`) is taken: the game stops sending frames and falls back to the keyboard. With Presage off (`PRESAGE_ENABLED` unset) a game asking for the camera gets that same `busy` once, with `"reason": "off"`, so every build falls back. `"code": "frames"` means the sensor can't decode JPEG (sharp isn't installed): the game switches to raw frames.
 
 ---
 

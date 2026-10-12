@@ -1,9 +1,13 @@
 import type { DiveRecord, HealthLog } from './health';
 import { lang, onLangChange, t } from './i18n';
 import { hasHealthData } from './wallet-storage';
+import { PRESAGE_ENABLED } from './features';
 
 // The health report is built only when the player presses the button. It reads
 // the dive log, works out a handful of wellness numbers, and draws two charts.
+// Heart and breathing rate come only from the camera (Presage). With it switched off
+// (features.ts) the keyboard dives log hold times, depth and outcome, so the report shows
+// those and leaves the heart figures out unless older camera dives still carry them.
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -150,7 +154,9 @@ function insights(s: Stats): string[] {
             'Every dive so far had sharks in the water. Dive the Fjord or Heaven Lake, where there are none, to get heart-rate figures.',
             '到目前为止每次下潜水里都有鲨鱼。去没有鲨鱼的峡湾或天池下潜，才能得到心率数据。',
           )
-        : t('Play with the camera to add heart rate and breathing rate to this report.', '开启摄像头游玩，即可把心率和呼吸频率加入本报告。'),
+        : PRESAGE_ENABLED
+          ? t('Play with the camera to add heart rate and breathing rate to this report.', '开启摄像头游玩，即可把心率和呼吸频率加入本报告。')
+          : t('Camera breath detection is turned off for now, so this report covers your breath-hold times only: how long you held the dive key.', '摄像头呼吸检测暂时关闭，所以本报告只包含屏息时间，即你按住下潜键的时长。'),
     );
   }
   return out;
@@ -248,6 +254,9 @@ function drawPulse(el: HTMLCanvasElement, d: DiveRecord) {
 
 /** The wellness-only line under every health figure: this report, the trip report and the health desk. */
 export function wellnessDisclaimer() {
+  if (!PRESAGE_ENABLED) {
+    return t('Wellness insights only. Hold times come from how long you held the dive key, not from a sensor. Not a medical device and not medical advice. Never practice breath holds in or near water, and stop if you feel dizzy or light-headed.', '仅为健康参考。屏息时间来自你按住下潜键的时长，而不是传感器。不是医疗设备，也不构成医疗建议。切勿在水中或水边练习屏息，感到头晕或眩晕时请立即停止。');
+  }
   return t('Wellness insights only, from camera-based Presage SmartSpectra estimates. Not a medical device and not medical advice. Never practice breath holds in or near water, and stop if you feel dizzy or light-headed.', '仅为健康参考，基于摄像头的 Presage SmartSpectra 估算。不是医疗设备，也不构成医疗建议。切勿在水中或水边练习屏息，感到头晕或眩晕时请立即停止。');
 }
 
@@ -297,15 +306,18 @@ export class Report {
     const trend =
       s.earlierAvg != null ? `${s.recentAvg >= s.earlierAvg ? '▲' : '▼'} ${t('from', '此前')} ${sec(s.earlierAvg)}` : t('last 10 dives', '最近 10 次下潜');
     const longest = s.vitals.length ? s.vitals.reduce((a, d) => (d.holdMs > a.holdMs ? d : a)) : null;
+    // Presage off and no camera dive on record: the four heart / breathing tiles could only ever say "—".
+    const heart = PRESAGE_ENABLED || [s.restPulse, s.reflexDrop, s.recovery, s.restRate].some((v) => v != null);
     this.panel.innerHTML = `${head}
       <div class="small muted basis">${t(`Based on ${s.n} dive${s.n > 1 ? 's' : ''}${s.vitals.length ? `, ${s.vitals.length} with heart-rate data` : ''}${s.sharkDives ? `; ${s.sharkDives} with sharks, not used for heart rate` : ''}.`, `基于 ${s.n} 次下潜${s.vitals.length ? `，其中 ${s.vitals.length} 次有心率数据` : ''}${s.sharkDives ? `；${s.sharkDives} 次有鲨鱼，不计入心率` : ''}。`)}</div>
       <div class="tiles">
         ${tile(t('Longest breath hold', '最长屏息'), sec(s.best.holdMs), new Date(s.best.at).toLocaleDateString(), C.hold)}
         ${tile(t('Average hold', '平均屏息'), sec(s.recentAvg), trend)}
+        ${heart ? `
         ${tile(t('Resting heart rate', '静息心率'), s.restPulse != null ? `${s.restPulse.toFixed(0)} bpm` : '—', t('before dives', '下潜前'))}
-        ${tile(t('Dive reflex', '潜水反射'), s.reflexDrop != null ? `${s.reflexDrop >= 0 ? '−' : '+'}${Math.abs(s.reflexDrop).toFixed(0)} bpm` : '—', s.reflexPct != null ? `${Math.abs(s.reflexPct).toFixed(0)}% ${s.reflexDrop! >= 0 ? t('slower', '更慢') : t('faster', '更快')} ${t('while holding', '屏息时')}` : t('needs camera', '需要摄像头'), C.danger)}
+        ${tile(t('Dive reflex', '潜水反射'), s.reflexDrop != null ? `${s.reflexDrop >= 0 ? '−' : '+'}${Math.abs(s.reflexDrop).toFixed(0)} bpm` : '—', s.reflexPct != null ? `${Math.abs(s.reflexPct).toFixed(0)}% ${s.reflexDrop! >= 0 ? t('slower', '更慢') : t('faster', '更快')} ${t('while holding', '屏息时')}` : PRESAGE_ENABLED ? t('needs camera', '需要摄像头') : t('camera off for now', '摄像头暂时关闭'), C.danger)}
         ${tile(t('Recovery', '恢复'), s.recovery != null ? `${s.recovery.toFixed(0)} s` : '—', t('heart back to rest', '心率恢复静息'))}
-        ${tile(t('Breathing rate', '呼吸频率'), s.restRate != null ? `${s.restRate.toFixed(0)} /min` : '—', t('at rest', '静息时'))}
+        ${tile(t('Breathing rate', '呼吸频率'), s.restRate != null ? `${s.restRate.toFixed(0)} /min` : '—', t('at rest', '静息时'))}` : ''}
         ${tile(t('Time on one breath', '单口气总时长'), sec(s.totalUnderMs), t('all dives', '全部下潜'))}
         ${tile(t('Deepest dive', '最深下潜'), `${s.deepest} m`, t(`${s.fish} fish banked`, `已存入 ${s.fish} 条鱼`))}
       </div>

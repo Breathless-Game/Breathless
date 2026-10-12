@@ -6,6 +6,8 @@
 
 > **用你真实的憋气来潜水抓鱼。** 摄像头通过 Presage 识别你是否在憋气，憋住气潜水员才能下潜；越深鱼越稀有；在水下一换气就必须马上浮上去，否则网里的鱼全丢。抓到的鱼可以铸造成 Solana NFT，玩家之间交易。游戏还会安静地记录每次憋气的时长和心率，你想看的时候一键生成健康报告。
 
+> **Presage 暂时关闭。** 额度用完了（HTTP 402），所以摄像头呼吸检测先关掉，游戏用**键盘模式**：按住 `Shift` 代表憋气、下潜。摄像头相关代码都还在，由两个默认关闭的开关控制，见[重新开启 Presage](#重新开启-presage)。
+
 低多边形（low-poly）2.5D 风格，Three.js + TypeScript，前端为主，加一个本地 Node 传感器服务。
 
 ---
@@ -133,9 +135,9 @@ npm run game       # 游戏，http://localhost:5173
 
 | 入口 | 说明 | 需要 |
 | --- | --- | --- |
-| **Start with camera** | 真实模式：摄像头 → Presage → 憋气检测 | sensor 正在运行，并且有 Presage key |
+| **Start with camera**（暂时关闭：构建时没设 `VITE_PRESAGE_ENABLED=1` 就不显示） | 真实模式：摄像头 → Presage → 憋气检测 | sensor 以 `PRESAGE_ENABLED=1` 运行，并且有 Presage key |
 | **Play with keyboard** | 按住 `Shift` 代表憋气 | 什么都不需要 |
-| 模拟模式（游戏里按 `K` 切换） | 由 sensor 生成假的呼吸波形和心率，按 `Shift` 代表憋气 | sensor 正在运行，不需要 key |
+| 模拟模式（游戏里按 `K` 切换；Presage 关闭期间只在开发构建里有） | 由 sensor 生成假的呼吸波形和心率，按 `Shift` 代表憋气 | sensor 正在运行，不需要 key |
 
 ### Presage API key
 
@@ -143,6 +145,14 @@ npm run game       # 游戏，http://localhost:5173
 - 填到根目录的 `.env`：`PRESAGE_API_KEY=...`
 - **`.env` 已经加进 `.gitignore`，绝对不要提交。** 队友之间请私下传 key，不要贴进代码、issue 或 PR。
 - 没有 key 时 sensor 会自动进入模拟模式（`npm run sensor:sim` 是强制模拟）。
+
+### 重新开启 Presage
+
+Presage **暂时关闭**：服务器和游戏各有一个开关，只有设成 `1`（或 `true`）才开，默认都是关。
+
+- **服务器：`PRESAGE_ENABLED=1`**，写在仓库根目录的 `.env`（或环境变量）里。关闭时 sensor 不加载 SmartSpectra SDK，即使 `.env` 里还有 `PRESAGE_API_KEY` 也忽略，丢弃摄像头帧，只跑模拟器；启动日志会写 `Presage SmartSpectra is disabled`。市场、NFT 元数据等服务器上的其他功能不受影响。
+- **游戏：构建时 `VITE_PRESAGE_ENABLED=1`**（写在 `game/.env`，或命令行 `VITE_PRESAGE_ENABLED=1 npm run build`）。关闭时游戏不请求摄像头，隐藏 **Start with camera** 和摄像头画面设置，跳过校准，`K` 只有键盘（开发构建里还有模拟器）。健康报告照常记录憋气时长、深度和结果；心率和呼吸频率需要摄像头，所以没有旧的摄像头数据时这几格不显示。
+- **两边都开**，然后重启 sensor、重新构建游戏。生产环境：在 Dell 的 `.env` 加 `PRESAGE_ENABLED=1`，并把 GitHub 仓库变量 `VITE_PRESAGE_ENABLED` 设成 `1`（见 deploy/SETUP.md 第 2 步）。只开服务器，游戏还是纯键盘；只开游戏，服务器会回「已关闭」，游戏自动退回键盘。
 
 ### 真机测试憋气
 
@@ -168,7 +178,9 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 
 | 变量 | 默认 | 含义 |
 | --- | --- | --- |
-| `PRESAGE_API_KEY` | 空 | **只放在服务器**仓库根目录的 `.env` 里。没有 key 时服务器跑模拟器。 |
+| `PRESAGE_ENABLED` | 关 | `1` 开启 Presage 实时检测。**暂时关闭**：不设时服务器忽略 `PRESAGE_API_KEY`，也不加载 SDK（见[重新开启 Presage](#重新开启-presage)）。 |
+| `VITE_PRESAGE_ENABLED` | 关 | 游戏构建时用：`1` 恢复摄像头选项。生产环境取自同名的 GitHub 仓库变量（见 deploy/SETUP.md）。 |
+| `PRESAGE_API_KEY` | 空 | **只放在服务器**仓库根目录的 `.env` 里。没有 key 时服务器跑模拟器。不设 `PRESAGE_ENABLED=1` 时会被忽略。 |
 | `PORT` | `8794` | HTTP + WebSocket 端口。开发模式（`npm run sensor`）仍用 `SENSOR_PORT`，8787。 |
 | `HOST` | `127.0.0.1` | 监听地址。只听本机，因为同机的隧道 / 代理是唯一入口。 |
 | `MAX_LIVE_SESSIONS` | `1` | 同时使用 Presage 实时检测的玩家数。SDK 的原生状态是进程全局的，一个进程里跑不了两个会话；设成 `0` 关闭实时检测。超出上限的玩家会看到 "Server busy"，自动改用键盘玩。 |
@@ -203,7 +215,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `V` | 声纳 |
 | `F` | 在船边的水面上爬上船；连按可以把翻了的船推正（汪洋风暴） |
 | `N` | 渐变切换上午 / 夜晚；自然循环与下午可在设置中选择 |
-| `K` | 切换呼吸输入：presage → sim → keyboard |
+| `K` | 切换呼吸输入：presage → sim → keyboard（Presage 关闭时只有 keyboard；开发构建里还有 sim） |
 | `C` | 收藏和 NFT 面板（可勾选批量卖出） |
 | `G` | 鱼竿 / 渔网升级面板 |
 | `B` | 插画潜水手册和新手教程 |
@@ -294,7 +306,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 }
 ```
 
-错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。`"code": "frames"` 表示 sensor 解不了 JPEG（没装 sharp）：游戏改发原始帧。
+错误以 `{ "t": "error", "message": "…" }` 发送。`"code": "busy"` 表示实时 Presage 名额（`MAX_LIVE_SESSIONS`）已满：游戏停止发帧，改用键盘。Presage 关闭时（没设 `PRESAGE_ENABLED`），请求摄像头的游戏会收到一次同样的 `busy`，附带 `"reason": "off"`，所以任何版本的游戏都会退回键盘。`"code": "frames"` 表示 sensor 解不了 JPEG（没装 sharp）：游戏改发原始帧。
 
 ---
 

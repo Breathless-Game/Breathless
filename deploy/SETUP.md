@@ -46,6 +46,13 @@ sudo -u breathless -H nano /srv/breathless/app/.env
 - 改完要重启才生效：`sudo systemctl restart breathless`。
 - 同一个文件里还可以写 `MAX_LIVE_SESSIONS`、`MAX_CONN_PER_IP`、`SENSOR_RECORD`（见 README 的「自托管」）。`PORT` 由 systemd unit 固定为 8794。
 
+> **Presage 暂时关闭**（额度用完，HTTP 402）。代码默认关：服务器不加载 SDK、**忽略** `.env` 里的 `PRESAGE_API_KEY`、丢弃摄像头帧；游戏不请求摄像头，只用键盘（按住 Shift 下潜）。key 可以留在 `.env` 里不动。恢复时两处都要开，不用改代码：
+>
+> 1. 服务器：在 `/srv/breathless/app/.env` 加一行 `PRESAGE_ENABLED=1`，然后 `sudo systemctl restart breathless`。日志里的 `Presage SmartSpectra is disabled` 会变成 `Presage live, max 1 at a time`。
+> 2. 游戏（构建时）：生产构建在 GitHub 云端 runner 上做（`.github/workflows/deploy.yml` 的 `build` job），`VITE_*` 只从那里的环境来，Dell 上的 `.env` 管不到它。在 GitHub 仓库 **Settings → Secrets and variables → Actions → Variables** 新建变量 `VITE_PRESAGE_ENABLED` = `1`，再到 Actions 里手动运行一次 **Deploy**（workflow_dispatch）或 push 一次 `main`，重新构建。
+>
+> 只开一边不行：只开服务器，游戏仍是纯键盘；只开游戏，服务器会回「已关闭」，游戏自动退回键盘。本地开发：`.env` 里 `PRESAGE_ENABLED=1`，`game/.env` 里（或命令行）`VITE_PRESAGE_ENABLED=1`。
+
 ### 3. 注册 GitHub self-hosted runner（仓库主 Lucas 操作）
 
 1. 在 GitHub 打开仓库 **Settings → Actions → Runners → New self-hosted runner**，选 **Linux / x64**。页面会给出下载命令和一条带一次性 token 的 `./config.sh --url … --token …`。
@@ -185,6 +192,13 @@ sudo -u breathless -H nano /srv/breathless/app/.env
 - Keep the file at mode 600. Without a key the server still runs, in simulator mode.
 - Restart to apply changes: `sudo systemctl restart breathless`.
 - The same file can set `MAX_LIVE_SESSIONS`, `MAX_CONN_PER_IP`, `SENSOR_RECORD` (README, "Self-hosting"). `PORT` is pinned to 8794 by the systemd unit.
+
+> **Presage is temporarily off** (its credits ran out, HTTP 402). Off is the default in code: the server never loads the SDK, **ignores** `PRESAGE_API_KEY` in `.env` and drops camera frames; the game never asks for the camera and plays on the keyboard (hold Shift to dive). The key can stay in `.env`. To turn it back on, flip both switches; no code change:
+>
+> 1. Server: add `PRESAGE_ENABLED=1` to `/srv/breathless/app/.env`, then `sudo systemctl restart breathless`. The log's `Presage SmartSpectra is disabled` line becomes `Presage live, max 1 at a time`.
+> 2. Game (build time): the production build runs on GitHub's runner (the `build` job in `.github/workflows/deploy.yml`) and gets its `VITE_*` values only from there; the Dell's `.env` never reaches it. Create the repository variable `VITE_PRESAGE_ENABLED` = `1` under **Settings → Secrets and variables → Actions → Variables**, then run the **Deploy** workflow by hand (workflow_dispatch) or push to `main` to rebuild.
+>
+> One without the other doesn't work: the server alone leaves the game keyboard-only; the game alone gets "turned off" from the server and drops back to the keyboard. Local dev: `PRESAGE_ENABLED=1` in `.env`, and `VITE_PRESAGE_ENABLED=1` in `game/.env` (or on the command line).
 
 ### 3. Register the GitHub self-hosted runner (repo owner, Lucas)
 
