@@ -12,5 +12,17 @@
     "build": "npm --prefix game run build",
     "test": "npm --prefix game test && npm --prefix sensor test",
     "start": "node sensor/index.mjs --serve game/dist"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "@metaplex-foundation/mpl-core": "1.10.0",
+    "@metaplex-foundation/mpl-token-metadata": "3.4.0",
+    "@metaplex-foundation/mpl-toolbox": "0.11.5",
+    "@metaplex-foundation/umi": "1.6.0",
+    "@metaplex-foundation/umi-bundle-defaults": "1.6.0",
+    "@upstash/redis": "1.39.0",
+    "@vercel/functions": "3.9.9"
   }
 }

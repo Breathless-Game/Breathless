@@ -261,7 +261,8 @@ export function redisKeys(prefix = DEFAULT_PREFIX) {
   };
 }
 
-function redisCas(redis, key, expected, next, ttlMs) {
+/** CAS_SCRIPT on one key: true when it was `expected` (null: absent) and is now `next` (null: deleted). */
+export function redisCas(redis, key, expected, next, ttlMs) {
   return redis
     .eval(CAS_SCRIPT, [key], [expected === null ? '0' : '1', expected ?? '', next === null ? '0' : '1', next ?? '', ttlMs ? String(Math.ceil(ttlMs)) : ''])
     .then((r) => Number(r) === 1);
