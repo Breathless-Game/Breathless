@@ -4,6 +4,7 @@ import { setShipThresholds, Shipyard, shipThreshold, SHIPS, SHIP_INTROS_EN } fro
 import { BreathSource, type BreathMode, type BreathState } from './breath';
 import { PRESAGE_ENABLED, breathModeList } from './features';
 import { sensorNotReady } from './camera-recovery';
+import { showTouchNotice } from './touch-only';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
@@ -87,6 +88,7 @@ import { explorerTx } from './wallet-storage';
 
 // One UI language (Settings → Language): <html lang> and index.html's static text.
 initI18n();
+showTouchNotice();
 
 // ---- Tuning -------------------------------------------------------------
 const DRAG = 2.4;
