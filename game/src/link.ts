@@ -6,11 +6,14 @@ import { KNOWN_WALLETS, isUserRejection, shortAddress } from './wallet-storage';
 import {
   anchorNames,
   base58Decode,
+  checkWalletEdits,
+  defaultComputeUnits,
   formatUnits,
   fromBase64,
   loginMessage,
   parseTransaction,
-  sameExceptBlockhash,
+  priorityFeeLamports,
+  RelayCheckError,
   summarizeTransaction,
   toBase64,
   withBlockhash,
@@ -25,7 +28,8 @@ import {
 // transaction does as decoded from its own bytes, and signs:
 //   connect  signMessage("breathless-desktop-login|<sid>|<nonce>|<expiresAt>|<origin>")
 //   sign     a fresh blockhash put in (the player may take longer than one lives), then one
-//            wallet prompt for all of them. The app checks every byte but the blockhash.
+//            wallet prompt for all of them. The app accepts back only that, or a compute budget
+//            the wallet changed (link-tx.ts checkWalletEdits); this page checks the same first.
 // The answer goes back once; Cancel tells the app no.
 
 const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://api.devnet.solana.com'; // as in chain.ts
@@ -134,6 +138,7 @@ function tokenName(mint: string | undefined, program: string) {
 function describe(s: TxSummary): { text: string; warn?: boolean; quiet?: boolean }[] {
   const lines: { text: string; warn?: boolean; quiet?: boolean }[] = [];
   const transfers = new Map<string, number>();
+  const budget: { seen: boolean; units?: number; microLamports?: bigint } = { seen: false };
   for (const ix of s.instructions as InstructionSummary[]) {
     switch (ix.kind) {
       case 'sol-transfer':
@@ -162,7 +167,9 @@ function describe(s: TxSummary): { text: string; warn?: boolean; quiet?: boolean
         lines.push({ text: t(`Open a token account for ${who(ix.owner)}`, `为${who(ix.owner)}开设代币账户`), quiet: true });
         break;
       case 'compute-budget':
-        lines.push({ text: t('Compute budget setting', '计算预算设置'), quiet: true });
+        if (ix.units !== undefined) budget.units = ix.units;
+        if (ix.microLamports !== undefined) budget.microLamports = ix.microLamports;
+        budget.seen = true;
         break;
       case 'memo':
         lines.push({ text: t(`Memo: ${ix.text}`, `备注：${ix.text}`), quiet: true });
@@ -182,6 +189,11 @@ function describe(s: TxSummary): { text: string; warn?: boolean; quiet?: boolean
   }
   for (const [to, n] of transfers) {
     lines.unshift({ text: t(`Hand over ${n} fish NFT${n === 1 ? '' : 's'} to ${who(to)}`, `把 ${n} 条鱼 NFT 转给 ${who(to)}`) });
+  }
+  if (budget.seen) {
+    const others = s.instructions.filter((ix) => ix.kind !== 'compute-budget').length;
+    const fee = priorityFeeLamports(budget.units ?? defaultComputeUnits(others), budget.microLamports ?? 0n);
+    lines.push({ text: t(`Priority fee: up to ${sol(fee)}`, `优先费：最多 ${sol(fee)}`), quiet: true });
   }
   return lines;
 }
@@ -341,17 +353,16 @@ async function sign(w: OwnerWallet, address: string) {
       }
       const signed = await w.signTransactionBytes(address, toSign);
       if (signed.length !== toSign.length) throw new Error(t('The wallet returned the wrong number of transactions.', '钱包返回的交易数量不对。'));
-      // Some wallets add instructions of their own when they sign: the app would refuse that, so say so here.
+      // Wallets may change a transaction while signing (Phantom adds a priority fee): the app's own
+      // rule, checked here first so a refusal says what changed. The blockhash is this page's to set,
+      // and one that arrived signed by another key must come back as it went.
       signed.forEach((tx, i) => {
-        const back = parseTransaction(tx).message;
-        const sent = parseTransaction(toSign[i]).message;
-        if (!sameExceptBlockhash(sent, back) || parseTransaction(tx).parsed.blockhash.join() !== parseTransaction(toSign[i]).parsed.blockhash.join()) {
-          throw new Error(
-            t(
-              `${w.name} changed the transaction while signing (for example by adding its own instructions). The desktop app can only accept it unchanged.`,
-              `${w.name} 在签名时改动了交易（例如加入了它自己的指令）。桌面版只能接受未改动的交易。`,
-            ),
-          );
+        const sent = parseTransaction(toSign[i]);
+        try {
+          checkWalletEdits(sent.message, parseTransaction(tx).message, { keepBlockhash: true, exact: sent.signatures.some((sig) => sig.some((b) => b !== 0)) });
+        } catch (e) {
+          const why = e instanceof RelayCheckError ? t(e.message, e.zh) : message(e);
+          throw new Error(t(`${w.name} changed the transaction in a way the desktop app can't accept: ${why}`, `${w.name} 改动了交易，桌面版无法接受：${why}`));
         }
       });
       result = { txs: signed.map(toBase64), ...(fresh ?? {}) };

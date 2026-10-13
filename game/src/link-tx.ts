@@ -3,9 +3,12 @@
 //
 //   - Solana's wire format, read byte by byte: a transaction's signature slots and its message
 //     (legacy or v0: header, account keys, blockhash, instructions, address lookup tables);
-//   - the app's check on what came back from the browser: the very message it sent, byte for
-//     byte, except the 32-byte recentBlockhash; the same signer slots and fee payer; the owner's
-//     slot holding a valid ed25519 signature over the returned message;
+//   - the relay's own compute budget (withComputeBudget), so a browser wallet has no priority fee
+//     to add while signing;
+//   - the one rule both sides apply to what came back from the browser (checkWalletEdits): the
+//     message it sent but for the recentBlockhash and the wallet's compute budget, everything else
+//     the same once decompiled; and the app's check (checkRelayedTransaction): that rule, the same
+//     signer slots, the owner's slot holding a valid ed25519 signature over the returned message;
 //   - the login message and its check;
 //   - the link page's summary of a transaction, decoded from its bytes (never from text the app
 //     sent): SOL and token amounts, Core NFT transfers and burns, which programs it calls.
@@ -230,7 +233,101 @@ export function sameExceptBlockhash(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-// ---- The app's check on a signed transaction coming back --------------------------------
+// ---- The relay's compute budget ------------------------------------------------------
+//
+// Phantom adds a priority fee (ComputeBudget instructions) to any transaction it signs that has no
+// signature yet and neither a SetComputeUnitLimit nor a SetComputeUnitPrice, as long as it still
+// fits in a packet (docs.phantom.com/developer-powertools/solana-priority-fees). The relay zeroes
+// the signatures it sends, so it puts its own compute budget in first.
+
+export const PACKET_SIZE = 1232;
+/** What the runtime grants an instruction when the transaction sets no limit, and the cap. */
+export const DEFAULT_INSTRUCTION_UNITS = 200_000;
+export const MAX_COMPUTE_UNITS = 1_400_000;
+/** The relay's price, micro-lamports per compute unit: at most 0.000014 SOL on 1.4M units. */
+export const RELAY_MICRO_LAMPORTS_PER_UNIT = 10_000n;
+/**
+ * The most priority fee a wallet may put on a relayed transaction, in lamports: 0.001 SOL, 200
+ * times the 5000-lamport signature fee and far above what a wallet asks for a transaction this
+ * small, yet a bounded loss if one asks for much more.
+ */
+export const MAX_WALLET_PRIORITY_FEE = 1_000_000n;
+
+function shortVecBytes(n: number): number[] {
+  const out: number[] = [];
+  for (;;) {
+    const b = n & 0x7f;
+    n >>= 7;
+    if (!n) return [...out, b];
+    out.push(b | 0x80);
+  }
+}
+
+/** A parsed message back to its bytes (parseMessage's inverse). */
+export function serializeMessage(m: ParsedMessage): Uint8Array {
+  const out: number[] = [];
+  if (m.version === 0) out.push(0x80);
+  out.push(m.header.numRequiredSignatures, m.header.numReadonlySigned, m.header.numReadonlyUnsigned, ...shortVecBytes(m.keys.length));
+  for (const k of m.keys) out.push(...k);
+  out.push(...m.blockhash, ...shortVecBytes(m.instructions.length));
+  for (const ix of m.instructions) out.push(ix.programIndex, ...shortVecBytes(ix.accounts.length), ...ix.accounts, ...shortVecBytes(ix.data.length), ...ix.data);
+  if (m.version === 0) {
+    out.push(...shortVecBytes(m.lookups.length));
+    for (const t of m.lookups) out.push(...t.account, ...shortVecBytes(t.writable.length), ...t.writable, ...shortVecBytes(t.readonly.length), ...t.readonly);
+  }
+  return Uint8Array.from(out);
+}
+
+/** SetComputeUnitLimit (2, u32) or SetComputeUnitPrice (3, u64), little-endian. */
+function budgetData(kind: 2 | 3, value: bigint): Uint8Array {
+  const d = new Uint8Array(kind === 2 ? 5 : 9);
+  d[0] = kind;
+  const view = new DataView(d.buffer);
+  if (kind === 2) view.setUint32(1, Number(value), true);
+  else view.setBigUint64(1, value, true);
+  return d;
+}
+
+/** The units a transaction gets without a SetComputeUnitLimit (an upper bound: builtins get less). */
+export function defaultComputeUnits(instructions: number): number {
+  return Math.min(MAX_COMPUTE_UNITS, DEFAULT_INSTRUCTION_UNITS * instructions);
+}
+
+/** Limit times price, in lamports (rounded up, as the runtime does). */
+export function priorityFeeLamports(units: number, microLamports: bigint): bigint {
+  return (BigInt(units) * microLamports + 999_999n) / 1_000_000n;
+}
+
+/**
+ * A copy of `tx` with every signature zeroed and the relay's compute budget in front: a limit of
+ * what the runtime would grant anyway (200k per instruction, at most 1.4M, so nothing gets less
+ * compute than before) and a small price. `tx` itself when it has a compute budget already, uses
+ * lookup tables (none of the app's do), or would no longer fit in a packet.
+ */
+export function withComputeBudget(tx: Uint8Array, microLamports = RELAY_MICRO_LAMPORTS_PER_UNIT): Uint8Array {
+  const { signatures, parsed: m } = parseTransaction(tx);
+  const program = addressBytes(COMPUTE_BUDGET_PROGRAM);
+  if (!m.instructions.length || m.lookups.length || m.keys.some((k) => bytesEqual(k, program))) return tx;
+  // A read-only program goes last among the keys: no other index moves.
+  const at = m.keys.length;
+  const message = serializeMessage({
+    ...m,
+    header: { ...m.header, numReadonlyUnsigned: m.header.numReadonlyUnsigned + 1 },
+    keys: [...m.keys, program],
+    instructions: [
+      { programIndex: at, accounts: [], data: budgetData(2, BigInt(defaultComputeUnits(m.instructions.length))) },
+      { programIndex: at, accounts: [], data: budgetData(3, microLamports) },
+      ...m.instructions,
+    ],
+  });
+  const head = shortVecBytes(signatures.length);
+  const out = new Uint8Array(head.length + 64 * signatures.length + message.length);
+  out.set(head);
+  out.set(message, head.length + 64 * signatures.length);
+  return out.length > PACKET_SIZE ? tx : out;
+}
+
+// ---- What a browser wallet may change while signing -------------------------------------
 
 /** Why a relayed answer was refused: `message` in English, `zh` in 中文 (this file has no i18n import). */
 export class RelayCheckError extends Error {
@@ -243,23 +340,149 @@ export class RelayCheckError extends Error {
   }
 }
 
+interface AccountMeta {
+  address: string;
+  signer: boolean;
+  writable: boolean;
+}
+
+interface Decompiled {
+  program: string;
+  accounts: AccountMeta[];
+  data: Uint8Array;
+}
+
+/** Every static key with its flags, from the header (signers first, read-only ones last in each part). */
+function accountMetas(m: ParsedMessage): AccountMeta[] {
+  const { numRequiredSignatures: s, numReadonlySigned: rs, numReadonlyUnsigned: ru } = m.header;
+  return m.keys.map((k, i) => ({ address: base58Encode(k), signer: i < s, writable: i < s ? i < s - rs : i < m.keys.length - ru }));
+}
+
+function decompile(m: ParsedMessage, metas: AccountMeta[]): Decompiled[] {
+  const meta = (i: number) => {
+    if (!metas[i]) throw new RelayCheckError('an instruction names an account that is not in the transaction', '某条指令引用了交易中不存在的账户');
+    return metas[i];
+  };
+  return m.instructions.map((ix) => ({ program: meta(ix.programIndex).address, accounts: ix.accounts.map(meta), data: ix.data }));
+}
+
+/** SetComputeUnitLimit or SetComputeUnitPrice: the only instructions a wallet may add, drop or change. */
+function budgetKind(ix: Decompiled): 'limit' | 'price' | null {
+  if (ix.program !== COMPUTE_BUDGET_PROGRAM || ix.accounts.length) return null;
+  if (ix.data[0] === 2 && ix.data.length === 5) return 'limit';
+  if (ix.data[0] === 3 && ix.data.length === 9) return 'price';
+  return null;
+}
+
+const sameAccount = (a: AccountMeta, b: AccountMeta) => a.address === b.address && a.signer === b.signer && a.writable === b.writable;
+const short = (address: string) => `${address.slice(0, 4)}…${address.slice(-4)}`;
+
+export interface WalletEdits {
+  blockhashChanged: boolean;
+  /** Something besides the blockhash differs (the wallet's compute budget). */
+  edited: boolean;
+}
+
+/**
+ * The one rule both sides apply to the message a browser wallet signed (`got`) for the message the
+ * relay sent (`sent`), message bytes each. Accepted: the very message, but for
+ *   - the blockhash (unless `keepBlockhash`), and
+ *   - SetComputeUnitLimit / SetComputeUnitPrice instructions added, dropped or changed (Phantom's
+ *     priority fee), while the priority fee they ask is at most MAX_WALLET_PRIORITY_FEE.
+ * Everything else must match once decompiled (adding a program reorders the keys): every other
+ * instruction, in the same order, with the same program, accounts (address, signer, writable) and
+ * data; the same signers in the same slots, so the same fee payer; the same writable accounts.
+ * `exact`: a key the app can't sign with again has signed this message, so nothing may change.
+ * Throws RelayCheckError naming the first difference.
+ */
+export function checkWalletEdits(sent: Uint8Array, got: Uint8Array, { keepBlockhash = false, exact = false } = {}): WalletEdits {
+  let a: ParsedMessage;
+  let b: ParsedMessage;
+  try {
+    a = parseMessage(sent);
+    b = parseMessage(got);
+  } catch (e) {
+    throw new RelayCheckError(`unreadable transaction (${(e as Error).message})`, '交易无法解析');
+  }
+  const blockhashChanged = !bytesEqual(a.blockhash, b.blockhash);
+  if (keepBlockhash && blockhashChanged) throw new RelayCheckError('the blockhash had to stay as it was', 'blockhash 不应被改动');
+  if (sameExceptBlockhash(sent, got)) return { blockhashChanged, edited: false };
+  const fail = (en: string, zh: string): never => {
+    throw new RelayCheckError(`the wallet ${en}`, `钱包${zh}`);
+  };
+  if (!bytesEqual(a.keys[0], b.keys[0])) fail('changed the fee payer', '换了手续费支付方');
+  if (exact) fail('changed a transaction another key had signed already (it must come back unchanged)', '改动了已有其他密钥签名的交易（必须原样返回）');
+  if (a.version !== b.version) fail('changed the transaction version', '改了交易版本');
+  if (a.lookups.length || b.lookups.length) fail('changed a transaction that uses address lookup tables (it must come back unchanged)', '改动了使用地址查找表的交易（必须原样返回）');
+  const n = a.header.numRequiredSignatures;
+  if (b.header.numRequiredSignatures !== n || a.keys.some((k, i) => i < n && !bytesEqual(k, b.keys[i]))) fail('changed the signers', '改了签名方');
+  const ma = accountMetas(a);
+  const mb = accountMetas(b);
+  if (new Set(mb.map((m) => m.address)).size !== mb.length) fail('listed an account twice', '重复列出了账户');
+
+  // Every instruction but the compute budget, in order: the same programs first (the clearest
+  // report of an added one), then the same writable accounts, then each one's accounts and data.
+  const ia = decompile(a, ma).filter((ix) => !budgetKind(ix));
+  const all = decompile(b, mb);
+  const ib = all.filter((ix) => !budgetKind(ix));
+  for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+    const [x, y] = [ia[i], ib[i]];
+    if (!x) fail(`added an instruction for program ${y.program}`, `加入了程序 ${y.program} 的指令`);
+    if (!y) fail(`dropped the instruction for program ${x.program}`, `删掉了程序 ${x.program} 的指令`);
+    if (x.program !== y.program) {
+      fail(
+        `made instruction ${i + 1} call program ${y.program}, not ${x.program} (added, dropped or reordered)`,
+        `把第 ${i + 1} 条指令改为调用程序 ${y.program}，原本是 ${x.program}（有指令被加入、删除或调换顺序）`,
+      );
+    }
+  }
+  const wasWritable = new Set(ma.filter((m) => m.writable).map((m) => m.address));
+  const isWritable = new Set(mb.filter((m) => m.writable).map((m) => m.address));
+  for (const w of isWritable) if (!wasWritable.has(w)) fail(`made account ${short(w)} writable`, `把账户 ${short(w)} 改成了可写`);
+  for (const w of wasWritable) if (!isWritable.has(w)) fail(`made account ${short(w)} read-only`, `把账户 ${short(w)} 改成了只读`);
+  ia.forEach((x, i) => {
+    const y = ib[i];
+    if (x.accounts.length !== y.accounts.length || x.accounts.some((acc, j) => !sameAccount(acc, y.accounts[j]))) {
+      fail(`changed the accounts of instruction ${i + 1} (program ${x.program})`, `改了第 ${i + 1} 条指令（程序 ${x.program}）的账户`);
+    }
+    if (!bytesEqual(x.data, y.data)) fail(`changed the data of instruction ${i + 1} (program ${x.program})`, `改了第 ${i + 1} 条指令（程序 ${x.program}）的数据`);
+  });
+
+  // The compute budget it ended up with, and what that costs.
+  const limits = all.filter((ix) => budgetKind(ix) === 'limit');
+  const prices = all.filter((ix) => budgetKind(ix) === 'price');
+  if (limits.length > 1 || prices.length > 1) fail('set the compute budget twice', '重复设置了计算预算');
+  const units = limits.length ? u32(limits[0].data, 1) : defaultComputeUnits(all.filter((ix) => ix.program !== COMPUTE_BUDGET_PROGRAM).length);
+  const fee = priorityFeeLamports(units, prices.length ? u64(prices[0].data, 1) : 0n);
+  if (fee > MAX_WALLET_PRIORITY_FEE) {
+    const [asked, cap] = [formatUnits(fee, 9), formatUnits(MAX_WALLET_PRIORITY_FEE, 9)];
+    fail(`asked a priority fee of ${asked} SOL, above the ${cap} SOL limit`, `要求 ${asked} SOL 的优先费，超过上限 ${cap} SOL`);
+  }
+  return { blockhashChanged, edited: true };
+}
+
+// ---- The app's check on a signed transaction coming back --------------------------------
+
 export interface RelayCheck {
-  /** The returned message bytes (equal to what was sent but for the blockhash). */
+  /** The returned message bytes: what the owner signed, so what the app sends. */
   message: Uint8Array;
   ownerIndex: number;
   ownerSignature: Uint8Array;
   /** The returned message's blockhash, base58. */
   blockhash: string;
   blockhashChanged: boolean;
+  /** The wallet changed more than the blockhash (its compute budget: checkWalletEdits). */
+  edited: boolean;
 }
 
 /**
  * Accept `got` (a signed transaction from the link page) only as a signature on `sent`: the same
- * signer slots, the same message byte for byte except the blockhash (unchanged too when
- * `keepBlockhash`), the owner a required signer, and the owner's slot a valid signature over the
- * returned message. Throws RelayCheckError saying what differed.
+ * signer slots, a message checkWalletEdits accepts (the blockhash unchanged too when
+ * `keepBlockhash`, nothing changed at all when `exact`), the owner a required signer, and the
+ * owner's slot a valid signature over the returned message. Throws RelayCheckError saying what
+ * differed.
  */
-export function checkRelayedTransaction(sent: Uint8Array, got: Uint8Array, owner: Uint8Array, verify: Verify, { keepBlockhash = false } = {}): RelayCheck {
+export function checkRelayedTransaction(sent: Uint8Array, got: Uint8Array, owner: Uint8Array, verify: Verify, { keepBlockhash = false, exact = false } = {}): RelayCheck {
   let a: ParsedTransaction;
   let b: ParsedTransaction;
   try {
@@ -269,16 +492,13 @@ export function checkRelayedTransaction(sent: Uint8Array, got: Uint8Array, owner
     throw new RelayCheckError(`unreadable transaction (${(e as Error).message})`, '交易无法解析');
   }
   if (b.signatures.length !== a.signatures.length) throw new RelayCheckError('the signer slots changed', '签名位被改动了');
-  if (!bytesEqual(a.parsed.keys[0], b.parsed.keys[0])) throw new RelayCheckError('the fee payer changed', '手续费支付方被改动了');
-  if (!sameExceptBlockhash(a.message, b.message)) throw new RelayCheckError('the transaction was changed (more than its blockhash)', '交易内容被改动了（不只是 blockhash）');
-  const blockhashChanged = !bytesEqual(a.parsed.blockhash, b.parsed.blockhash);
-  if (keepBlockhash && blockhashChanged) throw new RelayCheckError('the blockhash had to stay as it was', 'blockhash 不应被改动');
+  const { blockhashChanged, edited } = checkWalletEdits(a.message, b.message, { keepBlockhash, exact });
   const n = a.parsed.header.numRequiredSignatures;
   const ownerIndex = a.parsed.keys.findIndex((k, i) => i < n && bytesEqual(k, owner));
   if (ownerIndex < 0) throw new RelayCheckError('the owner is not a signer of this transaction', '钱包所有者不是这笔交易的签名方');
   const ownerSignature = b.signatures[ownerIndex];
   if (!verify(ownerSignature, b.message, owner)) throw new RelayCheckError("the owner's signature is not valid", '所有者的签名无效');
-  return { message: b.message.slice(), ownerIndex, ownerSignature: ownerSignature.slice(), blockhash: base58Encode(b.parsed.blockhash), blockhashChanged };
+  return { message: b.message.slice(), ownerIndex, ownerSignature: ownerSignature.slice(), blockhash: base58Encode(b.parsed.blockhash), blockhashChanged, edited };
 }
 
 // ---- Login ---------------------------------------------------------------------------

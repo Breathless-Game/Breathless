@@ -240,7 +240,8 @@ export function ownerAddress(_umi: Umi): string {
 export function ownerSigner(umi: Umi): Signer {
   const key = requireOwner();
   if (!current) throw new Error('Connect a wallet first');
-  // The session key too: the desktop Browser wallet signs with it again if it swaps the blockhash.
+  // The session key too: the desktop Browser wallet signs with it again when the message changed
+  // (a fresher blockhash, or a compute budget: relay-signer.ts).
   return current.signer(umi, key, secret ? [sessionSigner(umi)] : []);
 }
 
