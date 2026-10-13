@@ -175,6 +175,12 @@ test('the sweep burns paid-unburned fish from the ledger and settles the rest wi
   assert.match(ledger.get('PlayerOwned').burnSkipped, /not the market/);
   assert.ok(logs.some((l) => l.includes('not burning paid fish PlayerOwned')));
   assert.deepEqual(ledger.unburned(), [], 'every candidate left the list');
+  // Burned by the sale desk between the listing and the fetch: its signature is kept.
+  const raced = ledgerWith({ Raced: 'paid' });
+  const racedChain = fakeChain([], (id) => raced.burned(id, 'desk-sig'));
+  const r2 = sweepOver(raced, racedChain);
+  assert.deepEqual(await r2.sweep.run(), { burned: 0, settled: 1, skipped: 0, failed: 0, left: 0, rateLimited: false });
+  assert.equal(raced.get('Raced').burnTx, 'desk-sig');
   // Nothing to do next time: no fetch at all.
   assert.deepEqual(await sweep.run(), { burned: 0, settled: 0, skipped: 0, failed: 0, left: 0, rateLimited: false });
   assert.equal(chain.fetched.length, 4);

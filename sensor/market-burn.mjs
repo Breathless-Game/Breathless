@@ -88,7 +88,7 @@ export function burnBlocker(asset, { market, collection }) {
  * deps:
  *   collection()  -> the fish collection address, or null before it exists
  *   market        the market wallet's address
- *   ledger        SoldLedger, or the Redis store's ledger: unburned(limit), burned(id, sig), skipBurn(id, why)
+ *   ledger        SoldLedger, or the Redis store's ledger: unburned(limit), get(id), burned(id, sig), skipBurn(id, why)
  *   loadAsset(id) -> the mpl-core asset, or null when it does not exist; throws on an RPC error (429, timeout)
  *   burnOnce(id, asset) burns it (asset: already fetched, so no second fetch); throws on failure
  * Returns { burned, settled, skipped, failed, left, rateLimited }: settled = already gone, marked
@@ -121,7 +121,10 @@ export function createSweep({
       try {
         const asset = await loadAsset(id);
         if (!asset) {
-          await ledger.burned(id, ''); // burned already (or never existed): nothing left to burn
+          // Burned already (or never existed): nothing left to burn. Keep a signature the sale desk
+          // may have recorded since the listing.
+          const r = await ledger.get(id);
+          await ledger.burned(id, r?.burnTx ?? '');
           out.settled++;
         } else {
           const why = burnBlocker(asset, { market, collection: coll });
