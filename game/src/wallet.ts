@@ -29,6 +29,8 @@ const RPC = (import.meta.env.VITE_SOLANA_RPC as string | undefined) ?? 'https://
 const SYSTEM_PROGRAM = publicKey('11111111111111111111111111111111');
 /** How long a page load waits for the last-used wallet's extension to register before giving up on a silent reconnect. */
 const RESTORE_WAIT_MS = 1200;
+/** How long that silent reconnect may take before the page gives up on it: a wallet that never answers must not hold every later login behind it in serial(). */
+const RESTORE_CONNECT_MS = 10_000;
 
 export interface WalletState {
   owner: string | null;
@@ -102,8 +104,18 @@ async function loadSession(forOwner: string): Promise<Uint8Array> {
   return fresh;
 }
 
+/**
+ * Make `next` (connected through `w`) the owner. A different account while one
+ * is already loaded is never swapped in place: as in accountsChanged, the old
+ * owner is dropped and main.ts reloads. connectWallet marked `w` as the wallet
+ * to restore, so that page load silently reconnects the account just picked.
+ */
 async function adopt(w: OwnerWallet, next: string): Promise<WalletState> {
   if (next === owner && w === current && secret) return walletState();
+  if (owner && next !== owner) {
+    drop();
+    return walletState();
+  }
   try {
     migrateLegacy(localStorage, next);
   } catch (e) {
@@ -175,12 +187,22 @@ export function restoreWallet(): Promise<WalletState> {
       const target = restoreTarget(localStorage);
       if (!target) return walletState();
       const w = await waitForWallet(target, RESTORE_WAIT_MS);
-      const address = w && (await w.connect(true));
+      const address = w && (await withTimeout(w.connect(true), RESTORE_CONNECT_MS));
       return w && address ? await adopt(w, address) : walletState();
     } catch {
       return walletState();
     }
   });
+}
+
+/** `p`, or null if it hasn't settled within `ms`. */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
