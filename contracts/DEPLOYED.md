@@ -106,3 +106,43 @@ on-chain program matches). ProgramData extended by 73368 bytes (381848 -> 455216
 - Read-only devnet simulations (scripts/measure-record-catch.ts, nothing sent): Core
   fish mint + `record_catch` for a new owner, 1066 bytes, 34.7k-39.2k CU, success;
   `buy_boat` bait Lv2, 411 bytes, 14.8k CU, success.
+
+# player_state TEST copy on devnet (Vercel pre-cutover only)
+
+Cluster: **devnet**. Deployed 2026-10-13 from `main` 0d6d2f7, with only `declare_id!` changed
+(built in a scratch copy; the repo keeps the live id). A separate program for the Vercel
+deployment's TEST market wallet: the live Config's oracle is the live market wallet, so a TEST
+market's co-signed fish mints fail `record_catch` with `Unauthorized` (0x1770). Vercel uses it
+through `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID` until cutover, then both are
+deleted (deploy/VERCEL.md). Never point the live market or the Dell at it.
+
+| what | address |
+| --- | --- |
+| Program id | [`4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`](https://explorer.solana.com/address/4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L?cluster=devnet) |
+| ProgramData | [`3Kun56APS62jzLNLogJdMpytvFMdFwbGiahK9UggbCYQ`](https://explorer.solana.com/address/3Kun56APS62jzLNLogJdMpytvFMdFwbGiahK9UggbCYQ?cluster=devnet) |
+| `config` PDA | [`BhrxVEScqpVCvfCYc3NP2DoVEhJfkNMLYWJXmpJ1XGyg`](https://explorer.solana.com/address/BhrxVEScqpVCvfCYc3NP2DoVEhJfkNMLYWJXmpJ1XGyg?cluster=devnet) |
+| `progress_config` PDA | [`BzkMp9YJEGEXHZF9LreajTjXSfrRKVofYbn4oaiMSqYT`](https://explorer.solana.com/address/BzkMp9YJEGEXHZF9LreajTjXSfrRKVofYbn4oaiMSqYT?cluster=devnet) |
+| Upgrade authority = admin = oracle (the TEST market wallet) | [`8RJHaqvY2EjsezPU8PX6Cakz6DWPkzjcNTumR7x6tiax`](https://explorer.solana.com/address/8RJHaqvY2EjsezPU8PX6Cakz6DWPkzjcNTumR7x6tiax?cluster=devnet) |
+| PEARL mint (the TEST market's own) | [`92GEca6UrCLJrXtwHYJGtukuE6wqFkiswjYWkQzuEgVv`](https://explorer.solana.com/address/92GEca6UrCLJrXtwHYJGtukuE6wqFkiswjYWkQzuEgVv?cluster=devnet) |
+| Token program (owner of the mint) | `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |
+
+Config and ProgressConfig are the live ones field for field (price table, boat prices, ship and
+map thresholds, versions), except `admin`, `oracle` and `pearl_mint` above and the
+ProgressConfig bump. The PEARL mint is fixed at `initialize_config`, so the program serves this
+one TEST wallet only.
+
+Secret keys (git-ignored, never commit): `contracts/.keys/test-player_state-program.json`,
+`contracts/.keys/test-market.json`.
+
+Binary: 455216 bytes, sha256
+`b495c82412e0f7618effb41f21d5666d5606a63f88c1e9e77fec09c5bf407d31` (the dumped on-chain program
+matches). Same player_state source as the live v2 binary and the same size; the two differ in
+1392 bytes, every differing 32-bit word being a word of the live id swapped for the TEST id.
+
+- Deploy: [`41sD1Tdb…aRCDy`](https://explorer.solana.com/tx/41sD1TdbJgiK68jCentRN8UTFSTzWW5dzEUi3xWhASBMxsxLCzxmqx8ErPxJiRTroZJn2cVd2anQARHjsh7aRCDy?cluster=devnet)
+- `initialize_config` (scripts/init-player-state.ts, `PLAYER_STATE_ORACLE` / `PEARL_MINT` set): [`4QQrUjy9…QttF`](https://explorer.solana.com/tx/4QQrUjy9w1PaeVxXjSdTeVcYJjjs2qJrcz9nHzoB2Ef4eQPmDH1GV5j5oDxuFc7JcYjGJFw6eDvf7ZJd8itZQttF?cluster=devnet)
+- `init_progress_config` (scripts/init-progress-config.ts): [`3n8Z8t28…usY`](https://explorer.solana.com/tx/3n8Z8t28QQQ8btjQXGbRkP6kcNdPnNjhZYy7zCtL4RWLEUkh1qHeXzAehEwh9QwsgpMmmijiM3fkXQdCiUtcusY?cluster=devnet)
+- Read-only simulation of the server's co-signed fish mint (sensor/fish-collection.mjs
+  `buildMintTx`, TEST market as oracle and collection authority, collection
+  `8ppuvcgUVQnbeZ57suBofVQH5g4kYhhSaPMhihxPi7M3`): against the live program `record_catch` fails
+  with 0x1770; against this program the transaction succeeds, 30.7k CU.
