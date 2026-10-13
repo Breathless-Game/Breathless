@@ -26,6 +26,7 @@ const {
   bankEntry,
   bulkSellable,
   bulkSellableBelowEpic,
+  isSpentFishError,
   migrateBank,
   needsConfirm,
   nextRetryAt,
@@ -347,4 +348,16 @@ test('sellBatches: at most 24 fish and 2 transfers per /sell-batch request, ever
   // Every fish its own transfer (handed over earlier, found by getSignaturesForAddress).
   check(Array.from({ length: 7 }, (_, i) => sale(i, `S${i}`)), 4);
   assert.deepEqual(sellBatches([], 24, 2), []);
+});
+
+test('a mint refused as already sold or burned is spent for good; other refusals are not', () => {
+  // fish-cosign.ts CosignError carries the market's status and code (sensor/fish-collection.mjs claim).
+  const cosignError = (status, code) => Object.assign(new Error('refused'), { status, code });
+  assert.equal(isSpentFishError(cosignError(409, 'already-burned')), true);
+  assert.equal(isSpentFishError(cosignError(409, 'already-minted')), false, 'adopted by cosignMint instead');
+  assert.equal(isSpentFishError(cosignError(409, 'mint-in-flight')), false, 'retried with backoff');
+  assert.equal(isSpentFishError(cosignError(429, 'already-burned')), false);
+  assert.equal(isSpentFishError(new Error('already-burned')), false);
+  assert.equal(isSpentFishError(null), false);
+  assert.equal(isSpentFishError(undefined), false);
 });

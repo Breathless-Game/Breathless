@@ -255,6 +255,16 @@ export function selectionRange<T>(order: readonly T[], from: T, to: T, selectabl
 // Maps and ships unlock by the lifetime banked value on chain (player_state Progress, which
 // record_catch raises with each co-signed mint; main.ts applyMapProgress). Selling never lowers it.
 
+/**
+ * The market refused to co-sign a mint because this fish's NFT was already sold or burned
+ * (sensor/fish-collection.mjs claim, HTTP 409 'already-burned'). The fish is spent for good:
+ * retrying can never succeed. Duck-typed like the queue's limitOf (fish-cosign.ts CosignError).
+ */
+export function isSpentFishError(e: unknown): boolean {
+  const x = e as { status?: unknown; code?: unknown } | null;
+  return x?.status === 409 && x.code === 'already-burned';
+}
+
 /** Errors that mean the burner wallet cannot pay (for the upload or the transaction). */
 export function isFundsError(message: string): boolean {
   return /insufficient|0x1\b|debit an account|not enough (balance|funds|sol)/i.test(message);

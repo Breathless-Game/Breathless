@@ -29,6 +29,7 @@ import {
   MIGRATIONS_PER_HOUR,
   MINTS_PER_HOUR,
   MINT_WINDOW_MS,
+  MPL_CORE_PROGRAM,
 } from './market-rules.mjs';
 import {
   Quota,
@@ -51,6 +52,17 @@ const COLLECTION_NEEDS_SOL = 0.005; // ~0.0014 SOL rent + fee, measured on a loc
 const TX_LIMIT = 1232;
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
+
+/**
+ * An account as umi's rpc.getAccount returns it -> 'missing' | 'live' | 'burned'. mpl-core's burn
+ * keeps the address: a 1-byte account (Key::Uninitialized = 0) still owned by Core, so it can never
+ * be created again (devnet: owner CoREENxT…, space 1, data 00). 'missing': no account, or one Core
+ * does not own (stray lamports): no mint ever landed there. Any other Core account is 'live'.
+ */
+export function assetState(acct) {
+  if (!acct?.exists || String(acct.owner) !== MPL_CORE_PROGRAM) return 'missing';
+  return acct.data?.length && acct.data[0] !== 0 ? 'live' : 'burned';
+}
 
 /**
  * The co-signed mint: the Core create into our collection, then player_state record_catch
@@ -174,8 +186,8 @@ export function createFishCollection({
 
   // ---- Chain helpers.
   /**
-   * The asset, or null when it does not exist. An RPC failure (429, timeout) throws: read as "gone",
-   * it would let claim() co-sign a second mint of a fish that already has an NFT.
+   * The asset, or null when it does not exist or is burned (cosignMigrate then refuses it). An RPC
+   * failure (429, timeout) throws instead of reading as "gone".
    */
   async function loadAsset(id) {
     try {
@@ -184,6 +196,15 @@ export function createFishCollection({
       if (isTransientRpcError(e)) throw e;
       return null;
     }
+  }
+
+  /**
+   * What is at an earlier co-signed asset address: 'live', 'burned' or 'missing' (assetState).
+   * Any RPC failure throws: read as "missing", it would co-sign a second mint of a fish that
+   * already has, or had, an NFT.
+   */
+  async function priorAssetState(id) {
+    return assetState(await u.rpc.getAccount(publicKey(id)));
   }
 
   async function blockHeight() {
@@ -206,14 +227,22 @@ export function createFishCollection({
 
   /**
    * Has this owner's fish already got an asset? 'free' (never, or a co-signed tx that expired
-   * unsent), 'same' (this very asset: a retry, sign again), or throws 409.
+   * unsent), 'same' (this very asset: a retry, sign again; a burned address can't be created
+   * again, so that mint fails on chain), or throws 409: already-minted (the NFT exists),
+   * already-burned (it existed and was sold or burned: the fish is spent for good), mint-in-flight.
    */
   async function claim(owner, fishId, asset) {
     const prior = await registry.get(owner, fishId);
     if (!prior || prior.asset === asset) return prior ? 'same' : 'free';
-    const existing = await loadAsset(prior.asset);
-    if (existing) {
+    const was = await priorAssetState(prior.asset);
+    if (was === 'live') {
       throw new HttpError(409, `This fish is already an NFT (${prior.asset})`, { code: 'already-minted', assetId: prior.asset });
+    }
+    if (was === 'burned') {
+      throw new HttpError(409, `This fish's NFT was already sold or burned (${prior.asset}): it can't be minted again`, {
+        code: 'already-burned',
+        assetId: prior.asset,
+      });
     }
     if (prior.lastValid !== null && (await blockHeight()) <= prior.lastValid) {
       throw new HttpError(409, 'An earlier mint of this fish may still land: retry in a minute', { code: 'mint-in-flight', retryAfterMs: 30_000 });
@@ -318,6 +347,7 @@ export function createFishCollection({
     capBatch,
     cosignMint,
     cosignMigrate,
+    claim,
     limits: { mintsPerHour, migrationsPerHour, dailyPearls: limits.dailyPearls ?? DAILY_PEARL_CAP },
   };
 }
