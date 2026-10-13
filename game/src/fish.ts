@@ -349,6 +349,8 @@ export interface FishMesh {
   /** The body alone (no fins, tail or eyes), e.g. to carve into; and its unscaled proportions. */
   body: THREE.Mesh;
   size: { len: number; height: number; width: number };
+  /** Extra yaw while swimming, for a model built leading with −x (an octopus jets mantle-first, arms trailing). Static renders ignore it. */
+  swimYaw?: number;
 }
 
 /** How finely the body is built. The game's fish are hexagonal, 6 rings long; more gives a smoother flank (e.g. to carve a name into). */
@@ -714,12 +716,14 @@ export class Fish {
     const g = this.mesh.group;
     const bob = Math.sin(time * (1.25 + speed * 0.12) + this.phase) * Math.min(0.11, 0.035 + speed * 0.008);
     g.position.set(this.pos.x, this.pos.y + bob, this.pos.z);
-    const targetYaw = this.facing > 0 ? 0 : Math.PI;
+    const lead = this.mesh.swimYaw ?? 0;
+    const targetYaw = (this.facing > 0 ? 0 : Math.PI) + lead;
     const yawDelta = THREE.MathUtils.euclideanModulo(targetYaw - g.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
     g.rotation.y += yawDelta * Math.min(1, dt * 6);
     // Rotation around z is a pitch in this side-on model. It should not flip
-    // when the fish turns around, otherwise upward swims point downward.
-    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5)
+    // when the fish turns around, otherwise upward swims point downward; but it
+    // does flip for a model that leads with its −x end.
+    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5) * Math.cos(lead)
       + Math.sin(time * 1.8 + this.phase) * 0.035;
     g.rotation.x = THREE.MathUtils.clamp(-this.vel.z * 0.1, -0.24, 0.24);
     const wag = (6 + this.vel.length() * 2.5) * (0.85 + this.profile.swimSpeed * 0.15);

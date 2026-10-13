@@ -467,6 +467,35 @@ test('fish head direction follows upward and downward swimming while facing left
   }
 });
 
+test('cephalopods swim mantle-first, arms trailing, while facing left or right', () => {
+  const distantDiver = new THREE.Vector3(500, 0, 0);
+  for (const species of ['Reef Octopus', 'Vampire Squid', 'Chambered Nautilus']) {
+    let spec;
+    for (let seed = 1; !spec && seed < 5000; seed++) {
+      for (const rarity of ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic']) {
+        const rolled = rollFish(seed, 20, [[rarity, 1]]);
+        if (rolled.species === species) { spec = rolled; break; }
+      }
+    }
+    assert.ok(spec, `a seed rolls ${species}`);
+    for (const horizontal of [-3, 3]) {
+      for (const vertical of [-2, 2]) {
+        const zone = ZONES[1];
+        const fish = new Fish(spec, zone, 0, -(zone.top + zone.bottom) / 2, 140);
+        fish.pos.z = 0;
+        fish.target.copy(fish.pos).add(new THREE.Vector3(horizontal * 10, vertical * 10, 0));
+        for (let frame = 0; frame < 180; frame++) fish.update(1 / 60, frame / 60, distantDiver);
+        assert.ok(fish.vel.x * horizontal > 0 && fish.vel.y * vertical > 0);
+        fish.mesh.group.updateMatrixWorld(true);
+        // The model is built arms toward +x, so its mantle (−x) must lead.
+        const mantle = new THREE.Vector3(-1, 0, 0).transformDirection(fish.mesh.group.matrixWorld);
+        assert.ok(mantle.x * horizontal > 0, `${species} leads with its mantle, travelling ${horizontal}`);
+        assert.ok(mantle.y * vertical > 0, `${species} mantle follows vertical travel ${vertical}, facing ${horizontal}`);
+      }
+    }
+  }
+});
+
 test('fish stay inside the expanded ±140 corridor at both new map edges', () => {
   for (const edge of [-1, 1]) {
     const fish = createFish(100 + edge);

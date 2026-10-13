@@ -441,6 +441,7 @@ export class TankTable extends TableScene {
     const holder = new THREE.Group();
     mesh.group.scale.setScalar(len / mesh.size.len);
     holder.add(mesh.group);
+    mesh.group.rotation.y = mesh.swimYaw ?? 0;
     holder.userData.fish = fish;
     mesh.group.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = true;
