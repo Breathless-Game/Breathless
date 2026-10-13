@@ -1,6 +1,7 @@
 import { fishValue } from './fish';
 import {
   isFundsError,
+  isSpentFishError,
   nextRetryAt,
   nextToMint,
   nftStep,
@@ -343,6 +344,16 @@ export class NftQueue {
             this.mintPause = { until: Date.now() + limit, reason: msg };
             this.schedulePoll(limit);
             return;
+          }
+          if (isSpentFishError(e)) {
+            // Its NFT was already sold or burned (another device, or a lost bank): the fish is spent,
+            // so it leaves the bank like a sold fish instead of failing and retrying.
+            console.warn('fish already sold or burned, removing it from the bank', f.id, errorText(e));
+            const i = this.bank.indexOf(f);
+            if (i >= 0) this.bank.splice(i, 1);
+            this.sellErrors.delete(f);
+            this.save();
+            continue;
           }
           console.error('mint failed', e);
           // A real shortfall pauses the queue without costing the fish an attempt. If the wallet looks
