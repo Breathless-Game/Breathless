@@ -88,7 +88,8 @@ function openOutside(raw) {
 }
 
 // ---- Deep links (breathless://) ---------------------------------------------
-// Phase B (wallet login through the system browser) will come back here. For now: log.
+// Nothing uses these yet: the browser wallet (wallet-bridge.js) answers through the server relay,
+// which the game polls, so a link back into the app is not needed. Logged only.
 function onDeepLink(url) {
   log('deep link:', String(url).slice(0, 500));
 }
