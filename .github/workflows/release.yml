@@ -1,0 +1,119 @@
+# Builds the desktop app (desktop/, Electron) for Windows, macOS and Linux and puts the
+# installers on a DRAFT GitHub Release for the tag. Publishing the draft stays a manual step.
+#   git tag v0.2.0 && git push origin v0.2.0
+# Run it from the Actions tab (workflow_dispatch) to build without a release: the installers
+# are then only kept as workflow artifacts. The app loads the live site, so this never
+# touches the site deploy (deploy.yml runs on pushes to main only, never on tags).
+# Builds are unsigned: there are no certificates. desktop/README.md says what users see.
+name: Release desktop app
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: --win
+          - os: macos-latest
+            platform: --mac
+          - os: ubuntu-latest
+            platform: --linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      # No certificates: don't look for one in the keychain. macOS gets an ad-hoc signature
+      # (mac.identity "-" in desktop/package.json), which Apple Silicon needs to launch at all.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # The tag is the version: v0.2.0 builds 0.2.0, whatever desktop/package.json says.
+      - name: Version from tag
+        if: github.ref_type == 'tag'
+        run: echo "VERSION_FLAG=-c.extraMetadata.version=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # --publish never: electron-builder uploads nothing itself; the release job below does,
+      # after the check, from one place (three runners racing to create one draft fail).
+      - name: Package
+        run: npx electron-builder ${{ matrix.platform }} --publish never $VERSION_FLAG
+
+      # The downloads are public: fail if anything but the desktop app's own files got packed.
+      - name: Check packaged files
+        run: node scripts/check-package.mjs dist
+
+      # The installers only (NSIS also leaves its uninstaller stub, *__uninstaller.exe, in dist/).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ runner.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            !desktop/dist/*__uninstaller*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: installers
+          merge-multiple: true
+
+      - name: Upload to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -la installers
+          # Re-running the workflow refreshes the files of a draft, but never edits a published release.
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != "true" ]; then
+              echo "::error::Release $TAG is already published; not touching it."
+              exit 1
+            fi
+            gh release upload "$TAG" installers/* --clobber
+          else
+            gh release create "$TAG" installers/* --draft --verify-tag \
+              --title "屏息 Breathless $TAG" --notes-file desktop/release-notes-template.md
+          fi

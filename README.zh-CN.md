@@ -90,6 +90,10 @@
 
 ## 2. 快速开始
 
+### 桌面版
+
+只想玩？用浏览器打开 https://breathless.gotclass.xyz ，或者到 [Releases](https://github.com/LucasYanzy/HackRU26-Breathless/releases) 下载 Windows、macOS、Linux 桌面版。它是同一个网站套了一个窗口（所以永远是最新版，也必须联网），在双显卡笔记本上会请求用独立显卡。安装包没有签名，第一次打开会弹警告：[怎样照样打开](desktop/README.md#first-launch-of-an-unsigned-build)。桌面版里的钱包登录还没做好。构建和发版见 [desktop/README.md](desktop/README.md)。
+
 ### 环境要求
 
 - **Node.js 20+**（开发机是 v20.19.5）
