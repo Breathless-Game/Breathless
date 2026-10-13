@@ -128,7 +128,7 @@ export function createFileStore({ dir }) {
     /** The market wallet: null here, market.mjs reads (or creates) <dir>/.market-keypair.json as always. */
     marketSecret: () => null,
 
-    /** { state, ledger, save, refresh } exactly as server mode always kept them: one JSON file, tmp + rename. */
+    /** { state, ledger, save, refresh, adopt } exactly as server mode always kept them: one JSON file, tmp + rename. */
     async openMarketState({ cluster }) {
       const statePath = path.join(dir, STATE_FILE);
       const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { cluster, mint: null, sold: {} };
@@ -140,7 +140,7 @@ export function createFileStore({ dir }) {
       };
       const ledger = new SoldLedger(state.sold, save);
       // One process: the object in memory is already the newest state.
-      return { state, ledger, save, refresh: async () => {} };
+      return { state, ledger, save, refresh: async () => {}, adopt: async () => {} };
     },
 
     /** The co-sign registry: the JSON-lines file, one appended line per co-signed mint or migration. */
@@ -547,6 +547,11 @@ export function createRedisSerials(redis, prefix = DEFAULT_PREFIX) {
   };
 }
 
+/** Market state fields set once and never replaced: two instances racing keep the first one saved. */
+const WRITE_ONCE = ['mint', 'fishCollection', 'fishCollectionSlot'];
+/** Equal as stored state: an absent field and null are the same. */
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
 export function createRedisStore({ redis, prefix = DEFAULT_PREFIX, env = process.env }) {
   const keys = redisKeys(prefix);
   const kv = createRedisKv(redis, prefix);
@@ -558,25 +563,60 @@ export function createRedisStore({ redis, prefix = DEFAULT_PREFIX, env = process
     marketSecret: () => parseSecretKey(env.MARKET_SECRET_KEY),
 
     /**
-     * { state, ledger, save, refresh }: the PEARL mint and fish collection (one JSON key, no sold
-     * set: that is RedisLedger), saved whole. refresh() reloads it into `state` in place, for an
-     * instance that started before another one created the mint or the collection.
+     * { state, ledger, save, refresh, adopt }: the PEARL mint and fish collection (one JSON key, no
+     * sold set: that is RedisLedger). Several instances write it, so save() never writes the whole
+     * object: it compare-and-sets only the fields this instance changed since it last read Redis
+     * (`base`) onto whatever Redis holds now. A field another instance changed meanwhile stays
+     * theirs: a delete only removes the value this instance knew, and a set write-once field
+     * (WRITE_ONCE: the mint, the collection) is never replaced; its winner is copied into `state`.
+     * refresh() replaces `state` with Redis's copy: only under the setup lock (market-server-mode.mjs),
+     * where no save of this instance is in flight. adopt() is the lock-free read: it only copies a
+     * write-once field another instance created into `state`, and never deletes anything.
      */
     async openMarketState({ cluster }) {
-      const load = async () => parse(await redis.get(keys.state)) ?? { cluster, mint: null };
-      const state = await load();
-      delete state.sold;
+      const read = async () => {
+        const raw = await redis.get(keys.state);
+        const obj = parse(raw) ?? {};
+        delete obj.sold;
+        return { raw: raw === null || raw === undefined ? null : String(raw), obj };
+      };
+      let { obj: base } = await read();
+      const state = Object.keys(base).length ? structuredClone(base) : { cluster, mint: null };
       const save = async () => {
-        const { sold: _sold, ...rest } = state;
-        await redis.set(keys.state, JSON.stringify(rest));
+        for (let i = 0; i < CAS_TRIES; i++) {
+          const { raw, obj: cur } = await read();
+          const next = { ...cur };
+          const theirs = []; // changed here, but another instance's value stays
+          for (const k of new Set([...Object.keys(state), ...Object.keys(base)])) {
+            if (k === 'sold' || same(state[k], base[k])) continue; // not changed here
+            if (WRITE_ONCE.includes(k) && cur[k] != null && !same(cur[k], state[k])) theirs.push(k); // first writer wins
+            else if (state[k] !== undefined) next[k] = state[k];
+            else if (same(cur[k], base[k])) delete next[k];
+            else theirs.push(k);
+          }
+          const text = JSON.stringify(next);
+          if (await redisCas(redis, keys.state, raw, text)) {
+            base = JSON.parse(text);
+            // Take what stayed theirs into `state` too, so a later save doesn't see it as ours to change.
+            for (const k of theirs) state[k] = structuredClone(next[k]);
+            for (const k of WRITE_ONCE) if (next[k] != null) state[k] = next[k];
+            return;
+          }
+        }
+        throw new HttpError(503, 'The market state is busy, retry in a few seconds');
       };
       const refresh = async () => {
-        const fresh = await load();
-        delete fresh.sold;
+        const { obj: fresh } = await read();
+        if (!Object.keys(fresh).length) return; // nothing saved yet
         for (const k of Object.keys(state)) if (!(k in fresh)) delete state[k];
-        Object.assign(state, fresh);
+        Object.assign(state, structuredClone(fresh));
+        base = fresh;
       };
-      return { state, ledger: new RedisLedger(redis, prefix), save, refresh };
+      const adopt = async () => {
+        const { obj: fresh } = await read();
+        for (const k of WRITE_ONCE) if (state[k] == null && fresh[k] != null) state[k] = base[k] = fresh[k];
+      };
+      return { state, ledger: new RedisLedger(redis, prefix), save, refresh, adopt };
     },
 
     openRegistry: () => new RedisRegistry(redis, prefix),

@@ -7,6 +7,8 @@ import test from 'node:test';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { DAILY_PEARL_CAP, HttpError, MPL_CORE_PROGRAM, SoldLedger, appraise } from '../market-rules.mjs';
 import { checkPayoutCap } from '../fish-trust.mjs';
+import { pendingIsLive } from '../fish-collection.mjs';
+import { SETUP_LOCK, createSetupStep } from '../market-server-mode.mjs';
 import { createPayout } from '../market-payout.mjs';
 import { createSaleDesk } from '../market-sale.mjs';
 import { SWEEP_RESUME_AFTER_MS, createSweep } from '../market-burn.mjs';
@@ -624,6 +626,110 @@ test('market state: saved without the sold set, and refresh() picks up what anot
   await s2.refresh();
   assert.deepEqual(s2.state, { cluster: 'devnet', mint: 'Mint1' });
   assert.equal(JSON.parse(redis.data.get('test:state').value).sold, undefined);
+});
+
+const openState = (redis) => createRedisStore({ redis, prefix: 'test:', env: {} }).openMarketState({ cluster: 'devnet' });
+const savedState = (redis) => JSON.parse(redis.data.get('test:state').value);
+
+test('market state: one instance saving the mint and another the collection, at once, keeps both', async () => {
+  const redis = createFakeRedis();
+  const [a, b] = await Promise.all([openState(redis), openState(redis)]);
+  const mintSteps = async () => {
+    a.state.pendingMint = 'Mint1';
+    await a.save();
+    a.state.mint = 'Mint1';
+    delete a.state.pendingMint;
+    await a.save();
+  };
+  const collectionSteps = async () => {
+    b.state.pendingFishCollection = 'Coll1';
+    await b.save();
+    b.state.fishCollection = 'Coll1';
+    b.state.fishCollectionSlot = 77;
+    delete b.state.pendingFishCollection;
+    await b.save();
+  };
+  await Promise.all([mintSteps(), collectionSteps()]);
+  assert.deepEqual(savedState(redis), { cluster: 'devnet', mint: 'Mint1', fishCollection: 'Coll1', fishCollectionSlot: 77 });
+  // A later refresh (under the setup lock) sees both.
+  await a.refresh();
+  assert.deepEqual(a.state, { cluster: 'devnet', mint: 'Mint1', fishCollection: 'Coll1', fishCollectionSlot: 77 });
+  const c = await openState(redis);
+  assert.deepEqual(c.state, savedState(redis));
+});
+
+test('market state: a lock-free read (adopt) during an in-flight save never drops the pending mint', async () => {
+  const redis = createFakeRedis();
+  const a = await openState(redis);
+  const other = await openState(redis);
+  other.state.fishCollection = 'Coll1';
+  await other.save();
+  a.state.pendingMint = 'Mint1';
+  // info() reads while the setup step saves: the read's GET may return the JSON before the save.
+  await Promise.all([a.save(), a.adopt(), a.adopt()]);
+  assert.equal(a.state.pendingMint, 'Mint1');
+  assert.equal(a.state.fishCollection, 'Coll1', 'adopt copies what another instance created');
+  assert.equal(savedState(redis).pendingMint, 'Mint1');
+  // Finishing the step (as createPearlMint does) then saves the mint and clears the pending address.
+  a.state.mint = 'Mint1';
+  delete a.state.pendingMint;
+  await Promise.all([a.save(), a.adopt()]);
+  assert.deepEqual(savedState(redis), { cluster: 'devnet', mint: 'Mint1', fishCollection: 'Coll1' });
+  assert.equal(a.state.mint, 'Mint1');
+});
+
+test('market state: a saved mint or collection is never replaced, and a delete only removes what this instance knew', async () => {
+  const redis = createFakeRedis();
+  const [a, b] = await Promise.all([openState(redis), openState(redis)]);
+  a.state.mint = 'MintA';
+  await a.save();
+  b.state.mint = 'MintB'; // a late second mint (a sender frozen past the setup lock)
+  await b.save();
+  assert.equal(savedState(redis).mint, 'MintA', 'the first saved mint stays');
+  assert.equal(b.state.mint, 'MintA', 'the loser now uses the saved one');
+
+  a.state.pendingFishCollection = 'P1';
+  await a.save();
+  await b.refresh();
+  a.state.pendingFishCollection = 'P2'; // a newer step replaced the pending address
+  await a.save();
+  delete b.state.pendingFishCollection; // b, still knowing P1, clears it
+  await b.save();
+  assert.equal(savedState(redis).pendingFishCollection, 'P2');
+  assert.equal(b.state.pendingFishCollection, 'P2', 'b now holds the value that stayed');
+  await b.save();
+  assert.equal(savedState(redis).pendingFishCollection, 'P2', 'a second save does not delete it either');
+});
+
+test('setup steps: one lock for the mint and the collection; the file store runs them as before', async () => {
+  const redis = createFakeRedis();
+  const store = createRedisStore({ redis, prefix: 'test:', env: {} });
+  const { refresh } = await store.openMarketState({ cluster: 'devnet' });
+  const step = createSetupStep({ store, refresh, shared: true });
+  assert.equal(SETUP_LOCK, 'setup');
+  let finish;
+  const mint = step('PEARL mint', () => new Promise((r) => (finish = r)));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(redis.data.has('test:kv:lock:setup'));
+  await assert.rejects(step('fish collection', async () => 'Coll1'), (e) => e.status === 503 && /fish collection/.test(e.message));
+  // Another instance's store over the same Redis is refused too.
+  const other = createRedisStore({ redis, prefix: 'test:', env: {} });
+  const otherStep = createSetupStep({ store: other, refresh, shared: true });
+  await assert.rejects(otherStep('fish collection', async () => 'Coll1'), (e) => e.status === 503);
+  finish('Mint1');
+  assert.equal(await mint, 'Mint1');
+  assert.equal(await step('fish collection', async () => 'Coll1'), 'Coll1', 'free again once the mint step is done');
+
+  const fileStep = createSetupStep({ store: { lock: () => assert.fail('no lock in one process') }, refresh, shared: false });
+  assert.deepEqual(await Promise.all([fileStep('PEARL mint', async () => 1), fileStep('fish collection', async () => 2)]), [1, 2]);
+});
+
+test('pendingIsLive: a pending address younger than the setup lock may still land; none in one process', () => {
+  const now = 1_000_000;
+  assert.equal(pendingIsLive(now - 1000, 240_000, now), true);
+  assert.equal(pendingIsLive(now - 240_000, 240_000, now), false);
+  assert.equal(pendingIsLive(undefined, 240_000, now), false, 'an old pending address without a time: replace it, as before');
+  assert.equal(pendingIsLive(now - 1000, 0, now), false, 'file store: as before');
 });
 
 /** The KV contract, run against the memory KV (Dell) and the Redis one. */

@@ -94,9 +94,24 @@ export function buildMintTx(u, { m, collection, blockhash, programId = playerSta
 }
 
 /**
+ * Whether a pending PEARL mint / fish collection (saved, with its time `at`, right before its
+ * create transaction is sent) that hasn't landed may still land, so must not be replaced yet. Its
+ * sender holds the setup lock (market-server-mode.mjs) for at most waitMs = SETUP_LOCK_MS, and a
+ * transaction's blockhash expires ~90 s after it is built: once the address is older than the
+ * lock, its transaction landed (and was adopted before this check) or expired, so a new signer is
+ * safe. The one leftover case, a sender frozen between saving and sending for longer than the
+ * lock, lands a second account later, but the store never replaces a saved mint or collection
+ * (write-once fields, market-store.mjs), so that one stays unused. waitMs 0 (one process): never.
+ */
+export function pendingIsLive(at, waitMs, now = Date.now()) {
+  return waitMs > 0 && Number.isFinite(at) && now - at < waitMs;
+}
+
+/**
  * deps: u (umi, identity = market wallet, mplCore installed), state + save (the server mode's
  * persisted state object), registry (the store's FishRegistry; default: the file in `dir`),
- * setupStep(name, fn) (runs the collection's creation once across instances), ledger (SoldLedger,
+ * setupStep(name, fn) (runs the collection's creation once across instances), pendingWaitMs (see
+ * pendingIsLive; 0, one process: a pending collection that hasn't landed is replaced), ledger (SoldLedger,
  * for the payout cap), balanceSol(maxAgeMs), log.
  * opts: legacyGraceSlots, limits ({ mintsPerHour, migrationsPerHour, dailyPearls }) for tests.
  */
@@ -107,6 +122,7 @@ export function createFishCollection({
   dir,
   registry = createFileStore({ dir }).openRegistry(),
   setupStep = (_name, fn) => fn(),
+  pendingWaitMs = 0,
   ledger,
   balanceSol,
   log,
@@ -142,22 +158,31 @@ export function createFishCollection({
       state.fishCollection = state.pendingFishCollection;
       state.fishCollectionSlot ??= Number(await u.rpc.getSlot({ commitment: 'confirmed' }));
       delete state.pendingFishCollection;
+      delete state.pendingFishCollectionAt;
       await save();
       return state.fishCollection;
+    }
+    // Not landed (yet): a sender that just failed to confirm, or lost the lock, may still land it.
+    if (state.pendingFishCollection && pendingIsLive(state.pendingFishCollectionAt, pendingWaitMs)) {
+      throw new HttpError(503, 'The fish collection is still being created, retry in a few minutes');
     }
     if ((await balanceSol(0)) < COLLECTION_NEEDS_SOL) {
       throw new HttpError(503, `The fish collection is not created yet: the market wallet ${market} needs devnet SOL`);
     }
     const signer = generateSigner(u);
-    state.pendingFishCollection = signer.publicKey.toString();
+    const address = signer.publicKey.toString(); // not state.pendingFishCollection: kept even if `state` is reloaded
+    state.pendingFishCollection = address;
+    if (pendingWaitMs) state.pendingFishCollectionAt = Date.now();
     await save();
     await createCollection(u, { collection: signer, name: FISH_COLLECTION_NAME, uri: '' }).sendAndConfirm(u);
-    state.fishCollection = state.pendingFishCollection;
+    state.fishCollection = address;
     // Fish created before this slot (plus a grace) are "legacy" and may migrate in.
     state.fishCollectionSlot = Number(await u.rpc.getSlot({ commitment: 'confirmed' }));
     delete state.pendingFishCollection;
-    await save();
-    log(`[market] created fish collection ${state.fishCollection} (slot ${state.fishCollectionSlot})`);
+    delete state.pendingFishCollectionAt;
+    await save(); // shared store: if another instance saved a collection first, `state` now holds that one
+    if (state.fishCollection !== address) log(`[market] fish collection ${address} landed after ${state.fishCollection} was saved: left unused`);
+    else log(`[market] created fish collection ${state.fishCollection} (slot ${state.fishCollectionSlot})`);
     return state.fishCollection;
   }
 

@@ -15,7 +15,7 @@ import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { HttpError, parseQuoteBatchBody, parseQuoteBody, singleFlight } from './market-rules.mjs';
 import { createBurnRetry, createSweep } from './market-burn.mjs';
-import { createFishCollection } from './fish-collection.mjs';
+import { createFishCollection, pendingIsLive } from './fish-collection.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 import { createFileStore } from './market-store.mjs';
@@ -35,6 +35,27 @@ const COLLECTION_TTL_MS = 60_000;
 // Creating the PEARL mint or the fish collection (Irys upload, send, confirm) holds this lock across
 // instances (Redis store) for at most this long; one process needs no lock.
 const SETUP_LOCK_MS = 4 * 60_000;
+/** ONE lock for every setup step: creating the mint and the collection each save the shared state. */
+export const SETUP_LOCK = 'setup';
+
+/**
+ * setupStep(name, fn): one setup step at a time across instances (and within one), on the newest
+ * state: refresh() runs only here, under the lock, so it never races a save of this instance.
+ * `name` only words the 503. One process (file store): just run it, as always.
+ */
+export function createSetupStep({ store, refresh, shared, lockMs = SETUP_LOCK_MS }) {
+  if (!shared) return (_name, fn) => fn();
+  return async (name, fn) => {
+    const release = await store.lock(SETUP_LOCK, lockMs);
+    if (!release) throw new HttpError(503, `The market is being set up (${name} waits for another step), retry in a minute`);
+    try {
+      await refresh();
+      return await fn();
+    } finally {
+      await Promise.resolve(release()).catch(() => {});
+    }
+  };
+}
 
 const sigStr = (bytes) => base58.deserialize(bytes)[0];
 const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
@@ -48,21 +69,11 @@ const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
 export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, store, background = true, batchDeadlineMs }) {
   const marketKey = u.identity.publicKey.toString();
   store ??= createFileStore({ dir });
-  const { state, ledger, save, refresh } = await store.openMarketState({ cluster: redactRpc(rpc) });
+  const { state, ledger, save, refresh, adopt } = await store.openMarketState({ cluster: redactRpc(rpc) });
   const shared = store.kind !== 'file'; // other instances write the same state
-
-  /** One setup step at a time across instances, on the newest state. One process: just run it. */
-  async function setupStep(name, fn) {
-    if (!shared) return fn();
-    const release = await store.lock(`setup:${name}`, SETUP_LOCK_MS);
-    if (!release) throw new HttpError(503, `The market's ${name} is being created by another instance, retry in a minute`);
-    try {
-      await refresh();
-      return await fn();
-    } finally {
-      await Promise.resolve(release()).catch(() => {});
-    }
-  }
+  const setupStep = createSetupStep({ store, refresh, shared });
+  // A pending mint / collection younger than this may still land (see pendingIsLive); one process: none.
+  const pendingWaitMs = shared ? SETUP_LOCK_MS : 0;
 
   log(`[market] mode: server (PEARL minted by the market wallet; set FISH_MARKET_PROGRAM_ID for program mode)`);
   log(`[market] market wallet ${marketKey}  (${redactRpc(rpc)})`);
@@ -107,15 +118,22 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     if (state.pendingMint && (await u.rpc.accountExists(publicKey(state.pendingMint)))) {
       state.mint = state.pendingMint;
       delete state.pendingMint;
+      delete state.pendingMintAt;
       await save();
       return state.mint;
+    }
+    // Not landed (yet): a sender that just failed to confirm, or lost the lock, may still land it.
+    if (state.pendingMint && pendingIsLive(state.pendingMintAt, pendingWaitMs)) {
+      throw new HttpError(503, 'The PEARL mint is still being created, retry in a few minutes');
     }
     if ((await balanceSol(0)) < MINT_NEEDS_SOL) {
       throw new HttpError(503, `PEARL market is not funded yet. Send devnet SOL to ${marketKey} (${FAUCET})`);
     }
     const uri = await uploadMetadata();
     const mint = generateSigner(u);
-    state.pendingMint = mint.publicKey.toString();
+    const address = mint.publicKey.toString(); // not state.pendingMint: kept even if `state` is reloaded
+    state.pendingMint = address;
+    if (pendingWaitMs) state.pendingMintAt = Date.now();
     await save();
     await createFungible(u, {
       mint,
@@ -125,10 +143,12 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
       sellerFeeBasisPoints: percentAmount(0),
       decimals: 0,
     }).sendAndConfirm(u);
-    state.mint = state.pendingMint;
+    state.mint = address;
     delete state.pendingMint;
-    await save();
-    log(`[market] created PEARL mint ${state.mint}`);
+    delete state.pendingMintAt;
+    await save(); // shared store: if another instance saved a mint first, `state.mint` is now that one
+    if (state.mint !== address) log(`[market] PEARL mint ${address} landed after ${state.mint} was saved: left unused`);
+    else log(`[market] created PEARL mint ${state.mint}`);
     return state.mint;
   }
 
@@ -191,7 +211,7 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
   }
 
   // The fish collection, the co-signed mint / migration routes and the one price gate (fish-collection.mjs).
-  const fish = createFishCollection({ u, state, save, registry: await store.openRegistry(), setupStep, ledger, balanceSol, log, ...fishOptions });
+  const fish = createFishCollection({ u, state, save, registry: await store.openRegistry(), setupStep, pendingWaitMs, ledger, balanceSol, log, ...fishOptions });
 
   /** Price check before the player hands the fish over, so the market never holds a fish it refuses. */
   async function quote(body) {
@@ -317,7 +337,7 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
 
   async function info() {
     // Another instance may have created the mint or the collection since this one loaded the state.
-    if (shared && (!state.mint || !state.fishCollection)) await refresh();
+    if (shared && (!state.mint || !state.fishCollection)) await adopt(); // read only: a setup step may be saving
     let funded = false;
     try {
       funded = (await balanceSol()) >= FUNDED_SOL;
