@@ -1,7 +1,7 @@
 import { rollFish } from './fish';
 import { cosignInfo } from './fish-cosign';
 import { MAPS } from './maps';
-import type { BankedFish } from './market';
+import { isRateLimitError as isRateLimit, type BankedFish } from './market';
 import { bankedFromChain, entryFromAsset, mergeChainFish, type CoreAssetLike, type MergeResult, type OwnedFish } from './chain-fish';
 
 // Brings the wallet's fish NFTs from the chain into the local bank (chain-fish.ts has the rules),
@@ -45,7 +45,6 @@ export interface ChainFishDeps {
 class RelayDown extends Error {}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const isRateLimit = (e: unknown) => /\b429\b|too many requests/i.test(e instanceof Error ? e.message : String(e));
 
 async function fromRelay(owner: string): Promise<OwnedFish[]> {
   let res: Response;
