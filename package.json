@@ -24,5 +24,10 @@
     "@metaplex-foundation/umi-bundle-defaults": "1.6.0",
     "@upstash/redis": "1.39.0",
     "@vercel/functions": "3.9.9"
+  },
+  "overrides": {
+    "rpc-websockets": {
+      "uuid": "11.1.1"
+    }
   }
 }
