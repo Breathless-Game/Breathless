@@ -1,0 +1,78 @@
+# Checks every pull request and every push to main: game type-check, tests and build, and the
+# sensor's syntax check and tests. It deploys nothing and needs no secrets: production is
+# Vercel, which builds and deploys main (and a Preview for each PR branch) through its own
+# GitHub integration, with its own environment variables (deploy/VERCEL.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            game/package-lock.json
+            sensor/package-lock.json
+
+      - name: Install game dependencies
+        working-directory: game
+        run: npm ci --no-audit --no-fund
+
+      - name: Test game
+        working-directory: game
+        run: npm test
+
+      - name: Build game (typecheck + vite build)
+        working-directory: game
+        run: npm run build
+
+      # index.mjs imports the PEARL market (market.mjs and its modules) lazily, so a
+      # syntax error there would only show up as a 503 at runtime: check them all here.
+      - name: Check sensor syntax
+        run: |
+          node --check sensor/index.mjs
+          node --check sensor/static.mjs
+          node --check sensor/frames.mjs
+          node --check sensor/decode.mjs
+          node --check sensor/market.mjs
+          node --check sensor/market-rules.mjs
+          node --check sensor/fish-market.mjs
+          node --check sensor/market-program-mode.mjs
+          node --check sensor/market-server-mode.mjs
+          node --check sensor/pearl-png.mjs
+          node --check sensor/nft-meta.mjs
+          node --check sensor/nft-serial.mjs
+          node --check sensor/fish-png.mjs
+          node --check sensor/fish-card.gen.mjs
+          node --check sensor/market-sale.mjs
+          node --check sensor/market-payout.mjs
+          node --check sensor/fish-gen.mjs
+          node --check sensor/fish-trust.mjs
+          node --check sensor/fish-collection.mjs
+          node --check sensor/market-balance.mjs
+          node --check sensor/fish-owned.mjs
+
+      - name: Install sensor dependencies
+        working-directory: sensor
+        run: npm ci --no-audit --no-fund
+
+      - name: Test sensor
+        working-directory: sensor
+        run: npm test
