@@ -198,7 +198,8 @@ export function createFishCollection({
 
   /**
    * Quote / sell price of a fetched asset, for `seller`. Synchronous on purpose: the sale desk
-   * calls it right before ledger.begin, so two sales for one seller can't both pass the cap.
+   * calls it right before ledger.begin (under the seller's lock on a shared store), so two sales
+   * for one seller can't both pass the cap.
    */
   function price(asset, seller) {
     const pearls = assertTrustedFish(asset, { collection: state.fishCollection });

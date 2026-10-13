@@ -13,7 +13,7 @@ import { burn, fetchAsset, fetchCollection } from '@metaplex-foundation/mpl-core
 import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, parseQuoteBatchBody, parseQuoteBody, singleFlight } from './market-rules.mjs';
+import { HttpError, parseQuoteBatchBody, parseQuoteBody, singleFlight, withLock } from './market-rules.mjs';
 import { createBurnRetry, createSweep } from './market-burn.mjs';
 import { createFishCollection, pendingIsLive } from './fish-collection.mjs';
 import { createPayout } from './market-payout.mjs';
@@ -37,6 +37,14 @@ const COLLECTION_TTL_MS = 60_000;
 const SETUP_LOCK_MS = 4 * 60_000;
 /** ONE lock for every setup step: creating the mint and the collection each save the shared state. */
 export const SETUP_LOCK = 'setup';
+// A sale's bookkeeping for its seller (read the last 24 h, check the daily cap, record the sale) holds
+// this lock across instances (Redis store): a handful of Redis commands, well under a second. The TTL
+// only frees the lock of an instance that died holding it; the desk records nothing once half of it
+// is gone (market-sale.mjs), so a lock that expired under a slow Redis can't let two sales past the cap.
+const SELLER_LOCK_MS = 15_000;
+// A sale waits this long for another instance's bookkeeping for the same seller, then answers 503.
+const SELLER_LOCK_WAIT_MS = 5_000;
+const SELLER_LOCK_POLL_MS = 100;
 
 /**
  * setupStep(name, fn): one setup step at a time across instances (and within one), on the newest
@@ -55,6 +63,33 @@ export function createSetupStep({ store, refresh, shared, lockMs = SETUP_LOCK_MS
       await Promise.resolve(release()).catch(() => {});
     }
   };
+}
+
+/**
+ * withSellerLock(seller, fn): the sale desk's daily-cap bookkeeping for one seller, one sale at a
+ * time across instances, so two sales can't both read the seller's 24 h total before either is
+ * recorded. This instance's own sales of the seller (a batch's parallel fish) queue in memory; only
+ * another instance's are waited for in Redis. fn(held) gets held() -> false once the lock may have
+ * expired. One process (file store): undefined, the desk's check and record are one synchronous step.
+ */
+export function createSellerLock({ store, shared, lockMs = SELLER_LOCK_MS, waitMs = SELLER_LOCK_WAIT_MS, pollMs = SELLER_LOCK_POLL_MS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now }) {
+  if (!shared) return undefined;
+  const queued = new Map();
+  return (seller, fn) =>
+    withLock(queued, seller, async () => {
+      const until = now() + waitMs;
+      let release;
+      while (!(release = await store.lock(`seller:${seller}`, lockMs))) {
+        if (now() >= until) throw new HttpError(503, "This wallet's other sales are still being recorded, sell this fish again in a few seconds");
+        await sleep(pollMs);
+      }
+      const at = now();
+      try {
+        return await fn(() => now() - at < lockMs / 2);
+      } finally {
+        await Promise.resolve(release()).catch(() => {});
+      }
+    });
 }
 
 const sigStr = (bytes) => base58.deserialize(bytes)[0];
@@ -314,6 +349,8 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
         (a) => a?.owner?.toString() === marketKey,
       ),
     priceFish: fish.price,
+    // Several instances: a seller's sales are priced against the daily cap and recorded one at a time.
+    withSellerLock: createSellerLock({ store, shared }),
     resolvePending: payout.resolvePending,
     pay: payout.pay,
     burnSold,

@@ -49,6 +49,8 @@ const errorOf = (assetId, e) => {
  *   pay(assetId, mint, seller, pearls)  sends and confirms one PEARL mint; updates the ledger
  *   burnSold(assetId)  best effort; updates the ledger
  *   priceFish(asset, seller) -> PEARL for a fetched asset, or throws HttpError (fish-trust.mjs; synchronous)
+ *   withSellerLock(seller, fn) optional: runs fn(held) holding the seller's lock across instances
+ *                     (market-server-mode.mjs createSellerLock; the Redis store only)
  *   log(msg)
  */
 export function createSaleDesk({
@@ -61,6 +63,7 @@ export function createSaleDesk({
   pay,
   burnSold,
   priceFish,
+  withSellerLock,
   log = () => {},
   // A /sell-batch starts no new fish after this long (ms): they come back as a 503 the game retries.
   // Unlimited on a long-running server; a serverless host sets it below its function time limit.
@@ -77,6 +80,30 @@ export function createSaleDesk({
    * asks the chain whether the earlier payout landed before anything is paid.
    */
   function sellAsset({ assetId, seller, transferTx }, getTransfer = fetchTransfer) {
+    /**
+     * Price the fish and record the sale; returns the plan from there. The price comes from the
+     * fish's on-chain attributes, never from the request: priceFish is fish-trust's gate (collection
+     * + generator check) and the daily cap over the seller's sales so far, so pricing and begin()
+     * must not interleave with another sale for the same seller. The file ledger: priceFish is
+     * synchronous and begin() writes before it yields, one step. The Redis ledger reads the seller's
+     * last 24 h first and records over several commands, so server mode runs this under
+     * withSellerLock, across instances, and records nothing once `held` says the lock may be gone.
+     */
+    const book = async (asset, held = () => true) => {
+      if (withSellerLock) {
+        // Another instance may have begun this very fish while we waited: priced again, it would count against itself.
+        const fresh = await ledger.plan(assetId, seller);
+        if (fresh !== 'new') return fresh;
+      }
+      if (ledger.loadSeller) await ledger.loadSeller(seller);
+      const pearls = priceFish(asset, seller);
+      if (!held()) throw new HttpError(503, 'Recording this sale took too long, sell this fish again');
+      // false only from the Redis ledger: another instance began this fish first (SET NX). Take
+      // up its record from where it is instead of starting a second sale of the same fish.
+      if ((await ledger.begin(assetId, { seller, transferTx, pearls })) === false) return ledger.plan(assetId, seller);
+      return 'resume';
+    };
+
     return withLock(locks, assetId, async () => {
       let plan = await ledger.plan(assetId, seller);
       if (plan === 'conflict') throw conflict();
@@ -89,21 +116,9 @@ export function createSaleDesk({
         if (bad) throw new HttpError(400, bad);
         const asset = await loadMarketAsset(assetId);
         if (asset?.owner?.toString() !== market) throw new HttpError(400, 'The market does not own this fish yet');
-        // The Redis ledger reads the seller's recent sales for the daily cap first (the file one has them all).
-        if (ledger.loadSeller) await ledger.loadSeller(seller);
-        // The price comes from the fish's on-chain attributes, never from the request: priceFish is
-        // fish-trust's gate (collection + generator check) and the daily cap. Synchronous, and nothing
-        // awaits between it and begin(), so a seller's concurrent sales can't both slip under the cap.
-        const pearls = priceFish(asset, seller);
-        // false only from the Redis ledger: another instance began this fish first (SET NX). Take
-        // up its record from where it is instead of starting a second sale of the same fish.
-        if ((await ledger.begin(assetId, { seller, transferTx, pearls })) === false) {
-          plan = await ledger.plan(assetId, seller);
-          if (plan === 'conflict') throw conflict();
-          if (plan === 'done') return ledger.result(assetId);
-        } else {
-          plan = 'resume';
-        }
+        plan = withSellerLock ? await withSellerLock(seller, (held) => book(asset, held)) : await book(asset);
+        if (plan === 'conflict') throw conflict();
+        if (plan === 'done') return ledger.result(assetId);
       }
 
       if (plan === 'resume') {
