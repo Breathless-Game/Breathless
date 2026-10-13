@@ -16,7 +16,7 @@
 //
 // State: the collection address and its creation slot in .market-state.json (beside the PEARL
 // mint), and <dir>/.market-fish.jsonl, the (owner, fish id) -> asset registry (fish-trust.mjs
-// FishRegistry), one JSON line per co-signed mint or migration. deploy.sh never touches .market-*.
+// FishRegistry), one JSON line per co-signed mint or migration. A deploy must never touch .market-*.
 // Both come from the store (market-store.mjs): those files, or Redis on a serverless host.
 
 import { createNoopSigner, generateSigner, publicKey, transactionBuilder } from '@metaplex-foundation/umi';

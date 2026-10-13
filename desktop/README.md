@@ -71,7 +71,7 @@ git push origin v0.2.0
 
 `.github/workflows/release.yml` builds on Windows, macOS and Linux runners, checks every packed app with `scripts/check-package.mjs`, and uploads the installers to a **draft** release for the tag, with `release-notes-template.md` as its text. The tag sets the version (`v0.2.0` builds 0.2.0); use `vMAJOR.MINOR.PATCH`. Then on GitHub: Releases → the draft → edit the notes → **Publish release**. Nothing is public until someone publishes it.
 
-Run the workflow from the Actions tab (Run workflow) to build without a release; the installers are kept as workflow artifacts for 14 days. Tags don't trigger the site deploy (`deploy.yml` runs on pushes to `main` only).
+Run the workflow from the Actions tab (Run workflow) to build without a release; the installers are kept as workflow artifacts for 14 days. Tags don't trigger the site deploy (Vercel deploys Production from pushes to `main` only).
 
 ## First launch of an unsigned build
 

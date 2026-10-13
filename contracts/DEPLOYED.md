@@ -107,14 +107,15 @@ on-chain program matches). ProgramData extended by 73368 bytes (381848 -> 455216
   fish mint + `record_catch` for a new owner, 1066 bytes, 34.7k-39.2k CU, success;
   `buy_boat` bait Lv2, 411 bytes, 14.8k CU, success.
 
-# player_state TEST copy on devnet (Vercel pre-cutover only)
+# player_state TEST copy on devnet (Vercel Preview only)
 
 Cluster: **devnet**. Deployed 2026-10-13 from `main` 0d6d2f7, with only `declare_id!` changed
 (built in a scratch copy; the repo keeps the live id). A separate program for the Vercel
 deployment's TEST market wallet: the live Config's oracle is the live market wallet, so a TEST
-market's co-signed fish mints fail `record_catch` with `Unauthorized` (0x1770). Vercel uses it
-through `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID` until cutover, then both are
-deleted (deploy/VERCEL.md). Never point the live market or the Dell at it.
+market's co-signed fish mints fail `record_catch` with `Unauthorized` (0x1770). Vercel's Preview
+environment uses it through `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID`;
+Production used it too until the cutover on 2026-10-13, when both were deleted there
+(deploy/VERCEL.md). Never point the live market at it.
 
 | what | address |
 | --- | --- |

@@ -6,8 +6,7 @@
 //
 // The same owner + fish always gets the same number, so a retried mint (or a repair of an already
 // minted fish) never burns a second one. The counter lives in <MARKET_DIR>/.market-serial.json,
-// which deploy/deploy.sh protects like the market's other state (.market-*), so redeploys never
-// reset it. Writes go to a temp file and are renamed into place, and a number is only answered
+// which is kept like the market's other state (.market-*): a redeploy must never reset it. Writes go to a temp file and are renamed into place, and a number is only answered
 // once it is on disk: a crash or restart can never hand the same number out twice. An unreadable
 // file fails closed (503) rather than starting again from 1. On Vercel the counter is in Redis
 // instead (market-store.mjs createRedisSerials, one INCR in a Lua script), passed in as `counter`.

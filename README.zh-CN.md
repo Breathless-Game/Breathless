@@ -156,7 +156,7 @@ Presage **暂时关闭**：服务器和游戏各有一个开关，只有设成 `
 
 - **服务器：`PRESAGE_ENABLED=1`**，写在仓库根目录的 `.env`（或环境变量）里。关闭时 sensor 不加载 SmartSpectra SDK，即使 `.env` 里还有 `PRESAGE_API_KEY` 也忽略，丢弃摄像头帧，只跑模拟器；启动日志会写 `Presage SmartSpectra is disabled`。市场、NFT 元数据等服务器上的其他功能不受影响。
 - **游戏：构建时 `VITE_PRESAGE_ENABLED=1`**（写在 `game/.env`，或命令行 `VITE_PRESAGE_ENABLED=1 npm run build`）。关闭时游戏不请求摄像头，隐藏 **Start with camera** 和摄像头画面设置，跳过校准，`K` 只有键盘（开发构建里还有模拟器）。健康报告照常记录憋气时长、深度和结果；心率和呼吸频率需要摄像头，所以没有旧的摄像头数据时这几格不显示。
-- **两边都开**，然后重启 sensor、重新构建游戏。生产环境：在 Dell 的 `.env` 加 `PRESAGE_ENABLED=1`，并把 GitHub 仓库变量 `VITE_PRESAGE_ENABLED` 设成 `1`（见 deploy/SETUP.md 第 2 步）。只开服务器，游戏还是纯键盘；只开游戏，服务器会回「已关闭」，游戏自动退回键盘。
+- **两边都开**，然后重启 sensor、重新构建游戏。生产环境跑在 Vercel 上，没有 `/sensor` WebSocket，所以只能用键盘：要用摄像头实时检测，得自己用 `npm start` 托管并配好 HTTPS（见「自托管」），或者构建游戏时用 `VITE_SENSOR_URL` 指向这样一个 sensor。只开服务器，游戏还是纯键盘；只开游戏，服务器会回「已关闭」，游戏自动退回键盘。
 
 ### 真机测试憋气
 
@@ -170,9 +170,9 @@ Presage **暂时关闭**：服务器和游戏各有一个开关，只有设成 `
 
 ### 自托管 / Self-hosting
 
-线上版本在 <https://breathless.gotclass.xyz>，由自托管 runner 从 `main` 自动部署。项目约 594 个提交、约 55,000 行代码，有 409 个游戏测试、106 个传感器测试和 52 个合约测试。
+线上版本在 <https://breathless.gotclass.xyz>，跑在 Vercel 上，每次 push 到 `main` 都会自动部署（见 deploy/VERCEL.md）。项目约 594 个提交、约 55,000 行代码，有 409 个游戏测试、106 个传感器测试和 52 个合约测试。
 
-`npm start` 是生产服务器：一个 Node 进程、一个端口，同时提供构建好的游戏、憋气传感器（WebSocket 在 `/sensor`）和 PEARL 市场（`/api/market`，见第 8 节），前面只需要一条隧道或一个反向代理。
+`npm start` 是自托管用的服务器（2026-10-13 之前生产环境就跑它）：一个 Node 进程、一个端口，同时提供构建好的游戏、憋气传感器（WebSocket 在 `/sensor`）和 PEARL 市场（`/api/market`，见第 8 节），前面只需要一条隧道或一个反向代理。
 
 ```bash
 npm run setup      # 一次性：安装 sensor/ 和 game/ 的依赖
@@ -183,7 +183,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | 变量 | 默认 | 含义 |
 | --- | --- | --- |
 | `PRESAGE_ENABLED` | 关 | `1` 开启 Presage 实时检测。**暂时关闭**：不设时服务器忽略 `PRESAGE_API_KEY`，也不加载 SDK（见[重新开启 Presage](#重新开启-presage)）。 |
-| `VITE_PRESAGE_ENABLED` | 关 | 游戏构建时用：`1` 恢复摄像头选项。生产环境取自同名的 GitHub 仓库变量（见 deploy/SETUP.md）。 |
+| `VITE_PRESAGE_ENABLED` | 关 | 游戏构建时用：`1` 恢复摄像头选项。Vercel 上不要设，它提供不了 `/sensor`（见 deploy/VERCEL.md）。 |
 | `PRESAGE_API_KEY` | 空 | **只放在服务器**仓库根目录的 `.env` 里。没有 key 时服务器跑模拟器。不设 `PRESAGE_ENABLED=1` 时会被忽略。 |
 | `PORT` | `8794` | HTTP + WebSocket 端口。开发模式（`npm run sensor`）仍用 `SENSOR_PORT`，8787。 |
 | `HOST` | `127.0.0.1` | 监听地址。只听本机，因为同机的隧道 / 代理是唯一入口。 |
@@ -191,14 +191,14 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `MAX_CONN_PER_IP` | `8` | 每个玩家 IP 可同时打开的传感器连接数（代理在本机时读 `CF-Connecting-IP` / `X-Forwarded-For`）。 |
 | `SENSOR_RECORD` | 关 | 设成 `1` 才把实时会话写进 `sensor/recordings/`。serve 模式默认关闭：陌生人的呼吸数据绝不落盘。（开发模式照旧录制。） |
 | `FISH_MARKET_PROGRAM_ID` | 空 | PEARL 市场模式：空 = 服务端模式，填 program id = 合约模式（第 8 节）。 |
-| `MARKET_DIR` | `sensor` | 市场的密钥和状态文件（`.market-*`）放在哪，相对仓库根目录。`deploy/deploy.sh` 从不覆盖或删除它们；记得备份。市场起不来时，游戏和传感器照常服务，`/api/market` 返回 503。 |
+| `MARKET_DIR` | `sensor` | 市场的密钥和状态文件（`.market-*`）放在哪，相对仓库根目录。更新代码时不要覆盖或删除它们；记得备份。市场起不来时，游戏和传感器照常服务，`/api/market` 返回 503。 |
 | `SOLANA_RPC` | devnet | 服务器端所有 Solana 调用用的 RPC：市场、鱼合集、付款和销毁（没设就用 `VITE_SOLANA_RPC`，再没有就用 `https://api.devnet.solana.com`）。公共 devnet 节点限流很严，有人批量卖鱼就会返回 HTTP 429，所以线上应换成服务商提供的专用 devnet RPC。这个 URL 通常带 API key：**只**放在服务器的 `.env` 里，不要提交进仓库，也不要放进任何 `VITE_*` 变量（它们会打包进前端）。日志里只打印它的域名。 |
 | `SOLANA_RPC_CONCURRENCY` | `3` | 市场同时在途的 RPC 调用数。遇到 429 时所有调用一起退避；只有付费 RPC 套餐才需要调大。 |
 
 - **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
 - **Solana RPC 抖动不会拖垮服务器。** 市场的所有 RPC 调用都经过同一个限流器（`SOLANA_RPC_CONCURRENCY`），遇到 429 统一退避；交易确认改为 HTTP 轮询（不再开 websocket 订阅）。付款后销毁失败的鱼会在内存里重试；启动时和之后每 10 分钟，市场会按售出账本把已付款、还没销毁的鱼销毁掉：每条鱼只查一次账户，不扫全链，遇到 429 就提前停下等下一轮（日志里是 `[market] sweep: ...`）。偶发的未处理 Promise 拒绝只会记一行 `[process] unhandled rejection (kept running)`，进程不退出；`[process] BUG: ...` 开头的是代码错误，需要看一下。
-- **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
-- **Vercel**（可选，与 Dell 并存）：游戏作为静态文件，所有 `/api` 路由放在一个函数里，市场状态存在 Upstash Redis。没有 `/sensor` WebSocket，只能用键盘模式。配置、用测试钱包预览、切换和回滚见 [deploy/VERCEL.md](deploy/VERCEL.md#中文)。
+- **生产环境是 Vercel**（2026-10-13 起）：游戏作为静态文件，所有 `/api` 路由放在一个函数里，市场状态存在 Upstash Redis。Vercel 通过自己的 GitHub 集成在每次 push 到 `main` 时部署，每个 PR 分支都有一个 Preview。没有 `/sensor` WebSocket，只能用键盘模式。配置、环境变量、用测试钱包预览、回滚坏部署见 [deploy/VERCEL.md](deploy/VERCEL.md#中文)。GitHub Actions（`.github/workflows/ci.yml`）只跑测试和构建，不部署任何东西。
+- **原来的 Dell 部署已经退役。** 2026-10-13 之前，生产环境在团队的一台机器上跑 `npm start`（systemd + self-hosted GitHub Actions runner + Cloudflare Tunnel）。相关脚本（`deploy/SETUP.md`、`deploy/deploy.sh`、`deploy/bootstrap-dell.sh`、systemd unit 和 sudoers 文件）已从仓库删除；想按老办法自托管，可以在 git 历史里找到它们。
 - **带宽。** 实时模式把每一帧 640×480 画面压成 JPEG 上传，30 fps，**每个玩家约 3–6 Mbit/s 上行**（Chrome 质量 0.7：画面简单时每帧 16–20 kB，画面杂乱时 30–35 kB）。Presage 要约 25 fps 以上，低于约 15 fps 波形会变差，所以游戏优先保帧率、牺牲画质：目标每帧 25 kB（30 fps 即 6 Mbit/s），帧偏大或上行太慢导致跳帧时，JPEG 质量在 0.8 到 0.4 之间自动下调。约 5 Mbit/s 的上行在一般画面下能保持 30 fps；更慢就会跳帧。sensor 用 [sharp](https://sharp.pixelplumbing.com/)（libvips）解码：每帧约 2 ms，在独立线程上跑，比原始帧多占约 3% 的单核。键盘和模拟模式不发帧。
   - 开发构建连本机 sensor 时仍默认发原始 RGBA（每帧 1.23 MB，30 fps 约 295 Mbit/s，只在同一台机器上用）。在页面 URL 后加 `?frames=raw` 或 `?frames=jpeg`（或构建时设置 `VITE_FRAME_FORMAT`）可以强制使用其中一种。
   - 不用摄像头检查某个部署的上行链路：在玩家的网络里运行 `node sensor/stream-test.mjs wss://<你的域名>/sensor`，它会连续 20 秒发送合成的 JPEG 帧，打印上行速率、跳过的帧数和 Presage 接收的帧数（可选 `--raw`、`--fps`、`--quality`、`--image face.jpg`）。
@@ -809,7 +809,7 @@ Esc → Settings → Weather 支持 Natural weather、Clear、Cloudy、Rain、St
 - 可改键的操作（设置 → 操作）和 English / 中文 语言
 - 收藏批量卖出：勾选框加全选
 - NFT 画面一致：NFT 图片与游戏内的卡由同一份代码绘制
-- 由自托管 runner 从 `main` 自动部署到 <https://breathless.gotclass.xyz>
+- 由 Vercel 从 `main` 自动部署到 <https://breathless.gotclass.xyz>
 
 ### 🔜 待办（认领时在 PR 或群里说一声）
 

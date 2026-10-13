@@ -13,7 +13,7 @@
 // Per instance, not per deployment (each instance has its own memory): the rate limiters in
 // market.mjs, nft-serial.mjs and nft-meta.mjs, the fish mint/migration quotas, the rpc-guard
 // concurrency limit and 429 backoff, and the balance / owned-fish caches. Vercel runs a handful
-// of instances under load, so each limit is that many times looser than on the Dell. What must
+// of instances under load, so each limit is that many times looser than in one `npm start` process. What must
 // hold across instances (one payout per fish, gapless fish numbers, one PEARL mint) is in Redis.
 
 import { timingSafeEqual } from 'node:crypto';
