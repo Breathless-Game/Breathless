@@ -567,6 +567,10 @@ const marketDir = () =>
 // sensor still serve and /api/market answers 503.
 let market = null;
 let marketDown = 'PEARL market is starting, try again in a moment';
+// For GET /api/health: 'starting' until createMarket resolves (local files only, no RPC call),
+// then 'up', or 'failed' if it threw. deploy.sh gates on it instead of /api/market/info, which
+// waits on the Solana RPC and so stalls whenever devnet rate-limits us.
+let marketState = 'starting';
 async function startMarket() {
   try {
     const dir = marketDir();
@@ -579,9 +583,11 @@ async function startMarket() {
       // This one process owns the files, the fish number counter's too; Redis is for Vercel (api/index.mjs).
       store: 'file',
     });
+    marketState = 'up';
     Promise.resolve(market.ready).catch((e) => log(`PEARL market start-up task failed: ${e?.message ?? e}`));
   } catch (e) {
     marketDown = 'PEARL market is unavailable on this server';
+    marketState = 'failed';
     log(`PEARL market unavailable, /api/market answers 503: ${e?.message ?? e}`);
   }
 }
@@ -618,6 +624,8 @@ if (SERVE) {
         pathname = new URL(req.url ?? '/', 'http://x').pathname;
       } catch {} // the static handler answers 400
       if (pathname.startsWith('/api/')) {
+        // Liveness for deploy.sh: answered from memory, never waits on the RPC or anything else.
+        if (pathname === '/api/health') return sendJson(res, 200, { ok: true, market: marketState });
         if (pathname === '/api/link' || pathname.startsWith('/api/link/')) {
           const handle = await link.catch(() => null);
           if (!handle) return sendJson(res, 503, { error: 'The wallet link is unavailable on this server' });

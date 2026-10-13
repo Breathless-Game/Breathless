@@ -10,7 +10,8 @@
 #   2. npm ci --omit=dev in sensor/, only when its lockfile or Node changed
 #   3. restart the systemd unit (sudoers-breathless allows exactly that)
 #   4. wait until http://127.0.0.1:$PORT/ serves the new index.html and
-#      /api/market/info answers 200 with JSON
+#      /api/health says the PEARL market module loaded; /api/market/info is
+#      only advisory (a WARNING, never a rollback: it waits on the Solana RPC)
 #
 # If anything fails after step 1 has started, the previous release is restored
 # from .rollback, the service restarted and checked again, and the script still
@@ -20,7 +21,7 @@
 #   bash deploy/deploy.sh --rollback  restore .rollback by hand (deploy/SETUP.md)
 #
 # Safe to re-run. Overridable: DEPLOY_DIR, NODE_BIN, PORT, HEALTH_TIMEOUT,
-# HEALTH_INTERVAL, HEALTH_MARKET=0 (skip the market check). One-time setup:
+# HEALTH_INTERVAL, HEALTH_MARKET=0 (skip the market checks). One-time setup:
 # deploy/SETUP.md. Tests: deploy/test-deploy.sh.
 set -euo pipefail
 
@@ -51,6 +52,10 @@ die() {
 loud() {
   log "$*"
   if [[ "${GITHUB_ACTIONS:-}" == true ]]; then printf '::error::%s\n' "$*"; fi
+}
+warn() {
+  log "WARNING: $*"
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then printf '::warning::%s\n' "$*"; fi
 }
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
@@ -87,31 +92,66 @@ KEEP=(--exclude='/recordings/' --exclude='/.market-*' --exclude='.env'
   --filter='P /recordings/' --filter='P /.market-*')
 
 # ---- health check -----------------------------------------------------------
-# Against the local port, not the tunnel. The market is imported lazily after
-# the server starts listening, so /api/market answers 503 for a few seconds:
-# both checks are retried until HEALTH_TIMEOUT.
+# Against the local port, not the tunnel, retried until HEALTH_TIMEOUT. Only a
+# sign that the release itself is broken fails the deploy (and so rolls back):
+#   - / not serving the new index.html: the process is down or crashed
+#   - /api/health saying the PEARL market module failed to load, or never
+#     finished loading (HEALTH_MARKET=1); answered from memory, no RPC call
+# /api/market/info is still asked, but only warns: it waits on the Solana RPC (a
+# balance read), so a public-RPC 429 storm stalls it for minutes while the server
+# is fine. A release from before /api/health (a 404, e.g. the one a rollback
+# restores) is gated on index.html alone.
 url="http://127.0.0.1:$PORT/"
+health_url="${url}api/health"
 market_url="${url}api/market/info"
 
 index_ok() { curl -fsS --max-time 5 "$url" 2>/dev/null | cmp -s - "$DEPLOY_DIR/game/dist/index.html"; }
-# -f turns any 4xx/5xx (the 503 of a market that failed to load) into a failure;
-# the body must then parse as a JSON object.
+# The market's state in /api/health: starting, up or failed. "none" when the
+# route is a 404 (an older release), nothing when it didn't answer 200 + JSON.
+market_state() {
+  local out code nl=$'\n'
+  out="$(curl -sS --max-time 5 -H 'Accept: application/json' -w '\n%{http_code}' "$health_url" 2>/dev/null)" || return 0
+  code=${out##*$nl}
+  if [[ "$code" == 404 ]]; then
+    echo none
+  elif [[ "$code" == 200 ]]; then
+    printf '%s' "${out%$nl*}" |
+      "$NODE_BIN" -e 'const j = JSON.parse(require("fs").readFileSync(0, "utf8")); if (typeof j?.market === "string") console.log(j.market)' 2>/dev/null || true
+  fi
+}
+# -f turns any 4xx/5xx (a 503 while the RPC throttles us) into a failure; the
+# body must then parse as a JSON object.
 market_ok() {
   curl -fsS --max-time 15 -H 'Accept: application/json' "$market_url" 2>/dev/null |
     "$NODE_BIN" -e 'const j = JSON.parse(require("fs").readFileSync(0, "utf8")); process.exit(j && typeof j === "object" ? 0 : 1)' 2>/dev/null
 }
 
 healthy() {
-  local deadline=$((SECONDS + HEALTH_TIMEOUT)) problem
+  local deadline=$((SECONDS + HEALTH_TIMEOUT)) problem state='' info
   while :; do
     problem=''
+    info=ok
     if ! index_ok; then
       problem="$url did not serve the expected index.html"
-    elif [[ "$HEALTH_MARKET" != 0 ]] && ! market_ok; then
-      problem="$market_url did not answer 200 with JSON"
+    elif [[ "$HEALTH_MARKET" != 0 ]]; then
+      state="$(market_state)"
+      case "$state" in
+        up | none) market_ok || info=slow ;;
+        failed) problem="the PEARL market failed to load ($health_url: market $state)" ;;
+        '') problem="$health_url did not answer 200 with JSON" ;;
+        *) problem="the PEARL market did not finish loading ($health_url: market $state)" ;;
+      esac
     fi
-    if [[ -z "$problem" ]]; then return 0; fi
+    if [[ -z "$problem" && "$info" == ok ]]; then return 0; fi
     if ((SECONDS >= deadline)); then
+      if [[ -z "$problem" ]]; then
+        if [[ "$state" == none ]]; then
+          warn "$market_url did not answer 200 with JSON within ${HEALTH_TIMEOUT}s; this release has no /api/health, so index.html alone decides"
+        else
+          warn "$market_url did not answer 200 with JSON within ${HEALTH_TIMEOUT}s, but the server is up and the PEARL market loaded: most likely the Solana RPC rate-limiting us (429), so no rollback"
+        fi
+        return 0
+      fi
       log "health check failed: $problem within ${HEALTH_TIMEOUT}s"
       sudo -n /usr/bin/systemctl is-active "$SERVICE" || true
       sudo -n /usr/bin/journalctl -u "$SERVICE" -n 50 --no-pager || true
@@ -246,7 +286,8 @@ fi
 restart
 
 # 4. Health check: the new index.html must come back from the server, and the
-#    PEARL market must answer (HEALTH_MARKET=0 skips that part).
+#    PEARL market module must have loaded (HEALTH_MARKET=0 skips that part); a
+#    slow /api/market/info only warns.
 healthy || exit 1
 ARMED=0
 log "healthy: $url ($(sudo -n /usr/bin/systemctl is-active "$SERVICE" || true)), release $NEW_SHA is live, $PREV_SHA kept in $BACKUP"

@@ -101,7 +101,8 @@ jobs:
       - name: Sync, install, restart, health check
         env:
           DEPLOY_DIR: /srv/breathless/app
-          # Repository variable HEALTH_MARKET=0 skips the /api/market/info check
+          # Repository variable HEALTH_MARKET=0 skips the market checks (/api/health's
+          # "market loaded", which can fail a deploy, and the /api/market/info warning)
           # (Settings → Secrets and variables → Actions → Variables), without a push.
           HEALTH_MARKET: ${{ vars.HEALTH_MARKET || '1' }}
         run: bash deploy/deploy.sh

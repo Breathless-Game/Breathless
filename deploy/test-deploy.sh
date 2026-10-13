@@ -56,7 +56,10 @@ case "$*" in
   "/usr/bin/systemctl restart breathless")
     mkdir -p "$FAKE_STATE"
     cp "$DEPLOY_DIR/game/dist/index.html" "$FAKE_STATE/served.html"
-    if [[ -f "$DEPLOY_DIR/sensor/MARKET_BROKEN" ]]; then touch "$FAKE_STATE/market-down"; else rm -f "$FAKE_STATE/market-down"; fi
+    # Markers in a release's sensor/ that change how its "server" behaves (see the fake curl).
+    for m in MARKET_BROKEN MARKET_STUCK MARKET_SLOW NO_HEALTH; do
+      if [[ -f "$DEPLOY_DIR/sensor/$m" ]]; then touch "$FAKE_STATE/$m"; else rm -f "$FAKE_STATE/$m"; fi
+    done
     ;;
   "/usr/bin/systemctl is-active breathless") echo active ;;
   "/usr/bin/journalctl -u breathless -n 50 --no-pager") echo "-- fake journal --" ;;
@@ -70,26 +73,61 @@ EOF
 
 cat >"$FAKES/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-# Fake curl: the URL is the last argument. Down when FAKE_CURL_DOWN is set, before
-# the first restart, or when the served index.html says BROKEN (a release whose
-# server never starts); /api/market/info is a 503 when the market is down.
+# Fake curl: the URL is the last argument; honours -f and -w '\n%{http_code}'.
+# Down when FAKE_CURL_DOWN is set, before the first restart, or when the served
+# index.html says BROKEN (a release whose server never starts). The release's
+# markers: MARKET_BROKEN (market module failed: /api/health says failed, market
+# routes 503), MARKET_STUCK (never leaves starting), MARKET_SLOW (module up, but
+# /api/market/info times out, as behind devnet 429s), NO_HEALTH (a release from
+# before /api/health: 404).
 url="${*: -1}"
+fail=0 write=0
+for a in "$@"; do
+  case "$a" in
+    -w) write=1 ;;
+    -*f*) [[ "$a" == --* ]] || fail=1 ;;
+  esac
+done
 echo "$url" >>"$FAKE_LOG/curl.log"
 if [[ -n "${FAKE_CURL_DOWN:-}" || ! -f "$FAKE_STATE/served.html" ]] || grep -q BROKEN "$FAKE_STATE/served.html"; then
   echo "curl: (7) Failed to connect" >&2
   exit 7
 fi
+on() { [[ -f "$FAKE_STATE/$1" ]]; }
+code=200
 case "$url" in
-  */api/market/info)
-    if [[ -f "$FAKE_STATE/market-down" ]]; then
-      echo "curl: (22) The requested URL returned error: 503" >&2
-      exit 22
+  */api/health)
+    if on NO_HEALTH; then
+      code=404 body='{"error":"Not found"}'
+    elif on MARKET_BROKEN; then
+      body='{"ok":true,"market":"failed"}'
+    elif on MARKET_STUCK; then
+      body='{"ok":true,"market":"starting"}'
+    else
+      body='{"ok":true,"market":"up"}'
     fi
-    echo '{"mode":"server","funded":true}'
     ;;
-  */) cat "$FAKE_STATE/served.html" ;;
-  *) exit 22 ;;
+  */api/market/info)
+    if on MARKET_SLOW; then
+      if ((write)); then printf '\n000'; fi
+      echo "curl: (28) Operation timed out" >&2
+      exit 28
+    elif on MARKET_BROKEN || on MARKET_STUCK; then
+      code=503 body='{"error":"PEARL market is unavailable on this server"}'
+    else
+      body='{"mode":"server","funded":true}'
+    fi
+    ;;
+  */) body="$(cat "$FAKE_STATE/served.html")" ;;
+  *) code=404 body='{"error":"Not found"}' ;;
 esac
+if ((fail && code >= 400)); then
+  echo "curl: (22) The requested URL returned error: $code" >&2
+  exit 22
+fi
+printf '%s\n' "$body"
+if ((write)); then printf '\n%s' "$code"; fi
+exit 0
 EOF
 chmod +x "$FAKES/bin/sudo" "$FAKES/bin/curl" "$FAKES/node/npm"
 
@@ -120,8 +158,16 @@ echo '{"name":"breathless","v":2}' >"$R/r2/package.json"
 
 cp -Rp "$R/r2" "$R/broken" # the server never comes up
 echo '<html>release 2 BROKEN</html>' >"$R/broken/game/dist/index.html"
-cp -Rp "$R/r2" "$R/nomarket" # serves index.html, but /api/market answers 503
+cp -Rp "$R/r2" "$R/nomarket" # serves index.html, but the market module failed to load
 touch "$R/nomarket/sensor/MARKET_BROKEN"
+cp -Rp "$R/r2" "$R/stuck" # the market module never finishes loading
+touch "$R/stuck/sensor/MARKET_STUCK"
+cp -Rp "$R/r2" "$R/slow" # market loaded, but /api/market/info stuck behind devnet 429s
+touch "$R/slow/sensor/MARKET_SLOW"
+cp -Rp "$R/r1" "$R/old" # release 1 as built before /api/health existed
+touch "$R/old/sensor/NO_HEALTH"
+cp -Rp "$R/old" "$R/oldslow" # ... whose /api/market/info is also stuck behind 429s
+touch "$R/oldslow/sensor/MARKET_SLOW"
 cp -Rp "$R/r2" "$R/noartifact" # build artifact not downloaded
 rm -rf "$R/noartifact/game/dist"
 
@@ -216,7 +262,7 @@ is_release() { # the live files are exactly release $1 (node_modules from its lo
     echo "        package.json differs"
     return 1
   }
-  diff -r -x node_modules -x recordings -x '.market-*' -x MARKET_BROKEN "$r/sensor" "$d/sensor" | sed 's/^/        diff: /' &&
+  diff -r -x node_modules -x recordings -x '.market-*' "$r/sensor" "$d/sensor" | sed 's/^/        diff: /' &&
     diff -r "$r/game/dist" "$d/game/dist" | sed 's/^/        diff: /'
 }
 release_is() { [[ "$(cat "$DEPLOY_DIR/RELEASE")" == "$1" ]]; }
@@ -277,12 +323,21 @@ check "release 1 is live again, half-installed node_modules gone" is_release r1
 check "restarted once (by the rollback)" test "$(restarts)" -eq 1
 check ".env and .market-* untouched" state_intact
 
-scenario "market check fails, index.html fine: rolled back"
+scenario "healthy: /api/health up, market info answers, no warning"
+fresh
+deploy r1 sha-1
+deploy r2 sha-2
+check "exit 0" test "$rc" -eq 0
+check "asked /api/health" has_text "$FAKE_LOG/curl.log" '/api/health'
+check "asked /api/market/info" has_text "$FAKE_LOG/curl.log" '/api/market/info'
+check "no WARNING" lacks_text "$OUT" 'WARNING: http'
+
+scenario "market module failed to load, index.html fine: rolled back"
 fresh
 deploy r1 sha-1
 deploy nomarket sha-2
 check "exit non-zero" test "$rc" -ne 0
-check "blames the market" has_text "$OUT" 'api/market/info did not answer 200 with JSON'
+check "blames the market module" has_text "$OUT" 'the PEARL market failed to load'
 check "says ROLLED BACK" has_text "$OUT" 'ROLLED BACK to previous release sha-1'
 check "release 1 is live again" is_release r1
 check "MARKET_BROKEN marker removed by restore" missing "$DEPLOY_DIR/sensor/MARKET_BROKEN"
@@ -294,7 +349,57 @@ deploy r1 sha-1
 deploy nomarket sha-2 HEALTH_MARKET=0
 check "exit 0" test "$rc" -eq 0
 check "never asked for /api/market/info" lacks_text "$FAKE_LOG/curl.log" '/api/market/info'
+check "never asked for /api/health" lacks_text "$FAKE_LOG/curl.log" '/api/health'
 check "RELEASE is sha-2" release_is sha-2
+
+scenario "market module never finishes loading: rolled back"
+fresh
+deploy r1 sha-1
+deploy stuck sha-2
+check "exit non-zero" test "$rc" -ne 0
+check "says it did not finish loading" has_text "$OUT" 'did not finish loading'
+check "says ROLLED BACK" has_text "$OUT" 'ROLLED BACK to previous release sha-1'
+check "release 1 is live again" is_release r1
+
+scenario "market info times out behind RPC 429s, server and market up: live, with a warning"
+fresh
+deploy r1 sha-1
+deploy slow sha-2
+check "exit 0" test "$rc" -eq 0
+check "warns about the RPC" has_text "$OUT" 'WARNING: http://127.0.0.1:8794/api/market/info did not answer 200 with JSON'
+check "names rate limiting" has_text "$OUT" 'rate-limiting'
+check "no rollback" lacks_text "$OUT" 'ROLLED BACK'
+check "restarted once" test "$(restarts)" -eq 1
+check "slow release is live" is_release slow
+check "RELEASE is sha-2" release_is sha-2
+check ".env and .market-* untouched" state_intact
+
+scenario "warning is a GitHub ::warning::, not an ::error::"
+fresh
+deploy r1 sha-1
+deploy slow sha-2 GITHUB_ACTIONS=true
+check "exit 0" test "$rc" -eq 0
+check "::warning:: line" has_text "$OUT" '::warning::'
+check "no ::error:: line" lacks_text "$OUT" '::error::'
+
+scenario "process down: rolled back to a release without /api/health"
+fresh
+deploy old sha-1
+check "the old release deploys (no /api/health: index.html decides)" test "$rc" -eq 0
+deploy broken sha-2
+check "exit 1, not 2" test "$rc" -eq 1
+check "says ROLLED BACK" has_text "$OUT" 'ROLLED BACK to previous release sha-1'
+check "no ROLLBACK FAILED" lacks_text "$OUT" 'ROLLBACK FAILED'
+check "old release is live again" is_release old
+
+scenario "rollback to an old release whose market info is stuck behind 429s: still rolled back"
+fresh
+deploy oldslow sha-1
+check "the old release deploys, with a warning" has_text "$OUT" 'no /api/health'
+deploy broken sha-2
+check "exit 1, not 2" test "$rc" -eq 1
+check "says ROLLED BACK" has_text "$OUT" 'ROLLED BACK to previous release sha-1'
+check "old release is live again" is_release oldslow
 
 scenario "rollback's own health check fails: loud, non-zero"
 fresh
