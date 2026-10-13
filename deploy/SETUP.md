@@ -62,7 +62,7 @@ sudo -u breathless -H nano /srv/breathless/app/.env
    sudo -u breathless -H bash
    mkdir -p /srv/breathless/actions-runner && cd /srv/breathless/actions-runner
    # 粘贴 GitHub 页面上 "Download" 那几行（curl … actions-runner-linux-x64-*.tar.gz，tar xzf …）
-   ./config.sh --url https://github.com/LucasYanzy/HackRU26 --token <页面上的 token> \
+   ./config.sh --url https://github.com/Breathless-Game/Breathless --token <页面上的 token> \
      --labels dell --name dell-breathless --unattended
    exit
    ```
@@ -209,7 +209,7 @@ sudo -u breathless -H nano /srv/breathless/app/.env
    sudo -u breathless -H bash
    mkdir -p /srv/breathless/actions-runner && cd /srv/breathless/actions-runner
    # paste the "Download" lines from the GitHub page (curl … actions-runner-linux-x64-*.tar.gz, tar xzf …)
-   ./config.sh --url https://github.com/LucasYanzy/HackRU26 --token <token from the page> \
+   ./config.sh --url https://github.com/Breathless-Game/Breathless --token <token from the page> \
      --labels dell --name dell-breathless --unattended
    exit
    ```

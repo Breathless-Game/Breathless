@@ -91,7 +91,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 
 ### Desktop app
 
-Just want to play? Open https://breathless.gotclass.xyz in a browser, or download the desktop app for Windows, macOS or Linux from [Releases](https://github.com/LucasYanzy/HackRU26-Breathless/releases). It is a window onto the same site (so it is always up to date and needs the internet) and asks for the discrete GPU on dual-GPU laptops. The builds are unsigned, so the first launch shows a warning: [how to open it anyway](desktop/README.md#first-launch-of-an-unsigned-build). Wallet login inside the desktop app is not done yet. Building and releasing it: [desktop/README.md](desktop/README.md).
+Just want to play? Open https://breathless.gotclass.xyz in a browser, or download the desktop app for Windows, macOS or Linux from [Releases](https://github.com/Breathless-Game/Breathless/releases). It is a window onto the same site (so it is always up to date and needs the internet) and asks for the discrete GPU on dual-GPU laptops. The builds are unsigned, so the first launch shows a warning: [how to open it anyway](desktop/README.md#first-launch-of-an-unsigned-build). Wallet login inside the desktop app is not done yet. Building and releasing it: [desktop/README.md](desktop/README.md).
 
 ### Requirements
 
@@ -102,8 +102,8 @@ Just want to play? Open https://breathless.gotclass.xyz in a browser, or downloa
 ### Install and run
 
 ```bash
-git clone https://github.com/LucasYanzy/HackRU26.git
-cd HackRU26
+git clone https://github.com/Breathless-Game/Breathless.git
+cd Breathless
 npm run setup                 # installs dependencies for sensor/ and game/
 cp .env.example .env          # then fill in PRESAGE_API_KEY (see below)
 ```
