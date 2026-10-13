@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- The desktop app's wallet link (src/link.ts): it signs for the player, so it loads nothing
+         from elsewhere and talks only to this site and the Solana RPC. frame-ancestors can't be
+         set here: vercel.json and sensor/static.mjs send it as a header. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https: wss:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex" />
+    <title>屏息 Breathless</title>
+  </head>
+  <body>
+    <main id="link" class="link-page" aria-live="polite"></main>
+    <noscript>This page needs JavaScript. 此页面需要 JavaScript。</noscript>
+    <script type="module" src="/src/link.ts"></script>
+  </body>
+</html>

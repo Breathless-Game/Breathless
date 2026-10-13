@@ -27,9 +27,9 @@ export class B {
   constructor(items = []) { this.items = items; }
   add(b) { return new B([...this.items, ...b.items]); }
   setFeePayer(p) { this.payer = p; return this; }
-  setBlockhash() { return this; }
+  setBlockhash(b) { this.blockhash = b?.blockhash; return this; }
   getTransactionSize() { return 200; }
-  async buildAndSign() { return { signatures: ['sig' + ++n + ':' + this.items.join('+')], payer: this.payer }; }
+  async buildAndSign() { return { signatures: ['sig' + ++n + ':' + this.items.join('+')], payer: this.payer, message: { blockhash: this.blockhash } }; }
 }
 export const publicKey = (s) => s;
 export const transactionBuilder = () => new B([]);
@@ -65,6 +65,7 @@ const chain = await import(await transpile('player-chain.ts', {
   './wallet': walletStub,
   './balance-api': balanceStub,
   './payment-safety': await transpile('payment-safety.ts'),
+  './blockhash-expiry': await transpile('blockhash-expiry.ts'),
   './player-state': psStub,
   './player-sync': syncUrl,
   './player-state-errors': await transpile('player-state-errors.ts'),

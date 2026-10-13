@@ -68,6 +68,7 @@ const pearlSrc = transpile('pearl.ts')
   .replace("const API = '/api/market';", `const API = '${BASE}/api/market';`)
   .replace(/from (['"])\.\/(wallet|market)\1/g, (_, q, f) => `from '${f === 'wallet' ? local['./wallet'] : dataUrl(transpile('market.ts'))}'`)
   .replace(/from (['"])\.\/payment-safety\1/g, () => `from '${dataUrl(transpile('payment-safety.ts'))}'`)
+  .replace(/from (['"])\.\/blockhash-expiry\1/g, () => `from '${dataUrl(transpile('blockhash-expiry.ts'))}'`)
   .replace(/import\((['"])([^'"]+)\1\)/g, (_, q, spec) => `import('${local[spec] ?? import.meta.resolve(spec)}')`);
 const pearl = await import(dataUrl(pearlSrc));
 console.log(`pearl.ts loaded; player PEARL balance ${await pearl.pearlBalance()}`);

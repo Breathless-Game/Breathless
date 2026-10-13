@@ -11,7 +11,7 @@ import * as gearOps from './gear-chain';
 import type { GearCtx } from './gear-chain';
 import type { GearMintRequest, GearUpdateRequest } from './gear-sync';
 import { fishImagePath, fishMetaPath, nftName, nftOrigin } from './nft-uri';
-import { ownerAddress, ownerSigner, sessionSigner, walletState } from './wallet';
+import { ownerAddress, ownerSigner, sendOwnerTx, sessionSigner, walletState } from './wallet';
 import { markBalanceStale } from './balance-api';
 import { confirmedOrThrow } from './payment-safety';
 
@@ -184,7 +184,9 @@ export async function listOwnedAssets(owner: string) {
 export async function burnFish(assetId: string): Promise<string> {
   const u = getUmi();
   const asset = await fetchAsset(u, publicKey(assetId));
-  const signature = await confirmedOrThrow(burn(u, { asset, authority: ownerSigner(u) }), u, 'Fish burn');
+  // The fee payer is the session key, signing before the owner: sendOwnerTx confirms against the
+  // blockhash the desktop Browser wallet may have swapped in (relay-signer.ts re-signs the session's slot).
+  const signature = await sendOwnerTx(u, burn(u, { asset, authority: ownerSigner(u) }), 'Fish burn');
   return base58.deserialize(signature)[0];
 }
 
