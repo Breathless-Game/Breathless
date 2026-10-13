@@ -4803,6 +4803,11 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   background: rgba(2, 8, 18, 0.78);
 }
 
+/* One tab per wallet (tab-lock.ts): above every panel, the shipyard and field guide included. */
+.link-wait.tab-notice {
+  z-index: 300;
+}
+
 .link-wait-card {
   max-width: 420px;
   width: 100%;

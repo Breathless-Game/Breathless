@@ -44,6 +44,7 @@ import { NftQueue } from './nft-queue';
 import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
+import { browserLocks, claimTab, showTabNotice, takeOverTab } from './tab-lock';
 import { LoginGate, mountWalletRow } from './login';
 import { LazyWorldEvents as WorldEvents } from './lazy-panels';
 import type { EventContext } from './events';
@@ -370,6 +371,9 @@ populate();
 let outOfAir = false;
 let emergency = 1;
 let net: FishSpec[] = [];
+// Whether this tab may save the wallet's bank: false until its tab lock is held (tab-lock.ts), and
+// again once another tab takes the wallet over. Before login saves are no-ops anyway.
+let ownsTab = false;
 const bank: BankedFish[] = loadBank();
 const equipment: EquipmentState = loadEquipment();
 let synthesisState: SynthesisState = loadSynthesis();
@@ -716,6 +720,8 @@ function loadBank(): BankedFish[] {
 }
 
 function saveBank() {
+  // Another tab plays this wallet (tab-lock.ts): its bank is the one in storage, so never write over it.
+  if (!ownsTab) return;
   try {
     localStorage.setItem(storageKey('bank'), JSON.stringify(bank));
   } catch {}
@@ -2649,19 +2655,51 @@ function loadWalletProgress() {
   chainFish.start();
 }
 
+/**
+ * Another tab plays this wallet: offer to play here instead. "Play here" steals the tab lock (the
+ * other tab stops saving) and reloads, so this page logs in from the bank that tab last saved.
+ */
+function tabTakenNotice(owner: string, stolen: boolean) {
+  const locks = browserLocks();
+  if (locks) showTabNotice(t, stolen, () => void takeOverTab(owner, locks, () => location.reload()));
+}
+
+/**
+ * Another tab took this wallet over. Don't reload: this page would race that one's reload for the
+ * lock. Stop saving and every background job (as logOut does) and wait behind the notice.
+ */
+function tabStolen(owner: string) {
+  ownsTab = false;
+  nftQueue.stop();
+  gearSync.stop();
+  chainFish.stop();
+  tabTakenNotice(owner, true);
+}
+
 onWalletChange((s) => {
   if (s.owner === walletOwner) return;
   if (walletOwner) {
     location.reload();
     return;
   }
-  walletOwner = s.owner;
-  loadWalletProgress();
-  void syncPearls(); // first read after login feeds the title badge
-  if (loginGate.visible) {
-    loginGate.hide();
-    workbench.show(true);
-  }
+  const owner = s.owner;
+  walletOwner = owner;
+  if (!owner) return;
+  // One tab per wallet: a second one would save its stale bank over this one's fish.
+  void claimTab(owner, browserLocks(), () => tabStolen(owner)).then((claim) => {
+    if (walletOwner !== owner) return;
+    if (claim === 'busy') {
+      tabTakenNotice(owner, false); // nothing of this wallet is loaded, saved or started here
+      return;
+    }
+    ownsTab = true;
+    loadWalletProgress();
+    void syncPearls(); // first read after login feeds the title badge
+    if (loginGate.visible) {
+      loginGate.hide();
+      workbench.show(true);
+    }
+  });
 });
 const walletRestored = restoreWallet();
 
