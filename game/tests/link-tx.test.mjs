@@ -97,16 +97,16 @@ test('rejects a tampered instruction, account, fee payer, extra signer or bad si
   const reject = (got, why) => assert.throws(() => L.checkRelayedTransaction(sent, got, OWNER, verify), (e) => e instanceof L.RelayCheckError && why.test(e.message) && typeof e.zh === 'string');
 
   // Another amount (the instruction's data), signed by the owner: still refused.
-  reject(pageSign(build(topUp(0.06))), /changed the transaction: instruction 1 .* other data/);
+  reject(pageSign(build(topUp(0.06))), /the wallet changed the data of instruction 1 \(program 1{32}\)/);
   // Another destination account, signed by the owner.
-  reject(pageSign(build(topUp(0.05, stranger.publicKey))), /changed/);
+  reject(pageSign(build(topUp(0.05, stranger.publicKey))), /made account \S+ writable/);
   // Bytes flipped after the blockhash (instruction data) or in the header, then signed.
   reject(pageSign(sent, { message: (m) => ((m[off + 40] ^= 1), m) }), /changed/);
-  reject(pageSign(sent, { message: (m) => ((m[2] ^= 1), m) }), /changed|unreadable/);
+  reject(pageSign(sent, { message: (m) => ((m[2] ^= 1), m) }), /changed|read-only|writable|unreadable/);
   // Legacy instead of v0: same instruction, other bytes.
   reject(pageSign(build(topUp().useLegacyVersion())), /changed|unreadable/);
   // Someone else pays the fee: a different transaction with the same instruction.
-  reject(pageSign(build(topUp(), session)), /fee payer|signer slots|changed/);
+  reject(pageSign(build(topUp(), session)), /fee payer|signer slots/);
   // An extra signer slot: another instruction that needs a second signature.
   const extra = build(topUp().add(transferSol(umi, { source: stranger, destination: owner.publicKey, amount: sol(1) })));
   reject(pageSign(extra), /signer slots/);
@@ -189,27 +189,27 @@ test('anything else a wallet changes is refused, saying what', () => {
   const assertion = ix(LIGHTHOUSE, [{ pubkey: session.publicKey, isSigner: false, isWritable: false }]);
   refuse(sent, walletSigned(fee().add(topUp()).add(assertion)), new RegExp(`added an instruction for program ${LIGHTHOUSE}`));
   // Other data (the amount), another destination (a new writable account).
-  refuse(sent, walletSigned(fee().add(topUp(0.5))), /instruction 1 \(program 1{32}\) has other data/);
-  refuse(sent, walletSigned(fee().add(topUp(0.05, stranger.publicKey))), /account \S+ became writable/);
+  refuse(sent, walletSigned(fee().add(topUp(0.5))), /changed the data of instruction 1 \(program 1{32}\)/);
+  refuse(sent, walletSigned(fee().add(topUp(0.05, stranger.publicKey))), /made account \S+ writable/);
   // A read-only account made writable.
   const touch = (isWritable) => ix(L.MEMO_PROGRAM, [{ pubkey: stranger.publicKey, isSigner: false, isWritable }]);
-  refuse(build(two(topUp(), touch(false))), walletSigned(fee().add(two(topUp(), touch(true)))), /account \S+ became writable/);
+  refuse(build(two(topUp(), touch(false))), walletSigned(fee().add(two(topUp(), touch(true)))), /made account \S+ writable/);
   // A new signer.
   const signerToo = fee().add(topUp()).add(transferSol(umi, { source: stranger, destination: owner.publicKey, amount: sol(1) }));
   refuse(sent, walletSigned(signerToo), /signer slots/);
-  assert.throws(() => L.checkWalletEdits(L.parseTransaction(sent).message, L.parseTransaction(walletSigned(signerToo)).message), /signers changed/);
+  assert.throws(() => L.checkWalletEdits(L.parseTransaction(sent).message, L.parseTransaction(walletSigned(signerToo)).message), /changed the signers/);
   // The original instructions reordered, or one dropped.
   const both = build(two(topUp(), memo()));
-  refuse(both, walletSigned(fee().add(two(memo(), topUp()))), /instruction 1 now calls program Memo\S+, not 1{32} \(added, dropped or reordered\)/);
+  refuse(both, walletSigned(fee().add(two(memo(), topUp()))), /made instruction 1 call program Memo\S+, not 1{32} \(added, dropped or reordered\)/);
   refuse(both, walletSigned(fee().add(topUp())), /dropped the instruction for program Memo/);
   // Another fee payer, the same two signers.
   const pair = () => two(topUp(), transferSol(umi, { source: session, destination: owner.publicKey, amount: sol(0.01) }));
-  refuse(build(pair()), walletSigned(fee().add(pair()), session), /fee payer changed/);
+  refuse(build(pair()), walletSigned(fee().add(pair()), session), /changed the fee payer/);
   // A compute budget other than a limit and a price (a heap frame), or a second price.
   refuse(sent, walletSigned(fee().add(requestHeapFrame(umi, { bytes: 64 * 1024 })).add(topUp())), /program ComputeBudget111/);
   refuse(sent, walletSigned(fee().add(budget({ microLamports: 1 })).add(topUp())), /compute budget twice/);
   // Signed by a key the app can't sign with again: nothing may change, not even the fee.
-  refuse(sent, walletSigned(fee().add(topUp())), /another key had signed it already/, { exact: true });
+  refuse(sent, walletSigned(fee().add(topUp())), /another key had signed already/, { exact: true });
   // Address lookup tables: unchanged only.
   const lut = [{ publicKey: generateSigner(umi).publicKey, addresses: [session.publicKey] }];
   const withLut = build(topUp().useV0().setAddressLookupTables(lut));

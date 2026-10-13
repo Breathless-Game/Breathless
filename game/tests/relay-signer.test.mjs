@@ -248,5 +248,5 @@ test("signed by a key this device doesn't hold: it travels signed, without a bud
   assert.ok(!L.summarizeTransaction(L.fromBase64(p.calls[0].txs[0])).instructions.some((ix) => ix.kind === 'compute-budget'));
   // A wallet that adds its fee anyway voids the oracle's signature: refused.
   const rogue = relaySigner(page({ tamper: (tx) => L.withComputeBudget(tx) })).signer;
-  await assert.rejects(rogue.signTransaction(presigned), (e) => e instanceof R.RelayError && /another key had signed it already/.test(e.message));
+  await assert.rejects(rogue.signTransaction(presigned), (e) => e instanceof R.RelayError && /another key had signed already/.test(e.message));
 });

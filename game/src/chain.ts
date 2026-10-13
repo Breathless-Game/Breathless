@@ -189,7 +189,8 @@ export async function burnFish(assetId: string): Promise<string> {
   const u = getUmi();
   const asset = await fetchAsset(u, publicKey(assetId));
   // The fee payer is the session key, signing before the owner: sendOwnerTx confirms against the
-  // blockhash the desktop Browser wallet may have swapped in (relay-signer.ts re-signs the session's slot).
+  // blockhash the desktop Browser wallet may have swapped in (relay-signer.ts re-signs the session's
+  // slot whenever the message changed, blockhash or compute budget).
   const signature = await sendOwnerTx(u, burn(u, { asset, authority: ownerSigner(u) }), 'Fish burn');
   return base58.deserialize(signature)[0];
 }

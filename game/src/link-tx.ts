@@ -408,17 +408,17 @@ export function checkWalletEdits(sent: Uint8Array, got: Uint8Array, { keepBlockh
   if (keepBlockhash && blockhashChanged) throw new RelayCheckError('the blockhash had to stay as it was', 'blockhash 不应被改动');
   if (sameExceptBlockhash(sent, got)) return { blockhashChanged, edited: false };
   const fail = (en: string, zh: string): never => {
-    throw new RelayCheckError(`the wallet changed the transaction: ${en}`, `钱包改动了交易：${zh}`);
+    throw new RelayCheckError(`the wallet ${en}`, `钱包${zh}`);
   };
-  if (!bytesEqual(a.keys[0], b.keys[0])) fail('the fee payer changed', '手续费支付方变了');
-  if (exact) fail('another key had signed it already, so it must come back unchanged', '已有其他密钥签过名，交易必须原样返回');
-  if (a.version !== b.version) fail('its version changed', '交易版本变了');
-  if (a.lookups.length || b.lookups.length) fail('it uses address lookup tables, so it must come back unchanged', '它使用了地址查找表，必须原样返回');
+  if (!bytesEqual(a.keys[0], b.keys[0])) fail('changed the fee payer', '换了手续费支付方');
+  if (exact) fail('changed a transaction another key had signed already (it must come back unchanged)', '改动了已有其他密钥签名的交易（必须原样返回）');
+  if (a.version !== b.version) fail('changed the transaction version', '改了交易版本');
+  if (a.lookups.length || b.lookups.length) fail('changed a transaction that uses address lookup tables (it must come back unchanged)', '改动了使用地址查找表的交易（必须原样返回）');
   const n = a.header.numRequiredSignatures;
-  if (b.header.numRequiredSignatures !== n || a.keys.some((k, i) => i < n && !bytesEqual(k, b.keys[i]))) fail('the signers changed', '签名方变了');
+  if (b.header.numRequiredSignatures !== n || a.keys.some((k, i) => i < n && !bytesEqual(k, b.keys[i]))) fail('changed the signers', '改了签名方');
   const ma = accountMetas(a);
   const mb = accountMetas(b);
-  if (new Set(mb.map((m) => m.address)).size !== mb.length) fail('an account is listed twice', '有账户被重复列出');
+  if (new Set(mb.map((m) => m.address)).size !== mb.length) fail('listed an account twice', '重复列出了账户');
 
   // Every instruction but the compute budget, in order: the same programs first (the clearest
   // report of an added one), then the same writable accounts, then each one's accounts and data.
@@ -427,36 +427,36 @@ export function checkWalletEdits(sent: Uint8Array, got: Uint8Array, { keepBlockh
   const ib = all.filter((ix) => !budgetKind(ix));
   for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
     const [x, y] = [ia[i], ib[i]];
-    if (!x) fail(`it added an instruction for program ${y.program}`, `加入了程序 ${y.program} 的指令`);
-    if (!y) fail(`it dropped the instruction for program ${x.program}`, `删掉了程序 ${x.program} 的指令`);
+    if (!x) fail(`added an instruction for program ${y.program}`, `加入了程序 ${y.program} 的指令`);
+    if (!y) fail(`dropped the instruction for program ${x.program}`, `删掉了程序 ${x.program} 的指令`);
     if (x.program !== y.program) {
       fail(
-        `instruction ${i + 1} now calls program ${y.program}, not ${x.program} (added, dropped or reordered)`,
-        `第 ${i + 1} 条指令改为调用程序 ${y.program}，原本是 ${x.program}（有指令被加入、删除或调换顺序）`,
+        `made instruction ${i + 1} call program ${y.program}, not ${x.program} (added, dropped or reordered)`,
+        `把第 ${i + 1} 条指令改为调用程序 ${y.program}，原本是 ${x.program}（有指令被加入、删除或调换顺序）`,
       );
     }
   }
   const wasWritable = new Set(ma.filter((m) => m.writable).map((m) => m.address));
   const isWritable = new Set(mb.filter((m) => m.writable).map((m) => m.address));
-  for (const w of isWritable) if (!wasWritable.has(w)) fail(`account ${short(w)} became writable`, `账户 ${short(w)} 变成了可写`);
-  for (const w of wasWritable) if (!isWritable.has(w)) fail(`account ${short(w)} is no longer writable`, `账户 ${short(w)} 不再可写`);
+  for (const w of isWritable) if (!wasWritable.has(w)) fail(`made account ${short(w)} writable`, `把账户 ${short(w)} 改成了可写`);
+  for (const w of wasWritable) if (!isWritable.has(w)) fail(`made account ${short(w)} read-only`, `把账户 ${short(w)} 改成了只读`);
   ia.forEach((x, i) => {
     const y = ib[i];
     if (x.accounts.length !== y.accounts.length || x.accounts.some((acc, j) => !sameAccount(acc, y.accounts[j]))) {
-      fail(`instruction ${i + 1} (program ${x.program}) has other accounts`, `第 ${i + 1} 条指令（程序 ${x.program}）的账户变了`);
+      fail(`changed the accounts of instruction ${i + 1} (program ${x.program})`, `改了第 ${i + 1} 条指令（程序 ${x.program}）的账户`);
     }
-    if (!bytesEqual(x.data, y.data)) fail(`instruction ${i + 1} (program ${x.program}) has other data`, `第 ${i + 1} 条指令（程序 ${x.program}）的数据变了`);
+    if (!bytesEqual(x.data, y.data)) fail(`changed the data of instruction ${i + 1} (program ${x.program})`, `改了第 ${i + 1} 条指令（程序 ${x.program}）的数据`);
   });
 
   // The compute budget it ended up with, and what that costs.
   const limits = all.filter((ix) => budgetKind(ix) === 'limit');
   const prices = all.filter((ix) => budgetKind(ix) === 'price');
-  if (limits.length > 1 || prices.length > 1) fail('it sets the compute budget twice', '重复设置了计算预算');
+  if (limits.length > 1 || prices.length > 1) fail('set the compute budget twice', '重复设置了计算预算');
   const units = limits.length ? u32(limits[0].data, 1) : defaultComputeUnits(all.filter((ix) => ix.program !== COMPUTE_BUDGET_PROGRAM).length);
   const fee = priorityFeeLamports(units, prices.length ? u64(prices[0].data, 1) : 0n);
   if (fee > MAX_WALLET_PRIORITY_FEE) {
     const [asked, cap] = [formatUnits(fee, 9), formatUnits(MAX_WALLET_PRIORITY_FEE, 9)];
-    fail(`it asks a priority fee of ${asked} SOL, above the ${cap} SOL limit`, `它要求 ${asked} SOL 的优先费，超过上限 ${cap} SOL`);
+    fail(`asked a priority fee of ${asked} SOL, above the ${cap} SOL limit`, `要求 ${asked} SOL 的优先费，超过上限 ${cap} SOL`);
   }
   return { blockhashChanged, edited: true };
 }
