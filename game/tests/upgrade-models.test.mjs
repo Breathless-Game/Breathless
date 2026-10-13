@@ -138,3 +138,22 @@ test('landing nets and unlit headlamps have no self-illuminating surfaces', () =
     }
   }
 });
+
+test('lamp reflectors open toward the lens and stay inside the sealed housing', () => {
+  for (const level of [1, 2, 3]) {
+    const model = buildUpgradeModel('lamp', level);
+    const reflectors = [], lenses = [];
+    model.traverse(object => {
+      if (object.name === 'recessed-faceted-reflector') reflectors.push(object);
+      if (object.name === 'flat-protective-lens') lenses.push(object);
+    });
+    assert.equal(reflectors.length, level === 3 ? 2 : 1);
+    reflectors.forEach((reflector, index) => {
+      const bounds = new THREE.Box3().setFromObject(reflector);
+      const lens = new THREE.Box3().setFromObject(lenses[index]);
+      assert.ok(bounds.max.z < lens.min.z, `Lv${level}: reflector stays behind the lens`);
+      const opening = new THREE.Vector3(0, 1, 0).transformDirection(reflector.matrixWorld);
+      assert.ok(opening.z > 0.999, 'the wide end opens forward');
+    });
+  }
+});
