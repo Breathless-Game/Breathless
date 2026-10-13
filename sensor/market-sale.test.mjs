@@ -3,6 +3,7 @@ import test from 'node:test';
 import { HttpError, MAX_BATCH, MAX_BATCH_TXS, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, appraise, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
+import { createSweep } from './market-burn.mjs';
 
 // The desk's price gate without the collection check (fish-trust.test.mjs covers that): the on-chain value.
 const plainPrice = (asset) => {
@@ -390,9 +391,11 @@ test('sell-batch: 24 fish naming 2 made-up transfers cost 2 poll sequences (12 R
 
 /**
  * A desk on a clock the test moves, with the real payout (market-payout.mjs) over a fake chain.
- * `onFetch` / `onConfirm` run as the asset is loaded and as a payout confirms (to move the clock).
+ * `hooks.fetch` / `hooks.confirm` / `hooks.mint` run as the asset is loaded, as a payout confirms
+ * and as a sale (or resume) starts paying (to move the clock); the test may swap them.
  */
 function deadlineSetup({ onFetch = () => {}, onConfirm = () => {} } = {}) {
+  const hooks = { fetch: onFetch, confirm: onConfirm, mint: () => {} };
   const clock = { t: 1_000_000 };
   const ledger = new SoldLedger();
   const sent = [];
@@ -405,7 +408,7 @@ function deadlineSetup({ onFetch = () => {}, onConfirm = () => {} } = {}) {
       sent.push(built.assetId);
     },
     confirm: async () => {
-      onConfirm(clock);
+      hooks.confirm(clock);
       return null;
     },
     getSignatureStatus: async () => null,
@@ -415,10 +418,13 @@ function deadlineSetup({ onFetch = () => {}, onConfirm = () => {} } = {}) {
     priceFish: plainPrice,
     ledger,
     market: MARKET,
-    ensureMint: async () => 'PearlMint',
+    ensureMint: async () => {
+      hooks.mint(clock);
+      return 'PearlMint';
+    },
     fetchTransfer: async () => transferTx({ moves: [{ asset: A }, { asset: B }] }),
     loadMarketAsset: async () => {
-      onFetch(clock);
+      hooks.fetch(clock);
       return { owner: MARKET, attributes: { attributeList: attrs('common', 3) } };
     },
     resolvePending: payout.resolvePending,
@@ -430,7 +436,7 @@ function deadlineSetup({ onFetch = () => {}, onConfirm = () => {} } = {}) {
     batchDeadlineMs: 1000,
     now: () => clock.t,
   });
-  return { desk, ledger, sent, burns };
+  return { desk, ledger, sent, burns, clock, hooks };
 }
 
 test('deadline: past it before the payout, /sell and /sell-batch answer 503 and send nothing; the retry pays once', async () => {
@@ -463,6 +469,34 @@ test('deadline: a payout sent before it is still confirmed and recorded; only th
   // A retry answers the same sale, pays nothing more and burns it.
   const again = await m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX });
   assert.equal(again.tx, 'pay-1');
+  assert.deepEqual(m.sent, [A]);
+  assert.deepEqual(m.burns, [A]);
+});
+
+test('deadline: a sweep resuming a stalled sale near its deadline sends no payout after it; the next sweep pays once', async () => {
+  const m = deadlineSetup({ onFetch: (c) => (c.t += 1500) });
+  await assert.rejects(m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX }), (e) => e.status === 503);
+  assert.equal(m.ledger.get(A).status, 'paying');
+  m.clock.t = Date.now() + 1000; // the ledger stamps the sale with the real clock: the sweep's sees it as old enough
+  const sweep = createSweep({
+    collection: () => 'Coll',
+    market: MARKET,
+    ledger: m.ledger,
+    loadAsset: async () => assert.fail('only the stalled sale is on the list'),
+    burnOnce: async () => assert.fail('the desk burns a resumed sale'),
+    resumeSale: (assetId, r, deadline) => m.desk.sellAsset({ assetId, seller: r.seller, transferTx: r.transferTx }, undefined, deadline),
+    resumeAfterMs: 0,
+    sleep: async () => {},
+    now: () => m.clock.t,
+  });
+  // The resume starts in time, but the sweep's deadline passes before its payout would go out.
+  m.hooks.mint = (c) => (c.t += 1500);
+  assert.deepEqual(await sweep.run({ deadlineMs: 1000 }), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 1, rateLimited: false, outOfTime: true });
+  assert.deepEqual(m.sent, [], 'no payout sent');
+  assert.equal(m.ledger.get(A).status, 'paying');
+  // The next sweep has the time: paid once, burned.
+  m.hooks.mint = () => {};
+  assert.deepEqual(await sweep.run({ deadlineMs: 1000 }), { burned: 0, resumed: 1, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, outOfTime: false });
   assert.deepEqual(m.sent, [A]);
   assert.deepEqual(m.burns, [A]);
 });

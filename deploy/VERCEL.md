@@ -35,7 +35,8 @@ The root `package.json` now lists the function's runtime dependencies: umi, mpl-
 
 - **Duration.** Hobby with Fluid compute (on by default): 300 s default and 300 s maximum ([docs](https://vercel.com/docs/functions/configuring-functions/duration)).
   - `vercel.json` sets 300.
-  - `/api/market/sell-batch` stops starting new fish after 240 s. Fish it did not reach answer `503 "sell this fish again"`, and the game retries them.
+  - `/api/market/sell` and `/api/market/sell-batch` start no fish and send no payout after 180 s. Fish they did not reach answer `503 "sell this fish again"`, and the game retries them. A payout sent just before that can still take ~110 s (429 backoff on the send, then up to 90 s to confirm), so 180 s keeps the request under 300 s.
+  - The sweep (cron or after a sale) starts no burn or resume after 180 s; the rest wait for the next sweep.
   - A 24-fish batch behind RPC 429 backoff can take longer than 300 s, which is why the deadline exists.
 - **Cron.** Hobby allows once a day at most, ±59 min ([usage](https://vercel.com/docs/cron-jobs/usage-and-pricing)). A cron is a GET to the production URL with `Authorization: Bearer $CRON_SECRET` ([manage](https://vercel.com/docs/cron-jobs/manage-cron-jobs)). It may fire twice or be missed; the sweep is idempotent.
 - **Redis.** Vercel KV is gone; Redis comes from the Marketplace (Upstash) ([docs](https://vercel.com/docs/redis)).
@@ -229,7 +230,8 @@ Dell 部署（deploy/SETUP.md）完全不变。这里是第二种托管同一个
 
 - **运行时长。** Hobby 计划开启 Fluid compute（默认开）时，默认和上限都是 300 秒（[文档](https://vercel.com/docs/functions/configuring-functions/duration)）。
   - `vercel.json` 设为 300。
-  - `/api/market/sell-batch` 过了 240 秒就不再开始卖新的鱼。没轮到的鱼回 `503`，游戏会重试。
+  - `/api/market/sell` 和 `/api/market/sell-batch` 过了 180 秒就不再开始卖新的鱼，也不再发放 PEARL。没轮到的鱼回 `503`，游戏会重试。截止前刚发出的付款还可能要约 110 秒（发送时的 429 退避，加上最多 90 秒确认），所以定 180 秒，保证请求在 300 秒内结束。
+  - 清扫（cron 或卖鱼之后）过了 180 秒就不再开始新的销毁或续卖，剩下的等下一次清扫。
   - 24 条鱼遇上 RPC 429 退避时可能超过 300 秒，所以加了这个截止时间。
 - **Cron。** Hobby 计划最多每天一次，误差 ±59 分钟（[用量](https://vercel.com/docs/cron-jobs/usage-and-pricing)）。调用方式是对生产 URL 发 GET，带 `Authorization: Bearer $CRON_SECRET`（[管理](https://vercel.com/docs/cron-jobs/manage-cron-jobs)）。可能重复或漏掉一次；清扫是幂等的。
 - **Redis。** Vercel KV 已停用，Redis 改由 Marketplace（Upstash）提供（[文档](https://vercel.com/docs/redis)）。

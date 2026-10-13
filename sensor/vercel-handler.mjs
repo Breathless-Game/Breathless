@@ -27,13 +27,18 @@ import { createLinkHandler } from './link-relay.mjs';
 
 /** How long Vercel's CDN keeps an NFT's metadata and art (nft-meta.mjs, nft-gear.mjs): a year, the most it allows. */
 export const NFT_CDN_CACHE = 'max-age=31536000';
-/** A /sell or /sell-batch starts no fish and sends no payout after this long (503, sell again); maxDuration is 300 s. */
-export const BATCH_DEADLINE_MS = 240_000;
 /**
- * A sweep starts no burn or resume after this long into the function (the after-sale one counts
- * from its sale's request); the rest wait for the next one.
+ * A /sell or /sell-batch starts no fish and sends no payout after this long (503, sell again).
+ * maxDuration is 300 s, and a payout sent just before the deadline can still take ~110 s: up to
+ * ~20 s of 429 backoff on the send, then up to 90 s for the confirmation.
  */
-export const SWEEP_DEADLINE_MS = 240_000;
+export const BATCH_DEADLINE_MS = 180_000;
+/**
+ * A sweep starts no burn or resume, and a resume sends no payout, after this long into the function
+ * (the after-sale one counts from its sale's request); the rest wait for the next one. 180 s for the
+ * same reason as BATCH_DEADLINE_MS: what was sent just before it still has ~110 s to confirm.
+ */
+export const SWEEP_DEADLINE_MS = 180_000;
 /** The opportunistic sweep after a sale runs at most this often, across all instances. */
 export const SWEEP_EVERY_MS = 10 * 60_000;
 /** One sweep at a time across instances; longer than any sweep (SWEEP_MAX_PER_RUN burns) takes. */

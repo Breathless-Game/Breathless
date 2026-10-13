@@ -23,7 +23,8 @@
 // maxPerRun fish per sweep (of which at most maxResumesPerRun resumed sales), and a 429 (after
 // rpc-guard.mjs has already backed off) ends the sweep early: the rest wait for the next one
 // instead of the whole sweep failing. So does run({ deadlineMs }) once that long has passed (a
-// serverless host, below its function time limit): no burn or resume is started after it.
+// serverless host, below its function time limit): no burn or resume is started after it, and a
+// resume under way sends no payout after it (the desk's own deadline).
 
 import { isRateLimited } from './rpc-guard.mjs';
 
@@ -43,7 +44,7 @@ export const SWEEP_MAX_RESUMES_PER_RUN = 3;
 /**
  * A 'paying' sale is the sweep's to resume only this long after it began. No request can still be
  * working on it by then: a request lives at most 300 s (Vercel's maxDuration; a /sell or /sell-batch
- * sends no payout after 240 s), its payout's blockhash expires within ~60-90 s and its confirmation
+ * sends no payout after 180 s), its payout's blockhash expires within ~60-90 s and its confirmation
  * gives up after 90 s. So the sweep never races a live sale; if a client's retry does run at the same time,
  * the per-fish lock (one process) and Redis's payPending SET NX (several) still let only one pay.
  */
@@ -113,8 +114,9 @@ export function burnBlocker(asset, { market, collection }) {
  *   ledger        SoldLedger, or the Redis store's ledger: unburned(limit), get(id), burned(id, sig), skipBurn(id, why)
  *   loadAsset(id) -> the mpl-core asset, or null when it does not exist; throws on an RPC error (429, timeout)
  *   burnOnce(id, asset) burns it (asset: already fetched, so no second fetch); throws on failure
- *   resumeSale(id, record)  finishes a sale stuck in 'paying': the sale desk's sellAsset (pays only
- *                 if the earlier payout did not land, then burns); throws like a /sell. Without it,
+ *   resumeSale(id, record, deadline)  finishes a sale stuck in 'paying': the sale desk's sellAsset
+ *                 (pays only if the earlier payout did not land, then burns; sends nothing after
+ *                 `deadline`, a time in ms, Infinity without one); throws like a /sell. Without it,
  *                 paying sales are left alone.
  * Returns { burned, resumed, settled, skipped, failed, waiting, left, rateLimited }: resumed = stalled
  * sales finished (paid now or found paid, then burned); settled = already gone, marked burned;
@@ -166,7 +168,7 @@ export function createSweep({
           if (resumes >= maxResumesPerRun) continue; // counted in `left`
           if (tried) await sleep(gapMs);
           resumes++;
-          await resumeSale(id, r);
+          await resumeSale(id, r, deadline);
           out.resumed++;
           log(`[market] sweep: finished the stalled sale of ${id} to ${r.seller}`);
           tried++;
@@ -195,6 +197,11 @@ export function createSweep({
         if (isRateLimited(e)) {
           out.rateLimited = true;
           break; // this fish and the rest wait for the next sweep
+        }
+        if (now() > deadline) {
+          // Out of time (a resume the desk would no longer pay, or anything else this late): stop here too.
+          out.outOfTime = true;
+          break;
         }
         out.failed++;
         log(`[market] sweep: finishing the sale of ${id} failed: ${short(e)}`);

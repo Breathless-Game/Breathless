@@ -149,7 +149,7 @@ test('the market is built once per instance, with no timers, the batch deadline 
   });
   assert.equal(market.made, 1);
   assert.equal(market.options.background, false);
-  assert.equal(market.options.batchDeadlineMs, 240_000);
+  assert.equal(market.options.batchDeadlineMs, 180_000);
   assert.equal(market.options.store.kind, 'redis');
 });
 
