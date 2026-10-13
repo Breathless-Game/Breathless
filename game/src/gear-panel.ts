@@ -106,8 +106,8 @@ const TIER_ZH: Record<UpgradeSlot, readonly { name: string; effect: string }[]> 
   ],
   lamp: [
     { name: '面镜灯', effect: '18 m 光束' },
-    { name: '远距反射器', effect: '28 m 光束' },
-    { name: '广角扩散器', effect: '38 m 广角光束' },
+    { name: '深潜头灯', effect: '聚光 33 m / 广角 24 m' },
+    { name: '深渊头灯', effect: '聚光 48 m / 广角 32 m' },
   ],
   sonar: [
     { name: '深潜声纳', effect: '10 m 缆绳 · 3 个脉冲节点' },
@@ -127,7 +127,7 @@ function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot,
     case 'reel': return language === 'zh' ? `恢复倍率 ${Math.round(stats.reelRecovery * 100)}%` : `${Math.round(stats.reelRecovery * 100)}% recovery rate`;
     case 'fins': return language === 'zh' ? `${stats.swimSpeed.toFixed(1)} m/s 游速 · ${stats.swimAcceleration.toFixed(1)} 加速度` : `${stats.swimSpeed.toFixed(1)} m/s swim speed · ${stats.swimAcceleration.toFixed(1)} acceleration`;
     case 'tank': return language === 'zh' ? `${stats.emergencySeconds.toFixed(1)} s 紧急返航窗口` : `${stats.emergencySeconds.toFixed(1)} s emergency return window`;
-    case 'lamp': return language === 'zh' ? `${stats.lampDistance.toFixed(0)} m 光距 · 直射 ${Math.round(stats.lampIntensity)} · 散射 ${Math.round(stats.lampScatter * 100)}% · ${Math.round(stats.lampAngle * 57.3)}°` : `${stats.lampDistance.toFixed(0)} m range · direct ${Math.round(stats.lampIntensity)} · scatter ${Math.round(stats.lampScatter * 100)}% · ${Math.round(stats.lampAngle * 57.3)}°`;
+    case 'lamp': return language === 'zh' ? `${stats.lampDistance.toFixed(0)} m 光距 · 直射 ${Math.round(stats.lampIntensity)} · ${Math.round(stats.lampAngle * 57.3)}°` : `${stats.lampDistance.toFixed(0)} m range · direct ${Math.round(stats.lampIntensity)} · ${Math.round(stats.lampAngle * 57.3)}°`;
   }
 }
 
@@ -257,6 +257,14 @@ export class GearPanel {
     this.notice.textContent = message;
     this.notice.classList.remove('hidden');
     window.setTimeout(() => this.notice.classList.add('hidden'), 2400);
+  }
+
+  /** Direct workbench entry to this equipment's purchase and path controls. */
+  openSlot(slot: UpgradeSlot, state: EquipmentState) {
+    this.selectedSlot = slot;
+    this.setView('upgrades');
+    this.render(state);
+    this.toggle(true);
   }
 
   /** While an upgrade's on-chain PEARL spend is in flight. */
@@ -467,7 +475,7 @@ export class GearPanel {
       pathButton.title = `${pathName(path)}: ${pathSummaryText(path)}`;
       const pathSelected = level >= 2 && path.id === selectedPath;
       pathButton.setAttribute('aria-pressed', String(pathSelected));
-      pathButton.disabled = level < 2;
+      pathButton.disabled = level < 2 || this.busy || !!this.lockReason();
       pathButton.classList.toggle('selected', pathSelected);
       pathButton.addEventListener('click', () => {
         this.selectSlot(slot);

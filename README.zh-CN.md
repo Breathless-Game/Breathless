@@ -454,9 +454,6 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
         ├── lowpoly.ts      共用的低多边形工具：flat 材质、顶点抖动、按面上色、把静态部件按材质合并成一个网格的 batcher
         ├── mappicker.ts    开始卡片上的地图卡片
         ├── diver.ts        低多边形潜水员、踢腿、网、头灯、气泡
-        ├── diver-designs.ts 三种人物皮肤、关节动画与共用的头部挂载坐标
-        ├── headlamp-model.ts 将装备图鉴的头灯按材质合并，生成穿戴模型
-        ├── diver-preview.ts 人物实时比较：旋转、手臂动作、头灯等级
         ├── gear.ts         鱼竿概念对应的渔网模型：握把、线轮、杆身、网圈和网格
         ├── equipment.ts    鱼竿等级、Pearl 余额、本地存档和升级规则
         ├── gear-panel.ts   鱼竿 / 渔网升级面板
@@ -676,18 +673,6 @@ node sensor/analyze.mjs --trace=lo --exhaleRatio=1.3
 ```bash
 npm run showcase:gif
 ```
-
-### 人物与头灯建模
-
-![三种可玩人物皮肤及 Lv1、Lv2、Lv3 头灯模型](docs/diver-headlamp-preview.png)
-
-三种可玩的皮肤共用 `diver-designs.ts` 中的动画模型：逐浪者（青绿自由潜水服）、潮汐探险家（苔绿潜水服与玻璃头套）、深渊侦察员（靛蓝潜水服与装甲视窗）。逐浪者的面罩使用倒角边框和内嵌镜片；渐细的小腿、有拇指轮廓的手套、闭合的薄脚蹼，让髋、膝、踝和手臂运动时仍能看清人物轮廓。
-
-穿戴头灯与工作台图鉴共用硬件模型：Lv1 是紧凑单灯，Lv2 是带护圈与散热环的深灯筒，Lv3 是双灯加固结构。调节转轴、镜片压圈、后置密封电池和电池盖螺钉均为实际几何；反光杯位于保护镜片后方，展示模式下头灯不自发光。游戏中将静态部件按材质合并，避免每颗螺钉、每段头带和每块外壳各占一次绘制。
-
-灯体、聚光灯、散射光锥和呼吸锚点跟随可见人物的头部，包括坐姿和换肤。光锥从镜片处出发，沿照射方向逐渐展开；换肤时保留已装备的头灯和渔网。本次改动只影响视觉，价格、屏息时间和照射距离仍使用原有升级规则。
-
-启动 `npm run game` 后，打开 `/diver-preview.html`，可旋转三种人物、试手臂动作、切换头灯等级或隐藏头灯；此页直接使用游戏人物。`/equipment-preview.html` 展示独立头灯及其三级结构。模型检查使用 `npm --prefix game test`，严格构建使用 `npm --prefix game run build`。
 
 ### 自动画质
 

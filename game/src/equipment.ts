@@ -135,7 +135,7 @@ export interface EquipmentStats {
   lampDistance: number;
   lampIntensity: number;
   lampAngle: number;
-  /** Fraction of the beam rendered as visible suspended-particle scatter. */
+  /** Strength of nearby reflected illumination. */
   lampScatter: number;
   /** Physical falloff and water absorption controls used by the diver light. */
   lampDecay: number;
@@ -233,8 +233,8 @@ const SLOT_LEVELS: Record<UpgradeSlot, readonly SlotTier[]> = {
   ],
   lamp: [
     { slot: 'lamp', level: 1, name: 'Mask lamp', effect: '18 m beam', cost: 0 },
-    { slot: 'lamp', level: 2, name: 'Long-focus reflector', effect: '28 m beam', cost: 100 },
-    { slot: 'lamp', level: 3, name: 'Wide diffuser', effect: '38 m wide beam', cost: 500 },
+    { slot: 'lamp', level: 2, name: 'Dive lamp', effect: '33 m focus / 24 m wide', cost: 100 },
+    { slot: 'lamp', level: 3, name: 'Abyss lamp', effect: '48 m focus / 32 m wide', cost: 500 },
   ],
   // Keep in step with DEEP_SONAR_LENGTH_TIERS in deep-sonar.ts (checked by tests/deep-sonar.test.mjs).
   sonar: [
@@ -327,11 +327,11 @@ export const EQUIPMENT_PATHS: Readonly<Record<EquipmentSlot, readonly EquipmentP
   ],
   lamp: [
     pathDef('lamp', 'focus', 'Long focus', '长焦反射杯', 'A narrow, brighter beam for deep targets.',
-      ['Base beam', '+5 m distance · +10 intensity · −0.12 rad angle', '+10 m distance · +20 intensity · −0.24 rad angle'],
-      [{}, { lampDistance: 5, lampIntensity: 10, lampAngle: -0.12 }, { lampDistance: 10, lampIntensity: 20, lampAngle: -0.24 }]),
+      ['18 m range · intensity 48', '33 m range · intensity 74', '48 m range · intensity 102'],
+      [{}, {}, {}]),
     pathDef('lamp', 'wideLamp', 'Wide diffuser', '广角扩散罩', 'See more of the local area at the cost of throw distance.',
-      ['Base beam', '+0.18 rad angle · −4 intensity', '+0.36 rad angle · −8 intensity'],
-      [{}, { lampAngle: 0.18, lampIntensity: -4 }, { lampAngle: 0.36, lampIntensity: -8 }]),
+      ['18 m range · intensity 48', '24 m range · intensity 60', '32 m range · intensity 74'],
+      [{}, {}, {}]),
   ],
   reel: [
     pathDef('reel', 'fastReel', 'Fast reel', '快收线轮', 'Shorter recovery between swings.',
