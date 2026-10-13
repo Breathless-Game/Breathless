@@ -556,7 +556,7 @@ function sendJson(res, status, obj) {
 }
 
 // Where the PEARL market's keys and state live, and the fish number counter (.market-serial.json):
-// MARKET_DIR (relative to the repo root), default sensor/. deploy.sh never touches .market-* there.
+// MARKET_DIR (relative to the repo root), default sensor/. A deploy must never touch .market-* there.
 const marketDir = () =>
   process.env.MARKET_DIR
     ? resolve(fileURLToPath(new URL('..', import.meta.url)), process.env.MARKET_DIR)
@@ -568,8 +568,8 @@ const marketDir = () =>
 let market = null;
 let marketDown = 'PEARL market is starting, try again in a moment';
 // For GET /api/health: 'starting' until createMarket resolves (local files only, no RPC call),
-// then 'up', or 'failed' if it threw. deploy.sh gates on it instead of /api/market/info, which
-// waits on the Solana RPC and so stalls whenever devnet rate-limits us.
+// then 'up', or 'failed' if it threw. A deploy health check should gate on it instead of
+// /api/market/info, which waits on the Solana RPC and so stalls whenever devnet rate-limits us.
 let marketState = 'starting';
 async function startMarket() {
   try {
@@ -624,7 +624,7 @@ if (SERVE) {
         pathname = new URL(req.url ?? '/', 'http://x').pathname;
       } catch {} // the static handler answers 400
       if (pathname.startsWith('/api/')) {
-        // Liveness for deploy.sh: answered from memory, never waits on the RPC or anything else.
+        // Liveness for health checks: answered from memory, never waits on the RPC or anything else.
         if (pathname === '/api/health') return sendJson(res, 200, { ok: true, market: marketState });
         if (pathname === '/api/link' || pathname.startsWith('/api/link/')) {
           const handle = await link.catch(() => null);

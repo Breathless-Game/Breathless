@@ -14,8 +14,8 @@
 // must keep resolving.
 //
 // game/src/nft-uri.ts builds these paths; keep the two in step (game/tests/nft-uri.test.mjs checks).
-// The JSON's image URL uses PUBLIC_ORIGIN when set, else the request's Host (cloudflared passes
-// the public hostname through), else DEFAULT_ORIGIN.
+// The JSON's image URL uses PUBLIC_ORIGIN when set, else the request's Host (a tunnel or proxy
+// passes the public hostname through), else DEFAULT_ORIGIN.
 
 import { ARCHETYPES, CARD_RENDER_VERSION, RARITIES, renderFishPng } from './fish-png.mjs';
 

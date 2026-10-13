@@ -155,7 +155,7 @@ Presage is **temporarily off**: there are two switches, one per side, and both a
 
 - **Server, `PRESAGE_ENABLED=1`** in the repo-root `.env` (or the environment). Off, the sensor never loads the SmartSpectra SDK, ignores `PRESAGE_API_KEY` even if `.env` still has one, drops camera frames and only runs the simulator; its startup log says `Presage SmartSpectra is disabled`. Market, NFT metadata and everything else on the server work the same either way.
 - **Game, `VITE_PRESAGE_ENABLED=1` at build time** (in `game/.env`, or on the command line: `VITE_PRESAGE_ENABLED=1 npm run build`). Off, the game never asks for the camera, hides **Start with camera** and the camera preview setting, skips calibration, and `K` offers the keyboard only (plus the simulator in a dev build). The health report keeps hold times, depth and outcomes; heart and breathing rate need the camera, so those tiles are hidden unless older camera dives have them.
-- Turn **both** on, then restart the sensor and rebuild the game. Production: add `PRESAGE_ENABLED=1` to the Dell's `.env` and set the repository variable `VITE_PRESAGE_ENABLED=1` (deploy/SETUP.md, step 2). With only the server on, the game stays keyboard-only; with only the game on, the server answers "turned off" and the game falls back to the keyboard.
+- Turn **both** on, then restart the sensor and rebuild the game. Production runs on Vercel, which has no `/sensor` WebSocket, so it stays keyboard-only: live camera sensing needs a self-hosted `npm start` behind HTTPS (see Self-hosting), or a game built with `VITE_SENSOR_URL` pointing at such a sensor. With only the server on, the game stays keyboard-only; with only the game on, the server answers "turned off" and the game falls back to the keyboard.
 
 ### Testing breath detection on a real camera
 
@@ -169,9 +169,9 @@ If it gets this wrong often, tune the constants in `sensor/breath-detector.mjs` 
 
 ### Self-hosting / 自托管
 
-The live build is at <https://breathless.gotclass.xyz>. It is deployed automatically from `main` by a self-hosted runner. The project is about 594 commits and about 55,000 lines of code, with 409 game tests, 106 sensor tests and 52 contracts tests.
+The live build is at <https://breathless.gotclass.xyz>. It runs on Vercel, which deploys every push to `main` automatically (deploy/VERCEL.md). The project is about 594 commits and about 55,000 lines of code, with 409 game tests, 106 sensor tests and 52 contracts tests.
 
-`npm start` is the production server: one Node process on one port serves the built game, the breath sensor (WebSocket at `/sensor`) and the PEARL market (`/api/market`, section 8) together, so a single tunnel or reverse proxy can front it.
+`npm start` is the self-hosting server (production ran on it until 2026-10-13): one Node process on one port serves the built game, the breath sensor (WebSocket at `/sensor`) and the PEARL market (`/api/market`, section 8) together, so a single tunnel or reverse proxy can front it.
 
 ```bash
 npm run setup      # once: installs sensor/ and game/ dependencies
@@ -182,7 +182,7 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PRESAGE_ENABLED` | off | `1` turns Presage live sensing on. **Temporarily off**: unset, the server ignores `PRESAGE_API_KEY` and never loads the SDK ([Turning Presage back on](#turning-presage-back-on)). |
-| `VITE_PRESAGE_ENABLED` | off | Build time, for the game: `1` brings back the camera option. Production sets it from the repository variable of the same name (deploy/SETUP.md). |
+| `VITE_PRESAGE_ENABLED` | off | Build time, for the game: `1` brings back the camera option. Leave it unset on Vercel, which cannot serve `/sensor` (deploy/VERCEL.md). |
 | `PRESAGE_API_KEY` | empty | Goes in `.env` at the repo root **on the server only**. Without it the server runs the simulator. Ignored unless `PRESAGE_ENABLED=1`. |
 | `PORT` | `8794` | HTTP + WebSocket port. Dev mode (`npm run sensor`) keeps `SENSOR_PORT`, 8787. |
 | `HOST` | `127.0.0.1` | Bind address. Loopback, because the tunnel / proxy on the same machine is the only way in. |
@@ -190,14 +190,14 @@ npm start          # http://127.0.0.1:8794, sensor at ws://127.0.0.1:8794/sensor
 | `MAX_CONN_PER_IP` | `8` | Open sensor connections per player IP (read from `CF-Connecting-IP` / `X-Forwarded-For` when the proxy is local). |
 | `SENSOR_RECORD` | off | `1` writes live sessions to `sensor/recordings/`. Off by default in serve mode: strangers' breathing data is never written to disk. (Dev mode records as before.) |
 | `FISH_MARKET_PROGRAM_ID` | empty | PEARL market mode: empty = server mode, a program id = program mode (section 8). |
-| `MARKET_DIR` | `sensor` | Where the market keeps its keypairs and state (`.market-*`), relative to the repo root. `deploy/deploy.sh` never overwrites or deletes them; back them up. If the market can't start, the game and sensor still serve and `/api/market` answers 503. |
+| `MARKET_DIR` | `sensor` | Where the market keeps its keypairs and state (`.market-*`), relative to the repo root. Never overwrite or delete them when you update the code; back them up. If the market can't start, the game and sensor still serve and `/api/market` answers 503. |
 | `SOLANA_RPC` | devnet | The Solana RPC every server-side call uses: the market, the fish collection, payouts and burns (falls back to `VITE_SOLANA_RPC`, then `https://api.devnet.solana.com`). The public devnet endpoint rate-limits hard (HTTP 429) as soon as someone bulk-sells, so production should use a dedicated devnet RPC from a provider. That URL usually contains an API key: put it **only** in the server's `.env`, never commit it, and never put it in a `VITE_*` variable (those are bundled into the page). Logs show only its origin. |
 | `SOLANA_RPC_CONCURRENCY` | `3` | Market RPC calls in flight at once. A 429 pauses all of them with backoff; raise this only on a paid RPC plan. |
 
 - **The camera needs HTTPS.** Browsers only allow `getUserMedia` on `https://` pages (or `localhost`), so put a tunnel (e.g. Cloudflare Tunnel) or a TLS reverse proxy in front of `127.0.0.1:8794`. The built game connects to `wss://<same host>/sensor` by itself; set `VITE_SENSOR_URL` at build time to point it elsewhere.
 - **Solana RPC hiccups don't take the server down.** All market RPC goes through one limiter (`SOLANA_RPC_CONCURRENCY`) with a shared 429 backoff, and confirmations are polled over HTTP (no websocket subscriptions). A burn that fails after a payout is retried in memory, and on start-up and every 10 minutes the market burns the fish its sold ledger says were paid but not burned yet, one account lookup per fish and no chain-wide scan, stopping early on a 429 (`[market] sweep: ...` in the log). A stray promise rejection is logged as `[process] unhandled rejection (kept running)` instead of exiting; `[process] BUG: ...` lines are programming errors worth a look.
-- **The team's Dell** deploys automatically on every push to `main` (GitHub Actions + a self-hosted runner + Cloudflare Tunnel). One-time setup: [deploy/SETUP.md](deploy/SETUP.md#english).
-- **Vercel** (optional, alongside the Dell): the game as static files and every `/api` route in one function, with the market's state in Upstash Redis. There is no `/sensor` WebSocket, so it is keyboard mode only. Setup, a preview with a test wallet, cutover and rollback: [deploy/VERCEL.md](deploy/VERCEL.md#english).
+- **Production is Vercel** (since 2026-10-13): the game as static files and every `/api` route in one function, with the market's state in Upstash Redis. Vercel deploys every push to `main` through its own GitHub integration, and every PR branch gets a Preview. There is no `/sensor` WebSocket, so it is keyboard mode only. Setup, environment variables, a preview with a test wallet and rolling back a bad deploy: [deploy/VERCEL.md](deploy/VERCEL.md#english). GitHub Actions (`.github/workflows/ci.yml`) only runs the tests and the build; it deploys nothing.
+- **The old Dell setup is retired.** Until 2026-10-13 production ran `npm start` on a team machine (systemd + a self-hosted GitHub Actions runner + Cloudflare Tunnel). Its scripts (`deploy/SETUP.md`, `deploy/deploy.sh`, `deploy/bootstrap-dell.sh`, the systemd unit and sudoers file) were removed from the repo; they are still in the git history if you want to self-host that way.
 - **Bandwidth.** Live mode sends every 640×480 camera frame as a JPEG, 30 fps, about **3–6 Mbit/s of upload per player** (Chrome at quality 0.7: 16–20 kB per frame for a plain scene, 30–35 kB for a busy one). Presage wants ~25+ fps and its trace degrades below ~15, so the game keeps the frame rate and gives up quality instead: it aims at 25 kB per frame (6 Mbit/s at 30 fps) and steps the JPEG quality between 0.8 and 0.4 when frames run larger or a slow uplink makes it skip frames. A ~5 Mbit/s uplink keeps 30 fps for typical scenes; slower ones skip frames. The sensor decodes with [sharp](https://sharp.pixelplumbing.com/) (libvips): about 2 ms per frame on its own thread, roughly 3% of one core more than raw frames. Keyboard and simulator mode send no frames.
   - Raw RGBA (1.23 MB per frame, ≈295 Mbit/s at 30 fps) is still the default for a dev build talking to a sensor on the same machine. Add `?frames=raw` or `?frames=jpeg` to the page URL (or set `VITE_FRAME_FORMAT` at build time) to force either.
   - To check a deployment's upload path from a player's network without a camera: `node sensor/stream-test.mjs wss://<your host>/sensor` streams synthetic JPEG frames for 20 s and prints the upload rate, frames skipped and frames Presage accepted (`--raw`, `--fps`, `--quality`, `--image face.jpg` are options).
@@ -808,7 +808,7 @@ Pause and background states freeze automatic weather and rain animation; manual 
 - Rebindable controls (Settings → Controls) and English / 中文 language
 - Collection bulk sell: tick boxes with select-all
 - NFT art match: the NFT image is drawn by the same code as the in-game card
-- Auto-deployed from `main` by a self-hosted runner to <https://breathless.gotclass.xyz>
+- Auto-deployed from `main` by Vercel to <https://breathless.gotclass.xyz>
 
 ### 🔜 To do (say so in a PR or the group chat when you pick one up)
 

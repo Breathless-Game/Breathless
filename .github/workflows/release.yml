@@ -3,7 +3,7 @@
 #   git tag v0.2.0 && git push origin v0.2.0
 # Run it from the Actions tab (workflow_dispatch) to build without a release: the installers
 # are then only kept as workflow artifacts. The app loads the live site, so this never
-# touches the site deploy (deploy.yml runs on pushes to main only, never on tags).
+# touches the site deploy (Vercel deploys Production from pushes to main only, never tags).
 # Builds are unsigned: there are no certificates. desktop/README.md says what users see.
 name: Release desktop app
 

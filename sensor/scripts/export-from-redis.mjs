@@ -1,5 +1,6 @@
-// The way back from Vercel to the Dell (deploy/VERCEL.md, rollback): write the Redis store's state
-// out as the three files server mode reads, in the formats it always used:
+// The way out of Redis, if the market ever has to leave Vercel (deploy/VERCEL.md, "Rolling back
+// and moving the market"): write the Redis store's state out as the three files server mode
+// reads, in the formats it always used:
 //
 //   .market-state.json   the PEARL mint, the fish collection, and the sold ledger
 //   .market-fish.jsonl   the (owner, fish id) -> asset registry

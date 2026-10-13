@@ -1,7 +1,7 @@
 // Bundles game/src/fish-card-geometry.ts (with fish.ts, marine.ts and three.js) into
-// sensor/fish-card.gen.mjs, so the server draws NFT images from the game's own fish code. The Dell
-// only receives sensor/ and game/dist/, so the bundle is committed; game/tests/fish-card.test.mjs
-// fails (and blocks the deploy) when it is stale.
+// sensor/fish-card.gen.mjs, so the server draws NFT images from the game's own fish code. No build
+// step regenerates it (the server, on Vercel or `npm start`, runs sensor/ as is), so the bundle is
+// committed; game/tests/fish-card.test.mjs fails (and so does CI) when it is stale.
 //
 //   npm --prefix game run build:fish-card
 import { build } from 'esbuild';

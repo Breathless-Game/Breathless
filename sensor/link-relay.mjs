@@ -14,8 +14,8 @@
 //
 // The server only passes things through: the app verifies every signature itself (the login's
 // signMessage, each transaction byte for byte except its blockhash), so a server that lies can
-// only make a request fail. Sessions live 5 minutes in the shared KV (market-store.mjs: memory on
-// the Dell, Redis on Vercel), so any instance can serve any step. Only SHA-256 hashes of the two
+// only make a request fail. Sessions live 5 minutes in the shared KV (market-store.mjs: memory under
+// `npm start`, Redis on Vercel), so any instance can serve any step. Only SHA-256 hashes of the two
 // tokens are stored; the page's token stops working once it posted a result or cancelled. Tokens
 // and payloads are never logged.
 
