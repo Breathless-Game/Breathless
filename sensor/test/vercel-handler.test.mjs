@@ -43,7 +43,7 @@ function fakeMarket({ fail = false } = {}) {
       },
       sweep: async () => {
         m.sweeps++;
-        return { burned: 1, failed: 0, left: 0, unpaid: 0 };
+        return { burned: 1, settled: 0, skipped: 0, failed: 0, left: 0, rateLimited: false };
       },
     };
   };
@@ -173,7 +173,7 @@ test('the cron sweeps only with the secret', async () => {
     assert.equal((await fetch(base + CRON_PATH, { headers: { authorization: 'Bearer wrong' } })).status, 401);
     const ok = await fetch(base + CRON_PATH, { headers: { authorization: `Bearer ${SECRET}` } });
     assert.equal(ok.status, 200);
-    assert.deepEqual(await ok.json(), { swept: true, burned: 1, failed: 0, left: 0, unpaid: 0 });
+    assert.deepEqual(await ok.json(), { swept: true, burned: 1, settled: 0, skipped: 0, failed: 0, left: 0, rateLimited: false });
   });
   assert.equal(market.sweeps, 1);
   const { handler: unset } = setup({ env: { CRON_SECRET: '' } });

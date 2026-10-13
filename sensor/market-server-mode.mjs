@@ -9,7 +9,7 @@
 // That is the file store; on a serverless host the same state lives in Redis (market-store.mjs).
 
 import { createGenericFile, generateSigner, percentAmount, publicKey, sol, transactionBuilder } from '@metaplex-foundation/umi';
-import { burn, fetchAsset, fetchAssetsByOwner, fetchCollection } from '@metaplex-foundation/mpl-core';
+import { burn, fetchAsset, fetchCollection } from '@metaplex-foundation/mpl-core';
 import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
@@ -244,11 +244,12 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
    * Burn one sold fish and record it. Throws when the burn did not land (RPC error, expiry, an
    * on-chain error). Only a fish the market owns is burned; one that is gone already counts as burned.
    * Concurrent calls for one fish (a sale retry, the retry queue, the sweep) share one attempt.
+   * `known`: the asset as the caller just fetched it (the sweep), saving a second fetch.
    */
   const burnFlights = new Map();
-  function burnOnce(assetId) {
+  function burnOnce(assetId, known) {
     return singleFlight(burnFlights, assetId, async () => {
-      const asset = await loadAsset(assetId); // throws on an RPC error: "not found" must really mean gone
+      const asset = known ?? (await loadAsset(assetId)); // throws on an RPC error: "not found" must really mean gone
       if (!asset) {
         const r = await ledger.get(assetId);
         if (r) await ledger.burned(assetId, r.burnTx ?? '');
@@ -267,8 +268,9 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
   // A failed burn is retried in memory with backoff; the sweep (start-up + every 10 min) catches the rest.
   // A serverless instance may be frozen once it has answered, so its timers can't be trusted: there the sweep alone catches up.
   const burnRetry = background ? createBurnRetry({ burnOnce, log }) : { retry() {} };
+  // The sweep works from the ledger's paid-but-unburned list, one getAccount per fish: no getProgramAccounts.
   const sweep = createSweep({
-    listOwned: () => fetchAssetsByOwner(u, u.identity.publicKey, { skipDerivePlugins: true }),
+    loadAsset,
     collection: () => state.fishCollection ?? null,
     market: marketKey,
     ledger,
@@ -349,7 +351,7 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     } catch (e) {
       log(`[market] fish collection not created yet: ${e.message}`);
     }
-    // Finish burns a crash or RPC hiccup left behind: the paid fish the market wallet still holds.
+    // Finish burns a crash or RPC hiccup left behind: the fish the ledger says were paid but not burned.
     await sweep.run();
   })();
   if (background) sweep.start();

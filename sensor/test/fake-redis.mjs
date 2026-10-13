@@ -126,30 +126,52 @@ export function createFakeRedis({ now = () => Date.now(), jitter = true } = {}) 
       const e = typed(key, 'hash');
       return e && e.value.size ? Object.fromEntries(e.value) : null;
     },
-    async zadd(key, { score, member }) {
+    async zadd(key, ...members) {
       await step('zadd');
+      if (!members.length) throw new Error('fake zadd: no members');
       let e = typed(key, 'zset');
       if (!e) data.set(key, (e = { type: 'zset', value: new Map(), expiresAt: Infinity }));
-      const added = e.value.has(member) ? 0 : 1;
-      e.value.set(String(member), Number(score));
+      let added = 0;
+      for (const { score, member } of members) {
+        if (!e.value.has(String(member))) added++;
+        e.value.set(String(member), Number(score));
+      }
       return added;
     },
+    async zrem(key, ...members) {
+      await step('zrem');
+      const e = typed(key, 'zset');
+      let removed = 0;
+      for (const m of members.flat()) if (e?.value.delete(String(m))) removed++;
+      if (e && !e.value.size) data.delete(key);
+      return removed;
+    },
+    /** By score ({ byScore: true }) or, as Redis does by default, by rank (start/stop, -1 = last). */
     async zrange(key, min, max, opts = {}) {
       await step('zrange');
-      if (!opts.byScore) throw new Error('fake zrange: only byScore');
+      const e = typed(key, 'zset');
+      const sorted = [...(e?.value ?? [])].sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1));
+      if (!opts.byScore) {
+        const len = sorted.length;
+        const at = (i) => (Number(i) < 0 ? len + Number(i) : Number(i));
+        return sorted.slice(Math.max(0, at(min)), at(max) + 1).map(([m]) => m);
+      }
       const lo = min === '-inf' ? -Infinity : Number(min);
       const hi = max === '+inf' ? Infinity : Number(max);
-      const e = typed(key, 'zset');
-      return [...(e?.value ?? [])]
-        .filter(([, s]) => s >= lo && s <= hi)
-        .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1))
-        .map(([m]) => m);
+      return sorted.filter(([, s]) => s >= lo && s <= hi).map(([m]) => m);
     },
-    /** One pass over everything (cursor "0" back): MATCH supports `*` only, as the scripts use it. */
-    async scan(_cursor, { match = '*' } = {}) {
+    /**
+     * Pages of `count` keys of the whole keyspace (default: everything at once), the cursor being an
+     * offset, "0" when done. Like Redis, MATCH filters each page after the fact, so a page may come
+     * back empty with a non-zero cursor. MATCH supports `*` only, as the scripts use it.
+     */
+    async scan(cursor, { match = '*', count = Infinity } = {}) {
       await step('scan');
       const re = new RegExp(`^${match.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
-      return ['0', [...data.keys()].filter((k) => live(k) && re.test(k))];
+      const all = [...data.keys()].filter((k) => live(k));
+      const from = Number(cursor) || 0;
+      const to = from + Number(count);
+      return [to >= all.length ? '0' : String(to), all.slice(from, to).filter((k) => re.test(k))];
     },
     async eval(script, keys, args) {
       await step('eval');

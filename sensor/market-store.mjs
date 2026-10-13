@@ -23,6 +23,9 @@
 //                                              never to land), so a stale "unpaid" can't pay again
 //   paid/burned CAS sold:<asset> old -> new    compare-and-set on the record's exact JSON
 //   serial      one Lua script: HGET the owner+fish key, else INCR the counter and HSET it
+//   unburned    ZSET of paid-but-unburned fish (the sweep's work list): ZADD before the 'paid' CAS,
+//               ZREM after the 'burned' one, so a crash in between leaves at most a stale entry,
+//               which the next listing checks against its record and drops
 //   registry    HSET (owner/fish -> entry): a retried append writes the same mapping again
 //
 // The generic KV (store.kv) is for short-lived shared state such as sessions and throttles: an
@@ -212,7 +215,8 @@ async function takeLock(kv, name, ttlMs) {
 
 // ---- Redis backend -------------------------------------------------------------------------------
 // The client is @upstash/redis (automaticDeserialization off) or anything with the same methods:
-// get, set(k, v, { nx, px }), del, mget, hget, hset, zadd, zrange(k, min, max, { byScore }), eval.
+// get, set(k, v, { nx, px }), del, mget, hget, hset, zadd(k, ...{ score, member }), zrem(k, ...members),
+// zrange(k, min, max, { byScore }) and by rank zrange(k, start, stop), scan(cursor, { match, count }), eval.
 // The scripts below are the only Lua; test/fake-redis.mjs runs a JS twin of each, keyed by its text.
 
 /** Compare-and-set one string key. ARGV: hasExpected, expected, hasNext, next, ttlMs ('' for none). */
@@ -257,6 +261,8 @@ export function redisKeys(prefix = DEFAULT_PREFIX) {
     fish: `${prefix}fish`,
     serialLast: `${prefix}serial:last`,
     serialKeys: `${prefix}serial:keys`,
+    unburned: `${prefix}unburned`,
+    unburnedReady: `${prefix}unburned:ready`,
     kv: (key) => `${prefix}kv:${key}`,
   };
 }
@@ -295,12 +301,18 @@ export function createRedisKv(redis, prefix = DEFAULT_PREFIX) {
 const parse = (s) => (s === null || s === undefined ? null : JSON.parse(s));
 /** CAS retries when another instance changed a record between our read and our write. */
 const CAS_TRIES = 8;
+/** SCAN page size for the one-time backfill of the unburned index. */
+const BACKFILL_SCAN_COUNT = 1000;
+
+/** On the sweep's work list: paid for, not burned yet, not set aside. */
+const isUnburned = (r) => r?.status === 'paid' && !r.burnSkipped;
 
 /**
  * Server mode's sold ledger in Redis, with SoldLedger's steps (market-rules.mjs), all async. The
  * record is one JSON string per fish; a payout in flight is its own key (see the top of this file).
  * `records` is a read-only snapshot for the daily cap: loadSeller(seller) fills in that seller's
- * last 24 h before each price check. loadAssets(ids) is the sweep's view of some fish.
+ * last 24 h before each price check. loadAssets(ids) reads some fish's records at once (the export).
+ * unburned(limit) is the sweep's work list, from the `unburned` index (see the top of this file).
  */
 export class RedisLedger {
   constructor(redis, prefix = DEFAULT_PREFIX, { now = () => Date.now(), windowMs = PAYOUT_WINDOW_MS } = {}) {
@@ -309,6 +321,7 @@ export class RedisLedger {
     this.now = now;
     this.windowMs = windowMs;
     this.bySeller = new Map(); // seller -> { at, records: { assetId: record } }
+    this.indexed = false; // the unburned index is known to be backfilled
   }
 
   /** The record with its payout in flight merged in, as SoldLedger keeps it; null if never sold. */
@@ -349,6 +362,8 @@ export class RedisLedger {
   }
 
   async paid(assetId) {
+    // Index first: an entry whose record is not 'paid' after all is dropped by the next unburned().
+    await this.redis.zadd(this.keys.unburned, { score: this.now(), member: assetId });
     await this.#update(assetId, (r, pay) => {
       if (r.status !== 'paying') return null; // already paid (or burned) by another instance
       const next = { ...r, status: 'paid' };
@@ -363,6 +378,63 @@ export class RedisLedger {
       const next = { ...merge(r, pay), status: 'burned', burnTx };
       return JSON.stringify(next) === JSON.stringify(merge(r, pay)) ? null : next;
     });
+    await this.redis.zrem(this.keys.unburned, assetId);
+  }
+
+  /** SoldLedger.skipBurn: a paid fish the sweep must not burn, recorded and taken off the work list. */
+  async skipBurn(assetId, reason) {
+    await this.#update(assetId, (r) => (r.burnSkipped === String(reason) ? null : { ...r, burnSkipped: String(reason) }));
+    await this.redis.zrem(this.keys.unburned, assetId);
+  }
+
+  /**
+   * SoldLedger.unburned: up to `limit` fish paid for but not burned, oldest first. Two commands
+   * (ZRANGE, MGET; ZRANGE alone when there is nothing to do), plus a ZREM when stale entries are
+   * dropped. The first call on a database without the index backfills it once (#ensureIndex).
+   */
+  async unburned(limit = 100) {
+    await this.#ensureIndex();
+    const n = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 100;
+    const ids = (await this.redis.zrange(this.keys.unburned, 0, n - 1)).map(String);
+    if (!ids.length) return [];
+    const recs = await this.redis.mget(...ids.map((id) => this.keys.sold(id)));
+    const live = [];
+    const stale = [];
+    ids.forEach((id, i) => (isUnburned(parse(recs[i])) ? live : stale).push(id));
+    if (stale.length) await this.redis.zrem(this.keys.unburned, ...stale);
+    return live;
+  }
+
+  /**
+   * The unburned index, built once from the records written before it existed: SCAN sold:*, MGET
+   * them, ZADD the paid ones, then SET the ready marker (only after a full pass, so a failed
+   * backfill runs again). Idempotent, so two instances doing it at once is harmless; the sweep
+   * lock makes that rare anyway. Later calls on this instance cost nothing, on a new instance one GET.
+   */
+  async #ensureIndex() {
+    if (this.indexed) return;
+    if (await this.redis.get(this.keys.unburnedReady)) {
+      this.indexed = true;
+      return;
+    }
+    const soldPrefix = this.keys.sold('');
+    let cursor = '0';
+    do {
+      const [next, keys] = await this.redis.scan(cursor, { match: `${soldPrefix}*`, count: BACKFILL_SCAN_COUNT });
+      for (let i = 0; i < keys.length; i += 100) {
+        const chunk = keys.slice(i, i + 100);
+        const vals = await this.redis.mget(...chunk);
+        const add = [];
+        chunk.forEach((k, j) => {
+          const r = parse(vals[j]);
+          if (isUnburned(r)) add.push({ score: Number(r.at) || 0, member: String(k).slice(soldPrefix.length) });
+        });
+        if (add.length) await this.redis.zadd(this.keys.unburned, ...add);
+      }
+      cursor = String(next);
+    } while (cursor !== '0');
+    await this.redis.set(this.keys.unburnedReady, String(this.now()));
+    this.indexed = true;
   }
 
   async result(assetId) {

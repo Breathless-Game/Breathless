@@ -68,6 +68,9 @@ export async function importToRedis({ redis, prefix = DEFAULT_PREFIX, data, dryR
     const inFlight = rec.status === 'paying' && payTx !== undefined;
     const record = inFlight ? rest : rec;
     await redis.zadd(keys.seller(rec.seller), { score: Number(rec.at) || 0, member: assetId });
+    // A paid fish not burned yet goes on the sweep's work list (RedisLedger.unburned), index first as
+    // the ledger does it: if Redis already holds a newer record, the listing drops the stale entry.
+    if (rec.status === 'paid' && !rec.burnSkipped) await redis.zadd(keys.unburned, { score: Number(rec.at) || 0, member: assetId });
     if ((await redis.set(keys.sold(assetId), JSON.stringify(record), { nx: true })) !== null) out.sold.added++;
     else out.sold.kept++;
     if (inFlight && (await redis.set(keys.payTx(assetId), JSON.stringify({ payTx, payLastValid }), { nx: true })) !== null) out.payouts++;

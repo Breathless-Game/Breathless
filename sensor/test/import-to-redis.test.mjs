@@ -49,6 +49,10 @@ test('import: the Redis store then reads exactly what the file store does', asyn
     assert.deepEqual(await fromRedis.ledger.get(id), fromFile.ledger.get(id), id);
     assert.equal(await fromRedis.ledger.plan(id, sold[id].seller), fromFile.ledger.plan(id, sold[id].seller), id);
   }
+  // The paid, unburned fish is on the sweep's work list straight from the import (no backfill needed).
+  assert.deepEqual([...redis.data.get('m:unburned').value.keys()], [B]);
+  assert.deepEqual(await fromRedis.ledger.unburned(), fromFile.ledger.unburned());
+  assert.deepEqual(fromFile.ledger.unburned(), [B]);
   // The payout in flight is still guarded: another payout for C is refused before it is sent.
   await assert.rejects(fromRedis.ledger.payPending(C, 'other', 1), (e) => e.status === 409);
   await fromRedis.ledger.loadSeller(SELLER);

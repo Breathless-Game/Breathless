@@ -278,6 +278,24 @@ export class SoldLedger {
     this.persist();
   }
 
+  /**
+   * The sweep's work list: fish paid for but not burned yet (and not set aside by skipBurn),
+   * oldest sale first, at most `limit`. The ledger is the source of truth, so no chain scan is needed.
+   */
+  unburned(limit = Infinity) {
+    return Object.entries(this.records)
+      .filter(([, r]) => r.status === 'paid' && !r.burnSkipped)
+      .sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0) || (a[0] < b[0] ? -1 : 1))
+      .slice(0, limit)
+      .map(([id]) => id);
+  }
+
+  /** A paid fish the sweep must not burn (the market no longer owns it, or it is not ours): off the work list. */
+  skipBurn(assetId, reason) {
+    this.records[assetId].burnSkipped = String(reason);
+    this.persist();
+  }
+
   /** The client-facing SellResult: tx = the PEARL pay tx, extra = [transfer, burn]. */
   result(assetId) {
     const r = this.records[assetId];
