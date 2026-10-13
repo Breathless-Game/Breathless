@@ -23,9 +23,10 @@
 //                                              never to land), so a stale "unpaid" can't pay again
 //   paid/burned CAS sold:<asset> old -> new    compare-and-set on the record's exact JSON
 //   serial      one Lua script: HGET the owner+fish key, else INCR the counter and HSET it
-//   unburned    ZSET of paid-but-unburned fish (the sweep's work list): ZADD before the 'paid' CAS,
-//               ZREM after the 'burned' one, so a crash in between leaves at most a stale entry,
-//               which the next listing checks against its record and drops
+//   unburned    ZSET of unfinished sales, paying or paid but not burned (the sweep's work list):
+//               ZADD at begin (before the SET NX, and again after it) and before the 'paid' CAS, ZREM
+//               after the 'burned' one, so a crash in between leaves at most a stale entry, which the
+//               next listing checks against its record and drops
 //   registry    HSET (owner/fish -> entry): a retried append writes the same mapping again
 //
 // The generic KV (store.kv) is for short-lived shared state such as sessions and throttles: an
@@ -46,7 +47,7 @@ import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } f
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, PAYOUT_WINDOW_MS, SoldLedger } from './market-rules.mjs';
+import { HttpError, PAYOUT_WINDOW_MS, SoldLedger, isUnfinished } from './market-rules.mjs';
 import { FishRegistry, parseRegistry } from './fish-trust.mjs';
 import { MAX_SERIAL } from './nft-serial.mjs';
 
@@ -262,7 +263,8 @@ export function redisKeys(prefix = DEFAULT_PREFIX) {
     serialLast: `${prefix}serial:last`,
     serialKeys: `${prefix}serial:keys`,
     unburned: `${prefix}unburned`,
-    unburnedReady: `${prefix}unburned:ready`,
+    // v2: the index holds paying sales too; a database backfilled when it held paid ones only is backfilled again.
+    unburnedReady: `${prefix}unburned:ready:v2`,
     kv: (key) => `${prefix}kv:${key}`,
   };
 }
@@ -304,8 +306,6 @@ const CAS_TRIES = 8;
 /** SCAN page size for the one-time backfill of the unburned index. */
 const BACKFILL_SCAN_COUNT = 1000;
 
-/** On the sweep's work list: paid for, not burned yet, not set aside. */
-const isUnburned = (r) => r?.status === 'paid' && !r.burnSkipped;
 
 /**
  * Server mode's sold ledger in Redis, with SoldLedger's steps (market-rules.mjs), all async. The
@@ -340,8 +340,15 @@ export class RedisLedger {
   async begin(assetId, { seller, transferTx, pearls }, now = this.now()) {
     // Index first: an entry whose record never got written (or is another seller's) is skipped on read.
     await this.redis.zadd(this.keys.seller(seller), { score: now, member: assetId });
+    // On the sweep's work list from the start, so a sale stuck in 'paying' is found and resumed.
+    const entry = { score: now, member: assetId };
+    await this.redis.zadd(this.keys.unburned, entry);
     const rec = JSON.stringify({ seller, transferTx, pearls, status: 'paying', at: now });
-    return (await this.redis.set(this.keys.sold(assetId), rec, { nx: true })) !== null;
+    if ((await this.redis.set(this.keys.sold(assetId), rec, { nx: true })) === null) return false;
+    // Again now that the record exists: a listing between the first ZADD and the SET saw no record
+    // and may have dropped the entry as stale.
+    await this.redis.zadd(this.keys.unburned, entry);
+    return true;
   }
 
   /** Persist the pay tx before sending it. Another instance's payout already in flight: 409, send nothing. */
@@ -362,15 +369,21 @@ export class RedisLedger {
   }
 
   async paid(assetId) {
-    // Index first: an entry whose record is not 'paid' after all is dropped by the next unburned().
-    await this.redis.zadd(this.keys.unburned, { score: this.now(), member: assetId });
+    let at;
+    let unfinished = false;
     await this.#update(assetId, (r, pay) => {
+      at = r.at;
+      unfinished = r.status === 'paying' || isUnfinished(r);
       if (r.status !== 'paying') return null; // already paid (or burned) by another instance
       const next = { ...r, status: 'paid' };
       if (pay?.payTx !== undefined) next.payTx = pay.payTx;
       delete next.payLastValid;
       return next;
     });
+    // On the sweep's work list until burned. begin() indexed it already; this puts back an entry a
+    // sale begun before the index held paying sales never had. Scored by the sale's time, as begin,
+    // the backfill and the import do, so the list stays oldest sale first.
+    if (unfinished) await this.redis.zadd(this.keys.unburned, { score: Number(at) || this.now(), member: assetId });
   }
 
   async burned(assetId, burnTx) {
@@ -388,7 +401,8 @@ export class RedisLedger {
   }
 
   /**
-   * SoldLedger.unburned: up to `limit` fish paid for but not burned, oldest first. Two commands
+   * SoldLedger.unburned: up to `limit` unfinished sales (paying, or paid and not burned), oldest
+   * first. Two commands
    * (ZRANGE, MGET; ZRANGE alone when there is nothing to do), plus a ZREM when stale entries are
    * dropped. The first call on a database without the index backfills it once (#ensureIndex).
    */
@@ -400,14 +414,14 @@ export class RedisLedger {
     const recs = await this.redis.mget(...ids.map((id) => this.keys.sold(id)));
     const live = [];
     const stale = [];
-    ids.forEach((id, i) => (isUnburned(parse(recs[i])) ? live : stale).push(id));
+    ids.forEach((id, i) => (isUnfinished(parse(recs[i])) ? live : stale).push(id));
     if (stale.length) await this.redis.zrem(this.keys.unburned, ...stale);
     return live;
   }
 
   /**
    * The unburned index, built once from the records written before it existed: SCAN sold:*, MGET
-   * them, ZADD the paid ones, then SET the ready marker (only after a full pass, so a failed
+   * them, ZADD the unfinished ones (paying, or paid and not set aside), then SET the ready marker (only after a full pass, so a failed
    * backfill runs again). Idempotent, so two instances doing it at once is harmless; the sweep
    * lock makes that rare anyway. Later calls on this instance cost nothing, on a new instance one GET.
    */
@@ -427,7 +441,7 @@ export class RedisLedger {
         const add = [];
         chunk.forEach((k, j) => {
           const r = parse(vals[j]);
-          if (isUnburned(r)) add.push({ score: Number(r.at) || 0, member: String(k).slice(soldPrefix.length) });
+          if (isUnfinished(r)) add.push({ score: Number(r.at) || 0, member: String(k).slice(soldPrefix.length) });
         });
         if (add.length) await this.redis.zadd(this.keys.unburned, ...add);
       }

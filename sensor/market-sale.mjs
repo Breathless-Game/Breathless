@@ -70,7 +70,12 @@ export function createSaleDesk({
   const locks = new Map();
   const conflict = () => new HttpError(409, 'This fish was already sold by another wallet');
 
-  /** Sell one fish. `getTransfer` lets a batch fetch each shared transaction once. */
+  /**
+   * Sell one fish. `getTransfer` lets a batch fetch each shared transaction once. The sweep
+   * (market-burn.mjs) calls it too, with a stalled 'paying' record's own seller and transfer: plan
+   * says 'resume', so the transfer verified at begin() is not fetched again, and resolvePending
+   * asks the chain whether the earlier payout landed before anything is paid.
+   */
   function sellAsset({ assetId, seller, transferTx }, getTransfer = fetchTransfer) {
     return withLock(locks, assetId, async () => {
       let plan = await ledger.plan(assetId, seller);

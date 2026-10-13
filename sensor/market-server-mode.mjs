@@ -268,16 +268,6 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
   // A failed burn is retried in memory with backoff; the sweep (start-up + every 10 min) catches the rest.
   // A serverless instance may be frozen once it has answered, so its timers can't be trusted: there the sweep alone catches up.
   const burnRetry = background ? createBurnRetry({ burnOnce, log }) : { retry() {} };
-  // The sweep works from the ledger's paid-but-unburned list, one getAccount per fish: no getProgramAccounts.
-  const sweep = createSweep({
-    loadAsset,
-    collection: () => state.fishCollection ?? null,
-    market: marketKey,
-    ledger,
-    burnOnce,
-    log,
-  });
-
   /** The sale desk's burn: best effort, never throws. The player is already paid either way. */
   async function burnSold(assetId) {
     try {
@@ -309,6 +299,20 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     burnSold,
     log,
     batchDeadlineMs,
+  });
+
+  // The sweep works from the ledger's list of unfinished sales: one getAccount per paid fish, no
+  // getProgramAccounts. A sale stuck in 'paying' goes back through the desk's own sellAsset, under
+  // the same per-fish lock as the players' requests (one desk per process), with the record's own
+  // seller and transfer: it re-checks the earlier payout on chain before paying, then burns.
+  const sweep = createSweep({
+    loadAsset,
+    collection: () => state.fishCollection ?? null,
+    market: marketKey,
+    ledger,
+    burnOnce,
+    resumeSale: (assetId, r) => desk.sellAsset({ assetId, seller: r.seller, transferTx: r.transferTx }),
+    log,
   });
 
   async function info() {
@@ -351,7 +355,7 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     } catch (e) {
       log(`[market] fish collection not created yet: ${e.message}`);
     }
-    // Finish burns a crash or RPC hiccup left behind: the fish the ledger says were paid but not burned.
+    // Finish sales a crash or RPC hiccup left behind: paid but not burned, or stuck in 'paying'.
     await sweep.run();
   })();
   if (background) sweep.start();

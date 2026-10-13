@@ -9,7 +9,7 @@ import { DAILY_PEARL_CAP, HttpError, MPL_CORE_PROGRAM, SoldLedger, appraise } fr
 import { checkPayoutCap } from '../fish-trust.mjs';
 import { createPayout } from '../market-payout.mjs';
 import { createSaleDesk } from '../market-sale.mjs';
-import { createSweep } from '../market-burn.mjs';
+import { SWEEP_RESUME_AFTER_MS, createSweep } from '../market-burn.mjs';
 import { createSerialHandler } from '../nft-serial.mjs';
 import { createFileStore, createMemoryKv, createRedisKv, createRedisStore, createStore, parseSecretKey, redisCredentials, storeKind } from '../market-store.mjs';
 import { createFakeRedis } from './fake-redis.mjs';
@@ -49,7 +49,9 @@ function transferTx(assets, seller = SELLER) {
 const tick = () => new Promise((r) => setImmediate(r));
 const timeout = () => Object.assign(new Error('fetch failed'), { cause: new Error('Connect Timeout Error') });
 
-/** The chain every instance talks to: built and landed PEARL payouts. `sends` scripts each send: ok | timeout-landed. */
+const rejected = () => Object.assign(new Error('Transaction simulation failed'), { transactionMessage: 'Transaction simulation failed: Blockhash not found' });
+
+/** The chain every instance talks to: built and landed PEARL payouts. `sends` scripts each send: ok | timeout-landed | rejected. */
 function fakeChain(sends = []) {
   const chain = { height: 1000, built: new Map(), landed: new Map(), sends: new Map(), seq: 0 };
   chain.payouts = (assetId) => [...chain.landed.values()].filter((t) => t.assetId === assetId).length;
@@ -63,9 +65,11 @@ function fakeChain(sends = []) {
     send: async ({ sig }) => {
       const { assetId } = chain.built.get(sig);
       chain.sends.set(assetId, chain.sendsFor(assetId) + 1);
+      const how = sends.shift() ?? 'ok';
       await tick();
+      if (how === 'rejected') throw rejected(); // refused by the node: never submitted
       chain.landed.set(sig, { assetId });
-      if ((sends.shift() ?? 'ok') === 'timeout-landed') throw timeout();
+      if (how === 'timeout-landed') throw timeout();
     },
     confirm: async ({ sig }) => {
       await tick();
@@ -97,6 +101,24 @@ async function instance(redis, chain, { transfer = transferTx(FISH) } = {}) {
     },
   });
   return { store, ledger, payout, desk };
+}
+
+/** The Dell: the file store's SoldLedger, one process, with the same payout and desk. */
+function fileInstance(chain) {
+  const ledger = new SoldLedger();
+  const payout = createPayout({ ledger, ...chain.deps });
+  const desk = createSaleDesk({
+    priceFish: plainPrice,
+    ledger,
+    market: MARKET,
+    ensureMint: async () => 'PearlMint',
+    fetchTransfer: async () => transferTx(FISH),
+    loadMarketAsset: async () => RARE,
+    resolvePending: payout.resolvePending,
+    pay: payout.pay,
+    burnSold: async (assetId) => ledger.burned(assetId, `burn-${assetId}`),
+  });
+  return { ledger, payout, desk };
 }
 
 /** Every failure is the 409 "already in progress, retry" a client handles; never anything else. */
@@ -273,20 +295,24 @@ test('the sweep works from the Redis unburned index: burns paid fish, settles go
     if (status === 'burned') await ledger.burned(FISH[i], '');
   }
   await ledger.skipBurn(FISH[4], 'owned by someone else, not the market');
-  assert.deepEqual(await ledger.unburned(), [FISH[0], FISH[3]], 'index order: paid first, first');
+  assert.deepEqual(await ledger.unburned(), [FISH[0], FISH[2], FISH[3]], 'index order: oldest sale first; paying ones too');
   // A second instance (another serverless function) sees the same list.
   const { ledger: other } = await instance(redis, fakeChain());
   const onChain = { [FISH[0]]: coreAsset(FISH[0]), [FISH[2]]: coreAsset(FISH[2]) }; // FISH[3]: already gone
   const { sweep, burned, fetched } = redisSweep(other, onChain);
-  assert.deepEqual(await sweep.run(), { burned: 1, settled: 1, skipped: 0, failed: 0, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, settled: 1, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
   assert.deepEqual(burned, [FISH[0]]);
   assert.deepEqual(fetched, [FISH[0], FISH[3]]);
   assert.equal((await ledger.get(FISH[3])).status, 'burned');
-  assert.equal((await ledger.get(FISH[2])).status, 'paying', "a payment in doubt is the sale desk's, not the sweep's");
+  assert.equal((await ledger.get(FISH[2])).status, 'paying', 'a payment in doubt begun just now waits: its request may still be on it');
+  assert.deepEqual([...redis.data.get('test:unburned').value.keys()], [FISH[2]], 'only the paying sale is left on the list');
+  // Its request finishes it: off the list.
+  await ledger.paid(FISH[2]);
+  await ledger.burned(FISH[2], 'b');
   assert.equal(redis.data.get('test:unburned'), undefined, 'the index is empty');
   // Idle: one ZRANGE, nothing on the chain.
   const before = redis.calls.length;
-  assert.deepEqual(await sweep.run(), { burned: 0, settled: 0, skipped: 0, failed: 0, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   assert.deepEqual(redis.calls.slice(before), ['zrange']);
   assert.equal(fetched.length, 2);
 });
@@ -298,9 +324,8 @@ test('Redis unburned index: a sale adds and removes its fish; stale entries are 
   await desk.sell({ assetId: FISH[0], seller: SELLER, transferTx: TX });
   assert.equal((await ledger.get(FISH[0])).status, 'burned');
   assert.deepEqual(await ledger.unburned(), []);
-  // A crash between the index ZADD and the 'paid' CAS: the entry's record is still 'paying'.
+  // A sale that stops in 'paying' (pay() failed, the player never came back) is on the list from begin().
   await ledger.begin(FISH[1], { seller: SELLER, transferTx: TX, pearls: 1 });
-  await redis.zadd('test:unburned', { score: 1, member: FISH[1] });
   // A crash between the 'burned' CAS and the ZREM, and an entry with no record at all.
   await ledger.begin(FISH[2], { seller: SELLER, transferTx: TX, pearls: 1 });
   await ledger.paid(FISH[2]);
@@ -308,12 +333,31 @@ test('Redis unburned index: a sale adds and removes its fish; stale entries are 
   await redis.zadd('test:unburned', { score: 2, member: FISH[2] }, { score: 3, member: FISH[5] });
   await ledger.begin(FISH[3], { seller: SELLER, transferTx: TX, pearls: 1 });
   await ledger.paid(FISH[3]);
-  assert.deepEqual(await ledger.unburned(), [FISH[3]]);
-  assert.deepEqual([...redis.data.get('test:unburned').value.keys()], [FISH[3]], 'the stale entries are gone');
-  // The 'paying' one, once paid, comes back.
+  assert.deepEqual(await ledger.unburned(), [FISH[1], FISH[3]]);
+  assert.deepEqual([...redis.data.get('test:unburned').value.keys()].sort(), [FISH[1], FISH[3]].sort(), 'the stale entries are gone');
+  // Paid, it stays on the list until burned, in its place (scored by the sale's time).
   await ledger.paid(FISH[1]);
-  assert.deepEqual((await ledger.unburned()).sort(), [FISH[1], FISH[3]].sort());
+  assert.deepEqual(await ledger.unburned(), [FISH[1], FISH[3]]);
   assert.equal((await ledger.unburned(1)).length, 1, 'bounded');
+});
+
+test('Redis unburned index: a listing between begin\'s ZADD and its SET cannot lose the sale', async () => {
+  const redis = createFakeRedis();
+  const { ledger } = await instance(redis, fakeChain());
+  const { ledger: other } = await instance(redis, fakeChain());
+  const realSet = redis.set;
+  redis.set = async (key, ...rest) => {
+    // Another instance's sweep lists right before the record is written: no record yet, so it drops the entry.
+    if (key === `test:sold:${FISH[0]}`) assert.deepEqual(await other.unburned(), []);
+    return realSet(key, ...rest);
+  };
+  assert.equal(await ledger.begin(FISH[0], { seller: SELLER, transferTx: TX, pearls: 1 }), true);
+  redis.set = realSet;
+  assert.deepEqual(await other.unburned(), [FISH[0]], 'begin indexed it again once the record existed');
+  // The loser of a begin race writes nothing and leaves the winner's sale listed.
+  assert.equal(await other.begin(FISH[0], { seller: OTHER, transferTx: TX, pearls: 9 }), false);
+  assert.deepEqual(await ledger.unburned(), [FISH[0]]);
+  assert.equal((await ledger.get(FISH[0])).seller, SELLER);
 });
 
 test('Redis unburned index: records written before it existed are backfilled once, over SCAN pages', async () => {
@@ -331,21 +375,33 @@ test('Redis unburned index: records written before it existed are backfilled onc
   await redis.set('other:sold:Elsewhere', rec('paid', 1)); // another prefix: not ours
   const { ledger } = await instance(redis, fakeChain());
   const before = redis.calls.length;
-  assert.deepEqual(await ledger.unburned(), ['Stuck1', 'Stuck2']);
+  assert.deepEqual(await ledger.unburned(), ['Paying', 'Stuck1', 'Stuck2'], 'paid and paying sales, by sale time');
   const calls = redis.calls.slice(before);
   assert.equal(calls.filter((c) => c === 'scan').length, 2, 'two SCAN pages of 1000');
-  assert.ok(redis.data.has('test:unburned:ready'));
+  assert.ok(redis.data.has('test:unburned:ready:v2'));
   // Every later listing, on this instance or a new one, reads the index only.
   let mark = redis.calls.length;
   await ledger.unburned();
   assert.deepEqual(redis.calls.slice(mark), ['zrange', 'mget']);
   const { ledger: fresh } = await instance(redis, fakeChain());
   mark = redis.calls.length;
-  assert.deepEqual(await fresh.unburned(), ['Stuck1', 'Stuck2']);
+  assert.deepEqual(await fresh.unburned(), ['Paying', 'Stuck1', 'Stuck2']);
   assert.deepEqual(redis.calls.slice(mark), ['get', 'zrange', 'mget']);
   // Burned through the ledger: off the list, and the backfill never runs again to put it back.
   await fresh.burned('Stuck1', 'sig');
-  assert.deepEqual(await ledger.unburned(), ['Stuck2']);
+  assert.deepEqual(await ledger.unburned(), ['Paying', 'Stuck2']);
+});
+
+test('Redis backfill: a database backfilled when the index held paid sales only is backfilled again', async () => {
+  const redis = createFakeRedis();
+  const rec = (status, at) => JSON.stringify({ seller: SELLER, transferTx: TX, pearls: 1, status, at });
+  await redis.set('test:sold:Paid', rec('paid', 2));
+  await redis.set('test:sold:Paying', rec('paying', 1));
+  // The index as the first version of the backfill left it: paid sales only, and its ready marker.
+  await redis.zadd('test:unburned', { score: 2, member: 'Paid' });
+  await redis.set('test:unburned:ready', '1');
+  const { ledger } = await instance(redis, fakeChain());
+  assert.deepEqual(await ledger.unburned(), ['Paying', 'Paid']);
 });
 
 test('Redis backfill: a failed pass leaves no ready marker and runs again', async () => {
@@ -357,9 +413,143 @@ test('Redis backfill: a failed pass leaves no ready marker and runs again', asyn
   };
   const { ledger } = await instance(redis, fakeChain());
   await assert.rejects(ledger.unburned(), /503/);
-  assert.equal(redis.data.has('test:unburned:ready'), false);
+  assert.equal(redis.data.has('test:unburned:ready:v2'), false);
   redis.scan = realScan;
   assert.deepEqual(await ledger.unburned(), ['Stuck']);
+});
+
+/**
+ * A sweep that resumes stalled sales through `desk`, wired as market-server-mode.mjs does, with its
+ * clock `aheadMs` in the future (by default just past SWEEP_RESUME_AFTER_MS: every paying sale is stale).
+ */
+function resumingSweep(ledger, desk, { aheadMs = SWEEP_RESUME_AFTER_MS + 1, ...opts } = {}) {
+  const resumed = [];
+  const sweep = createSweep({
+    collection: () => COLL,
+    market: MARKET,
+    ledger,
+    loadAsset: async (id) => coreAsset(id),
+    burnOnce: async (id) => ledger.burned(id, `burn-${id}`),
+    resumeSale: (assetId, r) => {
+      resumed.push(assetId);
+      return desk.sellAsset({ assetId, seller: r.seller, transferTx: r.transferTx });
+    },
+    sleep: async () => {},
+    now: () => Date.now() + aheadMs,
+    ...opts,
+  });
+  return { sweep, resumed };
+}
+
+const stats = (o) => ({ burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, ...o });
+
+test('the sweep finishes a stalled sale whose payout never went out: paid once, by another instance, then burned', async () => {
+  const redis = createFakeRedis();
+  const chain = fakeChain(['rejected']);
+  const [a, b] = await Promise.all([instance(redis, chain), instance(redis, chain)]);
+  const sale = { assetId: FISH[0], seller: SELLER, transferTx: TX };
+  await assert.rejects(a.desk.sell(sale), /simulation failed/);
+  assert.equal((await a.ledger.get(FISH[0])).status, 'paying');
+  assert.equal(chain.payouts(FISH[0]), 0);
+  // Begun just now: a request may still be working on it, so the sweep leaves it alone.
+  const young = resumingSweep(b.ledger, b.desk, { aheadMs: 60_000 });
+  assert.deepEqual(await young.sweep.run(), stats({ waiting: 1 }));
+  assert.deepEqual(young.resumed, []);
+  assert.equal(chain.sendsFor(FISH[0]), 1, 'only the refused send so far');
+  // Ten minutes on, the player has not come back (storage cleared, another device): the sweep finishes it.
+  const stale = resumingSweep(b.ledger, b.desk);
+  assert.deepEqual(await stale.sweep.run(), stats({ resumed: 1 }));
+  assert.deepEqual(stale.resumed, [FISH[0]]);
+  assert.equal(chain.payouts(FISH[0]), 1);
+  const rec = await a.ledger.get(FISH[0]);
+  assert.equal(rec.status, 'burned');
+  assert.equal(rec.burnTx, `burn-${FISH[0]}`);
+  // Nothing left to do, and the player's own retry gets the stored result without a second payout.
+  assert.deepEqual(await stale.sweep.run(), stats({}));
+  const r = await a.desk.sell(sale);
+  assert.equal(r.pearls, 10);
+  assert.equal(r.tx, rec.payTx);
+  assert.equal(chain.sendsFor(FISH[0]), 2);
+  assert.equal(chain.payouts(FISH[0]), 1);
+});
+
+test('the sweep settles a stalled sale whose payout already landed from the chain: no second payout', async () => {
+  const redis = createFakeRedis();
+  const chain = fakeChain(['timeout-landed']);
+  const [a, b] = await Promise.all([instance(redis, chain), instance(redis, chain)]);
+  await assert.rejects(a.desk.sell({ assetId: FISH[0], seller: SELLER, transferTx: TX }), /fetch failed/);
+  const before = await a.ledger.get(FISH[0]);
+  assert.equal(before.status, 'paying');
+  assert.ok(before.payTx);
+  const { sweep } = resumingSweep(b.ledger, b.desk);
+  assert.deepEqual(await sweep.run(), stats({ resumed: 1 }));
+  assert.equal(chain.sendsFor(FISH[0]), 1, 'nothing sent again');
+  assert.equal(chain.payouts(FISH[0]), 1);
+  const after = await a.ledger.get(FISH[0]);
+  assert.equal(after.status, 'burned');
+  assert.equal(after.payTx, before.payTx, 'the earlier payout is the one on record');
+});
+
+test('a stalled sale whose payout may still land is not paid again: counted as failed, finished once it expires', async () => {
+  const redis = createFakeRedis();
+  const chain = fakeChain();
+  const { ledger, desk } = await instance(redis, chain);
+  await ledger.begin(FISH[0], { seller: SELLER, transferTx: TX, pearls: 10 });
+  await ledger.payPending(FISH[0], 'ghost', chain.height + 150); // sent, unconfirmed, blockhash still valid
+  const logs = [];
+  const { sweep } = resumingSweep(ledger, desk, { log: (m) => logs.push(m) });
+  assert.deepEqual(await sweep.run(), stats({ failed: 1 }));
+  assert.ok(logs.some((l) => l.includes(FISH[0]) && l.includes('still confirming')));
+  assert.equal(chain.sendsFor(FISH[0]), 0);
+  assert.equal((await ledger.get(FISH[0])).status, 'paying');
+  // Its blockhash expired and it is not on chain: it can never land, so the next sweep pays.
+  chain.height += 200;
+  assert.deepEqual(await sweep.run(), stats({ resumed: 1 }));
+  assert.equal(chain.payouts(FISH[0]), 1);
+  assert.equal((await ledger.get(FISH[0])).status, 'burned');
+});
+
+test('sweeps and the players\' retries of the same stalled sales, all at once on several instances, pay each fish once', async () => {
+  const redis = createFakeRedis();
+  const chain = fakeChain(FISH.map(() => 'rejected'));
+  const [a, b, c] = await Promise.all([1, 2, 3].map(() => instance(redis, chain)));
+  for (const id of FISH) await assert.rejects(a.desk.sell({ assetId: id, seller: SELLER, transferTx: TX }), /simulation failed/);
+  const sweeps = [a, b].map((inst) => resumingSweep(inst.ledger, inst.desk, { maxResumesPerRun: FISH.length }).sweep);
+  const sell = (inst, assetId) => inst.desk.sell({ assetId, seller: SELLER, transferTx: TX });
+  // Same instance (the per-fish lock) and other instances (Redis) racing the sweeps.
+  const results = await Promise.allSettled([...sweeps.map((s) => s.run()), ...FISH.flatMap((id) => [sell(a, id), sell(b, id), sell(c, id)])]);
+  onlyRetryable(results);
+  for (const id of FISH) {
+    assert.equal(chain.payouts(id), 1, `${id}: paid once`);
+    assert.equal(chain.sendsFor(id), 2, `${id}: the refused send and one payout, nothing else sent`);
+  }
+  // Whatever is still unfinished (a 409'd request) the next sweep finishes, without paying again.
+  await sweeps[0].run();
+  for (const id of FISH) {
+    assert.equal((await a.ledger.get(id)).status, 'burned', id);
+    assert.equal(chain.payouts(id), 1);
+  }
+});
+
+test('the Dell (file ledger, one process): the sweep and a retry of a stalled sale share the fish\'s lock and pay once', async () => {
+  const chain = fakeChain(['rejected', 'timeout-landed']);
+  const { ledger, desk } = fileInstance(chain);
+  const sale = (assetId) => ({ assetId, seller: SELLER, transferTx: TX });
+  await assert.rejects(desk.sell(sale(FISH[0])), /simulation failed/); // never paid
+  await assert.rejects(desk.sell(sale(FISH[1])), /fetch failed/); // paid, the answer lost
+  assert.deepEqual(ledger.unburned(), [FISH[0], FISH[1]]);
+  const { sweep } = resumingSweep(ledger, desk);
+  const [out, r0, r1] = await Promise.all([sweep.run(), desk.sell(sale(FISH[0])), desk.sell(sale(FISH[1]))]);
+  assert.equal(out.failed, 0);
+  assert.equal(r0.pearls, 10);
+  assert.equal(r1.pearls, 10);
+  for (const id of [FISH[0], FISH[1]]) {
+    assert.equal(chain.payouts(id), 1, `${id}: paid once`);
+    assert.equal(ledger.get(id).status, 'burned');
+  }
+  assert.equal(chain.sendsFor(FISH[0]), 2);
+  assert.equal(chain.sendsFor(FISH[1]), 1);
+  assert.deepEqual(ledger.unburned(), []);
 });
 
 test('fish numbers: concurrent requests on several instances get distinct, gapless numbers; a key keeps its number', async () => {
