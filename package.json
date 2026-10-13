@@ -22,6 +22,7 @@
     "@metaplex-foundation/mpl-toolbox": "0.11.5",
     "@metaplex-foundation/umi": "1.6.0",
     "@metaplex-foundation/umi-bundle-defaults": "1.6.0",
+    "@metaplex-foundation/umi-uploader-irys": "1.6.0",
     "@upstash/redis": "1.39.0",
     "@vercel/functions": "3.9.9"
   },
