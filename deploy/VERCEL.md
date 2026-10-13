@@ -151,7 +151,7 @@ Run steps 1-6 within one window. The Dell's market must be stopped before you co
    - Wait for Vercel's certificate.
 8. **Watch.**
    - Sell a fish end to end.
-   - In Settings → Cron Jobs, press Run on `/api/cron/sweep`. It must answer 200; a 401 means `CRON_SECRET` is missing.
+   - In Settings → Cron Jobs, press Run on `/api/cron/sweep`. It must answer 200. A 401 with `{"error":"Unauthorized"}` means `CRON_SECRET` is missing; an HTML login page means Deployment Protection stopped the call before it reached the function.
    - Check the next 04:00 UTC run in the function logs (`[market] sweep`).
    - Keep the Dell stopped, with its files untouched, for rollback.
 
@@ -336,7 +336,7 @@ Dell 的构建（`.github/workflows/deploy.yml`）只设置 `VITE_PRESAGE_ENABLE
    - 等 Vercel 签好证书。
 8. **观察。**
    - 完整卖一条鱼。
-   - 在 Settings → Cron Jobs 对 `/api/cron/sweep` 点 Run，必须回 200；回 401 说明 `CRON_SECRET` 没设。
+   - 在 Settings → Cron Jobs 对 `/api/cron/sweep` 点 Run，必须回 200。回 401 且内容是 `{"error":"Unauthorized"}`，说明 `CRON_SECRET` 没设；回的是 HTML 登录页，说明请求在到达函数前被部署保护拦下了。
    - 在函数日志里确认下一次 UTC 04:00 的运行（`[market] sweep`）。
    - Dell 保持停止，文件不动，留着回滚用。
 
