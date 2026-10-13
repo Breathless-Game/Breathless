@@ -9,7 +9,8 @@
 // which deploy/deploy.sh protects like the market's other state (.market-*), so redeploys never
 // reset it. Writes go to a temp file and are renamed into place, and a number is only answered
 // once it is on disk: a crash or restart can never hand the same number out twice. An unreadable
-// file fails closed (503) rather than starting again from 1.
+// file fails closed (503) rather than starting again from 1. On Vercel the counter is in Redis
+// instead (market-store.mjs createRedisSerials, one INCR in a Lua script), passed in as `counter`.
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { HttpError, RateLimiter, isAddress } from './market-rules.mjs';
@@ -90,10 +91,10 @@ export function createSerialCounter(file) {
  * Mount on an http server before the NFT metadata handler (which answers every other /api/nft/
  * path): `if (await serials(req, res)) return;`. Returns false for anything but /api/nft/serial.
  * The counter loads on first use, so a bad file only takes this route down, never the server.
+ * `counter` ({ peek, assign }, may be async) replaces the file: the Redis store's.
  */
-export function createSerialHandler({ file, clientIp = (req) => req.socket?.remoteAddress ?? '?', log = console.log, limit = 30 } = {}) {
-  if (!file) throw new Error('createSerialHandler: file is required');
-  let counter = null;
+export function createSerialHandler({ file, counter = null, clientIp = (req) => req.socket?.remoteAddress ?? '?', log = console.log, limit = 30 } = {}) {
+  if (!file && !counter) throw new Error('createSerialHandler: file (or counter) is required');
   let loadError = null;
   // Only new numbers count: a returning player's repair asks again for fish it already numbered.
   const limiter = new RateLimiter({ limit, windowMs: 60_000 });
@@ -156,8 +157,8 @@ export function createSerialHandler({ file, clientIp = (req) => req.socket?.remo
       if (typeof owner !== 'string' || !isAddress(owner)) throw new HttpError(400, 'owner must be a Solana address');
       const c = load();
       if (!c) throw new HttpError(503, 'Fish numbers are unavailable on this server');
-      if (!c.peek(owner, id) && !limiter.allow(clientIp(req))) throw new HttpError(429, 'Too many new fish numbers, slow down');
-      send(res, 200, { serial: c.assign(owner, id) });
+      if (!(await c.peek(owner, id)) && !limiter.allow(clientIp(req))) throw new HttpError(429, 'Too many new fish numbers, slow down');
+      send(res, 200, { serial: await c.assign(owner, id) });
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
       if (status >= 500) log(`[nft] ${SERIAL_PATH} failed: ${e?.message ?? e}`);

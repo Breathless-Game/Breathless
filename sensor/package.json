@@ -21,6 +21,7 @@
     "@metaplex-foundation/umi-bundle-defaults": "^1.6.0",
     "@metaplex-foundation/umi-uploader-irys": "^1.6.0",
     "@smartspectra/node-sdk": "^3.4.0",
+    "@upstash/redis": "1.39.0",
     "dotenv": "^16.4.5",
     "sharp": "^0.35.5",
     "ws": "^8.18.0"

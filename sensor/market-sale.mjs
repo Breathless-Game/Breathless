@@ -39,7 +39,8 @@ const errorOf = (assetId, e) => {
 
 /**
  * deps:
- *   ledger            SoldLedger
+ *   ledger            SoldLedger, or the Redis store's ledger (market-store.mjs): every call is awaited,
+ *                     which costs the file ledger nothing (its writes happen before the await yields)
  *   market            the market wallet's address (base58)
  *   ensureMint()      -> the PEARL mint address
  *   fetchTransfer(sig)-> umi TransactionWithMeta or null (may poll until it shows up)
@@ -50,15 +51,30 @@ const errorOf = (assetId, e) => {
  *   priceFish(asset, seller) -> PEARL for a fetched asset, or throws HttpError (fish-trust.mjs; synchronous)
  *   log(msg)
  */
-export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, loadMarketAsset, resolvePending, pay, burnSold, priceFish, log = () => {} }) {
+export function createSaleDesk({
+  ledger,
+  market,
+  ensureMint,
+  fetchTransfer,
+  loadMarketAsset,
+  resolvePending,
+  pay,
+  burnSold,
+  priceFish,
+  log = () => {},
+  // A /sell-batch starts no new fish after this long (ms): they come back as a 503 the game retries.
+  // Unlimited on a long-running server; a serverless host sets it below its function time limit.
+  batchDeadlineMs = Infinity,
+}) {
   if (typeof priceFish !== 'function') throw new Error('createSaleDesk: priceFish is required (the trusted-fish gate)');
   const locks = new Map();
+  const conflict = () => new HttpError(409, 'This fish was already sold by another wallet');
 
   /** Sell one fish. `getTransfer` lets a batch fetch each shared transaction once. */
   function sellAsset({ assetId, seller, transferTx }, getTransfer = fetchTransfer) {
     return withLock(locks, assetId, async () => {
-      let plan = ledger.plan(assetId, seller);
-      if (plan === 'conflict') throw new HttpError(409, 'This fish was already sold by another wallet');
+      let plan = await ledger.plan(assetId, seller);
+      if (plan === 'conflict') throw conflict();
       if (plan === 'done') return ledger.result(assetId);
       const mint = await ensureMint();
 
@@ -68,19 +84,28 @@ export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, load
         if (bad) throw new HttpError(400, bad);
         const asset = await loadMarketAsset(assetId);
         if (asset?.owner?.toString() !== market) throw new HttpError(400, 'The market does not own this fish yet');
+        // The Redis ledger reads the seller's recent sales for the daily cap first (the file one has them all).
+        if (ledger.loadSeller) await ledger.loadSeller(seller);
         // The price comes from the fish's on-chain attributes, never from the request: priceFish is
         // fish-trust's gate (collection + generator check) and the daily cap. Synchronous, and nothing
         // awaits between it and begin(), so a seller's concurrent sales can't both slip under the cap.
         const pearls = priceFish(asset, seller);
-        ledger.begin(assetId, { seller, transferTx, pearls });
-        plan = 'resume';
+        // false only from the Redis ledger: another instance began this fish first (SET NX). Take
+        // up its record from where it is instead of starting a second sale of the same fish.
+        if ((await ledger.begin(assetId, { seller, transferTx, pearls })) === false) {
+          plan = await ledger.plan(assetId, seller);
+          if (plan === 'conflict') throw conflict();
+          if (plan === 'done') return ledger.result(assetId);
+        } else {
+          plan = 'resume';
+        }
       }
 
       if (plan === 'resume') {
         const pending = await resolvePending(assetId);
         if (pending === 'in-flight') throw new HttpError(409, 'Payment is still confirming, retry in a few seconds');
         if (pending === 'unpaid') {
-          const r = ledger.get(assetId);
+          const r = await ledger.get(assetId);
           await pay(assetId, mint, seller, r.pearls);
           log(`[market] paid ${r.pearls} PEARL to ${seller} for ${assetId}`);
         }
@@ -112,7 +137,9 @@ export function createSaleDesk({ ledger, market, ensureMint, fetchTransfer, load
       if (!fetched.has(sig)) fetched.set(sig, fetchTransfer(sig));
       return fetched.get(sig);
     };
+    const deadline = Date.now() + batchDeadlineMs;
     const results = await mapLimit(sales, BATCH_CONCURRENCY, async ({ assetId, transferTx }) => {
+      if (Date.now() > deadline) return { assetId, status: 503, error: 'Out of time for this request, sell this fish again' };
       try {
         return { assetId, ...(await sellAsset({ assetId, seller, transferTx }, getTransfer)) };
       } catch (e) {

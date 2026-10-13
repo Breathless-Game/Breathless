@@ -11,6 +11,9 @@ contracts/target/deploy/*-keypair.json
 node_modules/
 dist/
 
+# Vercel CLI project link (deploy/VERCEL.md)
+.vercel/
+
 # os
 .DS_Store
 

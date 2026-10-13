@@ -27,7 +27,8 @@ const LANDED = new Set(['confirmed', 'finalized']);
 
 /**
  * deps:
- *   ledger                       SoldLedger
+ *   ledger                       SoldLedger, or the Redis store's ledger (every call awaited; payDropped
+ *                                also names the signature it drops, so it never drops another instance's)
  *   build(assetId, mint, seller, pearls) -> { tx, sig, lastValid, ... }  a signed, unsent payout
  *   send(built)                  submits it; throws on any failure (see rejectedBeforeSubmit)
  *   confirm(built)               waits for it: the on-chain error (null when it succeeded); throws on timeout/expiry
@@ -38,27 +39,28 @@ export function createPayout({ ledger, build, send, confirm, getSignatureStatus,
   /** Mint `pearls` to the seller for `assetId`. The signature and expiry are persisted before sending. */
   async function pay(assetId, mint, seller, pearls) {
     const built = await build(assetId, mint, seller, pearls);
-    ledger.payPending(assetId, built.sig, built.lastValid);
+    // The Redis ledger refuses (409) when another instance already holds a pending payout for this fish.
+    await ledger.payPending(assetId, built.sig, built.lastValid);
     try {
       await send(built);
     } catch (e) {
       // Refused by the node: never submitted, safe to pay again. Anything else (a timeout, a reset
       // connection) may have reached a leader: keep the signature, resolvePending decides later.
-      if (rejectedBeforeSubmit(e)) ledger.payDropped(assetId);
+      if (rejectedBeforeSubmit(e)) await ledger.payDropped(assetId, built.sig);
       throw e;
     }
     // A timeout or blockheight-exceeded here throws with the signature kept, for resolvePending.
     const err = await confirm(built);
     if (err) {
-      ledger.payDropped(assetId); // landed and failed: it minted nothing and can never run again
+      await ledger.payDropped(assetId, built.sig); // landed and failed: it minted nothing and can never run again
       throw new Error('PEARL mint transaction failed');
     }
-    ledger.paid(assetId);
+    await ledger.paid(assetId);
   }
 
   /** A record stuck in `paying` (crash or timeout): did its pay tx land? 'paid' | 'unpaid' | 'in-flight'. */
   async function resolvePending(assetId) {
-    const r = ledger.get(assetId);
+    const r = await ledger.get(assetId);
     if (!r.payTx) return 'unpaid';
     // The height is read BEFORE the status: if the finalized chain was already past the blockhash's
     // last valid height, any block that could hold the tx is finalized too, so a status lookup
@@ -68,14 +70,14 @@ export function createPayout({ ledger, build, send, confirm, getSignatureStatus,
     if (status) {
       if (!LANDED.has(status.commitment)) return 'in-flight'; // processed only: could still be on a fork
       if (status.error) {
-        ledger.payDropped(assetId); // landed and failed: nothing was minted
+        await ledger.payDropped(assetId, r.payTx); // landed and failed: nothing was minted
         return 'unpaid';
       }
-      ledger.paid(assetId);
+      await ledger.paid(assetId);
       return 'paid';
     }
     if (Number.isSafeInteger(r.payLastValid) && height > r.payLastValid) {
-      ledger.payDropped(assetId); // expired and not on chain: it can never land now
+      await ledger.payDropped(assetId, r.payTx); // expired and not on chain: it can never land now
       return 'unpaid';
     }
     return 'in-flight';

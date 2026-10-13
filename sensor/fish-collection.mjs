@@ -17,9 +17,8 @@
 // State: the collection address and its creation slot in .market-state.json (beside the PEARL
 // mint), and <dir>/.market-fish.jsonl, the (owner, fish id) -> asset registry (fish-trust.mjs
 // FishRegistry), one JSON line per co-signed mint or migration. deploy.sh never touches .market-*.
+// Both come from the store (market-store.mjs): those files, or Redis on a serverless host.
 
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
 import { createNoopSigner, generateSigner, publicKey, transactionBuilder } from '@metaplex-foundation/umi';
 import { create, createCollection, fetchAsset, fetchCollection, update, updateAuthority } from '@metaplex-foundation/mpl-core';
 import {
@@ -32,7 +31,6 @@ import {
   MINT_WINDOW_MS,
 } from './market-rules.mjs';
 import {
-  FishRegistry,
   Quota,
   assertTrustedFish,
   capQuotes,
@@ -42,13 +40,13 @@ import {
   mintLimitError,
   parseCosignMigrate,
   parseCosignMint,
-  parseRegistry,
   readFacts,
 } from './fish-trust.mjs';
 import { fishSeedKey, playerStateProgramId, recordCatch } from './player-state-ix.mjs';
 import { isTransientRpcError } from './rpc-guard.mjs';
+import { REGISTRY_FILE, createFileStore } from './market-store.mjs';
 
-export const REGISTRY_FILE = '.market-fish.jsonl';
+export { REGISTRY_FILE };
 const COLLECTION_NEEDS_SOL = 0.005; // ~0.0014 SOL rent + fee, measured on a local validator
 const TX_LIMIT = 1232;
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
@@ -85,7 +83,9 @@ export function buildMintTx(u, { m, collection, blockhash, programId = playerSta
 
 /**
  * deps: u (umi, identity = market wallet, mplCore installed), state + save (the server mode's
- * persisted state object), dir, ledger (SoldLedger, for the payout cap), balanceSol(maxAgeMs), log.
+ * persisted state object), registry (the store's FishRegistry; default: the file in `dir`),
+ * setupStep(name, fn) (runs the collection's creation once across instances), ledger (SoldLedger,
+ * for the payout cap), balanceSol(maxAgeMs), log.
  * opts: legacyGraceSlots, limits ({ mintsPerHour, migrationsPerHour, dailyPearls }) for tests.
  */
 export function createFishCollection({
@@ -93,6 +93,8 @@ export function createFishCollection({
   state,
   save,
   dir,
+  registry = createFileStore({ dir }).openRegistry(),
+  setupStep = (_name, fn) => fn(),
   ledger,
   balanceSol,
   log,
@@ -107,11 +109,6 @@ export function createFishCollection({
   const mintQuota = new Quota({ limit: mintsPerHour, windowMs: MINT_WINDOW_MS });
   const migrateQuota = new Quota({ limit: migrationsPerHour, windowMs: MINT_WINDOW_MS });
 
-  const registryPath = path.join(dir, REGISTRY_FILE);
-  const registry = new FishRegistry(existsSync(registryPath) ? parseRegistry(readFileSync(registryPath, 'utf8')) : [], (e) =>
-    appendFileSync(registryPath, `${JSON.stringify(e)}\n`, { mode: 0o600 }),
-  );
-
   log(`[market] fish collection ${state.fishCollection ?? '(not created yet)'}`);
 
   // ---- The collection: created once, lazily, like the PEARL mint.
@@ -120,19 +117,20 @@ export function createFishCollection({
 
   function ensureCollection() {
     if (state.fishCollection) return Promise.resolve(state.fishCollection);
-    creating ??= createFishCollectionOnce().finally(() => {
+    creating ??= setupStep('fish collection', createFishCollectionOnce).finally(() => {
       creating = null;
     });
     return creating;
   }
 
   async function createFishCollectionOnce() {
+    if (state.fishCollection) return state.fishCollection; // another instance made it (refreshed under the setup lock)
     // A crash between send and save leaves a pending address: adopt it if it landed.
     if (state.pendingFishCollection && (await u.rpc.accountExists(publicKey(state.pendingFishCollection)))) {
       state.fishCollection = state.pendingFishCollection;
       state.fishCollectionSlot ??= Number(await u.rpc.getSlot({ commitment: 'confirmed' }));
       delete state.pendingFishCollection;
-      save();
+      await save();
       return state.fishCollection;
     }
     if ((await balanceSol(0)) < COLLECTION_NEEDS_SOL) {
@@ -140,13 +138,13 @@ export function createFishCollection({
     }
     const signer = generateSigner(u);
     state.pendingFishCollection = signer.publicKey.toString();
-    save();
+    await save();
     await createCollection(u, { collection: signer, name: FISH_COLLECTION_NAME, uri: '' }).sendAndConfirm(u);
     state.fishCollection = state.pendingFishCollection;
     // Fish created before this slot (plus a grace) are "legacy" and may migrate in.
     state.fishCollectionSlot = Number(await u.rpc.getSlot({ commitment: 'confirmed' }));
     delete state.pendingFishCollection;
-    save();
+    await save();
     log(`[market] created fish collection ${state.fishCollection} (slot ${state.fishCollectionSlot})`);
     return state.fishCollection;
   }
@@ -211,7 +209,7 @@ export function createFishCollection({
    * unsent), 'same' (this very asset: a retry, sign again), or throws 409.
    */
   async function claim(owner, fishId, asset) {
-    const prior = registry.get(owner, fishId);
+    const prior = await registry.get(owner, fishId);
     if (!prior || prior.asset === asset) return prior ? 'same' : 'free';
     const existing = await loadAsset(prior.asset);
     if (existing) {
@@ -234,7 +232,7 @@ export function createFishCollection({
     const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
     const tx = buildMintTx(u, { m, collection, blockhash, programId: playerStateProgram });
     const signed = await u.identity.signTransaction(tx);
-    registry.set(m.owner, m.fishId, { asset: m.asset, lastValid: blockhash.lastValidBlockHeight, kind: 'mint' });
+    await registry.set(m.owner, m.fishId, { asset: m.asset, lastValid: blockhash.lastValidBlockHeight, kind: 'mint' });
     return { tx: b64(u.transactions.serialize(signed)), lastValidBlockHeight: blockhash.lastValidBlockHeight, collection: collection.publicKey.toString() };
   }
 
@@ -265,7 +263,8 @@ export function createFishCollection({
       }
     }
     if (ok.length) {
-      const fresh = ok.filter((f) => registry.get(owner, f.fishId)?.asset !== f.assetId).length;
+      const priors = await Promise.all(ok.map((f) => registry.get(owner, f.fishId)));
+      const fresh = ok.filter((f, i) => priors[i]?.asset !== f.assetId).length;
       const q = migrateQuota.take(owner, fresh);
       if (!q.ok) throw mintLimitError('Migration', migrationsPerHour, q.retryAfterMs);
     }
@@ -308,7 +307,7 @@ export function createFishCollection({
       const signed = await u.identity.signTransaction(g.b.build(u));
       txs.push({ tx: b64(u.transactions.serialize(signed)), assetIds: g.ids, lastValidBlockHeight: blockhash.lastValidBlockHeight });
     }
-    for (const f of ok) registry.set(owner, f.fishId, { asset: f.assetId, lastValid: blockhash.lastValidBlockHeight, kind: 'migrate' });
+    for (const f of ok) await registry.set(owner, f.fishId, { asset: f.assetId, lastValid: blockhash.lastValidBlockHeight, kind: 'migrate' });
     return { txs, rejected };
   }
 

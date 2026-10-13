@@ -153,8 +153,11 @@ export function metadataJson(fish, origin) {
 /**
  * Mount on an http server: `if (await nft(req, res)) return;`. Answers everything under /api/nft/
  * (unknown paths get a JSON 404), and returns false for anything else.
+ * `cdnCache`: a Vercel-CDN-Cache-Control value for the 200s (Vercel only: api/index.mjs). Vercel's
+ * CDN keeps them that long and never passes the header on, so browsers and wallets see the same
+ * Cache-Control as from the Dell; a new deployment starts a fresh cache (its key has the deployment).
  */
-export function createNftHandler({ publicOrigin = process.env.PUBLIC_ORIGIN, log = console.log } = {}) {
+export function createNftHandler({ publicOrigin = process.env.PUBLIC_ORIGIN, log = console.log, cdnCache = null } = {}) {
   const pngs = new Map(); // path -> PNG, least recently used first
   let windowStart = 0;
   let renders = 0;
@@ -167,6 +170,7 @@ export function createNftHandler({ publicOrigin = process.env.PUBLIC_ORIGIN, log
       // Solana Explorer and other web viewers fetch the JSON and image from the browser.
       'Access-Control-Allow-Origin': '*',
       'X-Content-Type-Options': 'nosniff',
+      ...(cdnCache && status === 200 ? { 'Vercel-CDN-Cache-Control': cdnCache } : {}),
     });
     res.end(req.method === 'HEAD' ? undefined : body);
   }

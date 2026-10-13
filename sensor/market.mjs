@@ -21,6 +21,9 @@
 // Secrets (gitignored, mode 600, Solana CLI format, never logged; only public keys are printed):
 //   program mode  MARKET_ORACLE_KEYPAIR, default <dir>/.market-oracle.json
 //   server mode   <dir>/.market-keypair.json (+ <dir>/.market-state.json, public)
+// With the Redis store (market-store.mjs, a serverless host) server mode's state is in Redis and
+// the market wallet is MARKET_SECRET_KEY, read-only: never generated, never written to disk.
+// Program mode needs the file store.
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -42,6 +45,7 @@ import { createProgramMode } from './market-program-mode.mjs';
 import { createServerMode } from './market-server-mode.mjs';
 import { createBalanceReader, parseBalanceQuery } from './market-balance.mjs';
 import { createOwnedFishReader, parseOwnedQuery } from './fish-owned.mjs';
+import { KEYPAIR_FILE, createStore } from './market-store.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IDL_PATH = path.join(REPO_ROOT, 'game/src/idl/fish_market.json');
@@ -62,6 +66,17 @@ function useKeypair(u, file, label, log) {
     log(`[market] generated a new ${label} keypair at ${shown}`);
   }
   u.use(keypairIdentity(u.eddsa.createKeypairFromSecretKey(secret)));
+}
+
+/** The market wallet from the store's secret (MARKET_SECRET_KEY): nothing is generated or written. */
+function useSecret(u, secret) {
+  let keypair;
+  try {
+    keypair = u.eddsa.createKeypairFromSecretKey(secret);
+  } catch {
+    throw new Error('MARKET_SECRET_KEY is not a valid ed25519 secret key'); // never the key itself
+  }
+  u.use(keypairIdentity(keypair));
 }
 
 /** The fish collection server mode created in this dir, if any (program mode then only buys its fish). */
@@ -90,8 +105,15 @@ export async function createMarket({
   clientIp = (req) => req.socket?.remoteAddress ?? '?',
   // Server mode, for tests and the e2e only: { legacyGraceSlots, limits: { mintsPerHour, migrationsPerHour, dailyPearls } }.
   fishOptions = {},
+  // Where state lives (market-store.mjs): a store, or its kind ('file' | 'redis'); default: the
+  // environment's choice (MARKET_STORE, else Redis exactly when its credentials are set).
+  store,
+  // A serverless host: no timers or start-up work (see createServerMode), and a /sell-batch deadline.
+  background = true,
+  batchDeadlineMs,
 } = {}) {
-  if (!dir) throw new Error('createMarket: dir is required');
+  if (!store || typeof store === 'string') store = await createStore({ kind: store, dir, log });
+  if (store.kind === 'file' && !dir) throw new Error('createMarket: dir is required');
   programId ||= null; // only the env var (or option) turns program mode on, so server mode stays the safe default
   if (programId && !isAddress(programId)) throw new Error(`FISH_MARKET_PROGRAM_ID is not an address: ${programId}`);
 
@@ -106,6 +128,7 @@ export async function createMarket({
   });
   log(`[market] Solana RPC ${redactRpc(rpc)}, at most ${rpcConcurrency} call(s) in flight`);
   let mode;
+  if (programId && store.kind !== 'file') throw new Error('Program mode (FISH_MARKET_PROGRAM_ID) needs the file store: its oracle key is a file');
   if (programId) {
     idl ??= loadIdl(IDL_PATH);
     const layout = idl ? layoutFromIdl(idl) : DEFAULT_LAYOUT; // a mismatched IDL fails here, loudly
@@ -117,8 +140,10 @@ export async function createMarket({
     useKeypair(u, file, 'oracle', log);
     mode = createProgramMode({ u, programId, layout, log, fishCollection: savedFishCollection(dir) });
   } else {
-    useKeypair(u, path.join(dir, '.market-keypair.json'), 'market', log);
-    mode = createServerMode({ u, rpc, dir, log, fishOptions });
+    const secret = store.marketSecret(); // null: the file store's keypair file
+    if (secret) useSecret(u, secret);
+    else useKeypair(u, path.join(dir, KEYPAIR_FILE), 'market', log);
+    mode = await createServerMode({ u, rpc, dir, log, fishOptions, store, background, batchDeadlineMs });
   }
   const modeName = programId ? 'program' : 'server';
 
@@ -277,5 +302,14 @@ export async function createMarket({
     return true;
   }
 
-  return { mode: modeName, info: mode.info, handle, ready: mode.ready, publicKey: u.identity.publicKey.toString() };
+  return {
+    mode: modeName,
+    info: mode.info,
+    handle,
+    ready: mode.ready,
+    // Server mode: burn the paid fish still in the market wallet (market-burn.mjs); a serverless host calls it.
+    sweep: mode.sweep ?? (async () => null),
+    store,
+    publicKey: u.identity.publicKey.toString(),
+  };
 }

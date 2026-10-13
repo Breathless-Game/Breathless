@@ -195,7 +195,7 @@ export function gearSvg(g) {
  * Mount on an http server before createNftHandler: `if (await gear(req, res)) return;`. Answers
  * everything under /api/nft/gear/ and returns false for anything else.
  */
-export function createGearHandler({ publicOrigin = process.env.PUBLIC_ORIGIN } = {}) {
+export function createGearHandler({ publicOrigin = process.env.PUBLIC_ORIGIN, cdnCache = null } = {}) {
   function send(req, res, status, type, body, cache) {
     res.writeHead(status, {
       'Content-Type': type,
@@ -206,6 +206,8 @@ export function createGearHandler({ publicOrigin = process.env.PUBLIC_ORIGIN } =
       'X-Content-Type-Options': 'nosniff',
       // The SVG is an image: no scripts, nothing loaded from elsewhere, even if opened directly.
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+      // Vercel only, as in nft-meta.mjs: its CDN's own lifetime, never sent on to the browser.
+      ...(cdnCache && status === 200 ? { 'Vercel-CDN-Cache-Control': cdnCache } : {}),
     });
     res.end(req.method === 'HEAD' ? undefined : body);
   }

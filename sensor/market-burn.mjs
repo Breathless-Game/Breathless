@@ -90,7 +90,7 @@ export function pickStranded(assets, { market, collection, ledger }) {
  *   listOwned()   -> the market wallet's mpl-core assets (one getProgramAccounts)
  *   collection()  -> the fish collection address, or null before it exists
  *   market        the market wallet's address
- *   ledger        SoldLedger
+ *   ledger        SoldLedger, or the Redis store's ledger (read through its loadAssets snapshot)
  *   burnOnce(id)  as above
  */
 export function createSweep({ listOwned, collection, market, ledger, burnOnce, log = () => {}, maxPerRun = SWEEP_MAX_PER_RUN, intervalMs = SWEEP_INTERVAL_MS }) {
@@ -99,7 +99,10 @@ export function createSweep({ listOwned, collection, market, ledger, burnOnce, l
   async function sweepOnce() {
     const coll = collection();
     if (!coll) return { burned: 0, failed: 0, left: 0, unpaid: 0 };
-    const { burn, unpaid } = pickStranded(await listOwned(), { market, collection: coll, ledger });
+    const owned = await listOwned();
+    // The Redis ledger reads just these fish's records first; the file one has them all in memory.
+    const view = ledger.loadAssets ? await ledger.loadAssets((owned ?? []).map((a) => String(a?.publicKey))) : ledger;
+    const { burn, unpaid } = pickStranded(owned, { market, collection: coll, ledger: view });
     let burned = 0;
     let failed = 0;
     const now = burn.slice(0, maxPerRun);

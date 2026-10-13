@@ -575,6 +575,8 @@ async function startMarket() {
       rpc: rpcEndpoint(), // SOLANA_RPC, else VITE_SOLANA_RPC, else public devnet
       dir,
       clientIp,
+      // This one process owns the files, the fish number counter's too; Redis is for Vercel (api/index.mjs).
+      store: 'file',
     });
     Promise.resolve(market.ready).catch((e) => log(`PEARL market start-up task failed: ${e?.message ?? e}`));
   } catch (e) {
