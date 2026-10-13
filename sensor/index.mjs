@@ -31,6 +31,7 @@ import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 import { Recorder, flags, points } from './recorder.mjs';
 import { staticHandler } from './static.mjs';
+import { createLinkHandler } from './link-relay.mjs';
 import { guardProcess } from './process-guard.mjs';
 import { presageEnabled } from './presage-flag.mjs';
 
@@ -606,6 +607,10 @@ if (SERVE) {
   // Fish numbers (#0042) for new mints, POST /api/nft/serial (nft-serial.mjs), counted in the market
   // dir (startMarket has created it by now). Before `nft`, which answers every other /api/nft/ path.
   const serials = createSerialHandler({ file: join(marketDir(), SERIAL_FILE), clientIp, log });
+  // The desktop app's wallet relay (link-relay.mjs): sessions in this process's memory, so it works
+  // even when the market could not start.
+  const link = import('./market-store.mjs').then(({ createMemoryKv }) => createLinkHandler({ kv: createMemoryKv(), clientIp, log }));
+  link.catch((e) => log(`wallet link unavailable: ${e?.message ?? e}`));
   const server = createServer(async (req, res) => {
     try {
       let pathname = '';
@@ -613,6 +618,11 @@ if (SERVE) {
         pathname = new URL(req.url ?? '/', 'http://x').pathname;
       } catch {} // the static handler answers 400
       if (pathname.startsWith('/api/')) {
+        if (pathname === '/api/link' || pathname.startsWith('/api/link/')) {
+          const handle = await link.catch(() => null);
+          if (!handle) return sendJson(res, 503, { error: 'The wallet link is unavailable on this server' });
+          if (await handle(req, res)) return;
+        }
         if (await serials(req, res)) return;
         if (await gear(req, res)) return;
         if (await nft(req, res)) return;

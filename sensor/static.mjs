@@ -39,6 +39,15 @@ const MIME = {
 };
 
 const NO_CACHE = 'no-cache';
+/**
+ * The desktop app's wallet link page (game/link.html) signs for the player: never inside a frame,
+ * and its URL (a session id) never goes out as a referrer. Its <meta> CSP can't say frame-ancestors.
+ */
+export const LINK_PAGE_HEADERS = {
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+};
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
 /** Returns an http request handler serving `dir`, with an index.html fallback for app routes. */
@@ -87,6 +96,7 @@ export function staticHandler(dir) {
       'Cache-Control': hashed ? IMMUTABLE : NO_CACHE,
       'Last-Modified': info.mtime.toUTCString(),
       'X-Content-Type-Options': 'nosniff',
+      ...(file === resolve(root, 'link.html') ? LINK_PAGE_HEADERS : {}),
     };
     // no-cache means "revalidate": answer that cheaply when nothing changed.
     const since = Date.parse(req.headers['if-modified-since'] ?? '');
