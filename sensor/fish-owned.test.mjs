@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GENERATOR_V1, fishOf, recordedDepth, rollFish } from './fish-gen.mjs';
-import { classifyOwned, createOwnedFishReader, parseOwnedQuery } from './fish-owned.mjs';
+import {
+  DAS_PAGE,
+  classifyOwned,
+  createOwnedFetcher,
+  createOwnedFishReader,
+  fetchAssetsByIds,
+  jsonRpc,
+  listOwnedIds,
+  parseOwnedQuery,
+} from './fish-owned.mjs';
 import { HttpError } from './market-rules.mjs';
 
 // GET /api/market/fish behind a fake chain: only the game's fish come back (collection fish and
@@ -167,4 +176,149 @@ test('a read in flight when the owner is invalidated does not cache its older an
   assert.equal((await reader.read({ owner: OWNER })).fish.length, 0, 'the cache holds the post-sale list');
   assert.equal(calls, 2);
   assert.equal(reader.pending(), 0);
+});
+
+// ---- Listing: the DAS owner index + getMultipleAccounts, or getProgramAccounts ------------------
+
+/**
+ * One fake chain behind both paths. `assets` (as mpl-core decodes them) are the accounts; the DAS
+ * index lists `indexed` (default: every asset) plus `extra` items. fetch answers JSON-RPC like an
+ * RPC: "method not found" without DAS, a 429 on `failPage`.
+ */
+function fakeRpc(assets, { das = true, indexed = assets, extra = [], failPage = null } = {}) {
+  const calls = { das: [], accounts: [], gpa: 0 };
+  const byId = new Map(assets.map((a) => [a.publicKey, a]));
+  const items = [...indexed.map((a) => ({ interface: 'MplCoreAsset', id: a.publicKey, burnt: false })), ...extra];
+  const fetch = async (_url, req) => {
+    const { params } = JSON.parse(req.body);
+    calls.das.push(params);
+    const json = (body) => ({ ok: true, status: 200, json: async () => ({ jsonrpc: '2.0', id: 1, ...body }) });
+    if (!das) return json({ error: { code: -32601, message: 'Method not found' } });
+    if (params.page === failPage) return { ok: false, status: 429, json: async () => ({}) };
+    const start = (params.page - 1) * params.limit;
+    return json({ result: { total: items.length, limit: params.limit, page: params.page, items: items.slice(start, start + params.limit) } });
+  };
+  return {
+    calls,
+    das: jsonRpc('https://rpc.example/?api-key=secret', { fetch }),
+    fetchByIds: (ids) =>
+      fetchAssetsByIds(ids, {
+        getAccounts: async (keys) => {
+          calls.accounts.push(keys.length);
+          return keys.map((k) => (byId.has(k) ? { exists: true, asset: byId.get(k) } : { exists: false }));
+        },
+        decode: (acc) => acc.asset,
+      }),
+    fetchByGpa: async (owner) => {
+      calls.gpa += 1;
+      return assets.filter((a) => a.owner === owner);
+    },
+  };
+}
+
+const ownedFixture = () => [
+  fishAsset(caught(0x44444444)),
+  fishAsset(caught(0x12345678), { ua: { type: 'Address', address: SESSION } }),
+  gearAsset(),
+  fishAsset(caught(0x0badf00d), { extra: { updateDelegate: { authority: { type: 'Owner' }, additionalDelegates: [] } } }),
+  fishAsset(caught(0x55555555), { owner: OTHER }),
+];
+
+const readerOver = (fetchOwned) => createOwnedFishReader({ fetchOwned, collection: async () => COLLECTION, ttlMs: 0 });
+const sameRead = (v) => ({ ...v, at: 0 });
+
+test('with DAS the fish come back exactly as getProgramAccounts gives them, and getProgramAccounts is not called', async () => {
+  const assets = ownedFixture();
+  const rpc = fakeRpc(assets, { indexed: assets.filter((a) => a.owner === OWNER) });
+  const logs = [];
+  const viaDas = await readerOver(createOwnedFetcher({ ...rpc, label: 'https://rpc.example/…', log: (m) => logs.push(m) })).read({ owner: OWNER });
+  assert.equal(rpc.calls.gpa, 0);
+  assert.deepEqual(rpc.calls.das, [{ ownerAddress: OWNER, page: 1, limit: DAS_PAGE }]);
+  const viaGpa = await readerOver(rpc.fetchByGpa).read({ owner: OWNER });
+  assert.deepEqual(sameRead(viaDas), sameRead(viaGpa));
+  assert.deepEqual(viaDas.fish.map((f) => f.trust), ['collection', 'legacy']); // gear and the delegated fish left out
+  assert.equal(logs.length, 1);
+  assert.ok(!logs.join(' ').includes('secret'), 'the RPC key is never logged');
+});
+
+test('the DAS index is only an index: stale, burnt, closed and non-Core entries change nothing', async () => {
+  const assets = ownedFixture();
+  const sold = assets[4]; // OTHER owns it on chain; a lagging index still lists it under OWNER
+  const rpc = fakeRpc(assets, {
+    indexed: [...assets.filter((a) => a.owner === OWNER), sold],
+    extra: [
+      { interface: 'V1_NFT', id: 'Legacy111', burnt: false },
+      { interface: 'MplCoreAsset', id: assets[0].publicKey, burnt: true },
+      { interface: 'MplCoreAsset', id: assets[1].publicKey, burnt: false }, // listed twice
+      { interface: 'MplCoreAsset', id: 'Gone11111', burnt: false }, // account closed since
+    ],
+  });
+  const viaDas = await readerOver(createOwnedFetcher({ ...rpc, log: () => {} })).read({ owner: OWNER });
+  assert.equal(rpc.calls.gpa, 0);
+  assert.deepEqual(sameRead(viaDas), sameRead(await readerOver(rpc.fetchByGpa).read({ owner: OWNER })));
+  // An account that no longer decodes as an asset is skipped, not thrown.
+  const got = await fetchAssetsByIds(['A', 'B'], {
+    getAccounts: async (keys) => keys.map((k) => ({ exists: true, k })),
+    decode: (acc) => {
+      if (acc.k === 'A') throw new Error('Uninitialized');
+      return acc.k;
+    },
+  });
+  assert.deepEqual(got, ['B']);
+});
+
+test('an RPC without DAS falls back to getProgramAccounts and is not asked again', async () => {
+  const assets = ownedFixture();
+  const rpc = fakeRpc(assets, { das: false });
+  const logs = [];
+  const fetchOwned = createOwnedFetcher({ ...rpc, log: (m) => logs.push(m) });
+  assert.equal((await readerOver(fetchOwned).read({ owner: OWNER })).fish.length, 2);
+  await fetchOwned(OWNER);
+  await fetchOwned(OWNER);
+  assert.equal(rpc.calls.das.length, 1, 'one probe per instance');
+  assert.equal(rpc.calls.gpa, 3);
+  assert.equal(logs.length, 1);
+  // No DAS caller at all: straight to getProgramAccounts.
+  const none = fakeRpc(assets);
+  await createOwnedFetcher({ ...none, das: null, log: () => {} })(OWNER);
+  assert.deepEqual([none.calls.das.length, none.calls.gpa], [0, 1]);
+});
+
+test('pages are followed to the end; a page failing mid-read means getProgramAccounts for that read only', async () => {
+  const assets = ownedFixture().map((a) => ({ ...a, owner: OWNER })); // 5 assets + 2 tokens: 4 pages of 2
+  const extra = ['Token1111', 'Token2222'].map((id) => ({ interface: 'FungibleToken', id, burnt: false }));
+  const ok = fakeRpc(assets, { extra });
+  assert.deepEqual(await listOwnedIds(ok.das, OWNER, { pageSize: 2 }), assets.map((a) => a.publicKey));
+  assert.deepEqual(ok.calls.das.map((p) => [p.page, p.limit]), [[1, 2], [2, 2], [3, 2], [4, 2]]);
+  await assert.rejects(listOwnedIds(ok.das, OWNER, { pageSize: 2, maxPages: 2 }), /more than 2 pages/); // never a silent cut
+  const viaDas = await createOwnedFetcher({ ...ok, pageSize: 2, log: () => {} })(OWNER);
+  assert.deepEqual(viaDas, assets);
+
+  const flaky = fakeRpc(assets, { extra, failPage: 2 });
+  let t = 0;
+  const logs = [];
+  const fetchOwned = createOwnedFetcher({ ...flaky, pageSize: 2, log: (m) => logs.push(m), now: () => t });
+  assert.equal((await fetchOwned(OWNER)).length, 5);
+  assert.deepEqual([flaky.calls.das.length, flaky.calls.gpa, flaky.calls.accounts.length], [2, 1, 0]);
+  await fetchOwned(OWNER);
+  assert.equal(flaky.calls.das.length, 4, 'DAS is tried again after a transient failure');
+  assert.equal(flaky.calls.gpa, 2);
+  assert.equal(logs.length, 1, 'failure logs are throttled');
+  t += 60_000;
+  await fetchOwned(OWNER);
+  assert.equal(logs.length, 2);
+});
+
+test('getMultipleAccounts is asked for at most 100 accounts at a time', async () => {
+  const keys = Array.from({ length: 250 }, (_, i) => `K${i}`);
+  const sizes = [];
+  const got = await fetchAssetsByIds(keys, {
+    getAccounts: async (ks) => {
+      sizes.push(ks.length);
+      return ks.map((k) => ({ exists: true, k }));
+    },
+    decode: (acc) => acc.k,
+  });
+  assert.deepEqual(sizes, [100, 100, 50]);
+  assert.deepEqual(got, keys);
 });
