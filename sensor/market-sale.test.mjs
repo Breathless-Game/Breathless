@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { HttpError, MAX_BATCH, MAX_BATCH_TXS, MPL_CORE_PROGRAM, RateLimiter, SoldLedger, appraise, parseQuoteBatchBody, parseSellBatchBody, withLock } from './market-rules.mjs';
+import { createPayout } from './market-payout.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 
 // The desk's price gate without the collection check (fish-trust.test.mjs covers that): the on-chain value.
@@ -385,4 +386,83 @@ test('sell-batch: 24 fish naming 2 made-up transfers cost 2 poll sequences (12 R
   assert.ok(results.every((r) => r.status === 400 && /not found/.test(r.error)));
   assert.equal(m.total(), 12);
   assert.equal(m.payments.length, 0);
+});
+
+/**
+ * A desk on a clock the test moves, with the real payout (market-payout.mjs) over a fake chain.
+ * `onFetch` / `onConfirm` run as the asset is loaded and as a payout confirms (to move the clock).
+ */
+function deadlineSetup({ onFetch = () => {}, onConfirm = () => {} } = {}) {
+  const clock = { t: 1_000_000 };
+  const ledger = new SoldLedger();
+  const sent = [];
+  const burns = [];
+  let seq = 0;
+  const payout = createPayout({
+    ledger,
+    build: async (assetId) => ({ sig: `pay-${++seq}`, lastValid: 500, assetId }),
+    send: async (built) => {
+      sent.push(built.assetId);
+    },
+    confirm: async () => {
+      onConfirm(clock);
+      return null;
+    },
+    getSignatureStatus: async () => null,
+    getBlockHeight: async () => 100,
+  });
+  const desk = createSaleDesk({
+    priceFish: plainPrice,
+    ledger,
+    market: MARKET,
+    ensureMint: async () => 'PearlMint',
+    fetchTransfer: async () => transferTx({ moves: [{ asset: A }, { asset: B }] }),
+    loadMarketAsset: async () => {
+      onFetch(clock);
+      return { owner: MARKET, attributes: { attributeList: attrs('common', 3) } };
+    },
+    resolvePending: payout.resolvePending,
+    pay: payout.pay,
+    burnSold: async (id) => {
+      burns.push(id);
+      ledger.burned(id, `burn-${id}`);
+    },
+    batchDeadlineMs: 1000,
+    now: () => clock.t,
+  });
+  return { desk, ledger, sent, burns };
+}
+
+test('deadline: past it before the payout, /sell and /sell-batch answer 503 and send nothing; the retry pays once', async () => {
+  // Fetching the fish took longer than the request has.
+  const m = deadlineSetup({ onFetch: (c) => (c.t += 1500) });
+  await assert.rejects(m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX }), (e) => e instanceof HttpError && e.status === 503 && /sell this fish again/.test(e.message));
+  const { results } = await m.desk.sellBatch(batch([[B]]));
+  assert.deepEqual(results, [{ assetId: B, status: 503, error: 'Out of time for this request, sell this fish again' }]);
+  assert.deepEqual(m.sent, [], 'no payout sent');
+  for (const id of [A, B]) {
+    assert.equal(m.ledger.get(id).status, 'paying');
+    assert.equal(m.ledger.get(id).payTx, undefined, 'no payout recorded either');
+  }
+  // The game sells them again with a fresh deadline: resumed (no new fetch), paid once, burned.
+  assert.equal((await m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX })).pearls, 3);
+  assert.equal((await m.desk.sellBatch(batch([[B]]))).results[0].pearls, 3);
+  assert.deepEqual(m.sent, [A, B]);
+  assert.deepEqual(m.burns, [A, B]);
+});
+
+test('deadline: a payout sent before it is still confirmed and recorded; only the burn is left to the sweep', async () => {
+  // The confirmation comes back after the deadline.
+  const m = deadlineSetup({ onConfirm: (c) => (c.t += 1500) });
+  const r = await m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX });
+  assert.equal(r.pearls, 3);
+  assert.equal(r.tx, 'pay-1', 'the payout that went out is the one on record');
+  assert.equal(m.ledger.get(A).status, 'paid', 'confirmed, not dropped');
+  assert.deepEqual(m.burns, [], 'no burn sent after the deadline');
+  assert.deepEqual(m.ledger.unburned(), [A], "on the sweep's list");
+  // A retry answers the same sale, pays nothing more and burns it.
+  const again = await m.desk.sell({ assetId: A, seller: SELLER, transferTx: TX });
+  assert.equal(again.tx, 'pay-1');
+  assert.deepEqual(m.sent, [A]);
+  assert.deepEqual(m.burns, [A]);
 });

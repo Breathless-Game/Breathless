@@ -22,7 +22,8 @@
 // list: the game resumes that sale later and gets paid then. Calls are spaced gapMs apart, at most
 // maxPerRun fish per sweep (of which at most maxResumesPerRun resumed sales), and a 429 (after
 // rpc-guard.mjs has already backed off) ends the sweep early: the rest wait for the next one
-// instead of the whole sweep failing.
+// instead of the whole sweep failing. So does run({ deadlineMs }) once that long has passed (a
+// serverless host, below its function time limit): no burn or resume is started after it.
 
 import { isRateLimited } from './rpc-guard.mjs';
 
@@ -41,9 +42,9 @@ export const SWEEP_MAX_PER_RUN = 24;
 export const SWEEP_MAX_RESUMES_PER_RUN = 3;
 /**
  * A 'paying' sale is the sweep's to resume only this long after it began. No request can still be
- * working on it by then: a request lives at most 300 s (Vercel's maxDuration; a /sell-batch starts
- * no fish after 240 s), its payout's blockhash expires within ~60-90 s and its confirmation gives up
- * after 90 s. So the sweep never races a live sale; if a client's retry does run at the same time,
+ * working on it by then: a request lives at most 300 s (Vercel's maxDuration; a /sell or /sell-batch
+ * sends no payout after 240 s), its payout's blockhash expires within ~60-90 s and its confirmation
+ * gives up after 90 s. So the sweep never races a live sale; if a client's retry does run at the same time,
  * the per-fish lock (one process) and Redis's payPending SET NX (several) still let only one pay.
  */
 export const SWEEP_RESUME_AFTER_MS = 10 * 60_000;
@@ -118,7 +119,7 @@ export function burnBlocker(asset, { market, collection }) {
  * Returns { burned, resumed, settled, skipped, failed, waiting, left, rateLimited }: resumed = stalled
  * sales finished (paid now or found paid, then burned); settled = already gone, marked burned;
  * skipped = set aside; waiting = paying sales too young to resume; left = sales seen but not tried
- * this time (at least that many remain).
+ * this time (at least that many remain). With a deadline, also outOfTime: it stopped there.
  */
 export function createSweep({
   collection,
@@ -138,8 +139,10 @@ export function createSweep({
 }) {
   let running = null;
 
-  async function sweepOnce() {
+  async function sweepOnce({ deadlineMs = Infinity } = {}) {
     const out = { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false };
+    const deadline = now() + deadlineMs;
+    if (Number.isFinite(deadlineMs)) out.outOfTime = false;
     const coll = collection();
     if (!coll) return out;
     // One more than we will try, to know whether any are left for the next sweep.
@@ -148,6 +151,10 @@ export function createSweep({
     let tried = 0;
     let resumes = 0;
     for (const id of batch) {
+      if (now() > deadline) {
+        out.outOfTime = true;
+        break; // this fish and the rest wait for the next sweep
+      }
       try {
         const r = await ledger.get(id);
         if (r?.status === 'paying') {
@@ -203,14 +210,15 @@ export function createSweep({
           (out.skipped ? `, ${out.skipped} set aside` : '') +
           (out.failed ? `, ${out.failed} failed` : '') +
           (out.rateLimited ? '; RPC rate limited (429), stopped early' : '') +
-          (out.left ? `; ${ids.length > maxPerRun || out.rateLimited ? 'more' : out.left} left for the next sweep` : ''),
+          (out.outOfTime ? '; out of time, stopped early' : '') +
+          (out.left ? `; ${ids.length > maxPerRun || out.rateLimited || out.outOfTime ? 'more' : out.left} left for the next sweep` : ''),
       );
     }
     return out;
   }
-  /** One sweep at a time; a sweep that throws (RPC down) is logged, never unhandled. */
-  function run() {
-    running ??= sweepOnce()
+  /** One sweep at a time; a sweep that throws (RPC down) is logged, never unhandled. opts: { deadlineMs }. */
+  function run(opts) {
+    running ??= sweepOnce(opts)
       .catch((e) => {
         log(`[market] sweep failed: ${short(e)}`);
         return null;

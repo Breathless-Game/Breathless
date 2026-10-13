@@ -354,3 +354,24 @@ test('a sweep whose ledger listing fails logs and resolves: no unhandled rejecti
   assert.equal(listings, 1);
   assert.equal(logs.filter((l) => l.includes('sweep failed')).length, 1);
 });
+
+test('a sweep with a deadline starts no burn after it, and says so in its result and log', async () => {
+  const ids = ['A', 'B', 'C', 'D'];
+  const ledger = ledgerWith(Object.fromEntries(ids.map((id) => [id, 'paid'])));
+  let t = 0;
+  const burned = [];
+  const { sweep, logs } = sweepOver(ledger, fakeChain(ids.map((id) => asset(id))), {
+    now: () => t,
+    // Each burn takes 100 s.
+    burnOnce: async (id) => {
+      t += 100_000;
+      burned.push(id);
+      ledger.burned(id, `sig-${id}`);
+    },
+  });
+  assert.deepEqual(await sweep.run({ deadlineMs: 240_000 }), { burned: 3, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 1, rateLimited: false, outOfTime: true });
+  assert.deepEqual(burned, ['A', 'B', 'C'], 'the third began before the deadline and was finished');
+  assert.ok(logs.some((l) => l.includes('out of time, stopped early') && l.includes('more left for the next sweep')));
+  assert.deepEqual(await sweep.run({ deadlineMs: 240_000 }), { burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, outOfTime: false });
+  assert.deepEqual(ledger.unburned(), []);
+});
