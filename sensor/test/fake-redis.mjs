@@ -145,6 +145,12 @@ export function createFakeRedis({ now = () => Date.now(), jitter = true } = {}) 
         .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1))
         .map(([m]) => m);
     },
+    /** One pass over everything (cursor "0" back): MATCH supports `*` only, as the scripts use it. */
+    async scan(_cursor, { match = '*' } = {}) {
+      await step('scan');
+      const re = new RegExp(`^${match.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+      return ['0', [...data.keys()].filter((k) => live(k) && re.test(k))];
+    },
     async eval(script, keys, args) {
       await step('eval');
       const fn = scripts.get(script);

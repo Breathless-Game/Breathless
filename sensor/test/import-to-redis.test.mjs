@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createFileStore, createRedisStore } from '../market-store.mjs';
 import { createSerialCounter } from '../nft-serial.mjs';
+import { exportFromRedis, writeMarketDir } from '../scripts/export-from-redis.mjs';
 import { importToRedis, readMarketDir } from '../scripts/import-to-redis.mjs';
 import { createFakeRedis } from './fake-redis.mjs';
 
@@ -97,4 +98,39 @@ test('import: an empty market dir imports nothing', async (t) => {
   assert.equal(r.state, false);
   assert.equal(redis.data.get('market:state'), undefined);
   assert.equal(redis.data.get('market:serial:last').value, '0');
+});
+
+test('export (rollback): Redis back to the three files, which the file store reads as Redis left them', async (t) => {
+  const { dir, sold } = marketDir(t);
+  const redis = createFakeRedis();
+  await importToRedis({ redis, prefix: 'm:', data: readMarketDir(dir) });
+  // Life on Vercel: C's payout lands, a new sale is in flight, a new fish is numbered and co-signed.
+  const store = createRedisStore({ redis, prefix: 'm:', env: {} });
+  const { ledger } = await store.openMarketState({ cluster: 'devnet' });
+  await ledger.paid(C);
+  const D = 'FishD111111111111111111111111111111111111111';
+  await ledger.begin(D, { seller: SELLER, transferTx: 'tD', pearls: 5 });
+  await ledger.payPending(D, 'pD', 99);
+  await store.openSerials().assign(OWNER, 'dd');
+  await store.openRegistry().set(OWNER, 'dd', { asset: D, kind: 'mint' }, 9);
+
+  const out = join(dir, 'export');
+  writeMarketDir(out, await exportFromRedis({ redis, prefix: 'm:' }));
+  assert.throws(() => writeMarketDir(out, { state: {}, registry: [], serial: { last: 0, keys: {} } }), /Refusing to overwrite/);
+
+  const file = createFileStore({ dir: out });
+  const back = await file.openMarketState({ cluster: 'devnet' });
+  assert.equal(back.state.mint, 'Mint111');
+  assert.equal(back.state.fishCollection, 'Coll111');
+  for (const id of [...Object.keys(sold), D]) assert.deepEqual(back.ledger.get(id), await ledger.get(id), id);
+  assert.equal(back.ledger.get(D).payTx, 'pD', 'the payout in flight is on the record again, as SoldLedger keeps it');
+  const reg = file.openRegistry();
+  assert.equal(reg.get(OWNER, 'aa').asset, C);
+  assert.equal(reg.get(OWNER, 'dd').asset, D);
+  // Straight back again: importing the export changes nothing.
+  const again = await importToRedis({ redis, prefix: 'm:', data: readMarketDir(out) });
+  assert.deepEqual([again.sold.added, again.registry.added, again.serials.added, again.payouts], [0, 0, 0, 0]);
+  const counter = createSerialCounter(join(out, '.market-serial.json'));
+  assert.equal(counter.peek(OWNER, 'dd'), 42);
+  assert.equal(counter.assign(OWNER, 'ee'), 43, 'the Dell numbers on from where Vercel stopped');
 });
