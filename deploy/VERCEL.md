@@ -77,7 +77,7 @@ Server (runtime). None of these reach the game bundle; only `VITE_*` do.
 | `PUBLIC_ORIGIN` | all | no | `https://breathless.gotclass.xyz`, so the NFT JSON points at the real game, byte for byte as the Dell serves it. |
 | `SOLANA_RPC` | all | **yes** if the URL holds an API key | The market's RPC. Default: `VITE_SOLANA_RPC`, else public devnet, which answers 429 under a bulk sell. |
 | `SOLANA_RPC_CONCURRENCY` | optional | no | Calls in flight, default 3. Raise only on a paid plan. |
-| `PLAYER_STATE_PROGRAM_ID` | optional | no | As on the Dell. |
+| `PLAYER_STATE_PROGRAM_ID` | Preview + Production **until cutover**, then deleted | no | `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`, the TEST player_state (contracts/DEPLOYED.md), whose oracle is the TEST market wallet. Unset = the live program, whose oracle is the live wallet, so a TEST market's fish mints fail with `0x1770` (Unauthorized). Always set together with `VITE_PLAYER_STATE_PROGRAM_ID`. |
 | `FISH_MARKET_PROGRAM_ID` | **must be unset** | n/a | Program mode needs the file store; with Redis the market refuses to start. |
 
 `PRESAGE_*`, `PORT`, `HOST`, `MAX_LIVE_SESSIONS`, `MAX_CONN_PER_IP` and `SENSOR_*` are not used on Vercel.
@@ -94,7 +94,7 @@ Game (build time). Vite bundles these into the page, so **never put a secret in 
 | `VITE_NFT_ORIGIN` | the page's origin when public https, else the deployed game | **`https://breathless.gotclass.xyz` in Preview and Production.** Otherwise a fish minted on a `*.vercel.app` URL points at a host that wallets cannot open (Deployment Protection). |
 | `VITE_SOLANA_RPC` | public devnet | as on the Dell (unset). Public: never a keyed URL. |
 | `VITE_GEAR_NFT` | on | unset |
-| `VITE_PLAYER_STATE_PROGRAM_ID` | the devnet program | unset |
+| `VITE_PLAYER_STATE_PROGRAM_ID` | the live devnet program | **`4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L` in Preview and Production until cutover**, the same value as `PLAYER_STATE_PROGRAM_ID`; deleted at cutover. |
 
 The Dell's build (`.github/workflows/deploy.yml`) only sets `VITE_PRESAGE_ENABLED`, from the repo variable. Everything else uses the defaults above.
 
@@ -110,9 +110,16 @@ Until cutover, **both Preview and Production use a TEST market wallet**, with a 
 2. Paste the file's contents into `MARKET_SECRET_KEY` (Sensitive). Also set:
    - `MARKET_STORE=redis` and `MARKET_STORE_PREFIX=preview:`;
    - `PUBLIC_ORIGIN` and `VITE_NFT_ORIGIN` as above;
-   - `SOLANA_RPC`.
+   - `SOLANA_RPC`;
+   - `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID`, both `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`.
 
    Then delete the local file.
+
+   The TEST player_state program is tied to one TEST wallet, `8RJHaqvY2EjsezPU8PX6Cakz6DWPkzjcNTumR7x6tiax` (its Config's oracle), and to that wallet's TEST PEARL mint. A different test wallet needs its own player_state deployment: `set_oracle` (signed by the TEST program's admin, that same wallet) would fix the fish mints, but the Config's PEARL mint is fixed at `initialize_config`, so PEARL spends would still burn the old test PEARL.
+
+   Set the two program ids **together**, with the same value. If only one is set (or they differ), the market's record_catch goes to one program and the game expects the other, so the game refuses to sign every fish mint ("The game and the market are on different versions … nothing was signed"), and a reload does not help.
+
+   `VITE_*` values are baked in at build time, so after adding, changing or deleting one, **redeploy** (a new build, not a promote of an old one).
 3. Deploy, and open the deployment URL in a browser logged in to Vercel.
    - `/api/market/info` shows the test wallet. On the first use the market creates a test PEARL mint and fish collection; a Redis lock makes sure only one instance does.
    - Check an NFT URL, e.g. `/api/nft/img/v1/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png`.
@@ -141,9 +148,11 @@ Run steps 1-6 within one window. The Dell's market must be stopped before you co
 5. **Set Production's variables.**
    - `MARKET_SECRET_KEY` = the Dell's `.market-keypair.json` contents (Sensitive);
    - `MARKET_STORE_PREFIX=live:`;
-   - `CRON_SECRET`, `PUBLIC_ORIGIN` and `SOLANA_RPC` (the Dell's).
-6. **Redeploy Production and verify** on its `*.vercel.app` URL, in a logged-in browser:
+   - `CRON_SECRET`, `PUBLIC_ORIGIN` and `SOLANA_RPC` (the Dell's);
+   - **delete** `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID` from Production, so the server and the game both fall back to the live program `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`, whose oracle is the live wallet. Leaving them set with the live key would break every fish mint (`0x1770`), and PEARL spends would point at the TEST PEARL mint.
+6. **Redeploy Production and verify** (a fresh build, since the `VITE_` variable changed) on its `*.vercel.app` URL, in a logged-in browser:
    - `/api/market/info` has the Dell's `market`, `pearlMint` and `fishCollection`;
+   - the page's bundle no longer contains the TEST program id `4tdod…`;
    - an NFT JSON and image are identical to the Dell's (before the stop, or from a backup).
 7. **Switch the domain.**
    - In the project, Settings → Domains → add `breathless.gotclass.xyz`.
@@ -262,7 +271,7 @@ Dell 部署（deploy/SETUP.md）完全不变。这里是第二种托管同一个
 | `PUBLIC_ORIGIN` | 全部 | 否 | `https://breathless.gotclass.xyz`，让 NFT JSON 指向正式游戏，和 Dell 输出的字节完全一致。 |
 | `SOLANA_RPC` | 全部 | URL 里带 API key 时**是** | 市场用的 RPC。默认取 `VITE_SOLANA_RPC`，再没有就用公共 devnet（批量卖鱼时会 429）。 |
 | `SOLANA_RPC_CONCURRENCY` | 可选 | 否 | 同时进行的调用数，默认 3。付费套餐才调高。 |
-| `PLAYER_STATE_PROGRAM_ID` | 可选 | 否 | 同 Dell。 |
+| `PLAYER_STATE_PROGRAM_ID` | Preview + Production，**只在切换前**，切换时删掉 | 否 | `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`，测试版 player_state（见 contracts/DEPLOYED.md），它的 oracle 是测试市场钱包。不设就是正式程序，oracle 是正式钱包，测试市场铸鱼会报 `0x1770`（Unauthorized）。必须和 `VITE_PLAYER_STATE_PROGRAM_ID` 一起设。 |
 | `FISH_MARKET_PROGRAM_ID` | **必须不设** | 不适用 | program 模式需要文件存储；用 Redis 时市场会拒绝启动。 |
 
 Vercel 上不用 `PRESAGE_*`、`PORT`、`HOST`、`MAX_LIVE_SESSIONS`、`MAX_CONN_PER_IP` 和 `SENSOR_*`。
@@ -279,7 +288,7 @@ Vercel 上不用 `PRESAGE_*`、`PORT`、`HOST`、`MAX_LIVE_SESSIONS`、`MAX_CONN
 | `VITE_NFT_ORIGIN` | 页面是公网 https 时用页面域名，否则用正式游戏 | **Preview 和 Production 都设为 `https://breathless.gotclass.xyz`。** 否则在 `*.vercel.app` 上铸的鱼会指向钱包打不开的地址（部署保护）。 |
 | `VITE_SOLANA_RPC` | 公共 devnet | 同 Dell（不设）。会公开，不能用带 key 的 URL。 |
 | `VITE_GEAR_NFT` | 开 | 不设 |
-| `VITE_PLAYER_STATE_PROGRAM_ID` | devnet 程序 | 不设 |
+| `VITE_PLAYER_STATE_PROGRAM_ID` | 正式的 devnet 程序 | **切换前 Preview 和 Production 都设为 `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`**，和 `PLAYER_STATE_PROGRAM_ID` 同值；切换时删掉。 |
 
 Dell 的构建（`.github/workflows/deploy.yml`）只设置 `VITE_PRESAGE_ENABLED`（取自仓库变量），其余都用上表的默认值。
 
@@ -295,9 +304,16 @@ Dell 的构建（`.github/workflows/deploy.yml`）只设置 `VITE_PRESAGE_ENABLE
 2. 把文件内容填进 `MARKET_SECRET_KEY`（Sensitive）。同时设置：
    - `MARKET_STORE=redis` 和 `MARKET_STORE_PREFIX=preview:`；
    - 上文所说的 `PUBLIC_ORIGIN` 和 `VITE_NFT_ORIGIN`；
-   - `SOLANA_RPC`。
+   - `SOLANA_RPC`；
+   - `PLAYER_STATE_PROGRAM_ID` 和 `VITE_PLAYER_STATE_PROGRAM_ID`，都设为 `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`。
 
    然后删掉本地文件。
+
+   测试版 player_state 绑定的是一个测试钱包 `8RJHaqvY2EjsezPU8PX6Cakz6DWPkzjcNTumR7x6tiax`（它 Config 里的 oracle），以及这个钱包的测试 PEARL 币。换别的测试钱包，就要另部署一份 player_state：由测试程序的 admin（也就是这个钱包）调用 `set_oracle` 只能修好铸鱼，Config 里的 PEARL 币在 `initialize_config` 时就定死了，PEARL 消费仍会烧旧的测试 PEARL。
+
+   两个程序 ID **必须一起设、同一个值**。只设了一个（或两个值不同）时，市场把 record_catch 发给一个程序，游戏却认另一个，于是游戏拒签每一笔铸鱼（"游戏和市场版本不一致……没有签署任何交易"），刷新页面也没用。
+
+   `VITE_*` 是构建时写进页面的，新增、修改或删除之后都要**重新部署**（重新构建，不是 promote 旧部署）。
 3. 部署，用登录了 Vercel 的浏览器打开部署地址。
    - `/api/market/info` 显示的是测试钱包。第一次使用时，市场会创建测试 PEARL 币和鱼集合；Redis 锁保证只有一个实例去做。
    - 打开一个 NFT 地址看看，例如 `/api/nft/img/v1/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png`。
@@ -326,9 +342,11 @@ Dell 的构建（`.github/workflows/deploy.yml`）只设置 `VITE_PRESAGE_ENABLE
 5. **设置 Production 变量。**
    - `MARKET_SECRET_KEY` = Dell 上 `.market-keypair.json` 的内容（Sensitive）；
    - `MARKET_STORE_PREFIX=live:`；
-   - `CRON_SECRET`、`PUBLIC_ORIGIN`、`SOLANA_RPC`（用 Dell 的那个）。
-6. **重新部署 Production 并核对。** 用登录的浏览器打开它的 `*.vercel.app` 地址：
+   - `CRON_SECRET`、`PUBLIC_ORIGIN`、`SOLANA_RPC`（用 Dell 的那个）；
+   - 从 Production **删掉** `PLAYER_STATE_PROGRAM_ID` 和 `VITE_PLAYER_STATE_PROGRAM_ID`，让服务器和游戏都回到正式程序 `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`（oracle 是正式钱包）。如果换了正式私钥却留着这两个变量，所有铸鱼都会报 `0x1770`，PEARL 消费也会指向测试 PEARL 币。
+6. **重新部署 Production 并核对**（`VITE_` 变量变了，必须重新构建）。 用登录的浏览器打开它的 `*.vercel.app` 地址：
    - `/api/market/info` 里的 `market`、`pearlMint`、`fishCollection` 和 Dell 一致；
+   - 页面的 JS 包里不再有测试程序 ID `4tdod…`；
    - NFT 的 JSON 和图片与 Dell 的完全相同（停机前保存的，或备份里的）。
 7. **切换域名。**
    - 项目 Settings → Domains → 添加 `breathless.gotclass.xyz`。
