@@ -470,7 +470,9 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
   };
   if(kind!=='turtle')animate=swimmingAnimation(group,tail,kind);
   const body=group.children.find(o=>o instanceof THREE.Mesh) as THREE.Mesh;
-  return {group,tail,material,animate,body,size:{len:3,height:1,width:1}};
+  // Cephalopods are built arms-forward (+x) but jet mantle- or shell-first, arms trailing.
+  const swimYaw=kind==='octopus'||kind==='squid'||kind==='nautilus'?Math.PI:0;
+  return {group,tail,material,animate,body,size:{len:3,height:1,width:1},swimYaw};
 }
 
 /** Deform in a shared bind space, keeping eyes, markings and fins attached. */
