@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import test from 'node:test';
 import { createGearHandler } from '../nft-gear.mjs';
 import { createNftHandler } from '../nft-meta.mjs';
-import { CRON_PATH, NFT_CDN_CACHE, SWEEP_EVERY_MS, createVercelHandler, cronAuthorized, originalUrl, vercelClientIp } from '../vercel-handler.mjs';
+import { CRON_PATH, NFT_CDN_CACHE, SWEEP_DEADLINE_MS, SWEEP_EVERY_MS, createVercelHandler, cronAuthorized, originalUrl, vercelClientIp } from '../vercel-handler.mjs';
 import { createFakeRedis } from './fake-redis.mjs';
 
 // The Vercel function (vercel-handler.mjs) against the fake Redis and a stand-in market: routing,
@@ -29,7 +29,7 @@ async function serve(handler, fn) {
 
 /** A stand-in for market.mjs's createMarket: answers sales 200 and counts sweeps. */
 function fakeMarket({ fail = false } = {}) {
-  const m = { made: 0, sweeps: 0, options: null };
+  const m = { made: 0, sweeps: 0, options: null, sweepOptions: [] };
   m.createMarket = async (options) => {
     m.made++;
     m.options = options;
@@ -41,8 +41,9 @@ function fakeMarket({ fail = false } = {}) {
         res.end(JSON.stringify({ route: `${req.method} ${req.url}`, ip: options.clientIp(req) }));
         return true;
       },
-      sweep: async () => {
+      sweep: async (opts) => {
         m.sweeps++;
+        m.sweepOptions.push(opts);
         return { burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false };
       },
     };
@@ -148,7 +149,7 @@ test('the market is built once per instance, with no timers, the batch deadline 
   });
   assert.equal(market.made, 1);
   assert.equal(market.options.background, false);
-  assert.equal(market.options.batchDeadlineMs, 240_000);
+  assert.equal(market.options.batchDeadlineMs, 180_000);
   assert.equal(market.options.store.kind, 'redis');
 });
 
@@ -176,6 +177,7 @@ test('the cron sweeps only with the secret', async () => {
     assert.deepEqual(await ok.json(), { swept: true, burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   });
   assert.equal(market.sweeps, 1);
+  assert.deepEqual(market.sweepOptions, [{ deadlineMs: SWEEP_DEADLINE_MS }], 'time-boxed below maxDuration');
   const { handler: unset } = setup({ env: { CRON_SECRET: '' } });
   await serve(unset, async (base) => {
     assert.equal((await fetch(base + CRON_PATH, { headers: { authorization: 'Bearer ' } })).status, 401);
@@ -201,6 +203,7 @@ test('after a sale the sweep runs in waitUntil, at most once per SWEEP_EVERY_MS 
       assert.equal(await sell(b), 200);
       await Promise.all(pending);
       assert.equal(market.sweeps, 2);
+      assert.deepEqual(market.sweepOptions, [{ deadlineMs: SWEEP_DEADLINE_MS }, { deadlineMs: SWEEP_DEADLINE_MS }], 'counted from the sale request');
     });
   });
 });

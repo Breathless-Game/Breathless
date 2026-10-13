@@ -15,6 +15,9 @@ export const BATCH_CONCURRENCY = 4;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** A request past its deadline sends nothing more for this fish: the game sells it again. */
+const outOfTime = () => new HttpError(503, 'Out of time for this request, sell this fish again');
+
 /** Call `fn` until `ok(result)`, at most `tries` times `gapMs` apart; returns the last result. */
 export async function poll(fn, ok, tries = 6, gapMs = 1000) {
   let last;
@@ -65,9 +68,12 @@ export function createSaleDesk({
   priceFish,
   withSellerLock,
   log = () => {},
-  // A /sell-batch starts no new fish after this long (ms): they come back as a 503 the game retries.
-  // Unlimited on a long-running server; a serverless host sets it below its function time limit.
+  // A /sell or /sell-batch starts no new fish, and sends no payout, after this long (ms): those fish
+  // come back as a 503 the game retries, and a paid fish's burn is left to the sweep. A transaction
+  // already sent is still confirmed. Unlimited on a long-running server; a serverless host sets it
+  // below its function time limit.
   batchDeadlineMs = Infinity,
+  now = Date.now,
 }) {
   if (typeof priceFish !== 'function') throw new Error('createSaleDesk: priceFish is required (the trusted-fish gate)');
   const locks = new Map();
@@ -77,9 +83,10 @@ export function createSaleDesk({
    * Sell one fish. `getTransfer` lets a batch fetch each shared transaction once. The sweep
    * (market-burn.mjs) calls it too, with a stalled 'paying' record's own seller and transfer: plan
    * says 'resume', so the transfer verified at begin() is not fetched again, and resolvePending
-   * asks the chain whether the earlier payout landed before anything is paid.
+   * asks the chain whether the earlier payout landed before anything is paid. `deadline` (a time,
+   * ms): no payout or burn is sent after it.
    */
-  function sellAsset({ assetId, seller, transferTx }, getTransfer = fetchTransfer) {
+  function sellAsset({ assetId, seller, transferTx }, getTransfer = fetchTransfer, deadline = Infinity) {
     /**
      * Price the fish and record the sale; returns the plan from there. The price comes from the
      * fish's on-chain attributes, never from the request: priceFish is fish-trust's gate (collection
@@ -125,20 +132,24 @@ export function createSaleDesk({
         const pending = await resolvePending(assetId);
         if (pending === 'in-flight') throw new HttpError(409, 'Payment is still confirming, retry in a few seconds');
         if (pending === 'unpaid') {
+          // Nothing sent yet, and the record stays 'paying': a retry (or the sweep) resumes it.
+          if (now() > deadline) throw outOfTime();
           const r = await ledger.get(assetId);
           await pay(assetId, mint, seller, r.pearls);
           log(`[market] paid ${r.pearls} PEARL to ${seller} for ${assetId}`);
         }
       }
 
-      await burnSold(assetId);
+      // Paid: the answer is the sale either way. Out of time, the burn waits for the sweep (as a failed one does).
+      if (now() > deadline) log(`[market] out of time, the burn of ${assetId} is left to the sweep`);
+      else await burnSold(assetId);
       return ledger.result(assetId);
     });
   }
 
   /** POST /sell: one fish. */
   function sell(body) {
-    return sellAsset(parseSellBody(body));
+    return sellAsset(parseSellBody(body), fetchTransfer, now() + batchDeadlineMs);
   }
 
   /**
@@ -157,11 +168,11 @@ export function createSaleDesk({
       if (!fetched.has(sig)) fetched.set(sig, fetchTransfer(sig));
       return fetched.get(sig);
     };
-    const deadline = Date.now() + batchDeadlineMs;
+    const deadline = now() + batchDeadlineMs;
     const results = await mapLimit(sales, BATCH_CONCURRENCY, async ({ assetId, transferTx }) => {
-      if (Date.now() > deadline) return { assetId, status: 503, error: 'Out of time for this request, sell this fish again' };
+      if (now() > deadline) return errorOf(assetId, outOfTime());
       try {
-        return { assetId, ...(await sellAsset({ assetId, seller, transferTx }, getTransfer)) };
+        return { assetId, ...(await sellAsset({ assetId, seller, transferTx }, getTransfer, deadline)) };
       } catch (e) {
         if (!(e instanceof HttpError)) log(`[market] batch sale of ${assetId} failed: ${String(e?.message ?? e).split('\n')[0]}`);
         return errorOf(assetId, e);

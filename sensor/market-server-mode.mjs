@@ -368,7 +368,7 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     market: marketKey,
     ledger,
     burnOnce,
-    resumeSale: (assetId, r) => desk.sellAsset({ assetId, seller: r.seller, transferTx: r.transferTx }),
+    resumeSale: (assetId, r, deadline) => desk.sellAsset({ assetId, seller: r.seller, transferTx: r.transferTx }, undefined, deadline),
     log,
   });
 
