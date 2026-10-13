@@ -367,9 +367,11 @@ test('a mint refused as already sold or burned is spent for good; other refusals
 test('transient mint errors pause the whole queue instead of costing the fish an attempt', () => {
   // fish-cosign.ts CosignError carries the market's status, code and retryAfterMs.
   const cosignError = (status, code, retryAfterMs) => Object.assign(new Error('refused'), { status, code, retryAfterMs });
-  // The market offline (status 0) or failing for now (5xx, e.g. its RPC refusing it, or chain.ts's 'collection-pending').
+  // The market offline (status 0), behind a failing gateway (502/504) or busy on purpose (503, e.g. its
+  // RPC refusing it, or chain.ts's 'collection-pending').
   assert.deepEqual(mintPauseOf(cosignError(503)), { ms: 30_000, kind: 'busy' });
-  assert.deepEqual(mintPauseOf(cosignError(500)), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(502)), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(504)), { ms: 30_000, kind: 'busy' });
   assert.deepEqual(mintPauseOf(cosignError(0)), { ms: 30_000, kind: 'busy' });
   assert.deepEqual(mintPauseOf(cosignError(503, 'collection-pending', 60_000)), { ms: 60_000, kind: 'busy' });
   // An earlier mint of this fish may still land: the server's retryAfterMs is honoured.
@@ -386,6 +388,9 @@ test('transient mint errors pause the whole queue instead of costing the fish an
   assert.deepEqual(mintPauseOf(cosignError(503, undefined, -5)), { ms: 30_000, kind: 'busy' }, 'a bad retryAfterMs falls back');
   // Genuine failures still count against the fish's MAX_AUTO_MINT_TRIES.
   assert.equal(mintPauseOf(cosignError(400)), null);
+  // A 500 is the market's catch-all, possibly a bug with this one fish: retrying it forever would block the queue.
+  assert.equal(mintPauseOf(cosignError(500)), null);
+  assert.equal(mintPauseOf(cosignError(501)), null);
   assert.equal(mintPauseOf(cosignError(403)), null);
   assert.equal(mintPauseOf(cosignError(409, 'already-burned')), null, 'spent fish: handled by isSpentFishError');
   assert.equal(mintPauseOf(Object.assign(new Error('Too Many Requests'), { status: 400 })), null, 'a market 4xx is never read as RPC throttling');

@@ -281,14 +281,16 @@ const MAX_MINT_PAUSE_MS = 60 * 60_000;
  * A mint error that is not the fish's fault, so the whole queue waits instead of the fish spending
  * one of its MAX_AUTO_MINT_TRIES (and every other queued fish spending one too, one after another):
  * - the market's mint limit (HTTP 429 from a co-sign request, fish-cosign.ts CosignError);
- * - the market offline (status 0) or failing for now (5xx: sensor/market.mjs answers 503 when its
- *   RPC refuses it, "so the game retries"; chain.ts throws 503 'collection-pending' while the
- *   market's fish collection is still being created);
+ * - the market offline (status 0), unreachable behind its gateway (502/504), or failing for now
+ *   on purpose (503: sensor/market.mjs answers 503 when its RPC refuses it, "so the game retries";
+ *   chain.ts throws 503 'collection-pending' while the market's fish collection is still being
+ *   created). A 500 (or any other 5xx) is the market's catch-all and may be a bug tied to this one
+ *   fish: it counts as a failed attempt, or that fish (always picked first) would block the queue forever;
  * - 409 'mint-in-flight': an earlier mint of this fish may still land (sensor/fish-collection.mjs);
  * - the Solana RPC throttling our own send/confirm (429 / "Too Many Requests" in the message; only
  *   for errors with no HTTP status, so a market 4xx is never misread as throttling).
  * Returns how long to wait (the server's retryAfterMs when it gives one, capped at an hour), else null.
- * Everything else (4xx validation errors, failed transactions, 409 'already-burned') is not a pause.
+ * Everything else (4xx validation errors, 500, failed transactions, 409 'already-burned') is not a pause.
  */
 export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | null {
   const x = e as { status?: unknown; code?: unknown; retryAfterMs?: unknown } | null;
@@ -300,7 +302,9 @@ export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | n
     fallback = MINT_LIMIT_PAUSE_MS;
   } else if (
     status === 0 ||
-    (status !== null && status >= 500) ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
     (status === 409 && x?.code === 'mint-in-flight') ||
     (status === null && e != null && isRateLimitError(e))
   ) {
