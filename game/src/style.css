@@ -4841,3 +4841,8 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   gap: 8px;
   margin-top: 12px;
 }
+
+/* One tab per wallet (tab-lock.ts): above every panel, the shipyard and field guide included. */
+.link-wait.tab-notice {
+  z-index: 300;
+}
