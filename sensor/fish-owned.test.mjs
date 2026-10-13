@@ -136,3 +136,35 @@ test('the reader lists only the owner\'s fish, caches briefly, and forgets after
   await assert.rejects(failing.read({ owner: OWNER }));
   assert.equal(failing.size(), 0);
 });
+
+test('a read in flight when the owner is invalidated does not cache its older answer, and leaves nothing behind', async () => {
+  let fish = [fishAsset(caught(0x44444444))];
+  let gate = null;
+  let calls = 0;
+  const reader = createOwnedFishReader({
+    fetchOwned: async () => {
+      calls += 1;
+      const out = fish;
+      if (gate) await gate;
+      return out;
+    },
+    collection: async () => COLLECTION,
+  });
+  for (let i = 0; i < 5_000; i++) reader.invalidate(`junk-${i}`);
+  assert.equal(reader.pending(), 0);
+  let open;
+  gate = new Promise((res) => (open = res));
+  const before = reader.read({ owner: OWNER });
+  reader.invalidate(OWNER); // sold meanwhile, same tick
+  await new Promise((res) => setImmediate(res));
+  gate = null;
+  fish = [];
+  const after = reader.read({ owner: OWNER }); // must not join the older read
+  assert.equal(reader.pending(), 1);
+  open();
+  assert.equal((await before).fish.length, 1);
+  assert.equal((await after).fish.length, 0);
+  assert.equal((await reader.read({ owner: OWNER })).fish.length, 0, 'the cache holds the post-sale list');
+  assert.equal(calls, 2);
+  assert.equal(reader.pending(), 0);
+});

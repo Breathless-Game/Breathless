@@ -77,9 +77,8 @@ export function classifyOwned(asset, { collection }) {
  */
 export function createOwnedFishReader({ fetchOwned, collection, ttlMs = OWNED_FISH_TTL_MS, now = Date.now, maxEntries = MAX_ENTRIES }) {
   const cache = new Map(); // owner -> { at, value }
-  const generation = new Map();
+  const reading = new Map(); // owner -> { gen, reads } while a read is in flight (see market-balance.mjs)
   const flights = new Map();
-  const genOf = (owner) => generation.get(owner) ?? 0;
 
   async function readChain(owner) {
     const [assets, coll] = await Promise.all([fetchOwned(owner), collection()]);
@@ -106,20 +105,26 @@ export function createOwnedFishReader({ fetchOwned, collection, ttlMs = OWNED_FI
   /** A sale moved fish out of this wallet: the next read goes to the chain. */
   function invalidate(owner) {
     if (!owner) return;
-    generation.set(owner, genOf(owner) + 1);
+    const r = reading.get(owner);
+    if (r) r.gen += 1; // a read already in flight will not store its (older) answer
     cache.delete(owner);
   }
 
   async function read({ owner }) {
     const hit = cache.get(owner);
     if (hit && now() - hit.at < ttlMs) return hit.value;
-    const gen = genOf(owner);
+    let r = reading.get(owner);
+    if (!r) reading.set(owner, (r = { gen: 0, reads: 0 }));
+    r.reads += 1;
+    const gen = r.gen;
     return singleFlight(flights, `${owner}:${gen}`, async () => {
       const value = await readChain(owner);
-      if (genOf(owner) === gen) store(owner, value);
+      if (r.gen === gen) store(owner, value);
       return value;
+    }).finally(() => {
+      if (--r.reads === 0) reading.delete(owner);
     });
   }
 
-  return { read, invalidate, size: () => cache.size };
+  return { read, invalidate, size: () => cache.size, pending: () => reading.size };
 }
