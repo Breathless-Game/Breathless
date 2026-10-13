@@ -7,6 +7,8 @@ export class DiverConcept {
   private holdingArm: THREE.Group | null = null;
   private upperBody = new THREE.Group();
   private headPose = new THREE.Group();
+  /** Gear and effects use this frame so they follow the visible head in every pose. */
+  get headFrame(): THREE.Group { return this.headPose; }
   private snorkel: THREE.Mesh | null = null;
   private snorkelRest: Float32Array | null = null;
   private arms: THREE.Group[] = [];
@@ -78,11 +80,23 @@ export class DiverConcept {
       }
       if (variant === 0) {
         // Flat optical panes face forward, rather than glowing bulges on the temples.
-        const frame=box(this.group,[0.065,0.17,0.18],black,1.305,0.05,side*0.105);
-        frame.rotation.y=side*-0.16;
-        const lensMaterial=new THREE.MeshStandardMaterial({color:'#79cbd1',roughness:0.17,metalness:0.3,flatShading:true});
-        const lens=box(this.group,[0.016,0.115,0.13],lensMaterial,1.343,0.054,side*0.105);
-        lens.rotation.y=side*-0.16;
+        const outline = (width:number,height:number,cut:number) => {
+          const shape = new THREE.Shape();
+          const points = [[-width+cut,-height],[width-cut,-height],[width,-height+cut],[width,height-cut],[width-cut,height],[-width+cut,height],[-width,height-cut],[-width,-height+cut]];
+          points.forEach(([x,y],i)=>i===0?shape.moveTo(x,y):shape.lineTo(x,y));
+          shape.closePath();
+          return shape;
+        };
+        const rim=outline(0.092,0.085,0.025);
+        const aperture=outline(0.068,0.060,0.018);
+        rim.holes.push(new THREE.Path(aperture.getPoints().reverse()));
+        const frame=add(this.group,new THREE.ExtrudeGeometry(rim,{depth:0.036,bevelEnabled:true,bevelSegments:1,steps:1,bevelSize:0.004,bevelThickness:0.004}),black,1.315,0.054,side*0.105);
+        frame.name='bevelled-mask-frame';
+        frame.rotation.y=Math.PI/2-side*0.16;
+        const lensMaterial=new THREE.MeshPhysicalMaterial({color:'#72b8c4',roughness:0.15,metalness:0.05,transparent:true,opacity:0.68,clearcoat:1,depthWrite:false,flatShading:true});
+        const lens=add(this.group,new THREE.ExtrudeGeometry(aperture,{depth:0.008,bevelEnabled:false}),lensMaterial,1.341,0.054,side*0.105);
+        lens.name='recessed-mask-lens';
+        lens.rotation.y=frame.rotation.y;
         const strapPath = new THREE.CatmullRomCurve3([
           new THREE.Vector3(1.29,0.05,side*0.19),
           new THREE.Vector3(1.12,0.055,side*0.25),
@@ -154,6 +168,8 @@ export class DiverConcept {
       const hand=armPath.getPoint(1);
       const glove=add(this.group,new THREE.IcosahedronGeometry(0.105,1),black,hand.x+0.065,hand.y,hand.z);
       glove.scale.set(1.25,0.75,0.82);
+      const thumb=add(glove,new THREE.IcosahedronGeometry(0.047,0),black,0.012,-0.06,-side*0.065);
+      thumb.scale.set(1.35,0.75,0.9);
       {
         const pivot=armPath.getPoint(0);
         const arm=new THREE.Group();arm.position.copy(pivot);this.group.add(arm);
@@ -174,7 +190,9 @@ export class DiverConcept {
       thigh.scale.x=0.9;
       const knee=new THREE.Group();knee.position.x=-0.712;leg.add(knee);
       add(knee,new THREE.IcosahedronGeometry(0.13,0),mats[1],0,0,0);
-      bone(knee,0.66,0.115,mats[0],-0.32,0,0);
+      const calfProfile=[[0.08,0],[0.055,0.105],[-0.06,0.128],[-0.22,0.132],[-0.39,0.113],[-0.56,0.083],[-0.67,0.079],[-0.69,0]];
+      const calf=add(knee,new THREE.LatheGeometry(calfProfile.map(([x,r])=>new THREE.Vector2(r,x)),10),mats[0],0,0,0);
+      calf.name='tapered-calf';calf.rotation.z=-Math.PI/2;calf.scale.x=0.88;
       const ankle=new THREE.Group();ankle.position.set(-0.64,0,0);knee.add(ankle);
       box(ankle,[0.3,0.16,0.23],black,-0.1,0,0);
       const len=[1.22,0.92,1.08][variant];
@@ -190,6 +208,16 @@ export class DiverConcept {
       }
       for(let row=0;row<6;row++)for(let col=0;col<4;col++){
         const a=row*5+col;indices.push(a,a+5,a+1,a+1,a+5,a+6);
+      }
+      // Closed blade edges keep the fin readable edge-on and during a kick.
+      const topCount=positions.length/3;
+      for(let vertex=0;vertex<topCount;vertex++) positions.push(positions[vertex*3],positions[vertex*3+1]-0.018,positions[vertex*3+2]);
+      const topIndices=[...indices];
+      for(let i=0;i<topIndices.length;i+=3) indices.push(topIndices[i]+topCount,topIndices[i+2]+topCount,topIndices[i+1]+topCount);
+      const perimeter=[0,1,2,3,4,9,14,19,24,29,34,33,32,31,30,25,20,15,10,5];
+      for(let i=0;i<perimeter.length;i++){
+        const a=perimeter[i],b=perimeter[(i+1)%perimeter.length];
+        indices.push(a,b,a+topCount,b,b+topCount,a+topCount);
       }
       const bladeGeo=new THREE.BufferGeometry();bladeGeo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));bladeGeo.setIndex(indices);bladeGeo.computeVertexNormals();
       const bladeMat=mats[1].clone();bladeMat.side=THREE.DoubleSide;
@@ -270,9 +298,9 @@ export class DiverConcept {
         box(this.group,[0.075,0.025,0.025],glow,0.47,0.005,side*0.35);
       }
     }
+    this.initializeRig();
   }
-  update(t:number,toolSwing?:number){
-    this.time=t;
+  private initializeRig() {
     // A waist pivot lets the chest lead the stroke without moving the hips.
     if(this.upperBody.parent===null){
       this.upperBody.position.x=-0.3;
@@ -293,6 +321,10 @@ export class DiverConcept {
       }
       this.upperBody.add(this.headPose);
     }
+    this.headPose.name='diver-head-frame';
+  }
+  update(t:number,toolSwing?:number){
+    this.time=t;
     this.headPose.rotation.z=0;
     this.shapeSnorkel(0);
     const kickPhase=t*2.8;

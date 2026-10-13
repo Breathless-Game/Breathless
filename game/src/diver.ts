@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DiverConcept } from './diver-designs';
 import { Splash } from './fx';
 import { buildFishingNetMesh } from './gear';
+import { buildHeadlamp, disposeMeshes } from './headlamp-model';
 import { lampActivation, lampDistanceAttenuation, lampProfile, type LampProfile } from './lamp-lighting';
 import type { RenderQuality } from './render-quality';
 
@@ -55,10 +56,11 @@ export class Diver {
     this.body.remove(old.group);
     this.playtestModel=new DiverConcept(this.skinIndex);
     this.body.add(this.playtestModel.group);
+    this.attachHeadGear();
     this.playtestModel.attachTool(this.netArm);
     this.playtestModel.update(this.modelTime,0);
     this.materialBinder?.(this.playtestModel.group);
-    old.group.traverse(obj=>{if(obj instanceof THREE.Mesh){obj.geometry.dispose();const mats=Array.isArray(obj.material)?obj.material:[obj.material];mats.forEach(mat=>mat.dispose());}});
+    disposeMeshes(old.group);
   }
   private originalSuit: THREE.Object3D[] = [];
   private customSuitActive = false;
@@ -75,9 +77,11 @@ export class Diver {
   /** Visible emergency-tank model; level one deliberately has no cylinder. */
   private tankGroup = new THREE.Group();
   private tankBody: THREE.Mesh | null = null;
-  /** Small head-mounted lamp housing, separate from the actual PointLight. */
+  /** Catalogue hardware and lighting share the current suit's animated head frame. */
   private lampGroup = new THREE.Group();
-  private lampLens: THREE.Mesh | null = null;
+  private lampAnchor = new THREE.Group();
+  private lampOrigin = new THREE.Vector3();
+  private lampEmitters: THREE.MeshStandardMaterial[] = [];
   private lampBeam: THREE.Mesh;
   private lampBeamMaterial: THREE.MeshBasicMaterial;
   private lampOptics: LampProfile = lampProfile(1);
@@ -185,14 +189,8 @@ export class Diver {
     this.tankGroup.visible = false;
     this.body.add(this.tankGroup);
 
-    this.lampGroup.position.set(1.42 - NECK, 0.18, 0.28); // on the head group (it tips when seated)
-    this.lampGroup.rotation.x = Math.PI / 2;
-    this.lampLens = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.12, 0.18, 6),
-      mat('#7ff7ff', { emissive: '#43e9e1', emissiveIntensity: 0, metalness: 0.1, roughness: 0.25 }),
-    );
-    this.lampGroup.add(this.lampLens);
-    this.head.add(this.lampGroup);
+    this.lampGroup.name = 'diver-headlamp-hardware';
+    this.lampAnchor.name = 'diver-headlamp-origin';
 
     // A single low-poly cone makes suspended particles visible in the beam.
     // The real SpotLight still provides direct illumination; this mesh only
@@ -203,9 +201,10 @@ export class Diver {
     });
     this.lampBeam = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 8, 1, true), this.lampBeamMaterial);
     this.lampBeam.name = 'diver-lamp-scatter';
-    this.lampBeam.rotation.z = -Math.PI / 2;
+    // ConeGeometry's apex is +Y: turn it toward the lens, with the base ahead.
+    this.lampBeam.rotation.z = Math.PI / 2;
     this.lampBeam.renderOrder = 1;
-    this.body.add(this.lampBeam);
+    this.lampAnchor.add(this.lampBeam);
 
     // The old design called this item a fishing rod; the fused game design
     // uses its shaft and hoop as an underwater net. Keep the model pivot at
@@ -219,20 +218,20 @@ export class Diver {
     this.body.add(this.netArm);
     this.originalSuit=[torso,stripe,hood,head,mask,snorkel,this.legL,this.legR,this.freeArm];
     this.body.add(this.playtestModel.group);
-    this.useCustomSuit(true);
 
     this.group.add(this.body);
     // White water stays where it was thrown, so it lives in the scene, not on the diver.
     this.splash.mesh.name = 'diver-water-splash';
     scene.add(this.splash.mesh);
     // A spotlight gives the diver a readable forward beam at depth. Its
-    // target is parented to the body, so yaw/pitch animation carries the beam
-    // with the diver instead of leaving a world-space light behind.
+    // target shares the visible head frame, so every head pose carries the beam.
     this.headlamp = new THREE.SpotLight('#fff1c4', 0, 22, 0.65, 0.55, 1.6);
-    this.headlamp.position.set(1.4, 0.2, 0.6);
-    this.headlamp.target.position.set(4.5, 0.05, 0.6);
-    this.body.add(this.headlamp, this.headlamp.target);
+    this.headlamp.position.set(0, 0, 0);
+    this.headlamp.target.position.set(3.1, 0, 0);
+    this.lampAnchor.add(this.headlamp, this.headlamp.target);
     this.headlamp.decay = this.lampOptics.decay;
+    this.replaceLampModel();
+    this.useCustomSuit(true);
     scene.add(this.group);
   }
 
@@ -496,15 +495,39 @@ export class Diver {
 
   /** Set lamp visual tier and its light reach; intensity still follows depth. */
   setLampLevel(level: number) {
-    this.lampLevel = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    if (tier !== this.lampLevel) {
+      this.lampLevel = tier;
+      this.replaceLampModel();
+    }
     this.lampOptics = lampProfile(this.lampLevel);
     this.headlamp.distance = this.lampOptics.distance;
     this.headlamp.angle = this.lampOptics.angle;
     this.headlamp.penumbra = this.lampOptics.penumbra;
     this.headlamp.decay = this.lampOptics.decay;
     this.lampMaxIntensity = this.lampOptics.intensity;
-    // Keep the authored lamp housing growth visible alongside the lighting profile.
-    this.lampGroup.scale.setScalar([1, 1.16, 1.32][this.lampLevel - 1]);
+  }
+
+  private replaceLampModel() {
+    disposeMeshes(this.lampGroup);
+    this.lampGroup.clear();
+    const model = buildHeadlamp(this.lampLevel as 1 | 2 | 3);
+    this.lampGroup.add(model.group);
+    this.lampOrigin.copy(model.origin);
+    this.lampEmitters = model.emitters;
+    this.attachHeadGear();
+    this.materialBinder?.(this.lampGroup);
+  }
+
+  private attachHeadGear() {
+    const helmet = this.skinIndex === 1;
+    this.lampGroup.position.set(helmet ? 0.295 : 0.27, helmet ? 0.19 : 0.17, 0);
+    this.lampGroup.rotation.y = Math.PI / 2;
+    this.lampGroup.scale.set(helmet ? 0.82 : 0.6, helmet ? 0.43 : 0.32, helmet ? 0.82 : 0.6);
+    this.playtestModel.headFrame.add(this.lampGroup, this.lampAnchor, this.breathPoint);
+    this.lampGroup.updateMatrix();
+    this.lampAnchor.position.copy(this.lampOrigin).applyMatrix4(this.lampGroup.matrix);
+    this.breathPoint.position.set(0.47, -0.1, -0.17);
   }
 
   /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
@@ -542,7 +565,7 @@ export class Diver {
 
     const beamLength = Math.max(0.5, this.lampOptics.distance * 0.48);
     const beamRadius = Math.max(0.045, Math.tan(Math.min(this.lampOptics.angle, 1.3)) * beamLength * 0.1);
-    this.lampBeam.position.set(1.4 + beamLength * 0.5, 0.2, 0.6);
+    this.lampBeam.position.set(beamLength * 0.5, 0, 0);
     this.lampBeam.scale.set(beamRadius, beamLength, beamRadius);
 
     const transmission = lampDistanceAttenuation(beamLength * 0.55, this.lampOptics);
@@ -550,8 +573,7 @@ export class Diver {
     this.lampBeamMaterial.opacity = THREE.MathUtils.clamp(scatter * 0.68, 0, 0.22);
     this.lampBeam.visible = this.lampBeamMaterial.opacity > 0.001;
 
-    if (this.lampLens) {
-      const material = this.lampLens.material as THREE.MeshStandardMaterial;
+    for (const material of this.lampEmitters) {
       material.emissiveIntensity = activation > 0 ? 0.35 + activation * 1.7 : 0;
     }
   }
@@ -560,7 +582,7 @@ export class Diver {
     this.headlamp.intensity = 0;
     this.lampBeamMaterial.opacity = 0;
     this.lampBeam.visible = false;
-    if (this.lampLens) (this.lampLens.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
+    for (const material of this.lampEmitters) material.emissiveIntensity = 0;
   }
 
   /** Configure how quickly the net can be swung again after a catch attempt. */
@@ -739,7 +761,7 @@ export class Diver {
     this.originalSuit.forEach(part=>part.visible=!active);
     this.playtestModel.group.visible=active;
     this.body.scale.setScalar(active?DIVER_SCALE:1);
-    if(active) this.playtestModel.attachTool(this.netArm);
+    if(active) {this.playtestModel.attachTool(this.netArm);this.attachHeadGear();}
     else {this.body.add(this.netArm);this.netArm.position.set(0.6,0,0.3);}
   }
 

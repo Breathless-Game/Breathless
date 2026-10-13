@@ -22,7 +22,12 @@ const gearUrl = await moduleUrl('gear');
 const fxUrl = await moduleUrl('fx');
 const lampLightingUrl = await moduleUrl('lamp-lighting');
 const conceptUrl = await moduleUrl('diver-designs');
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './diver-designs': conceptUrl }));
+const commonUrl = await moduleUrl('upgrade-models/common');
+const divingUrl = await moduleUrl('upgrade-models/diving', { './common': commonUrl });
+const headlampUrl = await moduleUrl('headlamp-model', { './upgrade-models/diving': divingUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
+const { buildHeadlamp } = await import(headlampUrl);
+const { buildLamp } = await import(divingUrl);
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './diver-designs': conceptUrl, './headlamp-model': headlampUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
@@ -408,6 +413,76 @@ test('headlamp keeps direct output and visible water scatter in sync', () => {
   assert.ok(diver.headlamp.intensity > 0, 'direct spotlight is active at depth');
   assert.ok(beam.material.opacity > 0, 'water scatter is visible with the direct beam');
   assert.equal(diver.headlamp.decay, 2);
+});
+
+test('mounted lamps preserve catalogue geometry while batching hardware into at most twelve meshes', () => {
+  for (const level of [1, 2, 3]) {
+    const { group, origin, emitters } = buildHeadlamp(level);
+    const reference = new THREE.Box3().setFromObject(buildLamp(level));
+    const bounds = new THREE.Box3().setFromObject(group);
+    assert.ok(bounds.min.distanceTo(reference.min) < 1e-6);
+    assert.ok(bounds.max.distanceTo(reference.max) < 1e-6);
+    assert.ok(group.children.length <= 12, `Lv${level} draw-call budget`);
+    assert.equal(emitters.length, level === 3 ? 2 : 1);
+    assert.ok(origin.z > 0.5 && origin.x === 0);
+  }
+});
+
+test('skin changes move the existing lamp, net and breath anchor without disposing their resources', () => {
+  const { diver } = createDiver();
+  diver.setLampLevel(3);
+  const lamp = diver.group.getObjectByName('diver-headlamp-hardware');
+  let disposals = 0;
+  lamp.traverse(object => {
+    if (object.isMesh) {
+      object.geometry.addEventListener('dispose', () => disposals++);
+      object.material.addEventListener('dispose', () => disposals++);
+    }
+  });
+  const netMaterial = diver.netArm.getObjectByProperty('isMesh', true).material;
+  netMaterial.addEventListener('dispose', () => disposals++);
+  for (const index of [1, 2, 0]) {
+    diver.setSkin(index);
+    const head = diver.group.getObjectByName('diver-head-frame');
+    assert.equal(lamp.parent, head);
+    assert.equal(diver.breathPoint.parent, head);
+    assert.equal(diver.headlamp.parent.parent, head);
+    assert.equal(diver.group.getObjectByName('diver-headlamp-hardware'), lamp);
+    assert.equal(disposals, 0);
+    diver.update(1 / 60, index, 20);
+    diver.group.updateMatrixWorld(true);
+    assert.ok(diver.headlamp.getWorldPosition(new THREE.Vector3()).distanceTo(diver.breathPoint.getWorldPosition(new THREE.Vector3())) < 0.5);
+  }
+});
+
+test('the scatter cone starts at the visible lamp and widens along the spotlight direction', () => {
+  const { diver } = createDiver();
+  diver.update(1 / 60, 0, 20);
+  diver.group.updateMatrixWorld(true);
+  const beam = diver.group.getObjectByName('diver-lamp-scatter');
+  const origin = diver.headlamp.getWorldPosition(new THREE.Vector3());
+  const apex = beam.localToWorld(new THREE.Vector3(0, 0.5, 0));
+  const base = beam.localToWorld(new THREE.Vector3(0, -0.5, 0));
+  const direction = diver.headlamp.target.getWorldPosition(new THREE.Vector3()).sub(origin).normalize();
+  assert.ok(apex.distanceTo(origin) < 1e-6);
+  assert.ok(base.clone().sub(origin).normalize().dot(direction) > 0.999);
+});
+
+test('headlamp replacement frees each owned resource once and leaves the selected skin intact', () => {
+  const { diver } = createDiver();
+  const lamp = diver.group.getObjectByName('diver-headlamp-hardware');
+  const resources = new Set();
+  const disposals = new Map();
+  lamp.traverse(object => { if (object.isMesh) { resources.add(object.geometry); resources.add(object.material); } });
+  for (const resource of resources) resource.addEventListener('dispose', () => disposals.set(resource, (disposals.get(resource) ?? 0) + 1));
+  let skinDisposals = 0;
+  diver.playtestModel.group.traverse(object => {
+    if (object.isMesh && !lamp.getObjectById(object.id)) object.geometry.addEventListener('dispose', () => skinDisposals++);
+  });
+  diver.setLampLevel(2);
+  for (const resource of resources) assert.equal(disposals.get(resource), 1);
+  assert.equal(skinDisposals, 0);
+  assert.equal(lamp.children[0].name, 'headlamp-level-2');
 });
 
 function createFish(seed = 42, zone = ZONES[1]) {
