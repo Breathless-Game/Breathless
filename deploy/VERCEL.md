@@ -100,7 +100,7 @@ The Dell's build (`.github/workflows/deploy.yml`) only sets `VITE_PRESAGE_ENABLE
 
 ### Deploying
 
-Deploy from Vercel: dashboard → Deployments → Redeploy, or create a deployment from GitHub `main`. Vercel pulls the repo and builds it from `vercel.json`, and there is no GitHub Actions workflow for it. `deploy.yml` still deploys the Dell on every push to `main`.
+The Vercel project is connected to `Breathless-Game/Breathless` through Vercel's GitHub app (installed on the Breathless-Game org). Every push to `main` deploys Production automatically, and every pull request branch gets a Preview deployment (behind Vercel Authentication) that uses the Preview environment variables; until cutover those are the same TEST market wallet and `test:` Redis prefix as Production. To deploy again without a push: dashboard → Deployments → Redeploy. There is still no GitHub Actions workflow for Vercel; `deploy.yml` still deploys the Dell on every push to `main`.
 
 ### Preview with a TEST wallet
 
@@ -294,7 +294,7 @@ Dell 的构建（`.github/workflows/deploy.yml`）只设置 `VITE_PRESAGE_ENABLE
 
 ### 部署
 
-从 Vercel 部署：控制台 → Deployments → Redeploy，或者从 GitHub `main` 新建一个部署。Vercel 自己拉取仓库，并按 `vercel.json` 构建，没有对应的 GitHub Actions workflow。`deploy.yml` 照旧在每次 push 到 `main` 时部署 Dell。
+Vercel 项目通过 Vercel 的 GitHub app（已装在 Breathless-Game 组织上）连接到 `Breathless-Game/Breathless`。每次 push 到 `main` 都会自动部署 Production；每个 pull request 分支都会得到一个 Preview 部署（受 Vercel Authentication 保护），使用 Preview 环境变量，切换之前它们和 Production 一样，是同一个测试市场钱包和 `test:` Redis 前缀。不 push 也想重新部署：控制台 → Deployments → Redeploy。Vercel 仍然没有对应的 GitHub Actions workflow；`deploy.yml` 照旧在每次 push 到 `main` 时部署 Dell。
 
 ### 用测试钱包做预览
 
