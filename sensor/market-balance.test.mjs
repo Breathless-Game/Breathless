@@ -155,6 +155,26 @@ test('a read in flight when the owner is invalidated does not cache its older an
   assert.equal(chain.calls.length, 2);
 });
 
+test('invalidate keeps no state for owners with nothing in flight; one called right after read() still counts', async () => {
+  const chain = fakeChain({ amount: 10 });
+  const r = reader(chain);
+  for (let i = 0; i < 5_000; i++) r.invalidate(`junk-${i}-${'x'.repeat(100)}`); // /sell with a made-up seller
+  assert.equal(r.pending(), 0);
+  let open;
+  chain.gate = new Promise((res) => (open = res));
+  const before = r.read({ owner: OWNER });
+  r.invalidate(OWNER); // same tick: the read has not reached the chain yet
+  assert.equal(r.pending(), 1);
+  await new Promise((res) => setImmediate(res)); // now it has read the pre-sale chain
+  chain.gate = null;
+  chain.amount = 25;
+  open();
+  assert.equal((await before).pearl, 10);
+  assert.equal(r.pending(), 0, 'settled reads leave nothing behind');
+  assert.equal((await r.read({ owner: OWNER })).pearl, 25, 'the older answer was not cached');
+  assert.equal(r.pending(), 0);
+});
+
 test('the cache stays bounded', async () => {
   const chain = fakeChain({ amount: 1 });
   const r = createBalanceReader({

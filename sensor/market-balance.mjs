@@ -69,11 +69,13 @@ function wholeTokens(raw, decimals) {
  */
 export function createBalanceReader({ getAccounts, ataOf, mintInfo, ttlMs = BALANCE_TTL_MS, now = Date.now, maxEntries = MAX_ENTRIES }) {
   const cache = new Map(); // "owner:session" -> { at, value }
-  const generation = new Map(); // owner -> bumped on every invalidate
+  // owner -> { gen, reads }, only while a read for that owner is in flight: invalidate bumps gen so
+  // those reads don't store their (older) answer. Nothing in flight, nothing to guard: no entry, so
+  // invalidating any number of owners keeps nothing.
+  const reading = new Map();
   const flights = new Map();
 
   const keyOf = (owner, session) => `${owner}:${session ?? ''}`;
-  const genOf = (owner) => generation.get(owner) ?? 0;
 
   async function readChain(owner, session) {
     const { pearlMint, tokenProgram } = await mintInfo();
@@ -101,7 +103,8 @@ export function createBalanceReader({ getAccounts, ataOf, mintInfo, ttlMs = BALA
   /** Forget everything cached for this owner; reads already in flight will not store their (older) answer. */
   function invalidate(owner) {
     if (!owner) return;
-    generation.set(owner, genOf(owner) + 1);
+    const r = reading.get(owner);
+    if (r) r.gen += 1;
     for (const k of cache.keys()) if (k.startsWith(`${owner}:`)) cache.delete(k);
   }
 
@@ -110,13 +113,19 @@ export function createBalanceReader({ getAccounts, ataOf, mintInfo, ttlMs = BALA
     const key = keyOf(owner, session);
     const hit = cache.get(key);
     if (hit && now() - hit.at < ttlMs) return hit.value;
-    const gen = genOf(owner);
+    let r = reading.get(owner);
+    if (!r) reading.set(owner, (r = { gen: 0, reads: 0 }));
+    r.reads += 1; // now, not inside the flight: an invalidate right after this call must see it
+    const gen = r.gen;
     return singleFlight(flights, `${key}:${gen}`, async () => {
       const value = await readChain(owner, session);
-      if (genOf(owner) === gen) store(key, value);
+      if (r.gen === gen) store(key, value);
       return value;
+    }).finally(() => {
+      if (--r.reads === 0) reading.delete(owner);
     });
   }
 
-  return { read, invalidate, size: () => cache.size };
+  // pending: owners with a read in flight (the only ones whose generation is kept).
+  return { read, invalidate, size: () => cache.size, pending: () => reading.size };
 }

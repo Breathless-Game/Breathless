@@ -186,9 +186,12 @@ export async function createMarket({
     fetchOwned: (owner) => fetchAssetsByOwner(u, owner, { skipDerivePlugins: true }),
     collection: fishCollection,
   });
-  /** A sale paid (or may have paid) the seller: their next balance (and owned-fish) read goes to the chain. */
+  /**
+   * A sale paid (or may have paid) the seller: their next balance (and owned-fish) read goes to the
+   * chain. Runs even when the body failed validation, so only a real address gets that far.
+   */
   const paidSeller = (body) => {
-    const seller = typeof body?.seller === 'string' ? body.seller : null;
+    const seller = isAddress(body?.seller) ? body.seller : null;
     balances.invalidate(seller);
     ownedFish.invalidate(seller);
   };
