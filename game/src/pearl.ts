@@ -34,6 +34,7 @@ import {
   type SigVerdict,
   type StatusDeps,
 } from './payment-safety';
+import { expiryOf } from './blockhash-expiry';
 
 export type SellStep = 'verify' | 'sign' | 'confirm';
 /** What a sale of several fish is doing: the step, how many fish it is at, and (at 'sign') how many transactions the one prompt covers. */
@@ -300,6 +301,8 @@ async function sellViaProgram(info: LiveInfo, assetId: string, onStep?: (s: Sell
 
   onStep?.('sign');
   const signed = await signer.signTransaction(tx);
+  // The oracle has signed already, so the blockhash stays (relay-signer.ts keepBlockhash); checked all the same.
+  const expiry = expiryOf(signed, { blockhash: m.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight });
   const sigBytes = await u.rpc.sendTransaction(signed, { preflightCommitment: 'confirmed' });
   const sig = base58.deserialize(sigBytes)[0];
   setPending(assetId, { mode: 'program', tx: sig, pearls: quote.pearls });
@@ -308,7 +311,7 @@ async function sellViaProgram(info: LiveInfo, assetId: string, onStep?: (s: Sell
   const res = await u.rpc
     .confirmTransaction(sigBytes, {
       commitment: 'confirmed',
-      strategy: { type: 'blockhash', blockhash: m.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight },
+      strategy: { type: 'blockhash', ...expiry },
     })
     .finally(markBalanceStale); // the server did not pay this one, so its cached balance is old
   setPending(assetId, null);
@@ -363,7 +366,8 @@ async function signAll(signer: Lib['signer'], txs: Tx[]): Promise<Tx[]> {
     if (signed.length === txs.length) return signed;
     console.warn(`wallet returned ${signed.length} of ${txs.length} signed transactions; signing one at a time`);
   } catch (e) {
-    if (rejectedByUser(e)) throw e;
+    // Declined, or the desktop Browser wallet's relay failed (one browser round trip per fish won't help).
+    if (rejectedByUser(e) || (e as { noRetry?: boolean } | null)?.noRetry) throw e;
     console.warn('wallet could not sign the transactions together; signing one at a time', e);
   }
   const out: Tx[] = [];
@@ -470,8 +474,9 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
 
       // Remember each transfer before it is sent: a reload from here on resumes instead of losing the fish.
       // The signature is read from what the wallet returned (a wallet may have changed the transaction).
-      const sent = signed.map((tx, i) => ({ ids: groups[i].ids, tx, sig: base58.deserialize(tx.signatures[0])[0] }));
-      for (const g of sent) for (const id of g.ids) setPending(id, { mode: 'server', transferTx: g.sig, lastValid: blockhash.lastValidBlockHeight });
+      // Each with the blockhash it was signed with (the desktop Browser wallet may have put a fresher one in).
+      const sent = signed.map((tx, i) => ({ ids: groups[i].ids, tx, sig: base58.deserialize(tx.signatures[0])[0], expiry: expiryOf(tx, blockhash) }));
+      for (const g of sent) for (const id of g.ids) setPending(id, { mode: 'server', transferTx: g.sig, lastValid: g.expiry.lastValidBlockHeight });
 
       if (sent.length) onProgress?.({ step: 'confirm', fish: toMove.length });
       await Promise.all(
@@ -487,7 +492,7 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
             return;
           }
           const res = await u.rpc
-            .confirmTransaction(base58.serialize(g.sig), { commitment: 'confirmed', strategy: { type: 'blockhash', ...blockhash } })
+            .confirmTransaction(base58.serialize(g.sig), { commitment: 'confirmed', strategy: { type: 'blockhash', ...g.expiry } })
             .catch(() => null);
           if (res?.value.err) {
             for (const id of g.ids) {
@@ -557,14 +562,16 @@ export async function spendPearls(amount: number, what?: unknown): Promise<strin
     const [ix] = toolbox
       .burnToken(u, { account: ata, mint: umi.publicKey(info.pearlMint), authority: signer, amount: BigInt(amount) })
       .getInstructions();
-    const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
+    const fetched = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
     // Sign first (the wallet prompt; declining throws with nothing sent), so the signature is known before sending.
     const tx = await umi
       .transactionBuilder()
       .add({ instruction: { ...ix, programId: umi.publicKey(info.tokenProgram) }, signers: [signer], bytesCreatedOnChain: 0 })
       .setFeePayer(signer)
-      .setBlockhash(blockhash)
+      .setBlockhash(fetched)
       .buildAndSign(u);
+    // The blockhash it was signed with: the desktop Browser wallet may have put a fresher one in.
+    const blockhash = expiryOf(tx, fetched);
     const signature = base58.deserialize(tx.signatures[0])[0];
     const record = what !== undefined;
     if (record) addPending(purchases, { signature, what, cost: amount, ts: Date.now(), lastValid: blockhash.lastValidBlockHeight });

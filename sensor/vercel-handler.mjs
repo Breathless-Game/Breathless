@@ -23,6 +23,7 @@ import { createGearHandler } from './nft-gear.mjs';
 import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
 import { createStore } from './market-store.mjs';
+import { createLinkHandler } from './link-relay.mjs';
 
 /** How long Vercel's CDN keeps an NFT's metadata and art (nft-meta.mjs, nft-gear.mjs): a year, the most it allows. */
 export const NFT_CDN_CACHE = 'max-age=31536000';
@@ -113,6 +114,15 @@ export function createVercelHandler({ env = process.env, redis, log = console.lo
       marketP = null;
       throw e;
     }));
+  // The desktop app's wallet relay (link-relay.mjs): its sessions in the store's KV, so every instance sees them.
+  let linkP = null;
+  const getLink = () =>
+    (linkP ??= getStore()
+      .then((store) => createLinkHandler({ kv: store.kv, clientIp: vercelClientIp, log, now }))
+      .catch((e) => {
+        linkP = null;
+        throw e;
+      }));
   let waitUntilP = null;
   const getWaitUntil = () => (waitUntilP ??= waitUntil ? Promise.resolve(waitUntil) : import('@vercel/functions').then((m) => m.waitUntil, () => (p) => p));
 
@@ -161,6 +171,16 @@ export function createVercelHandler({ env = process.env, redis, log = console.lo
       }
       if (await gear(req, res)) return;
       if (await nft(req, res)) return;
+      if (pathname === '/api/link' || pathname.startsWith('/api/link/')) {
+        let link;
+        try {
+          link = await getLink();
+        } catch (e) {
+          log(`wallet link unavailable: ${e?.message ?? e}`);
+          return sendJson(res, 503, { error: 'The wallet link is unavailable, try again in a moment' });
+        }
+        if (await link(req, res)) return;
+      }
       if (pathname.startsWith('/api/market/')) {
         let market;
         try {

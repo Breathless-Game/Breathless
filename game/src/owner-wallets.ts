@@ -2,12 +2,18 @@ import { getWallets, type Wallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
 import { publicKey, type Signer, type Transaction, type Umi } from '@metaplex-foundation/umi';
 import { DEVNET, usableWallet } from './wallet-storage';
+import { isDesktop } from './desktop';
+import { browserWallet } from './desktop-wallet';
 
 // Every wallet the player can log in with, behind one interface: Wallet
 // Standard wallets (Phantom, MetaMask, Solflare, Backpack and any other that
 // registers), plus Phantom's legacy window.phantom.solana, only when Phantom
 // didn't register through the standard. wallet.ts sees an address, account
 // changes and an umi Signer; it never touches a wallet directly.
+//
+// In the desktop app (desktop.ts isDesktop) there are no extensions: the one wallet is the
+// "Browser wallet" (desktop-wallet.ts), which relays to the player's wallet in their normal
+// browser. The link page it opens there (link.ts) signs raw bytes through the same wallets here.
 
 export interface OwnerWallet {
   readonly name: string;
@@ -20,8 +26,16 @@ export interface OwnerWallet {
   disconnect(): Promise<void>;
   /** The wallet's accounts for this site changed: their addresses, [] once it disconnected the site. Returns the unsubscribe. */
   watch(cb: (addresses: string[]) => void): () => void;
-  /** Signs as `address`: every signature is a prompt in this wallet. */
-  signer(umi: Umi, address: string): Signer;
+  /**
+   * Signs as `address`: every signature is a prompt in this wallet. `local`: signers this device
+   * holds (the session key), which the desktop Browser wallet signs with again when it swaps the
+   * blockhash; other wallets ignore it.
+   */
+  signer(umi: Umi, address: string, local?: readonly Signer[]): Signer;
+  /** The link page: sign serialized transactions as `address` (one prompt), returned serialized. */
+  signTransactionBytes?(address: string, txs: Uint8Array[]): Promise<Uint8Array[]>;
+  /** The link page: sign a message as `address`. */
+  signMessageBytes?(address: string, message: Uint8Array): Promise<Uint8Array>;
 }
 
 // ---- Wallet Standard ---------------------------------------------------------
@@ -68,33 +82,37 @@ function standardWallet(w: Wallet): OwnerWallet {
       return events.on('change', ({ accounts }) => accounts && cb(solanaAddresses(accounts)));
     },
     signer(umi, address) {
-      const account = () => {
-        const a = w.accounts.find((x) => x.address === address);
-        if (!a) throw new Error(`${w.name} switched accounts. Reload the game to continue.`);
-        return a;
-      };
-      // The game is devnet only: say so wherever the wallet lists devnet.
-      const chain = (a: WalletAccount) => (a.chains.includes(DEVNET) || w.chains.includes(DEVNET) ? DEVNET : undefined);
-      const sign = async (txs: Transaction[]) => {
-        const a = account();
-        const out = await f['solana:signTransaction'].signTransaction(
-          ...txs.map((tx) => ({ account: a, chain: chain(a), transaction: umi.transactions.serialize(tx) })),
-        );
-        return out.map((o) => umi.transactions.deserialize(new Uint8Array(o.signedTransaction)));
-      };
+      const sign = async (txs: Transaction[]) =>
+        (await signBytes(address, txs.map((tx) => umi.transactions.serialize(tx)))).map((b) => umi.transactions.deserialize(b));
       return {
         publicKey: publicKey(address),
-        async signMessage(message) {
-          const sm = f['solana:signMessage'];
-          if (!sm) throw new Error(`${w.name} can't sign messages`);
-          const [out] = await sm.signMessage({ account: account(), message });
-          return out.signature;
-        },
+        signMessage: (message) => signText(address, message),
         signTransaction: async (tx) => (await sign([tx]))[0],
         signAllTransactions: sign,
       };
     },
+    signTransactionBytes: (address, txs) => signBytes(address, txs),
+    signMessageBytes: (address, message) => signText(address, message),
   };
+
+  function account(address: string) {
+    const a = w.accounts.find((x) => x.address === address);
+    if (!a) throw new Error(`${w.name} switched accounts. Reload the game to continue.`);
+    return a;
+  }
+  async function signBytes(address: string, txs: Uint8Array[]): Promise<Uint8Array[]> {
+    const a = account(address);
+    // The game is devnet only: say so wherever the wallet lists devnet.
+    const chain = a.chains.includes(DEVNET) || w.chains.includes(DEVNET) ? DEVNET : undefined;
+    const out = await f['solana:signTransaction'].signTransaction(...txs.map((transaction) => ({ account: a, chain, transaction })));
+    return out.map((o) => new Uint8Array(o.signedTransaction));
+  }
+  async function signText(address: string, message: Uint8Array): Promise<Uint8Array> {
+    const sm = f['solana:signMessage'];
+    if (!sm) throw new Error(`${w.name} can't sign messages`);
+    const [out] = await sm.signMessage({ account: account(address), message });
+    return out.signature;
+  }
 }
 
 // ---- Phantom's legacy provider (fallback) -----------------------------------
@@ -176,6 +194,16 @@ function legacyPhantom(p: PhantomProvider): OwnerWallet {
         },
       };
     },
+    async signTransactionBytes(address, txs) {
+      if (p.publicKey && keyString(p.publicKey) !== address) throw new Error('Phantom switched accounts. Reload to continue.');
+      const { VersionedTransaction } = await import('@solana/web3.js');
+      const signed = await p.signAllTransactions(txs.map((b) => VersionedTransaction.deserialize(b)));
+      return signed.map((tx) => tx.serialize());
+    },
+    async signMessageBytes(address, message) {
+      if (p.publicKey && keyString(p.publicKey) !== address) throw new Error('Phantom switched accounts. Reload to continue.');
+      return (await p.signMessage(message)).signature;
+    },
   };
 }
 
@@ -204,8 +232,12 @@ function standardWallets(): OwnerWallet[] {
   return list;
 }
 
-/** Every wallet the player can log in with right now, one per name. Looked up on every call: extensions inject late. */
+/**
+ * Every wallet the player can log in with right now, one per name. Looked up on every call:
+ * extensions inject late. In the desktop app, only the Browser wallet.
+ */
 export function ownerWallets(): OwnerWallet[] {
+  if (isDesktop()) return [browserWallet()];
   const list = standardWallets();
   const p = window.phantom?.solana;
   if (p?.isPhantom && !list.some((o) => sameName(o.name, 'Phantom'))) list.push(wrap(p, legacyPhantom));
@@ -227,6 +259,7 @@ export function onWalletsChange(cb: () => void): () => void {
  * standard; then Phantom's legacy provider, if that is what is asked for.
  */
 export function waitForWallet(name: string, ms: number): Promise<OwnerWallet | null> {
+  if (isDesktop()) return Promise.resolve(findWallet(name));
   const registered = () => standardWallets().find((w) => sameName(w.name, name)) ?? null;
   const now = registered();
   if (now) return Promise.resolve(now);

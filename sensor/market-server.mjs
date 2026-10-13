@@ -14,6 +14,8 @@ import { guardProcess } from './process-guard.mjs';
 import { createGearHandler } from './nft-gear.mjs';
 import { createNftHandler } from './nft-meta.mjs';
 import { SERIAL_FILE, createSerialHandler } from './nft-serial.mjs';
+import { createLinkHandler } from './link-relay.mjs';
+import { createMemoryKv } from './market-store.mjs';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 guardProcess();
@@ -36,8 +38,11 @@ const nft = createNftHandler();
 const gear = createGearHandler();
 // And the fish numbers (#0042) the game asks for before each mint; before `nft`, which claims /api/nft/.
 const serials = createSerialHandler({ file: join(DIR, SERIAL_FILE) });
+// The desktop app's wallet relay (link-relay.mjs), its sessions in this process's memory.
+const link = createLinkHandler({ kv: createMemoryKv() });
 
 const server = http.createServer(async (req, res) => {
+  if (await link(req, res)) return;
   if (await serials(req, res)) return;
   if (await gear(req, res)) return;
   if (await nft(req, res)) return;

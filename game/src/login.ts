@@ -4,6 +4,8 @@ import { orbNfts } from './explorer-links';
 import { formatPearls, onPearlBalance, pearlBalance } from './pearl-balance';
 import { LAST_WALLET_KEY, devnetHint, explorerAddress, isUserRejection, shortAddress, walletTiles, type WalletTile } from './wallet-storage';
 import { lang, onLangChange, t as tr } from './i18n';
+import { isDesktop } from './desktop';
+import { BROWSER_WALLET } from './desktop-wallet';
 import phantomLogo from './wallet-logos/phantom.svg';
 import metamaskLogo from './wallet-logos/metamask.svg';
 import solflareLogo from './wallet-logos/solflare.svg';
@@ -13,11 +15,19 @@ import backpackLogo from './wallet-logos/backpack.svg';
 // wallet is the account, so nothing past the title runs without it. A tile per
 // wallet: installed ones connect, well-known ones that aren't installed link to
 // their site. main.ts moves on to the workbench once the wallet reports connected.
+// In the desktop app there are no wallet extensions: one tile, "Browser wallet", logs in
+// through the player's normal browser (desktop-wallet.ts).
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 /** devnetHint (wallet-storage.ts, kept import-free for its test) in the player's language. */
 function devnetHintText(name: string): string {
+  if (name === BROWSER_WALLET) {
+    return tr(
+      'Wallet extensions cannot run inside the desktop app. This opens a page in your usual browser: approve there with your wallet (Devnet).',
+      '桌面版里无法运行钱包扩展。这会在你常用的浏览器中打开一个页面：在那里用你的钱包确认 (Devnet)。',
+    );
+  }
   if (lang() === 'en') return devnetHint(name);
   return name.toLowerCase() === 'phantom'
     ? '仅支持 Devnet。Phantom → 设置 → 开发者设置 → 测试网模式 → Solana Devnet'
@@ -93,6 +103,7 @@ export class LoginGate {
     this.root.classList.remove('hidden');
     this.tiles()[0]?.focus();
     if (!tiles.some((t) => t.installed)) this.status.textContent = tr('No Solana wallet found in this browser. Install one, then reload this page.', '这个浏览器里没有找到 Solana 钱包。请安装一个，然后刷新本页。');
+    else if (isDesktop()) this.status.textContent = tr('Log in with the wallet in your usual browser.', '用你常用浏览器里的钱包登录。');
   }
 
   hide() {
@@ -106,7 +117,8 @@ export class LoginGate {
   /** Installed wallets are looked up on every render: extensions can inject after the page loads. */
   private render(): WalletTile[] {
     const installed = ownerWallets();
-    const tiles = walletTiles(installed, lastWallet());
+    // The desktop app: only the Browser wallet; extensions can't be installed into it.
+    const tiles = walletTiles(installed, lastWallet()).filter((t) => t.installed || !isDesktop());
     const focused = (document.activeElement as HTMLElement | null)?.dataset.wallet;
     this.grid.replaceChildren(
       ...tiles.map((t) => {

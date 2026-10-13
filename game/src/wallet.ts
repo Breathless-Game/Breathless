@@ -1,9 +1,10 @@
 import './polyfills';
-import { createSignerFromKeypair, publicKey, transactionBuilder, type Signer, type Umi } from '@metaplex-foundation/umi';
+import { createSignerFromKeypair, publicKey, transactionBuilder, type Signer, type TransactionBuilder, type TransactionSignature, type Umi } from '@metaplex-foundation/umi';
 import { base58 } from '@metaplex-foundation/umi/serializers';
 import { findWallet, waitForWallet, type OwnerWallet } from './owner-wallets';
 import { markBalanceStale, readBalances } from './balance-api';
-import { confirmedOrThrow } from './payment-safety';
+import { assertLanded } from './payment-safety';
+import { expiryOf } from './blockhash-expiry';
 import {
   SESSION_NAME,
   addressOfSecret,
@@ -217,7 +218,22 @@ export function ownerAddress(_umi: Umi): string {
 export function ownerSigner(umi: Umi): Signer {
   const key = requireOwner();
   if (!current) throw new Error('Connect a wallet first');
-  return current.signer(umi, key);
+  // The session key too: the desktop Browser wallet signs with it again if it swaps the blockhash.
+  return current.signer(umi, key, secret ? [sessionSigner(umi)] : []);
+}
+
+/**
+ * Sign, send and confirm a transaction the owner signs, throwing if it failed on chain. Like
+ * umi's sendAndConfirm, except that it confirms against the blockhash the transaction was
+ * actually signed with (blockhash-expiry.ts): the desktop Browser wallet may have swapped it.
+ */
+export async function sendOwnerTx(u: Umi, builder: TransactionBuilder, label: string): Promise<TransactionSignature> {
+  const fetched = await u.rpc.getLatestBlockhash();
+  const tx = await builder.setBlockhash(fetched).buildAndSign(u);
+  const signature = await u.rpc.sendTransaction(tx);
+  const result = await u.rpc.confirmTransaction(signature, { strategy: { type: 'blockhash', ...expiryOf(tx, fetched) } });
+  assertLanded(result, label);
+  return signature;
 }
 
 /** Silent signer for mints and fees: this owner's session keypair. */
@@ -285,6 +301,6 @@ export async function topUpSession(sol: number): Promise<string> {
       bytesCreatedOnChain: 0,
     })
     .setFeePayer(payer);
-  const signature = await confirmedOrThrow(topUp, u, 'Session top-up').finally(markBalanceStale); // the market's cached session SOL is now old
+  const signature = await sendOwnerTx(u, topUp, 'Session top-up').finally(markBalanceStale); // the market's cached session SOL is now old
   return base58.deserialize(signature)[0];
 }

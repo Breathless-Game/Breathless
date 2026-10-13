@@ -35,6 +35,7 @@ import {
   type StatusDeps,
   verdictOf,
 } from './payment-safety';
+import { expiryOf } from './blockhash-expiry';
 import {
   decodeAquarium,
   decodeConfig,
@@ -380,8 +381,10 @@ async function sendTracked(
   label: string,
   onSigned?: (signature: string, lastValid: number) => void,
 ): Promise<string> {
-  const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
-  const tx = await builder.setFeePayer(payer).setBlockhash(blockhash).buildAndSign(u);
+  const fetched = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
+  const tx = await builder.setFeePayer(payer).setBlockhash(fetched).buildAndSign(u);
+  // The blockhash it was signed with: the desktop Browser wallet may have put a fresher one in.
+  const blockhash = expiryOf(tx, fetched);
   const signature = base58.deserialize(tx.signatures[0])[0];
   const record = what !== null;
   if (record) addPending(purchases, { signature, what, cost, ts: Date.now(), lastValid: blockhash.lastValidBlockHeight });

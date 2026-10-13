@@ -1,6 +1,7 @@
 // The desktop app (desktop/, Electron) loads this same site and adds window.breathlessDesktop
 // from its preload (desktop/src/preload.js). In a normal browser it is missing.
-// Not wired into the login yet: desktop wallet login (through the system browser) comes later.
+// In the app the login offers one wallet, "Browser wallet" (desktop-wallet.ts): it asks the bridge
+// to open the site's /link.html in the system browser and relays through the server.
 
 export interface BreathlessDesktop {
   platform: 'win32' | 'darwin' | 'linux';

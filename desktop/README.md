@@ -13,7 +13,8 @@ What it adds over a browser tab:
     walletRequest(req: unknown): Promise<unknown>,  // → src/wallet-bridge.js
   }
   ```
-  `walletRequest` answers `{ ok: false, reason: 'unsupported', … }` for now. Wallet extensions (Phantom etc.) don't exist inside Electron, so desktop wallet login will relay signatures through the system browser and come back over `breathless://` (`onDeepLink` in `src/main.js`, which only logs today).
+  `walletRequest` takes one request, `{ kind: 'openLink', url }`, and opens `url` in the system browser only if it is the site's own `https://<site>/link.html?sid=…#t=…` (`{ ok: true }`, else `{ ok: false, reason }`). Wallet extensions (Phantom etc.) don't exist inside Electron, so the game's "Browser wallet" (`game/src/desktop-wallet.ts`) relays login and owner signatures through the server (`/api/link`, `sensor/link-relay.mjs`) to that page in the player's normal browser, and polls for the answer; it verifies every signature itself. `breathless://` deep links are not used for it (`onDeepLink` only logs).
+  A dev run with `BREATHLESS_URL=http://localhost:5173` can't open the link page (https only): copy the link from the waiting screen instead.
 
 ## Files
 
@@ -25,6 +26,7 @@ What it adds over a browser tab:
 | `src/offline.html`, `src/offline.js` | The "can't reach the server" page |
 | `build/icon.png` | App icon (1024 × 1024), made by `scripts/make-icon.py` from `assets/fish/moonfin-leviathan.png` |
 | `scripts/check-package.mjs` | Fails if a packed app holds anything but the files above |
+| `test/wallet-bridge.test.mjs` | `npm test`: the bridge opens the link page and nothing else (not packaged) |
 
 Security: `contextIsolation`, `sandbox`, no `nodeIntegration`. The window only navigates within the site's origin; other `https:` links (explorers, wallet sites) open in the system browser and anything else is blocked, for links and `window.open` alike. The camera (`media`) is allowed for the site only, in case Presage comes back; every other permission is denied.
 
