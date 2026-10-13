@@ -4841,3 +4841,8 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   gap: 8px;
   margin-top: 12px;
 }
+
+/* Touch-only devices: the title hint talks about Enter, which they do not have. */
+.touch-only .title-hint {
+  display: none;
+}
