@@ -2,12 +2,14 @@ import { fishValue } from './fish';
 import {
   isFundsError,
   isSpentFishError,
+  mintPauseOf,
   nextRetryAt,
   nextToMint,
   nftStep,
   sellQuote,
   unsettled,
   type BankedFish,
+  type MintPauseKind,
   type NftEvent,
 } from './market';
 import type { MintStep } from './chain';
@@ -62,12 +64,6 @@ export interface NftQueueHooks {
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** Fish per market check while syncing the collection (the server migrates 12 per request). */
 const TRUST_CHUNK = 24;
-/** A market limit (HTTP 429 from a co-sign request, fish-cosign.ts CosignError): how long to wait, else null. */
-function limitOf(e: unknown): number | null {
-  const x = e as { status?: unknown; retryAfterMs?: unknown } | null;
-  if (x?.status !== 429) return null;
-  return typeof x.retryAfterMs === 'number' && x.retryAfterMs > 0 ? Math.min(x.retryAfterMs, 60 * 60_000) : 60_000;
-}
 
 export class NftQueue {
   /** Lazy module loaders. Kept as fields so a browser test can swap in a fake chain. */
@@ -91,8 +87,11 @@ export class NftQueue {
   batch: { step: SellStep | null; fish: number; txs?: number } | null = null;
   /** The player declined the last batch's wallet prompt: shown once, not on every card. */
   declined: number = 0;
-  /** The market's per-wallet mint limit was reached: mints wait until `until` (the server's message in `reason`). */
-  mintPause: { until: number; reason: string } | null = null;
+  /**
+   * Mints wait until `until`: the market's per-wallet mint limit was reached ('limit'), or the market
+   * or an RPC is down or throttled for now ('busy'; market.ts mintPauseOf). `reason`: the error's message.
+   */
+  mintPause: { until: number; reason: string; kind: MintPauseKind } | null = null;
 
   private mintBusy = false;
   private sellBusy = false;
@@ -126,8 +125,9 @@ export class NftQueue {
    */
   stop() {
     this.stopped = true;
-    for (const t of [this.startTimer, this.wakeTimer, this.pollTimer]) window.clearTimeout(t);
-    this.startTimer = this.wakeTimer = this.pollTimer = 0;
+    for (const t of [this.startTimer, this.wakeTimer]) window.clearTimeout(t);
+    this.startTimer = this.wakeTimer = 0;
+    this.clearPoll();
   }
 
   /** A mint or sale is under way right now. */
@@ -164,8 +164,7 @@ export class NftQueue {
   /** Check the wallet again now (the collection panel opened, or SOL arrived). */
   recheck() {
     if (this.funds !== 'needs-sol' && this.funds !== 'offline' && this.serials !== 'waiting') return;
-    window.clearTimeout(this.pollTimer);
-    this.pollTimer = 0;
+    this.clearPoll();
     this.kick();
   }
 
@@ -258,10 +257,28 @@ export class NftQueue {
   private schedulePoll(ms = POLL_MS) {
     if (this.stopped || this.pollTimer) return;
     this.pollTimer = window.setTimeout(() => {
+      if (document.hidden) {
+        // No chain work in a hidden tab, but no fresh full delay either (a long pause would stretch):
+        // run as soon as the tab shows again. pollTimer stays set meanwhile, so nothing arms a second poll.
+        document.addEventListener('visibilitychange', this.onVisible);
+        return;
+      }
       this.pollTimer = 0;
-      if (document.hidden) this.schedulePoll(ms);
-      else this.kick();
+      this.kick();
     }, ms);
+  }
+
+  private readonly onVisible = () => {
+    if (document.hidden) return;
+    this.clearPoll();
+    this.kick();
+  };
+
+  /** Drop the poll: its timer, or its wait for the tab to show again. */
+  private clearPoll() {
+    window.clearTimeout(this.pollTimer);
+    document.removeEventListener('visibilitychange', this.onVisible);
+    this.pollTimer = 0;
   }
 
   /** Make sure the fish has its number from our server. False (and a retry scheduled) if the server did not answer. */
@@ -337,14 +354,6 @@ export class NftQueue {
           this.hooks.minted?.(f, !!res.collection);
         } catch (e) {
           const msg = errorText(e);
-          const limit = limitOf(e);
-          if (limit) {
-            // The market's per-wallet mint limit: not the fish's fault. Wait until it opens again.
-            this.apply(f, { type: 'paused' });
-            this.mintPause = { until: Date.now() + limit, reason: msg };
-            this.schedulePoll(limit);
-            return;
-          }
           if (isSpentFishError(e)) {
             // Its NFT was already sold or burned (another device, or a lost bank): the fish is spent,
             // so it leaves the bank like a sold fish instead of failing and retrying.
@@ -354,6 +363,17 @@ export class NftQueue {
             this.sellErrors.delete(f);
             this.save();
             continue;
+          }
+          const pause = mintPauseOf(e);
+          if (pause) {
+            // The market's mint limit, or the market / an RPC down or throttled: not the fish's fault,
+            // and the next fish would fail the same way. Hold the whole queue (no attempt counted);
+            // the pause spaces out retries however long an outage lasts.
+            console.warn('mints paused', pause.kind, msg);
+            this.apply(f, { type: 'paused' });
+            this.mintPause = { until: Date.now() + pause.ms, reason: msg, kind: pause.kind };
+            this.schedulePoll(pause.ms);
+            return;
           }
           console.error('mint failed', e);
           // A real shortfall pauses the queue without costing the fish an attempt. If the wallet looks

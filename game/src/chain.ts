@@ -6,7 +6,7 @@ import { base58 } from '@metaplex-foundation/umi/serializers';
 import { zoneName } from './depth-odds';
 import { ZONES, fishValue, recordedDepth, zoneForDepth, type FishSpec } from './fish';
 import { MAPS, mapDepth, type MapId } from './maps';
-import { cosignInfo, cosignMint, makeSellable, mintRoute, type FishTrust } from './fish-cosign';
+import { CosignError, cosignInfo, cosignMint, makeSellable, mintRoute, type FishTrust } from './fish-cosign';
 import * as gearOps from './gear-chain';
 import type { GearCtx } from './gear-chain';
 import type { GearMintRequest, GearUpdateRequest } from './gear-sync';
@@ -94,7 +94,11 @@ export async function mintFish(spec: FishSpec, onStep?: (s: MintStep) => void): 
   // The market only buys fish in its collection, and only it can admit one (fish-cosign.ts).
   const info = await cosignInfo();
   const route = mintRoute(info);
-  if (route === 'wait') throw new Error('The market is still creating its fish collection; minting resumes shortly');
+  // Not the fish's fault: a 503 like the market's own, so the queue pauses (market.ts mintPauseOf)
+  // for a minute, the time cosignInfo() caches the answer, instead of counting a failed attempt.
+  if (route === 'wait') {
+    throw new CosignError('The market is still creating its fish collection; minting resumes shortly', 503, 'collection-pending', 60_000);
+  }
   if (route === 'cosign') {
     const res = await cosignMint(u, {
       info,

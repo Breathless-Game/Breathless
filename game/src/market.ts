@@ -258,11 +258,60 @@ export function selectionRange<T>(order: readonly T[], from: T, to: T, selectabl
 /**
  * The market refused to co-sign a mint because this fish's NFT was already sold or burned
  * (sensor/fish-collection.mjs claim, HTTP 409 'already-burned'). The fish is spent for good:
- * retrying can never succeed. Duck-typed like the queue's limitOf (fish-cosign.ts CosignError).
+ * retrying can never succeed. Duck-typed like mintPauseOf below (fish-cosign.ts CosignError).
  */
 export function isSpentFishError(e: unknown): boolean {
   const x = e as { status?: unknown; code?: unknown } | null;
   return x?.status === 409 && x.code === 'already-burned';
+}
+
+/** An RPC (or other HTTP) throttling error, read from its message: Solana RPCs answer 429 "Too Many Requests". */
+export function isRateLimitError(e: unknown): boolean {
+  return /\b429\b|too many requests/i.test(e instanceof Error ? e.message : String(e));
+}
+
+/** 'limit': the market's per-wallet mint limit. 'busy': the market, its RPC or ours is down or throttled for now. */
+export type MintPauseKind = 'limit' | 'busy';
+
+const MINT_LIMIT_PAUSE_MS = 60_000;
+const MINT_BUSY_PAUSE_MS = 30_000;
+const MAX_MINT_PAUSE_MS = 60 * 60_000;
+
+/**
+ * A mint error that is not the fish's fault, so the whole queue waits instead of the fish spending
+ * one of its MAX_AUTO_MINT_TRIES (and every other queued fish spending one too, one after another):
+ * - the market's mint limit (HTTP 429 from a co-sign request, fish-cosign.ts CosignError);
+ * - the market offline (status 0) or failing for now (5xx: sensor/market.mjs answers 503 when its
+ *   RPC refuses it, "so the game retries"; chain.ts throws 503 'collection-pending' while the
+ *   market's fish collection is still being created);
+ * - 409 'mint-in-flight': an earlier mint of this fish may still land (sensor/fish-collection.mjs);
+ * - the Solana RPC throttling our own send/confirm (429 / "Too Many Requests" in the message; only
+ *   for errors with no HTTP status, so a market 4xx is never misread as throttling).
+ * Returns how long to wait (the server's retryAfterMs when it gives one, capped at an hour), else null.
+ * Everything else (4xx validation errors, failed transactions, 409 'already-burned') is not a pause.
+ */
+export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | null {
+  const x = e as { status?: unknown; code?: unknown; retryAfterMs?: unknown } | null;
+  const status = typeof x?.status === 'number' ? x.status : null;
+  let kind: MintPauseKind;
+  let fallback: number;
+  if (status === 429) {
+    kind = 'limit';
+    fallback = MINT_LIMIT_PAUSE_MS;
+  } else if (
+    status === 0 ||
+    (status !== null && status >= 500) ||
+    (status === 409 && x?.code === 'mint-in-flight') ||
+    (status === null && e != null && isRateLimitError(e))
+  ) {
+    kind = 'busy';
+    fallback = MINT_BUSY_PAUSE_MS;
+  } else {
+    return null;
+  }
+  const after = x?.retryAfterMs;
+  const ms = typeof after === 'number' && after > 0 ? Math.min(after, MAX_MINT_PAUSE_MS) : fallback;
+  return { ms, kind };
 }
 
 /** Errors that mean the burner wallet cannot pay (for the upload or the transaction). */

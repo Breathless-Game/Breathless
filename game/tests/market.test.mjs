@@ -26,8 +26,10 @@ const {
   bankEntry,
   bulkSellable,
   bulkSellableBelowEpic,
+  isRateLimitError,
   isSpentFishError,
   migrateBank,
+  mintPauseOf,
   needsConfirm,
   nextRetryAt,
   nextToMint,
@@ -360,4 +362,49 @@ test('a mint refused as already sold or burned is spent for good; other refusals
   assert.equal(isSpentFishError(new Error('already-burned')), false);
   assert.equal(isSpentFishError(null), false);
   assert.equal(isSpentFishError(undefined), false);
+});
+
+test('transient mint errors pause the whole queue instead of costing the fish an attempt', () => {
+  // fish-cosign.ts CosignError carries the market's status, code and retryAfterMs.
+  const cosignError = (status, code, retryAfterMs) => Object.assign(new Error('refused'), { status, code, retryAfterMs });
+  // The market offline (status 0) or failing for now (5xx, e.g. its RPC refusing it, or chain.ts's 'collection-pending').
+  assert.deepEqual(mintPauseOf(cosignError(503)), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(500)), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(0)), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(503, 'collection-pending', 60_000)), { ms: 60_000, kind: 'busy' });
+  // An earlier mint of this fish may still land: the server's retryAfterMs is honoured.
+  assert.deepEqual(mintPauseOf(cosignError(409, 'mint-in-flight', 30_000)), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(409, 'mint-in-flight', 5_000)), { ms: 5_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(cosignError(409, 'mint-in-flight')), { ms: 30_000, kind: 'busy' });
+  // The Solana RPC throttling our own send/confirm (no HTTP status on the error).
+  assert.deepEqual(mintPauseOf(new Error('429 Too Many Requests: {"code":429}')), { ms: 30_000, kind: 'busy' });
+  assert.deepEqual(mintPauseOf(new Error('Server responded with too many requests')), { ms: 30_000, kind: 'busy' });
+  // The market's mint limit: its retryAfterMs, else a minute, never more than an hour.
+  assert.deepEqual(mintPauseOf(cosignError(429)), { ms: 60_000, kind: 'limit' });
+  assert.deepEqual(mintPauseOf(cosignError(429, 'limit', 120_000)), { ms: 120_000, kind: 'limit' });
+  assert.deepEqual(mintPauseOf(cosignError(429, 'limit', 10 * 60 * 60_000)), { ms: 60 * 60_000, kind: 'limit' });
+  assert.deepEqual(mintPauseOf(cosignError(503, undefined, -5)), { ms: 30_000, kind: 'busy' }, 'a bad retryAfterMs falls back');
+  // Genuine failures still count against the fish's MAX_AUTO_MINT_TRIES.
+  assert.equal(mintPauseOf(cosignError(400)), null);
+  assert.equal(mintPauseOf(cosignError(403)), null);
+  assert.equal(mintPauseOf(cosignError(409, 'already-burned')), null, 'spent fish: handled by isSpentFishError');
+  assert.equal(mintPauseOf(Object.assign(new Error('Too Many Requests'), { status: 400 })), null, 'a market 4xx is never read as RPC throttling');
+  assert.equal(mintPauseOf(new Error('Transaction simulation failed: custom program error 0x1771')), null);
+  assert.equal(mintPauseOf(null), null);
+  assert.equal(mintPauseOf(undefined), null);
+
+  assert.equal(isRateLimitError(new Error('HTTP 429')), true);
+  assert.equal(isRateLimitError('Too Many Requests'), true);
+  assert.equal(isRateLimitError(new Error('blockhash 4290 expired')), false);
+});
+
+test('a paused fish keeps its tries; a failed one spends one', () => {
+  const f = { ...nftStep(bankEntry(fish()), { type: 'start' }), mintTries: 2 };
+  assert.equal(f.nft, 'minting');
+  const paused = nftStep(f, { type: 'paused' });
+  assert.equal(paused.nft, 'pending');
+  assert.equal(paused.mintTries, 2, 'no attempt counted');
+  const failed = nftStep(f, { type: 'failed', error: 'bad request', now: 0 });
+  assert.equal(failed.nft, 'failed');
+  assert.equal(failed.mintTries, 3);
 });
