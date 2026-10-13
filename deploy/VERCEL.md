@@ -144,7 +144,7 @@ After a deploy that touched the market, check production:
 For the record:
 - The Dell's `breathless` service was stopped and disabled, and its `deploy` workflow disabled in GitHub (since replaced by `ci.yml`, which deploys nothing). The Dell is decommissioned.
 - Its market state (`.market-state.json`, `.market-fish.jsonl`, `.market-serial.json`) was imported with `sensor/scripts/import-to-redis.mjs` into Production's Redis under the fresh prefix `live:`.
-- Production's environment: `MARKET_STORE_PREFIX=live:`, `MARKET_SECRET_KEY` = the live market wallet (Sensitive), plus `CRON_SECRET`, `PUBLIC_ORIGIN` and `SOLANA_RPC`. `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID` were deleted from Production, so the server and the game both use the live program `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`, whose oracle is the live wallet. Those two variables and the `test:` prefix are Preview-only.
+- Production's environment: `MARKET_STORE_PREFIX=live:`, `MARKET_SECRET_KEY` = the live market wallet (Sensitive), plus `CRON_SECRET` and `PUBLIC_ORIGIN`. `SOLANA_RPC` is unset, so the market uses public devnet, as the Dell did. `PLAYER_STATE_PROGRAM_ID` and `VITE_PLAYER_STATE_PROGRAM_ID` were deleted from Production, so the server and the game both use the live program `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`, whose oracle is the live wallet. Those two variables and the `test:` prefix are Preview-only.
 - DNS: `breathless.gotclass.xyz` is a CNAME to `cname.vercel-dns.com` in Cloudflare, **DNS only (grey cloud)**. Proxied through Cloudflare, Vercel would see Cloudflare's IPs, and the per-IP limits would lump players together.
 
 Never run a second market with the live wallet next to Vercel: one wallet with two ledgers could pay for the same fish twice.
@@ -329,7 +329,7 @@ Vercel 项目通过 Vercel 的 GitHub app（已装在 Breathless-Game 组织上�
 记录如下：
 - Dell 上的 `breathless` 服务已停止并禁用，GitHub 里的 `deploy` workflow 已停用（后来换成了不部署任何东西的 `ci.yml`）。Dell 已经退役。
 - 它的市场状态（`.market-state.json`、`.market-fish.jsonl`、`.market-serial.json`）用 `sensor/scripts/import-to-redis.mjs` 导入了 Production 的 Redis，放在全新的前缀 `live:` 下。
-- Production 的环境变量：`MARKET_STORE_PREFIX=live:`，`MARKET_SECRET_KEY` = 正式市场钱包（Sensitive），另有 `CRON_SECRET`、`PUBLIC_ORIGIN` 和 `SOLANA_RPC`。`PLAYER_STATE_PROGRAM_ID` 和 `VITE_PLAYER_STATE_PROGRAM_ID` 已从 Production 删除，服务器和游戏都用正式程序 `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`（oracle 是正式钱包）。这两个变量和 `test:` 前缀只在 Preview 里用。
+- Production 的环境变量：`MARKET_STORE_PREFIX=live:`，`MARKET_SECRET_KEY` = 正式市场钱包（Sensitive），另有 `CRON_SECRET` 和 `PUBLIC_ORIGIN`。`SOLANA_RPC` 没有设，市场用公共 devnet，和 Dell 一样。`PLAYER_STATE_PROGRAM_ID` 和 `VITE_PLAYER_STATE_PROGRAM_ID` 已从 Production 删除，服务器和游戏都用正式程序 `EUzJF8sYEMiqM2XV7FrPoPiQ89VHJvJ4VeeFtuXVaWJQ`（oracle 是正式钱包）。这两个变量和 `test:` 前缀只在 Preview 里用。
 - DNS：`breathless.gotclass.xyz` 在 Cloudflare 里是指向 `cname.vercel-dns.com` 的 CNAME，**只用 DNS（灰色云朵）**。经过 Cloudflare 代理的话，Vercel 看到的是 Cloudflare 的 IP，按 IP 的限流会把玩家混在一起。
 
 绝不要在 Vercel 之外再用正式钱包跑第二个市场：同一个钱包配两本账，同一条鱼可能被付两次钱。
