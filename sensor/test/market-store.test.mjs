@@ -8,7 +8,7 @@ import { base58 } from '@metaplex-foundation/umi/serializers';
 import { DAILY_PEARL_CAP, HttpError, MPL_CORE_PROGRAM, SoldLedger, appraise } from '../market-rules.mjs';
 import { checkPayoutCap } from '../fish-trust.mjs';
 import { pendingIsLive } from '../fish-collection.mjs';
-import { SETUP_LOCK, createSetupStep } from '../market-server-mode.mjs';
+import { SETUP_LOCK, createSellerLock, createSetupStep } from '../market-server-mode.mjs';
 import { createPayout } from '../market-payout.mjs';
 import { createSaleDesk } from '../market-sale.mjs';
 import { SWEEP_RESUME_AFTER_MS, createSweep } from '../market-burn.mjs';
@@ -84,13 +84,22 @@ function fakeChain(sends = []) {
   return chain;
 }
 
-/** One serverless instance: its own store, ledger, payout and desk, over the shared fake Redis. */
-async function instance(redis, chain, { transfer = transferTx(FISH) } = {}) {
+/**
+ * One serverless instance: its own store, ledger, payout and desk, over the shared fake Redis.
+ * `cap`: price with the daily cap as fish-collection.mjs does, and hold the seller lock as server mode does.
+ */
+async function instance(redis, chain, { transfer = transferTx(FISH), cap } = {}) {
   const store = createRedisStore({ redis, prefix: 'test:', env: {} });
   const { ledger } = await store.openMarketState({ cluster: 'devnet' });
   const payout = createPayout({ ledger, ...chain.deps });
+  const capped = (asset, seller) => {
+    const pearls = plainPrice(asset);
+    checkPayoutCap(ledger.records, seller, pearls, { cap });
+    return pearls;
+  };
   const desk = createSaleDesk({
-    priceFish: plainPrice,
+    priceFish: cap === undefined ? plainPrice : capped,
+    withSellerLock: cap === undefined ? undefined : createSellerLock({ store, shared: true, waitMs: 200, sleep: tick }),
     ledger,
     market: MARKET,
     ensureMint: async () => 'PearlMint',
@@ -259,6 +268,47 @@ test('the daily cap reads the seller\'s last 24 h from Redis (loadSeller), not o
   assert.throws(() => checkPayoutCap(fresh.records, SELLER, 6), (e) => e.status === 429);
   await fresh.loadSeller(OTHER);
   assert.throws(() => checkPayoutCap(fresh.records, SELLER, 6), (e) => e.status === 429, 'loading another seller keeps this one');
+});
+
+test('the daily cap holds across instances: two sales for a seller just under it, at once, pay exactly one', async () => {
+  for (const how of ['two instances', 'one batch']) {
+    const redis = createFakeRedis();
+    const chain = fakeChain();
+    const [a, b] = await Promise.all([instance(redis, chain, { cap: 20 }), instance(redis, chain, { cap: 20 })]);
+    // 5 PEARL already today: one more fish (10) fits under 20, two do not.
+    await a.ledger.begin(FISH[5], { seller: SELLER, transferTx: TX, pearls: 5 });
+    const sell = (inst, assetId) => inst.desk.sell({ assetId, seller: SELLER, transferTx: TX });
+    const answers =
+      how === 'two instances'
+        ? (await Promise.allSettled([sell(a, FISH[0]), sell(b, FISH[1])])).map((r) => (r.status === 'fulfilled' ? r.value : { status: r.reason.status }))
+        : (await a.desk.sellBatch({ seller: SELLER, sales: [FISH[0], FISH[1]].map((assetId) => ({ assetId, transferTx: TX })) })).results;
+    assert.equal(answers.filter((r) => r.pearls === 10).length, 1, `${how}: one sale paid`);
+    assert.deepEqual(answers.filter((r) => r.pearls === undefined).map((r) => r.status), [429], `${how}: the other gets the daily cap`);
+    assert.equal(chain.payouts(FISH[0]) + chain.payouts(FISH[1]), 1, `${how}: one payout`);
+    assert.equal(redis.data.has('test:kv:lock:seller:' + SELLER), false, `${how}: the seller lock is released`);
+  }
+});
+
+test('the seller lock: the 24 h total is not re-capped on a resume, and a lock held elsewhere is a 503 to retry', async () => {
+  const redis = createFakeRedis();
+  const chain = fakeChain(['rejected']);
+  const a = await instance(redis, chain, { cap: 10 });
+  const sale = { assetId: FISH[0], seller: SELLER, transferTx: TX };
+  // Begun at the cap exactly (10 of 10), then the payout was refused: the sale is stuck in 'paying'.
+  await assert.rejects(a.desk.sell(sale), /simulation failed/);
+  const before = await redis.zrange('test:seller:' + SELLER, 0, -1);
+  // The sweep's resume (and the player's retry) pays the stored record without pricing it again.
+  const { sweep } = resumingSweep(a.ledger, a.desk);
+  assert.deepEqual(await sweep.run(), stats({ resumed: 1 }));
+  assert.equal(chain.payouts(FISH[0]), 1);
+  assert.deepEqual(await redis.zrange('test:seller:' + SELLER, 0, -1), before, 'counted once in the seller\'s 24 h');
+  // Another instance holds a seller's lock (and never lets go): a new sale waits a little, then answers 503.
+  const BUYER = 'Buyer' + '1'.repeat(38);
+  const store = createRedisStore({ redis, prefix: 'test:', env: {} });
+  assert.ok(await store.lock('seller:' + BUYER, 60_000));
+  const b = await instance(redis, chain, { cap: 100, transfer: transferTx(FISH, BUYER) });
+  await assert.rejects(b.desk.sell({ assetId: FISH[1], seller: BUYER, transferTx: TX }), (e) => e.status === 503 && /still being recorded/.test(e.message));
+  assert.equal(await b.ledger.get(FISH[1]), null, 'nothing recorded');
 });
 
 const COLL = 'Coll1111111111111111111111111111111111111';
