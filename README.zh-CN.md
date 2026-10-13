@@ -196,7 +196,7 @@ npm start          # http://127.0.0.1:8794，传感器在 ws://127.0.0.1:8794/se
 | `SOLANA_RPC_CONCURRENCY` | `3` | 市场同时在途的 RPC 调用数。遇到 429 时所有调用一起退避；只有付费 RPC 套餐才需要调大。 |
 
 - **摄像头必须走 HTTPS。** 浏览器只在 `https://` 页面（或 `localhost`）上允许 `getUserMedia`，所以要在 `127.0.0.1:8794` 前面放一条隧道（如 Cloudflare Tunnel）或带 TLS 的反向代理。构建出的游戏会自动连 `wss://<同一域名>/sensor`；构建时设置 `VITE_SENSOR_URL` 可以改连别处。
-- **Solana RPC 抖动不会拖垮服务器。** 市场的所有 RPC 调用都经过同一个限流器（`SOLANA_RPC_CONCURRENCY`），遇到 429 统一退避；交易确认改为 HTTP 轮询（不再开 websocket 订阅）。付款后销毁失败的鱼会在内存里重试；启动时和之后每 10 分钟，市场会把钱包里仍持有的、已付款的鱼销毁掉（日志里是 `[market] sweep: ...`）。偶发的未处理 Promise 拒绝只会记一行 `[process] unhandled rejection (kept running)`，进程不退出；`[process] BUG: ...` 开头的是代码错误，需要看一下。
+- **Solana RPC 抖动不会拖垮服务器。** 市场的所有 RPC 调用都经过同一个限流器（`SOLANA_RPC_CONCURRENCY`），遇到 429 统一退避；交易确认改为 HTTP 轮询（不再开 websocket 订阅）。付款后销毁失败的鱼会在内存里重试；启动时和之后每 10 分钟，市场会按售出账本把已付款、还没销毁的鱼销毁掉：每条鱼只查一次账户，不扫全链，遇到 429 就提前停下等下一轮（日志里是 `[market] sweep: ...`）。偶发的未处理 Promise 拒绝只会记一行 `[process] unhandled rejection (kept running)`，进程不退出；`[process] BUG: ...` 开头的是代码错误，需要看一下。
 - **团队的 Dell** 在每次 push 到 `main` 后自动部署（GitHub Actions + self-hosted runner + Cloudflare Tunnel）。一次性配置见 [deploy/SETUP.md](deploy/SETUP.md#中文)。
 - **Vercel**（可选，与 Dell 并存）：游戏作为静态文件，所有 `/api` 路由放在一个函数里，市场状态存在 Upstash Redis。没有 `/sensor` WebSocket，只能用键盘模式。配置、用测试钱包预览、切换和回滚见 [deploy/VERCEL.md](deploy/VERCEL.md#中文)。
 - **带宽。** 实时模式把每一帧 640×480 画面压成 JPEG 上传，30 fps，**每个玩家约 3–6 Mbit/s 上行**（Chrome 质量 0.7：画面简单时每帧 16–20 kB，画面杂乱时 30–35 kB）。Presage 要约 25 fps 以上，低于约 15 fps 波形会变差，所以游戏优先保帧率、牺牲画质：目标每帧 25 kB（30 fps 即 6 Mbit/s），帧偏大或上行太慢导致跳帧时，JPEG 质量在 0.8 到 0.4 之间自动下调。约 5 Mbit/s 的上行在一般画面下能保持 30 fps；更慢就会跳帧。sensor 用 [sharp](https://sharp.pixelplumbing.com/)（libvips）解码：每帧约 2 ms，在独立线程上跑，比原始帧多占约 3% 的单核。键盘和模拟模式不发帧。

@@ -23,6 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_PREFIX, REGISTRY_FILE, STATE_FILE, redisCas, redisCredentials, redisKeys } from '../market-store.mjs';
 import { parseRegistry } from '../fish-trust.mjs';
+import { isUnfinished } from '../market-rules.mjs';
 import { SERIAL_FILE } from '../nft-serial.mjs';
 
 const readJson = (file) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null);
@@ -68,6 +69,9 @@ export async function importToRedis({ redis, prefix = DEFAULT_PREFIX, data, dryR
     const inFlight = rec.status === 'paying' && payTx !== undefined;
     const record = inFlight ? rest : rec;
     await redis.zadd(keys.seller(rec.seller), { score: Number(rec.at) || 0, member: assetId });
+    // An unfinished sale (paying, or paid and not burned) goes on the sweep's work list (RedisLedger.unburned),
+    // index first as the ledger does it: if Redis already holds a newer record, the listing drops the stale entry.
+    if (isUnfinished(rec)) await redis.zadd(keys.unburned, { score: Number(rec.at) || 0, member: assetId });
     if ((await redis.set(keys.sold(assetId), JSON.stringify(record), { nx: true })) !== null) out.sold.added++;
     else out.sold.kept++;
     if (inFlight && (await redis.set(keys.payTx(assetId), JSON.stringify({ payTx, payLastValid }), { nx: true })) !== null) out.payouts++;

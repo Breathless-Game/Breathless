@@ -213,6 +213,9 @@ export function checkTransferTx(tx, { assetId, seller, market }) {
   return moves.some((ix) => authorityOf(ix) === seller) ? null : 'The seller did not transfer this fish';
 }
 
+/** On the sweep's work list (SoldLedger.unburned, RedisLedger.unburned): paying, or paid and not set aside. */
+export const isUnfinished = (r) => r?.status === 'paying' || (r?.status === 'paid' && !r.burnSkipped);
+
 /**
  * Server mode's sold set, keyed by asset id. A record moves paying -> paid ->
  * burned and is persisted after every step (via `persist`), so a retried
@@ -275,6 +278,26 @@ export class SoldLedger {
 
   burned(assetId, burnTx) {
     Object.assign(this.records[assetId], { status: 'burned', burnTx });
+    this.persist();
+  }
+
+  /**
+   * The sweep's work list: every sale not finished yet, oldest first, at most `limit`: fish paid
+   * for but not burned (and not set aside by skipBurn), and sales still `paying` (the sweep resumes
+   * those once they are old enough that no request can still be working on them, see market-burn.mjs).
+   * The ledger is the source of truth, so no chain scan is needed.
+   */
+  unburned(limit = Infinity) {
+    return Object.entries(this.records)
+      .filter(([, r]) => isUnfinished(r))
+      .sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0) || (a[0] < b[0] ? -1 : 1))
+      .slice(0, limit)
+      .map(([id]) => id);
+  }
+
+  /** A paid fish the sweep must not burn (the market no longer owns it, or it is not ours): off the work list. */
+  skipBurn(assetId, reason) {
+    this.records[assetId].burnSkipped = String(reason);
     this.persist();
   }
 
