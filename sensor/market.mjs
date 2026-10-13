@@ -30,7 +30,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { keypairIdentity, publicKey } from '@metaplex-foundation/umi';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { fetchAssetsByOwner, mplCore } from '@metaplex-foundation/mpl-core';
+import { deserializeAssetV1, fetchAssetsByOwner, mplCore } from '@metaplex-foundation/mpl-core';
 import { findAssociatedTokenPda, mplToolbox } from '@metaplex-foundation/mpl-toolbox';
 import { mplTokenMetadata } from '@metaplex-foundation/mpl-token-metadata';
 import { HttpError, RateLimiter, isAddress } from './market-rules.mjs';
@@ -44,7 +44,7 @@ import { DEFAULT_LAYOUT, layoutFromIdl } from './fish-market.mjs';
 import { createProgramMode } from './market-program-mode.mjs';
 import { createServerMode } from './market-server-mode.mjs';
 import { createBalanceReader, parseBalanceQuery } from './market-balance.mjs';
-import { createOwnedFishReader, parseOwnedQuery } from './fish-owned.mjs';
+import { createOwnedFetcher, createOwnedFishReader, fetchAssetsByIds, jsonRpc, parseOwnedQuery } from './fish-owned.mjs';
 import { KEYPAIR_FILE, createStore } from './market-store.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -172,7 +172,8 @@ export async function createMarket({
       findAssociatedTokenPda(u, { mint: publicKey(mint), owner: publicKey(owner), tokenProgramId: publicKey(tokenProgram) })[0].toString(),
     mintInfo,
   });
-  // Owned fish (a wallet rebuilding its aquarium from the chain): one getProgramAccounts per read,
+  // Owned fish (a wallet rebuilding its aquarium from the chain): the RPC's DAS owner index plus
+  // getMultipleAccounts when it has one, else one getProgramAccounts per read (fish-owned.mjs);
   // cached a few seconds in memory. Attributes live on the asset itself, so no collection fetch.
   const ownedLimiter = new RateLimiter({ limit: 20, windowMs: 60_000 });
   let collMemo = { at: 0, value: null };
@@ -182,8 +183,17 @@ export async function createMarket({
     collMemo = { at: Date.now(), value: (await mode.info()).fishCollection ?? null };
     return collMemo.value;
   }
+  // DAS goes over plain fetch (see jsonRpc) but through the same limiter and 429 backoff as umi.
+  const dasCall = jsonRpc(rpc);
+  const das = (method, params) => u.rpc.guard.limiter.run(() => u.rpc.guard.backoff.call(() => dasCall(method, params)));
   const ownedFish = createOwnedFishReader({
-    fetchOwned: (owner) => fetchAssetsByOwner(u, owner, { skipDerivePlugins: true }),
+    fetchOwned: createOwnedFetcher({
+      das,
+      fetchByIds: (ids) => fetchAssetsByIds(ids, { getAccounts: (keys) => u.rpc.getAccounts(keys.map((k) => publicKey(k))), decode: deserializeAssetV1 }),
+      fetchByGpa: (owner) => fetchAssetsByOwner(u, owner, { skipDerivePlugins: true }),
+      label: redactRpc(rpc),
+      log,
+    }),
     collection: fishCollection,
   });
   /**

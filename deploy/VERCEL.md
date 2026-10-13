@@ -75,7 +75,7 @@ Server (runtime). None of these reach the game bundle; only `VITE_*` do.
 | `MARKET_SECRET_KEY` | all | **yes**, mark it Sensitive | The market wallet's 64-byte secret key: the keypair file's JSON array, or base58. **TEST wallet** everywhere until cutover. |
 | `CRON_SECRET` | Production | **yes** | Random, at least 16 characters (`openssl rand -hex 32`). Vercel sends it with each cron call; without it `/api/cron/sweep` answers 401 to everyone. |
 | `PUBLIC_ORIGIN` | all | no | `https://breathless.gotclass.xyz`, so the NFT JSON points at the real game, byte for byte as the Dell serves it. |
-| `SOLANA_RPC` | all | **yes** if the URL holds an API key | The market's RPC. Default: `VITE_SOLANA_RPC`, else public devnet, which answers 429 under a bulk sell. |
+| `SOLANA_RPC` | all | **yes** if the URL holds an API key | The market's RPC. Default: `VITE_SOLANA_RPC`, else public devnet, which answers 429 under a bulk sell. If it has the Metaplex DAS API (public devnet and Helius do), `/api/market/fish` lists by its owner index instead of `getProgramAccounts`; checked on the first read, nothing to set. |
 | `SOLANA_RPC_CONCURRENCY` | optional | no | Calls in flight, default 3. Raise only on a paid plan. |
 | `PLAYER_STATE_PROGRAM_ID` | Preview + Production **until cutover**, then deleted | no | `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`, the TEST player_state (contracts/DEPLOYED.md), whose oracle is the TEST market wallet. Unset = the live program, whose oracle is the live wallet, so a TEST market's fish mints fail with `0x1770` (Unauthorized). Always set together with `VITE_PLAYER_STATE_PROGRAM_ID`. |
 | `FISH_MARKET_PROGRAM_ID` | **must be unset** | n/a | Program mode needs the file store; with Redis the market refuses to start. |
@@ -269,7 +269,7 @@ Dell 部署（deploy/SETUP.md）完全不变。这里是第二种托管同一个
 | `MARKET_SECRET_KEY` | 全部 | **是**，标为 Sensitive | 市场钱包的 64 字节私钥：keypair 文件里的 JSON 数组，或 base58。切换前一律用**测试钱包**。 |
 | `CRON_SECRET` | Production | **是** | 随机串，至少 16 个字符（`openssl rand -hex 32`）。Vercel 调 cron 时会带上；不设的话 `/api/cron/sweep` 对谁都回 401。 |
 | `PUBLIC_ORIGIN` | 全部 | 否 | `https://breathless.gotclass.xyz`，让 NFT JSON 指向正式游戏，和 Dell 输出的字节完全一致。 |
-| `SOLANA_RPC` | 全部 | URL 里带 API key 时**是** | 市场用的 RPC。默认取 `VITE_SOLANA_RPC`，再没有就用公共 devnet（批量卖鱼时会 429）。 |
+| `SOLANA_RPC` | 全部 | URL 里带 API key 时**是** | 市场用的 RPC。默认取 `VITE_SOLANA_RPC`，再没有就用公共 devnet（批量卖鱼时会 429）。它若支持 Metaplex DAS API（公共 devnet 和 Helius 都支持），`/api/market/fish` 就用它的持有人索引代替 `getProgramAccounts`；第一次读取时自动探测，无需设置。 |
 | `SOLANA_RPC_CONCURRENCY` | 可选 | 否 | 同时进行的调用数，默认 3。付费套餐才调高。 |
 | `PLAYER_STATE_PROGRAM_ID` | Preview + Production，**只在切换前**，切换时删掉 | 否 | `4tdodYRKyHKMPs7ZzY4yPs7CM3PnGrJV6FWfYbp7473L`，测试版 player_state（见 contracts/DEPLOYED.md），它的 oracle 是测试市场钱包。不设就是正式程序，oracle 是正式钱包，测试市场铸鱼会报 `0x1770`（Unauthorized）。必须和 `VITE_PLAYER_STATE_PROGRAM_ID` 一起设。 |
 | `FISH_MARKET_PROGRAM_ID` | **必须不设** | 不适用 | program 模式需要文件存储；用 Redis 时市场会拒绝启动。 |
