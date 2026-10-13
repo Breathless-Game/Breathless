@@ -5,10 +5,10 @@
   "private": true,
   "description": "屏息 Breathless desktop app: a window onto breathless.gotclass.xyz",
   "homepage": "https://breathless.gotclass.xyz",
-  "repository": "https://github.com/LucasYanzy/HackRU26-Breathless",
+  "repository": "https://github.com/Breathless-Game/Breathless",
   "author": {
     "name": "Breathless team",
-    "url": "https://github.com/LucasYanzy/HackRU26-Breathless"
+    "url": "https://github.com/Breathless-Game/Breathless"
   },
   "license": "UNLICENSED",
   "main": "src/main.js",
@@ -116,7 +116,7 @@
       "category": "Game",
       "executableName": "breathless",
       "icon": "build/icon.png",
-      "maintainer": "Breathless team <https://github.com/LucasYanzy/HackRU26-Breathless>",
+      "maintainer": "Breathless team <https://github.com/Breathless-Game/Breathless>",
       "synopsis": "Breath-hold free-diving and fishing game"
     }
   }

@@ -7,7 +7,7 @@
 # ../.env). Values set below win over .env.
 [Unit]
 Description=Breathless game and Presage breath sensor
-Documentation=https://github.com/LucasYanzy/HackRU26/blob/main/deploy/SETUP.md
+Documentation=https://github.com/Breathless-Game/Breathless/blob/main/deploy/SETUP.md
 After=network-online.target
 Wants=network-online.target
 
