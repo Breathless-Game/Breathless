@@ -6,7 +6,8 @@ import ts from 'typescript';
 // The desktop Browser wallet's umi Signer (src/relay-signer.ts) with a real umi and a simulated
 // link page (a throwaway owner key): the blockhash swap, re-signing what the session key signed
 // before the owner, keeping the blockhash when a key this device doesn't hold signed first, one
-// relay per batch, and refusing whatever the page changed. Confirmation uses the new blockhash's
+// relay per batch, the relay's own compute budget and a wallet's priority fee in its place, and
+// refusing whatever else the page changed. Confirmation uses the new blockhash's
 // expiry (src/blockhash-expiry.ts).
 
 const dataUrl = (js) => `data:text/javascript;base64,${Buffer.from(js).toString('base64')}`;
@@ -50,7 +51,8 @@ function page({ fresh = BH2, key = owner, tamper, swapWhenKept = false } = {}) {
     const keep = req.keepBlockhash && !swapWhenKept;
     const txs = req.txs.map((b64) => {
       const tx = L.fromBase64(b64);
-      assert.ok(L.parseTransaction(tx).signatures.every((s) => s.every((x) => x === 0)), 'nothing signed travels');
+      // Nothing signed travels, but for what a key this device doesn't hold signed (it can't be redone).
+      if (!req.keepBlockhash) assert.ok(L.parseTransaction(tx).signatures.every((s) => s.every((x) => x === 0)), 'nothing signed travels');
       let out = keep ? tx.slice() : L.withBlockhash(tx, L.base58Decode(fresh.blockhash));
       if (tamper) out = tamper(out);
       const p = L.parseTransaction(out);
@@ -61,6 +63,18 @@ function page({ fresh = BH2, key = owner, tamper, swapWhenKept = false } = {}) {
     return keep ? { txs } : { txs, blockhash: fresh.blockhash, lastValidBlockHeight: fresh.lastValidBlockHeight };
   };
   return { relay, calls };
+}
+
+/** What Phantom does with a priority fee: here its own price instead of the relay's limit and price. */
+function phantomFee(tx, microLamports = 200_000n) {
+  const { signatures, parsed } = L.parseTransaction(tx);
+  const cb = parsed.keys.findIndex((k) => L.base58Encode(k) === L.COMPUTE_BUDGET_PROGRAM);
+  assert.ok(cb >= 0, 'the relay put a compute budget in');
+  const price = new Uint8Array(9);
+  price[0] = 3;
+  new DataView(price.buffer).setBigUint64(1, microLamports, true);
+  const instructions = [{ programIndex: cb, accounts: [], data: price }, ...parsed.instructions.filter((ix) => ix.programIndex !== cb)];
+  return new Uint8Array([signatures.length, ...new Uint8Array(64 * signatures.length), ...L.serializeMessage({ ...parsed, instructions })]);
 }
 
 function relaySigner(p, local = [session]) {
@@ -181,4 +195,58 @@ test('whatever the page changes is refused, with nothing kept', async () => {
   const { signer } = relaySigner(page());
   await assert.rejects(signer.signTransaction(build(session)), /does not ask for the owner/);
   await assert.rejects(signer.signMessage(new Uint8Array(3)), /transactions only/);
+});
+
+test('the relay sends its own compute budget, so the wallet has none to add', async () => {
+  const p = page();
+  const { signer } = relaySigner(p);
+  const tx = await transferSol(umi, { source: signer, destination: session.publicKey, amount: sol(0.01) }).setFeePayer(signer).setBlockhash(BH1).buildAndSign(umi);
+  const relayed = L.summarizeTransaction(L.fromBase64(p.calls[0].txs[0]));
+  assert.deepEqual(relayed.instructions.slice(0, 2), [
+    { kind: 'compute-budget', units: 200_000 },
+    { kind: 'compute-budget', microLamports: L.RELAY_MICRO_LAMPORTS_PER_UNIT },
+  ]);
+  assert.equal(relayed.instructions[2].kind, 'sol-transfer');
+  // What comes back is what goes out: the budgeted message, fully signed.
+  assert.equal(tx.message.instructions.length, 3);
+  assertFullySigned(tx);
+});
+
+test("a wallet's priority fee is kept, and the session key signs the returned message again", async () => {
+  const asset = generateSigner(umi).publicKey;
+  // With a fresh blockhash, and with the same one (then only the wallet's edit voids the session's signature).
+  for (const fresh of [BH2, BH1]) {
+    const p = page({ fresh, tamper: (tx) => phantomFee(tx) });
+    const { signer } = relaySigner(p);
+    const builder = burnV1(umi, { asset, authority: signer, payer: session }).setFeePayer(session).setBlockhash(BH1);
+    const tx = await signTransaction(builder.build(umi), builder.getSigners(umi));
+    const summary = L.summarizeTransaction(umi.transactions.serialize(tx));
+    assert.deepEqual(summary.instructions[0], { kind: 'compute-budget', microLamports: 200_000n }, "the wallet's price");
+    assert.equal(summary.instructions.length, 2, "the relay's limit dropped, the burn kept");
+    assert.equal(tx.message.blockhash, fresh.blockhash);
+    assertFullySigned(tx);
+  }
+  // Too high a fee is refused on the desktop as well.
+  const greedy = relaySigner(page({ tamper: (tx) => phantomFee(tx, 10_000_000_000n) })).signer;
+  const build = (s) => transferSol(umi, { source: s, destination: session.publicKey, amount: sol(0.01) }).setFeePayer(s).setBlockhash(BH1).build(umi);
+  await assert.rejects(greedy.signTransaction(build(greedy)), (e) => e instanceof R.RelayError && /priority fee of 2 SOL, above the 0\.001 SOL limit/.test(e.message));
+});
+
+test("signed by a key this device doesn't hold: it travels signed, without a budget, and must come back unchanged", async () => {
+  const p = page();
+  const { signer } = relaySigner(p);
+  const builder = transactionBuilder()
+    .add(transferSol(umi, { source: oracle, destination: owner.publicKey, amount: sol(0.01) }))
+    .add(transferSol(umi, { source: signer, destination: oracle.publicKey, amount: sol(0.01) }))
+    .setFeePayer(signer)
+    .setBlockhash(BH1);
+  const presigned = await oracle.signTransaction(builder.build(umi));
+  assertFullySigned(await signer.signTransaction(presigned));
+  const relayed = L.parseTransaction(L.fromBase64(p.calls[0].txs[0]));
+  const slot = relayed.parsed.keys.findIndex((k) => L.base58Encode(k) === oracle.publicKey.toString());
+  assert.ok(verify(relayed.signatures[slot], relayed.message, relayed.parsed.keys[slot]), "the oracle's signature travels");
+  assert.ok(!L.summarizeTransaction(L.fromBase64(p.calls[0].txs[0])).instructions.some((ix) => ix.kind === 'compute-budget'));
+  // A wallet that adds its fee anyway voids the oracle's signature: refused.
+  const rogue = relaySigner(page({ tamper: (tx) => L.withComputeBudget(tx) })).signer;
+  await assert.rejects(rogue.signTransaction(presigned), (e) => e instanceof R.RelayError && /another key had signed it already/.test(e.message));
 });

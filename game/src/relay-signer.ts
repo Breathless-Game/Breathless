@@ -1,5 +1,5 @@
 import type { PublicKey, Signer, Transaction, TransactionSignature, Umi } from '@metaplex-foundation/umi';
-import { addressBytes, checkRelayedTransaction, fromBase64, RelayCheckError, toBase64, zeroSignatures, type Verify } from './link-tx';
+import { addressBytes, bytesEqual, checkRelayedTransaction, fromBase64, RelayCheckError, toBase64, withComputeBudget, zeroSignatures, type Verify } from './link-tx';
 import { t } from './i18n';
 
 // The desktop app's owner signer: an umi Signer whose signatures come from the player's wallet in
@@ -9,14 +9,19 @@ import { t } from './i18n';
 // Signer order and the blockhash swap. umi's buildAndSign signs with the fee payer first, then
 // each instruction's signers, so the owner is not always first: burnFish's fee payer is the
 // session key, which has signed by the time the owner is asked. The link page may put a fresher
-// blockhash in (the player can take longer than a blockhash lives), and that invalidates every
-// signature made before. So:
-//   - every signature slot is zeroed before the relay (the page only ever signs the owner's);
+// blockhash in (the player can take longer than a blockhash lives), and the wallet may change the
+// compute budget (Phantom adds a priority fee to a transaction that has none and no signature):
+// either invalidates every signature made before. So:
+//   - every signature slot is zeroed before the relay (the page only ever signs the owner's; but
+//     see the oracle below), and the relay's own compute budget goes in first (link-tx.ts
+//     withComputeBudget), so the wallet has none to add;
 //   - slots already signed by a key this device holds (the session key: `local`) are signed
-//     again over the returned message; slots signed later are signed over it in the first place;
+//     again over the returned message whenever it differs; slots signed later are signed over it
+//     in the first place;
 //   - a slot signed by a key this device does NOT hold (the market's oracle co-signature on a
-//     program-mode sale) can't be redone: then the page is told to keep the blockhash, and the
-//     returned message must be byte-identical, blockhash included;
+//     program-mode sale) can't be redone: that transaction travels as it is, its signatures in
+//     place (a wallet leaves a signed transaction's fee alone), the page is told to keep the
+//     blockhash, and the returned message must be byte-identical, blockhash included;
 //   - each returned transaction is checked (link-tx.ts checkRelayedTransaction) before anything
 //     is kept from it; only the owner's signature and the message are taken from it.
 // Callers confirm with expiryOf (blockhash-expiry.ts): `noteExpiry` records the new blockhash's
@@ -24,7 +29,7 @@ import { t } from './i18n';
 
 export interface RelayRequest {
   owner: string;
-  /** Unsigned transactions (every signature slot zero), base64. */
+  /** The transactions, base64: unsigned (every slot zero) unless a key this device doesn't hold signed first. */
   txs: string[];
   /** Sign as is: some slot already holds a signature this device can't make again. */
   keepBlockhash: boolean;
@@ -73,10 +78,15 @@ export function createRelaySigner(deps: RelaySignerDeps): Signer {
       const ownerIndex = tx.message.accounts.findIndex((k, i) => i < n && k.toString() === address);
       if (ownerIndex < 0) throw new RelayError(t('This transaction does not ask for the owner to sign', '这笔交易不需要钱包所有者签名'));
       const before = tx.signatures.map((s, i) => (i !== ownerIndex && i < n && !isZero(s) ? i : -1)).filter((i) => i >= 0);
-      return { tx, ownerIndex, before };
+      // Signed by a key this device doesn't hold: it must come back exactly as it went.
+      const foreign = before.some((i) => !holder(tx.message.accounts[i]));
+      return { tx, ownerIndex, before, foreign };
     });
-    const keepBlockhash = plans.some((p) => p.before.some((i) => !holder(p.tx.message.accounts[i])));
-    const sent = plans.map((p) => zeroSignatures(umi.transactions.serialize(p.tx)));
+    const keepBlockhash = plans.some((p) => p.foreign);
+    const sent = plans.map((p) => {
+      const bytes = umi.transactions.serialize(p.tx);
+      return p.foreign ? bytes : zeroSignatures(withComputeBudget(bytes));
+    });
     const res = await deps.relay({ owner: address, txs: sent.map(toBase64), keepBlockhash });
     if (!Array.isArray(res?.txs) || res.txs.length !== txs.length) throw new RelayError(t(`The browser wallet returned ${res?.txs?.length ?? 0} of ${txs.length} transactions`, `浏览器钱包只返回了 ${res?.txs?.length ?? 0} / ${txs.length} 笔交易`));
 
@@ -88,7 +98,7 @@ export function createRelaySigner(deps: RelaySignerDeps): Signer {
         throw new RelayError(t('The browser wallet returned an unreadable transaction', '浏览器钱包返回的交易无法解析'));
       }
       try {
-        return checkRelayedTransaction(unsigned, got, owner, verify, { keepBlockhash });
+        return checkRelayedTransaction(unsigned, got, owner, verify, { keepBlockhash, exact: plans[i].foreign });
       } catch (e) {
         const why = e instanceof RelayCheckError ? t(e.message, e.zh) : String((e as Error).message);
         throw new RelayError(t(`Refused the browser wallet's transaction: ${why}`, `已拒绝浏览器钱包返回的交易：${why}`));
@@ -106,11 +116,11 @@ export function createRelaySigner(deps: RelaySignerDeps): Signer {
     const out: Transaction[] = [];
     for (const [i, p] of plans.entries()) {
       const c = checked[i];
-      const signatures: TransactionSignature[] = p.tx.signatures.map((s, j) =>
-        j === c.ownerIndex ? c.ownerSignature : c.blockhashChanged ? new Uint8Array(64) : s,
-      );
+      // Another blockhash, the relay's compute budget or the wallet's: what was signed before is void.
+      const changed = !bytesEqual(c.message, p.tx.serializedMessage);
+      const signatures: TransactionSignature[] = p.tx.signatures.map((s, j) => (j === c.ownerIndex ? c.ownerSignature : changed ? new Uint8Array(64) : s));
       let tx: Transaction = { message: umi.transactions.deserializeMessage(c.message), serializedMessage: c.message, signatures };
-      if (c.blockhashChanged) for (const j of p.before) tx = await holder(p.tx.message.accounts[j])!.signTransaction(tx);
+      if (changed) for (const j of p.before) tx = await holder(p.tx.message.accounts[j])!.signTransaction(tx);
       out.push(tx);
     }
     return out;

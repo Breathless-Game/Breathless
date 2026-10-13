@@ -14,7 +14,9 @@ const L = await import(`data:text/javascript;base64,${Buffer.from(outputText).to
 
 const { generateSigner, publicKey, sol, transactionBuilder, createNoopSigner } = await import('@metaplex-foundation/umi');
 const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-const { mplToolbox, transferSol, transferTokens, transferTokensChecked, burnToken } = await import('@metaplex-foundation/mpl-toolbox');
+const { mplToolbox, transferSol, transferTokens, transferTokensChecked, burnToken, setComputeUnitLimit, setComputeUnitPrice, requestHeapFrame, addMemo } = await import(
+  '@metaplex-foundation/mpl-toolbox'
+);
 const { mplCore, transferV1, burnV1 } = await import('@metaplex-foundation/mpl-core');
 const { ed25519 } = await import('@noble/curves/ed25519');
 
@@ -95,7 +97,7 @@ test('rejects a tampered instruction, account, fee payer, extra signer or bad si
   const reject = (got, why) => assert.throws(() => L.checkRelayedTransaction(sent, got, OWNER, verify), (e) => e instanceof L.RelayCheckError && why.test(e.message) && typeof e.zh === 'string');
 
   // Another amount (the instruction's data), signed by the owner: still refused.
-  reject(pageSign(build(topUp(0.06))), /changed \(more than its blockhash\)/);
+  reject(pageSign(build(topUp(0.06))), /changed the transaction: instruction 1 .* other data/);
   // Another destination account, signed by the owner.
   reject(pageSign(build(topUp(0.05, stranger.publicKey))), /changed/);
   // Bytes flipped after the blockhash (instruction data) or in the header, then signed.
@@ -109,7 +111,7 @@ test('rejects a tampered instruction, account, fee payer, extra signer or bad si
   const extra = build(topUp().add(transferSol(umi, { source: stranger, destination: owner.publicKey, amount: sol(1) })));
   reject(pageSign(extra), /signer slots/);
   // Another instruction appended (what a wallet's own guard instruction would do).
-  reject(pageSign(build(topUp().add(transferSol(umi, { source: owner, destination: stranger.publicKey, amount: sol(0.001) })))), /changed/);
+  reject(pageSign(build(topUp().add(transferSol(umi, { source: owner, destination: stranger.publicKey, amount: sol(0.001) })))), /added an instruction for program 1111/);
   // Signed by the wrong key, or not at all.
   reject(pageSign(sent, { key: stranger }), /signature is not valid/);
   reject(L.withBlockhash(sent, L.base58Decode(BH2)), /signature is not valid/);
@@ -119,6 +121,125 @@ test('rejects a tampered instruction, account, fee payer, extra signer or bad si
   // The owner must be a signer at all.
   const notOwners = build(transferSol(umi, { source: session, destination: stranger.publicKey, amount: sol(1) }), session);
   assert.throws(() => L.checkRelayedTransaction(notOwners, notOwners, OWNER, verify), /not a signer/);
+});
+
+// ---- What a wallet may change while signing (Phantom's priority fee) ----------------------
+
+const LIGHTHOUSE = 'L2TExMFKdjpN9kozasaurPtRJWCRfYXJGiAB4AfPfGJ';
+/** ComputeBudget instructions, as a wallet puts them in front. */
+function budget({ units, microLamports } = {}) {
+  let b = transactionBuilder();
+  if (units !== undefined) b = b.add(setComputeUnitLimit(umi, { units }));
+  if (microLamports !== undefined) b = b.add(setComputeUnitPrice(umi, { microLamports }));
+  return b;
+}
+const fee = () => budget({ units: 300_000, microLamports: 100_000 });
+/** What the wallet hands back: `builder` compiled anew with the page's blockhash, signed by the owner. */
+const walletSigned = (builder, payer = owner) => pageSign(build(builder, payer, BH2), { blockhash: null });
+const accept = (sent, got, opts) => L.checkRelayedTransaction(sent, got, OWNER, verify, opts);
+const refuse = (sent, got, why, opts) =>
+  assert.throws(() => accept(sent, got, opts), (e) => e instanceof L.RelayCheckError && why.test(e.message) && /\p{Script=Han}/u.test(e.zh), String(why));
+const two = (a, b) => transactionBuilder().add(a).add(b);
+const memo = (text = 'breathless') => addMemo(umi, { memo: text });
+const ix = (programId, keys, data = new Uint8Array([1])) => ({ instruction: { programId: publicKey(programId), keys, data }, signers: [], bytesCreatedOnChain: 0 });
+
+test("a wallet's priority fee is accepted, and the app gets the message the owner signed", () => {
+  const sent = build(topUp());
+  for (const [what, b] of [
+    ['limit and price', fee()],
+    ['price only', budget({ microLamports: 50_000 })],
+    ['limit only', budget({ units: 1_000 })],
+    ['exactly 0.001 SOL', budget({ units: 200_000, microLamports: 5_000_000 })],
+  ]) {
+    const got = walletSigned(b.add(topUp()));
+    const c = accept(sent, got);
+    assert.equal(c.edited, true, what);
+    assert.equal(c.blockhashChanged, true, what);
+    assert.deepEqual(c.message, L.parseTransaction(got).message, what);
+    assert.ok(verify(c.ownerSignature, c.message, OWNER), what);
+  }
+  // Legacy too.
+  assert.equal(accept(build(topUp().useLegacyVersion()), walletSigned(fee().add(topUp()).useLegacyVersion())).edited, true);
+  // The relay's own budget, changed or dropped by the wallet.
+  const relayed = L.withComputeBudget(sent);
+  assert.equal(accept(relayed, walletSigned(budget({ units: 250_000, microLamports: 200_000 }).add(topUp()))).edited, true);
+  assert.equal(accept(relayed, walletSigned(topUp())).edited, true);
+  // Unchanged is no edit.
+  assert.equal(accept(relayed, pageSign(relayed)).edited, false);
+  // The link page applies the same rule to the message bytes, with its own blockhash kept.
+  const page = L.parseTransaction(L.withBlockhash(sent, L.base58Decode(BH2))).message;
+  const back = L.parseTransaction(walletSigned(fee().add(topUp()))).message;
+  assert.deepEqual(L.checkWalletEdits(page, back, { keepBlockhash: true }), { blockhashChanged: false, edited: true });
+  assert.throws(() => L.checkWalletEdits(L.parseTransaction(sent).message, back, { keepBlockhash: true }), /blockhash had to stay/);
+});
+
+test('a priority fee above 0.001 SOL is refused', () => {
+  const sent = build(topUp());
+  refuse(sent, walletSigned(budget({ units: 200_000, microLamports: 5_000_001 }).add(topUp())), /priority fee of 0\.001000001 SOL, above the 0\.001 SOL limit/);
+  // No limit: the runtime's default (200k units for the one instruction) is what it costs.
+  refuse(sent, walletSigned(budget({ microLamports: 10_000_000 }).add(topUp())), /priority fee of 0\.002 SOL/);
+  refuse(L.withComputeBudget(sent), walletSigned(budget({ units: 1_400_000, microLamports: 1_000_000 }).add(topUp())), /priority fee of 0\.0014 SOL/);
+});
+
+test('anything else a wallet changes is refused, saying what', () => {
+  const sent = build(topUp());
+  // A transfer of its own.
+  refuse(sent, walletSigned(fee().add(topUp()).add(transferSol(umi, { source: owner, destination: stranger.publicKey, amount: sol(0.001) }))), /added an instruction for program 1111/);
+  // A Lighthouse assertion (not known to happen on signTransaction): refused, naming its program.
+  const assertion = ix(LIGHTHOUSE, [{ pubkey: session.publicKey, isSigner: false, isWritable: false }]);
+  refuse(sent, walletSigned(fee().add(topUp()).add(assertion)), new RegExp(`added an instruction for program ${LIGHTHOUSE}`));
+  // Other data (the amount), another destination (a new writable account).
+  refuse(sent, walletSigned(fee().add(topUp(0.5))), /instruction 1 \(program 1{32}\) has other data/);
+  refuse(sent, walletSigned(fee().add(topUp(0.05, stranger.publicKey))), /account \S+ became writable/);
+  // A read-only account made writable.
+  const touch = (isWritable) => ix(L.MEMO_PROGRAM, [{ pubkey: stranger.publicKey, isSigner: false, isWritable }]);
+  refuse(build(two(topUp(), touch(false))), walletSigned(fee().add(two(topUp(), touch(true)))), /account \S+ became writable/);
+  // A new signer.
+  const signerToo = fee().add(topUp()).add(transferSol(umi, { source: stranger, destination: owner.publicKey, amount: sol(1) }));
+  refuse(sent, walletSigned(signerToo), /signer slots/);
+  assert.throws(() => L.checkWalletEdits(L.parseTransaction(sent).message, L.parseTransaction(walletSigned(signerToo)).message), /signers changed/);
+  // The original instructions reordered, or one dropped.
+  const both = build(two(topUp(), memo()));
+  refuse(both, walletSigned(fee().add(two(memo(), topUp()))), /instruction 1 now calls program Memo\S+, not 1{32} \(added, dropped or reordered\)/);
+  refuse(both, walletSigned(fee().add(topUp())), /dropped the instruction for program Memo/);
+  // Another fee payer, the same two signers.
+  const pair = () => two(topUp(), transferSol(umi, { source: session, destination: owner.publicKey, amount: sol(0.01) }));
+  refuse(build(pair()), walletSigned(fee().add(pair()), session), /fee payer changed/);
+  // A compute budget other than a limit and a price (a heap frame), or a second price.
+  refuse(sent, walletSigned(fee().add(requestHeapFrame(umi, { bytes: 64 * 1024 })).add(topUp())), /program ComputeBudget111/);
+  refuse(sent, walletSigned(fee().add(budget({ microLamports: 1 })).add(topUp())), /compute budget twice/);
+  // Signed by a key the app can't sign with again: nothing may change, not even the fee.
+  refuse(sent, walletSigned(fee().add(topUp())), /another key had signed it already/, { exact: true });
+  // Address lookup tables: unchanged only.
+  const lut = [{ publicKey: generateSigner(umi).publicKey, addresses: [session.publicKey] }];
+  const withLut = build(topUp().useV0().setAddressLookupTables(lut));
+  assert.equal(accept(withLut, pageSign(withLut)).edited, false);
+  refuse(withLut, walletSigned(fee().add(topUp()).useV0().setAddressLookupTables(lut)), /address lookup tables/);
+});
+
+test("withComputeBudget: the relay's own limit and price in front, nothing else changed", () => {
+  for (const tx of [build(topUp()), build(topUp().useLegacyVersion()), build(two(topUp(), memo()))]) {
+    const p = L.parseTransaction(tx);
+    assert.deepEqual(L.serializeMessage(p.parsed), p.message, 'serializeMessage reverses parseMessage');
+    const out = L.withComputeBudget(tx);
+    const n = p.parsed.instructions.length;
+    const s = L.summarizeTransaction(out);
+    assert.deepEqual(s.instructions.slice(0, 2), [
+      { kind: 'compute-budget', units: 200_000 * n },
+      { kind: 'compute-budget', microLamports: L.RELAY_MICRO_LAMPORTS_PER_UNIT },
+    ]);
+    assert.deepEqual(s.instructions.slice(2), L.summarizeTransaction(tx).instructions);
+    assert.deepEqual({ ...s, instructions: [] }, { ...L.summarizeTransaction(tx), instructions: [] }, 'same fee payer, signers, blockhash, version');
+    assert.ok(L.parseTransaction(out).signatures.every((sig) => sig.every((b) => b === 0)));
+    assert.equal(umi.transactions.deserialize(out).message.instructions.length, n + 2, 'umi reads it');
+    assert.equal(L.checkWalletEdits(p.message, L.parseTransaction(out).message).edited, true);
+    assert.equal(L.withComputeBudget(out), out, 'a budget already: left alone');
+  }
+  // No room left for it: as it was (the wallet can't add one either).
+  const base = build(two(topUp(), memo(''))).length;
+  const big = build(two(topUp(), memo('x'.repeat(L.PACKET_SIZE - base - 10))));
+  assert.ok(big.length <= L.PACKET_SIZE);
+  assert.equal(L.withComputeBudget(big), big);
 });
 
 test('sameExceptBlockhash and withBlockhash touch only the 32 blockhash bytes', () => {
