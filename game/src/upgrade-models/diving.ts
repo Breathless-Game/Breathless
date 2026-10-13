@@ -302,7 +302,7 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
   mesh(group, new THREE.ExtrudeGeometry(housing, { depth, bevelEnabled: false }), colors.rubber, [x, 0.015, z], 'compact-angular-lamp-housing');
   mesh(group, new THREE.BoxGeometry(width * 1.9, height * 1.9, 0.028), colors.rubber, [x, 0.015, z + 0.012], 'sealed-rear-housing');
   // Only three shoulder rings create broad reflector facets; no glowing bulb.
-  const reflectorProfile = [[0.025, 0], [radius * 0.43, depth * 0.31], [radius * 0.87, depth * 0.7]].map(([r, y]) => new THREE.Vector2(r, y));
+  const reflectorProfile = [[0.025, 0], [radius * 0.43, depth * 0.31], [radius * 0.87, depth * 0.77]].map(([r, y]) => new THREE.Vector2(r, y));
   const reflector = mesh(group, new THREE.LatheGeometry(reflectorProfile, 8), colors.metal, [x, 0.015, z + depth * 0.16], 'recessed-faceted-reflector');
   reflector.rotation.x = Math.PI / 2;
   reflector.material = colors.metal.clone();
@@ -312,12 +312,6 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
   ring(group, radius * 0.91, 0.012, colors.rubber, [x, 0.015, front - 0.006], 'z', 8).name = 'flush-lens-seal';
   const glazing = new THREE.MeshPhysicalMaterial({ color: '#d3d8d3', flatShading: true, roughness: 0.29, metalness: 0, transparent: true, opacity: 0.22, transmission: 0.15, thickness: 0.008, emissive: '#000000', emissiveIntensity: 0, depthWrite: false });
   cylinderZ(group, radius * 0.84, 0.008, glazing, [x, 0.015, front - 0.013], 8).name = 'flat-protective-lens';
-  for (const side of [-1, 1]) {
-    const pivot = mesh(group, new THREE.CylinderGeometry(radius * 0.23, radius * 0.23, 0.035, 6), colors.metal, [x + side * (width + 0.007), 0.015, z + depth * 0.35], 'lamp-tilt-pivot');
-    pivot.rotation.z = Math.PI / 2;
-    mesh(group, new THREE.BoxGeometry(0.016, radius * 0.22, 0.008), colors.rubber, [x + side * (width + 0.026), 0.015, z + depth * 0.35], 'pivot-screw-slot');
-  }
-  ring(group, radius * 0.88, 0.006, colors.metal, [x, 0.015, front - 0.019], 'z', 8).name = 'recessed-lens-retainer';
   if (guard) {
     ring(group, radius + 0.008, 0.014, colors.rubber, [x, 0.015, front + 0.004], 'z', 8).name = 'integrated-impact-guard';
   }
@@ -357,7 +351,6 @@ export function buildLamp(level: UpgradeLevel) {
   mesh(group, new THREE.BoxGeometry(batteryWidth + 0.025, 0.18, 0.04), colors.rubber, [0, 0.025, -0.44], 'rear-battery-mount');
   mesh(group, new THREE.BoxGeometry(batteryWidth, 0.165, batteryDepth), colors.rubber, [0, 0.025, batteryZ], 'sealed-rear-battery');
   mesh(group, new THREE.BoxGeometry(batteryWidth + 0.006, 0.026, batteryDepth + 0.004), colors.body, [0, -0.048, batteryZ], 'battery-cover-seam');
-  for (const side of [-1, 1]) cylinderZ(group, 0.015, 0.008, colors.metal, [side * batteryWidth * 0.33, 0.025, batteryZ - batteryDepth / 2 - 0.004], 6).name = 'battery-cover-fastener';
   tube(group, [[level === 3 ? 0.26 : 0.14, 0.04, 0.47], [0.39, 0.046, 0.26], [0.46, 0.047, 0], [0.36, 0.047, -0.27], [batteryWidth / 2, 0.04, -0.46]], 0.011, colors.rubber, 4).name = 'battery-power-cable';
   for (const side of [-1, 1]) {
     const buckle = new THREE.Shape();

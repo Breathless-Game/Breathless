@@ -3,7 +3,7 @@ import { DiverConcept } from './diver-designs';
 import { Splash } from './fx';
 import { buildFishingNetMesh } from './gear';
 import { buildHeadlamp, disposeMeshes } from './headlamp-model';
-import { lampActivation, lampDistanceAttenuation, lampProfile, type LampProfile } from './lamp-lighting';
+import { lampActivation, lampProfile, type LampProfile } from './lamp-lighting';
 import type { RenderQuality } from './render-quality';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
@@ -44,7 +44,6 @@ export class Diver {
   vel = new THREE.Vector3();
   facing = 1;
   headlamp: THREE.SpotLight;
-  /** A faint volumetric cone makes the otherwise invisible SpotLight readable underwater. */
   private body = new THREE.Group();
   private playtestModel = new DiverConcept(0);
   private modelTime = 0;
@@ -82,8 +81,8 @@ export class Diver {
   private lampAnchor = new THREE.Group();
   private lampOrigin = new THREE.Vector3();
   private lampEmitters: THREE.MeshStandardMaterial[] = [];
-  private lampBeam: THREE.Mesh;
-  private lampBeamMaterial: THREE.MeshBasicMaterial;
+  /** Nearby light reflected from the water keeps the diver's suit readable. */
+  private lampFill: THREE.PointLight;
   private lampOptics: LampProfile = lampProfile(1);
   private lampLevel = 1;
   private lampNight = 0;
@@ -192,20 +191,6 @@ export class Diver {
     this.lampGroup.name = 'diver-headlamp-hardware';
     this.lampAnchor.name = 'diver-headlamp-origin';
 
-    // A single low-poly cone makes suspended particles visible in the beam.
-    // The real SpotLight still provides direct illumination; this mesh only
-    // represents the volume between the lens and the water.
-    this.lampBeamMaterial = new THREE.MeshBasicMaterial({
-      color: '#bcecff', transparent: true, opacity: 0, depthWrite: false,
-      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
-    this.lampBeam = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 8, 1, true), this.lampBeamMaterial);
-    this.lampBeam.name = 'diver-lamp-scatter';
-    // ConeGeometry's apex is +Y: turn it toward the lens, with the base ahead.
-    this.lampBeam.rotation.z = Math.PI / 2;
-    this.lampBeam.renderOrder = 1;
-    this.lampAnchor.add(this.lampBeam);
-
     // The old design called this item a fishing rod; the fused game design
     // uses its shaft and hoop as an underwater net. Keep the model pivot at
     // the shoulder so the whole tool follows the swing animation.
@@ -230,6 +215,10 @@ export class Diver {
     this.headlamp.target.position.set(3.1, 0, 0);
     this.lampAnchor.add(this.headlamp, this.headlamp.target);
     this.headlamp.decay = this.lampOptics.decay;
+    this.lampFill = new THREE.PointLight('#b7e4ed', 0, 3, 2);
+    this.lampFill.name = 'diver-lamp-fill';
+    this.lampFill.position.set(-0.45, 0.12, 0.12);
+    this.lampAnchor.add(this.lampFill);
     this.replaceLampModel();
     this.useCustomSuit(true);
     scene.add(this.group);
@@ -554,24 +543,12 @@ export class Diver {
     this.lampEffects = effectsEnabled;
   }
 
-  /**
-   * Drive the direct spotlight and its low-poly suspended-particle volume.
-   * Three.js applies the inverse-square falloff to the SpotLight itself; the
-   * shared attenuation curve keeps the visible scatter beam in step with it.
-   */
+  /** Only real lights illuminate surfaces; no geometry represents the beam. */
   private updateLamp(depth: number) {
-    const activation = this.lampEffects ? lampActivation(depth, this.lampNight) : 0;
+    const activation = this.lampEffects && this.lampGroup.visible ? lampActivation(depth, this.lampNight) : 0;
     this.headlamp.intensity = this.lampMaxIntensity * activation;
-
-    const beamLength = Math.max(0.5, this.lampOptics.distance * 0.48);
-    const beamRadius = Math.max(0.045, Math.tan(Math.min(this.lampOptics.angle, 1.3)) * beamLength * 0.1);
-    this.lampBeam.position.set(beamLength * 0.5, 0, 0);
-    this.lampBeam.scale.set(beamRadius, beamLength, beamRadius);
-
-    const transmission = lampDistanceAttenuation(beamLength * 0.55, this.lampOptics);
-    const scatter = activation * this.lampOptics.scatter * (0.55 + transmission * 0.45);
-    this.lampBeamMaterial.opacity = THREE.MathUtils.clamp(scatter * 0.68, 0, 0.22);
-    this.lampBeam.visible = this.lampBeamMaterial.opacity > 0.001;
+    this.lampFill.intensity = activation * this.lampMaxIntensity * this.lampOptics.scatter * 0.06;
+    this.lampFill.distance = 2 + this.lampOptics.angle * 2;
 
     for (const material of this.lampEmitters) {
       material.emissiveIntensity = activation > 0 ? 0.35 + activation * 1.7 : 0;
@@ -580,8 +557,7 @@ export class Diver {
 
   private setLampOff() {
     this.headlamp.intensity = 0;
-    this.lampBeamMaterial.opacity = 0;
-    this.lampBeam.visible = false;
+    this.lampFill.intensity = 0;
     for (const material of this.lampEmitters) material.emissiveIntensity = 0;
   }
 

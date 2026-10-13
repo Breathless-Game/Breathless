@@ -403,15 +403,16 @@ test('the headlamp remains attached to the rotating head in deep water', () => {
   assert.ok(diver.headlamp.intensity > 0);
 });
 
-test('headlamp keeps direct output and visible water scatter in sync', () => {
+test('headlamp illuminates surfaces and the diver without beam geometry', () => {
   const { diver } = createDiver(RENDER_QUALITY.high, -24);
   diver.setLampStats(48, 102, 0.43, 0.075, 2, 0.24, 0.014);
   diver.setLampEnvironment(0, true);
   diver.update(1 / 60, 0, 24);
-  const beam = diver.group.getObjectByName('diver-lamp-scatter');
-  assert.ok(beam, 'scatter cone is attached to the diver');
-  assert.ok(diver.headlamp.intensity > 0, 'direct spotlight is active at depth');
-  assert.ok(beam.material.opacity > 0, 'water scatter is visible with the direct beam');
+  const fill = diver.group.getObjectByName('diver-lamp-fill');
+  assert.ok(fill.isPointLight);
+  assert.ok(diver.headlamp.intensity > 0);
+  assert.ok(fill.intensity > 0);
+  assert.equal(diver.group.getObjectByName('diver-lamp-scatter'), undefined);
   assert.equal(diver.headlamp.decay, 2);
 });
 
@@ -455,17 +456,23 @@ test('skin changes move the existing lamp, net and breath anchor without disposi
   }
 });
 
-test('the scatter cone starts at the visible lamp and widens along the spotlight direction', () => {
+test('lamp upgrades improve actual lighting and unequipped lamps emit no light', () => {
   const { diver } = createDiver();
-  diver.update(1 / 60, 0, 20);
-  diver.group.updateMatrixWorld(true);
-  const beam = diver.group.getObjectByName('diver-lamp-scatter');
-  const origin = diver.headlamp.getWorldPosition(new THREE.Vector3());
-  const apex = beam.localToWorld(new THREE.Vector3(0, 0.5, 0));
-  const base = beam.localToWorld(new THREE.Vector3(0, -0.5, 0));
-  const direction = diver.headlamp.target.getWorldPosition(new THREE.Vector3()).sub(origin).normalize();
-  assert.ok(apex.distanceTo(origin) < 1e-6);
-  assert.ok(base.clone().sub(origin).normalize().dot(direction) > 0.999);
+  let range = 0, brightness = 0;
+  for (const level of [1, 2, 3]) {
+    diver.setLampLevel(level);
+    diver.update(1 / 60, level, 50);
+    assert.ok(diver.headlamp.distance > range);
+    assert.ok(diver.headlamp.intensity > brightness);
+    range = diver.headlamp.distance;
+    brightness = diver.headlamp.intensity;
+  }
+  diver.setWorn({ fins: true, tank: false, lamp: false, net: true });
+  diver.update(1 / 60, 4, 50);
+  assert.equal(diver.headlamp.intensity, 0);
+  assert.equal(diver.group.getObjectByName('diver-lamp-fill').intensity, 0);
+  const anchor = diver.group.getObjectByName('diver-headlamp-origin');
+  assert.ok(anchor.children.every(child => !child.isMesh));
 });
 
 test('headlamp replacement frees each owned resource once and leaves the selected skin intact', () => {
