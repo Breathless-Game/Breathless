@@ -31,12 +31,34 @@ export function browserLocks(): TabLocks | undefined {
 
 const forever = () => new Promise<never>(() => {});
 
+/** How long a reloaded page waits for its previous document's lock to be released, per retry. */
+export const TAB_RETRY_MS = 750;
+export const TAB_RETRIES = 2;
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 /**
  * Take this wallet's tab lock if no other tab holds it, and hold it until the page unloads. When
  * another tab steals it later, the held request rejects (AbortError) and `stolen` runs once.
+ * On a plain reload the old document's lock is released asynchronously, so a busy answer is asked
+ * again TAB_RETRIES times, TAB_RETRY_MS apart (~1.5 s), before this tab gives way.
  */
-export function claimTab(owner: string, locks: TabLocks | undefined, stolen: () => void): Promise<TabClaim> {
-  if (!locks || typeof locks.request !== 'function') return Promise.resolve('unsupported');
+export async function claimTab(
+  owner: string,
+  locks: TabLocks | undefined,
+  stolen: () => void,
+  sleep: (ms: number) => Promise<void> = wait,
+): Promise<TabClaim> {
+  if (!locks || typeof locks.request !== 'function') return 'unsupported';
+  for (let attempt = 0; ; attempt++) {
+    const claim = await tryClaim(owner, locks, stolen);
+    if (claim !== 'busy' || attempt >= TAB_RETRIES) return claim;
+    await sleep(TAB_RETRY_MS);
+  }
+}
+
+/** One ifAvailable request: granted (and held), busy, or unsupported when the request fails. */
+function tryClaim(owner: string, locks: TabLocks, stolen: () => void): Promise<TabClaim> {
   return new Promise<TabClaim>((resolve) => {
     let held = false;
     let heldRequest: Promise<unknown>;

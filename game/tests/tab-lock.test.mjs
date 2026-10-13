@@ -13,6 +13,7 @@ const L = await import(`data:text/javascript;base64,${Buffer.from(outputText).to
 const OWNER_A = 'GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB';
 const OWNER_B = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const tick = () => new Promise((r) => setTimeout(r, 0));
+const noSleep = async () => {};
 
 /**
  * A lock manager with Web Locks' semantics for one page set: ifAvailable gets null while held;
@@ -54,7 +55,7 @@ test('first tab gets the lock, asking only if it is free', async () => {
 test('a second tab on the same wallet is busy; another wallet is not', async () => {
   const locks = fakeLocks();
   assert.equal(await L.claimTab(OWNER_A, locks, () => {}), 'granted');
-  assert.equal(await L.claimTab(OWNER_A, locks, () => {}), 'busy');
+  assert.equal(await L.claimTab(OWNER_A, locks, () => {}, noSleep), 'busy');
   assert.equal(await L.claimTab(OWNER_B, locks, () => {}), 'granted');
 });
 
@@ -71,7 +72,7 @@ test('"Play here" steals the lock: the holder hears it once, then the thief relo
   const locks = fakeLocks();
   let stolen = 0;
   assert.equal(await L.claimTab(OWNER_A, locks, () => stolen++), 'granted');
-  assert.equal(await L.claimTab(OWNER_A, locks, () => {}), 'busy');
+  assert.equal(await L.claimTab(OWNER_A, locks, () => {}, noSleep), 'busy');
   let reloaded = 0;
   void L.takeOverTab(OWNER_A, locks, () => reloaded++);
   await tick();
@@ -79,5 +80,29 @@ test('"Play here" steals the lock: the holder hears it once, then the thief relo
   assert.equal(reloaded, 1);
   // steal alone: Web Locks refuses steal together with ifAvailable
   assert.deepEqual(locks.calls.at(-1).options, { steal: true });
-  assert.equal(await L.claimTab(OWNER_A, locks, () => {}), 'busy'); // the thief holds it now
+  assert.equal(await L.claimTab(OWNER_A, locks, () => {}, noSleep), 'busy'); // the thief holds it now
+});
+
+test('a reload whose old lock is still being released retries before giving way', async () => {
+  const locks = fakeLocks();
+  const name = L.tabLockName(OWNER_A);
+  locks.held.set(name, () => {}); // the previous document's lock, not yet released
+  const slept = [];
+  const sleep = async (ms) => {
+    slept.push(ms);
+    locks.held.delete(name); // the browser releases it meanwhile
+  };
+  assert.equal(await L.claimTab(OWNER_A, locks, () => {}, sleep), 'granted');
+  assert.deepEqual(slept, [L.TAB_RETRY_MS]);
+  assert.equal(locks.calls.length, 2);
+});
+
+test('still held after every retry: busy', async () => {
+  const locks = fakeLocks();
+  locks.held.set(L.tabLockName(OWNER_A), () => {}); // another tab really plays it
+  const slept = [];
+  assert.equal(await L.claimTab(OWNER_A, locks, () => {}, async (ms) => void slept.push(ms)), 'busy');
+  assert.equal(slept.length, L.TAB_RETRIES);
+  assert.equal(locks.calls.length, L.TAB_RETRIES + 1);
+  assert.equal(L.TAB_RETRIES * L.TAB_RETRY_MS, 1500);
 });
