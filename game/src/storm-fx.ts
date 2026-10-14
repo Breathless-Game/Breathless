@@ -3,19 +3,21 @@ import { buildFishMesh, type FishSpec } from './fish';
 import { disposeAll } from './fx';
 import { flatMat } from './lowpoly';
 import { ROGUE } from './storm';
+import { FoamSurfaceMaterial, foamGeometry, foamEnvelope } from './water-foam';
 
 // What a rogue wave looks like beyond the water itself (storm.ts has the rules,
-// water.ts the wave): foam tumbling along its crest, spray torn off it, the
+// water.ts the wave): broken foam riding its crest, spray torn off it, the
 // burst when it hits the boat, and what goes overboard when the boat turns over.
-// Everything is flat-shaded chunks like the rest of the scene: three instanced
-// draws and a dozen small meshes, all hidden while the sea is quiet.
+// Surface foam and faceted spray use three bounded instanced draws; cargo
+// meshes appear only when the boat capsizes.
 
 /** World height of the water at (x, z), swell and rogue wave included. */
 export type Surface = (x: number, z: number) => number;
 
 const FOAM = 30;
 const DROPS = 320;
-const PATCHES = 10;
+const PATCHES = 48;
+const PATCH_STRIDE = 9;
 const GRAVITY = 9.8;
 
 // Scratch objects for the per-frame path.
@@ -23,7 +25,9 @@ const _m = new THREE.Matrix4();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _q = new THREE.Quaternion();
-const _e = new THREE.Euler();
+const UP = new THREE.Vector3(0, 1, 0);
+const _normal = new THREE.Vector3();
+const _turn = new THREE.Quaternion();
 const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
 
 interface Floater {
@@ -53,8 +57,11 @@ export class StormFx {
   private drop = new Float32Array(DROPS * 9);
   private nextDrop = 0;
   private liveDrops = 0;
-  // Foam patches left on the water: x, z, age, life, size, turn.
-  private patch = new Float32Array(PATCHES * 6);
+  // Foam patches: x, z, age, life, size, turn, drift x/z, aspect ratio.
+  private patch = new Float32Array(PATCHES * PATCH_STRIDE);
+  private foamOpacity = new Float32Array(FOAM);
+  private patchOpacity = new Float32Array(PATCHES);
+  private livePatches = 0;
   private nextPatch = 0;
   private floaters: Floater[] = [];
   private cargo: THREE.Object3D[] = [];
@@ -66,17 +73,19 @@ export class StormFx {
   private wakeCooldown = 0;
   private lastBoatX = Number.NaN;
   private lastBoatY = Number.NaN;
-  // Each clump of foam keeps its own place along the crest, size and tumble.
+  // Each clump keeps its own place along the crest, size and bearing.
   private clump = new Float32Array(FOAM * 4);
 
   constructor(scene: THREE.Scene) {
-    // White water carries its own light: under a storm sky plain white facets would read as grey stones.
-    const white = flatMat('#ffffff', { emissive: '#dcecf2', emissiveIntensity: 0.85, roughness: 0.7 });
-    this.foam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), white, FOAM);
-    this.drops = new THREE.InstancedMesh(new THREE.TetrahedronGeometry(1, 0), white, DROPS);
-    const disc = new THREE.CircleGeometry(1, 7);
-    disc.rotateX(-Math.PI / 2);
-    this.patches = new THREE.InstancedMesh(disc, flatMat('#f1f8fa', { emissive: '#c4dae2', emissiveIntensity: 0.6 }), PATCHES);
+    // Soft surface foam stays separate from airborne droplets and uses the same three draws.
+    const white = flatMat('#eaf5f5', { emissive: '#bdd8db', emissiveIntensity: 0.22, roughness: 0.7 });
+    this.foam = new THREE.InstancedMesh(foamGeometry(this.foamOpacity), new FoamSurfaceMaterial(), FOAM);
+    this.drops = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), white, DROPS);
+    this.patches = new THREE.InstancedMesh(foamGeometry(this.patchOpacity), new FoamSurfaceMaterial(), PATCHES);
+    this.foam.renderOrder = this.patches.renderOrder = 2; // over the transparent water surface
+    this.foam.name = 'wave-crest-foam';
+    this.drops.name = 'wave-spray';
+    this.patches.name = 'surface-foam-trail';
     for (const mesh of [this.foam, this.drops, this.patches]) {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.frustumCulled = false;
@@ -118,9 +127,17 @@ export class StormFx {
   }
 
   /** A patch of foam left lying on the water at (x, z). */
-  private leaveFoam(x: number, z: number, size: number, life: number) {
-    this.patch.set([x, z, 0, life, size, Math.random() * 6], this.nextPatch * 6);
+  private leaveFoam(x: number, z: number, size: number, life: number, vx = -0.18, vz = 0.07, aspect = 1.3) {
+    this.patch.set([x, z, 0, life, size, Math.random() * 6, vx, vz, aspect], this.nextPatch * PATCH_STRIDE);
     this.nextPatch = (this.nextPatch + 1) % PATCHES;
+  }
+
+  /** Place a foam patch on the local tangent of the same surface that moves the boat. */
+  private surfacePose(x: number, z: number, turn: number, surface: Surface) {
+    const dx = (surface(x + 0.35, z) - surface(x - 0.35, z)) / 0.7;
+    const dz = (surface(x, z + 0.35) - surface(x, z - 0.35)) / 0.7;
+    _q.setFromUnitVectors(UP, _normal.set(-dx, 1, -dz).normalize());
+    _q.multiply(_turn.setFromAxisAngle(UP, turn));
   }
 
   /** A burst of white water thrown up around (x, z): `count` droplets, flung `throwX` m/s along x. */
@@ -131,7 +148,7 @@ export class StormFx {
       this.spray(
         x + Math.cos(a) * 1.4, y + Math.random() * 0.6, z + Math.sin(a) * 1.1,
         throwX * (0.3 + Math.random() * 0.9) + Math.cos(a) * out, power * (0.45 + Math.random() * 0.75), Math.sin(a) * out,
-        0.9 + Math.random() * 1.1, 0.12 + Math.random() * 0.3,
+        0.9 + Math.random() * 1.1, 0.05 + Math.random() * 0.13,
       );
     }
   }
@@ -222,7 +239,7 @@ export class StormFx {
     // spray. This remains visible as the hull rises off a passing trough.
     const trailX = x - 2.3;
     const trailZ = -waveSide * 0.62;
-    this.leaveFoam(trailX, trailZ, size, THREE.MathUtils.lerp(1.5, 3.6, intensity));
+    this.leaveFoam(trailX, trailZ, size, THREE.MathUtils.lerp(2.2, 4.2, intensity), horizontalSpeed * 0.12 - 0.22, -waveSide * 0.12, 2.2);
     if (intensity > 0.42) {
       this.leaveFoam(x - 0.7, waveSide * 0.9, size * 0.72, 1.5 + intensity * 1.8);
     }
@@ -237,7 +254,11 @@ export class StormFx {
    * Advance by `dt`. `waveX` is the crest (null: no wave), travelling `dir`, `height` m tall
    * right now; `surface` is the water everything rides on.
    */
-  update(dt: number, time: number, waveX: number | null, dir: 1 | -1, height: number, surface: Surface) {
+  update(dt: number, time: number, waveX: number | null, dir: 1 | -1, height: number, surface: Surface, nightMix = 0) {
+    const night = THREE.MathUtils.clamp(nightMix, 0, 1);
+    (this.foam.material as THREE.MeshStandardMaterial).emissiveIntensity = THREE.MathUtils.lerp(0.18, 0.04, night);
+    (this.patches.material as THREE.MeshStandardMaterial).emissiveIntensity = THREE.MathUtils.lerp(0.18, 0.04, night);
+    (this.drops.material as THREE.MeshStandardMaterial).emissiveIntensity = THREE.MathUtils.lerp(0.22, 0.06, night);
     // ---- Foam along the crest, and spray torn off it by the wind.
     const crest = waveX !== null && height > 0.4;
     this.foam.visible = crest;
@@ -250,15 +271,17 @@ export class StormFx {
         const s = size * share * (0.95 + 0.3 * Math.sin(time * 5.3 + turn * 2));
         // The crest flattens out before the camera (see water.ts): no foam there.
         const fade = z > 2 ? Math.max(0, 1 - (z - 2) / 5) : 1;
-        _q.setFromEuler(_e.set(time * 2.2 + turn, turn, -dir * time * 3.4 + turn));
-        this.foam.setMatrixAt(i, _m.compose(_p.set(x, surface(x, z) + 0.12 * s, z), _q, _s.set(s * 1.25 * fade, s * 0.62 * fade, s * 1.05 * fade)));
+        this.surfacePose(x, z, turn + time * 0.15, surface);
+        this.foamOpacity[i] = fade * Math.min(1, share) * (0.65 + 0.35 * Math.sin(time * 1.7 + turn) ** 2);
+        this.foam.setMatrixAt(i, _m.compose(_p.set(x, surface(x, z) + 0.045, z), _q, _s.set(s * 1.55 * fade, 1, s * 1.2 * fade)));
       }
       this.foam.instanceMatrix.needsUpdate = true;
+      this.foam.geometry.attributes.aFoamOpacity.needsUpdate = true;
       this.emit += dt * 46 * share;
       while (this.emit >= 1) {
         this.emit -= 1;
         const z = -52 + Math.random() * 55;
-        this.spray(waveX, surface(waveX, z) + 0.25, z, dir * (ROGUE.speed + 1 + Math.random() * 5), 1.6 + Math.random() * 3.6, (Math.random() - 0.5) * 2.4, 0.6 + Math.random() * 0.7, 0.09 + Math.random() * 0.2);
+        this.spray(waveX, surface(waveX, z) + 0.25, z, dir * (ROGUE.speed + 1 + Math.random() * 5), 1.6 + Math.random() * 3.6, (Math.random() - 0.5) * 2.4, 0.6 + Math.random() * 0.7, 0.035 + Math.random() * 0.09);
       }
       // The broken water it leaves behind.
       if (Math.random() < dt * 5 * share) this.leaveFoam(waveX - dir * (4 + Math.random() * 5), -30 + Math.random() * 30, 1 + Math.random() * 1.6, 3 + Math.random() * 3);
@@ -283,33 +306,43 @@ export class StormFx {
       }
       alive++;
       const s = d[o + 8] * (1 - t * t);
-      _q.setFromEuler(_e.set(d[o + 6] * 7 + i, i, d[o + 6] * 5));
-      this.drops.setMatrixAt(i, _m.compose(_p.set(d[o], d[o + 1], d[o + 2]), _q, _s.set(s, s, s)));
+      _normal.set(d[o + 3], d[o + 4], d[o + 5]);
+      if (_normal.lengthSq() < 1e-8) _normal.copy(UP);
+      _q.setFromUnitVectors(UP, _normal.normalize());
+      this.drops.setMatrixAt(i, _m.compose(_p.set(d[o], d[o + 1], d[o + 2]), _q, _s.set(s * 0.5, s * 1.35, s * 0.5)));
     }
     if (alive || this.liveDrops) this.drops.instanceMatrix.needsUpdate = true;
     this.liveDrops = alive;
     this.drops.visible = alive > 0;
 
-    // ---- Foam patches spread, ride the swell and shrink away.
+    // ---- Foam patches drift, spread, ride the swell and dissolve.
     let lying = 0;
     for (let i = 0; i < PATCHES; i++) {
-      const o = i * 6;
+      const o = i * PATCH_STRIDE;
       if (this.patch[o + 3] <= 0) continue;
       this.patch[o + 2] += dt;
       const t = this.patch[o + 2] / this.patch[o + 3];
       if (t >= 1) {
         this.patch[o + 3] = 0;
+        this.patchOpacity[i] = 0;
         this.patches.setMatrixAt(i, HIDDEN);
         continue;
       }
       lying++;
-      const s = this.patch[o + 4] * Math.min(1, t * 6) * (1 - t * t);
+      this.patch[o] += this.patch[o + 6] * dt;
+      this.patch[o + 1] += this.patch[o + 7] * dt;
+      const s = this.patch[o + 4] * (0.7 + t * 0.6);
+      this.patchOpacity[i] = foamEnvelope(this.patch[o + 2], this.patch[o + 3]);
       const [x, z] = [this.patch[o], this.patch[o + 1]];
-      _q.setFromEuler(_e.set(0, this.patch[o + 5] + t, 0));
-      this.patches.setMatrixAt(i, _m.compose(_p.set(x, surface(x, z) + 0.06, z), _q, _s.set(s * 1.3, 1, s)));
+      this.surfacePose(x, z, this.patch[o + 5] + t * 0.2, surface);
+      this.patches.setMatrixAt(i, _m.compose(_p.set(x, surface(x, z) + 0.045, z), _q, _s.set(s * this.patch[o + 8], 1, s)));
     }
     this.patches.visible = lying > 0;
-    if (lying || this.patches.visible) this.patches.instanceMatrix.needsUpdate = true;
+    if (lying || this.livePatches) {
+      this.patches.instanceMatrix.needsUpdate = true;
+      this.patches.geometry.attributes.aFoamOpacity.needsUpdate = true;
+    }
+    this.livePatches = lying;
 
     // ---- Cargo and fish gone overboard.
     for (let i = this.floaters.length - 1; i >= 0; i--) {
@@ -372,6 +405,12 @@ export class StormFx {
     this.floaters.length = 0;
     this.drop.fill(0);
     this.patch.fill(0);
+    this.foamOpacity.fill(0);
+    this.patchOpacity.fill(0);
+    this.livePatches = 0;
+    this.emit = 0;
+    this.nextPatch = 0;
+    this.nextDrop = 0;
     this.liveDrops = 0;
     this.wakeCooldown = 0;
     this.lastBoatX = Number.NaN;
@@ -381,5 +420,7 @@ export class StormFx {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.visible = false;
     }
+    this.foam.geometry.attributes.aFoamOpacity.needsUpdate = true;
+    this.patches.geometry.attributes.aFoamOpacity.needsUpdate = true;
   }
 }

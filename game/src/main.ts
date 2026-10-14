@@ -2815,7 +2815,7 @@ function update(dt: number, time: number) {
   const stormEvent = stormSea.tick(dt, world.weather.state.storm, phase === 'play' && world.map.stormSwell > 0);
   world.setRogueWave(stormSea.x, stormSea.dir, stormSea.height);
   world.boatPose = stormSea.capsized ? stormSea.pose : null;
-  stormFx.update(dt, time, stormSea.x, stormSea.dir, stormSea.height, seaSurface);
+  stormFx.update(dt, time, stormSea.x, stormSea.dir, stormSea.height, seaSurface, world.dayCycle.state.nightMix);
   if (stormEvent === 'wave') hud.message(t('A rogue wave is bearing down on the boat!', '一道巨浪正朝船扑来！'), 2600);
   else if (stormEvent === 'capsize') capsize();
   else if (stormEvent === 'righted') {

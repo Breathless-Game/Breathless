@@ -3,6 +3,7 @@ import type { LightingState } from './daylight';
 import type { RenderQuality } from './render-quality';
 import type { WeatherState } from './weather';
 import { ROGUE } from './storm';
+import { whitecapStrength } from './water-foam';
 
 /** Colored low-poly facets and a faceted road of sun or moon glitter in one water draw. */
 export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
@@ -14,6 +15,8 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     uWaterDetail: { value: 1 },
     uWaterWind: { value: 0 },
     uWaterMapWaves: { value: 1 },
+    uWaterFoamStrength: { value: 0 },
+    uWaterFoamLight: { value: 1 },
     // A rogue wave: where its crest is (x), how high it stands, and which way it travels (+1 or -1).
     uWaterRogue: { value: new THREE.Vector3(0, 0, 1) },
     uWaterAbove: { value: 1 },
@@ -39,6 +42,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           varying vec4 vWaterPatch;
           varying vec3 vWaterFacetCenter;
           varying vec2 vWaterFacetTone;
+          varying vec3 vWaterSurface;
           uniform float uWaterTime;
           uniform float uWaterWind;
           uniform float uWaterMapWaves;
@@ -61,16 +65,22 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           vWaterPatch = aWaterPatch;
           vWaterFacetCenter = (modelMatrix * vec4(aWaterFacet.x, 0.0, aWaterFacet.y, 1.0)).xyz;
           vWaterFacetTone = aWaterFacet.zw;
+          // Match the displacement's local z (the surface itself is translated behind the boat).
+          vWaterSurface = transformed;
         `);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec4 vWaterPatch;
           varying vec3 vWaterFacetCenter;
           varying vec2 vWaterFacetTone;
+          varying vec3 vWaterSurface;
           uniform float uWaterTime;
           uniform float uWaterEffects;
           uniform float uWaterDetail;
           uniform float uWaterWind;
+          uniform float uWaterFoamStrength;
+          uniform float uWaterFoamLight;
+          uniform vec3 uWaterRogue;
           uniform float uWaterAbove;
           uniform vec3 uWaterSky;
           uniform vec3 uWaterHorizon;
@@ -165,6 +175,24 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
             // Added light, not paint: the facet's own shading stays visible under it.
             outgoingLight += glintColor * highlight * 0.92;
             diffuseColor.a = clamp(diffuseColor.a + highlight * 0.12, 0.0, 0.92);
+
+            // White water belongs to moving crests, distinct from the reflected road of light.
+            // Continuous surface coordinates keep it coherent across different facet budgets.
+            float swellCrest = sin(vWaterSurface.x * 0.15 + uWaterTime * 1.3) * 0.35
+              + cos(vWaterSurface.z * 0.2 + uWaterTime * 0.9) * 0.25;
+            float crestFoam = smoothstep(0.26, 0.53, swellCrest) * uWaterFoamStrength;
+            float rogueOffset = (vWaterSurface.x - uWaterRogue.x) * uWaterRogue.z - 0.55;
+            float rogueFoam = exp(-rogueOffset * rogueOffset / 2.0)
+              * smoothstep(0.25, 2.0, uWaterRogue.y)
+              * (1.0 - smoothstep(34.0, 46.0, vWaterSurface.z));
+            float foamNoise = sin(vWaterSurface.x * 1.35 + vWaterSurface.z * 0.7 - uWaterTime * 0.45)
+              * cos(vWaterSurface.z * 1.6 - vWaterSurface.x * 0.4 + uWaterTime * 0.3);
+            float foamAA = max(fwidth(foamNoise), 0.025);
+            float foamLace = smoothstep(-0.05 - foamAA, 0.40 + foamAA, foamNoise);
+            float foam = clamp(max(crestFoam, rogueFoam) * foamLace * uWaterAbove, 0.0, 0.85);
+            vec3 foamTint = mix(vec3(0.74, 0.87, 0.87), vec3(0.94, 0.97, 0.91), clamp(waterNormal.y, 0.0, 1.0));
+            outgoingLight = mix(outgoingLight, foamTint * uWaterFoamLight, foam);
+            diffuseColor.a = min(0.94, diffuseColor.a + foam * 0.18);
           }
           #include <opaque_fragment>
         `);
@@ -172,7 +200,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   }
 
   customProgramCacheKey(): string {
-    return 'deepbreath-water-facets-v4';
+    return 'deepbreath-water-facets-v5';
   }
 
   setEffectsEnabled(enabled: boolean): void {
@@ -190,6 +218,12 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
     uniforms.uWaterDetail.value = quality.waterDetail;
     uniforms.uWaterWind.value = weather?.wind ?? 0;
     uniforms.uWaterMapWaves.value = mapWaves;
+    uniforms.uWaterFoamStrength.value = whitecapStrength(mapWaves, weather?.wind ?? 0);
+    uniforms.uWaterFoamLight.value = THREE.MathUtils.clamp(
+      (0.16 + lighting.ambientIntensity * 0.25 + lighting.sunIntensity * 0.12)
+        * THREE.MathUtils.lerp(1, 0.35, lighting.nightMix) * (1 - (weather?.cloud ?? 0) * 0.35),
+      0.035, 0.9,
+    );
     uniforms.uWaterAbove.value = THREE.MathUtils.smoothstep(cameraY, -0.65, 0.9);
     uniforms.uWaterSky.value.setRGB(...lighting.skyColor, THREE.SRGBColorSpace);
     uniforms.uWaterHorizon.value.setRGB(...lighting.horizonColor, THREE.SRGBColorSpace);
