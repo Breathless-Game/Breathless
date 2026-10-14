@@ -9,6 +9,8 @@ import { buildBoatSpeed, buildBoatHull, buildBoatDeck } from './upgrade-models/m
 import { buildFins, buildTank, buildLamp } from './upgrade-models/diving';
 import { beam, material, mesh } from './upgrade-models/common';
 import { buildFishingBoat } from './boat';
+import { lampPath } from './lamp-upgrades';
+import type { LampPath } from './lamp-lighting';
 
 export type UpgradeId = 'rod' | 'reel' | 'bait' | 'boat' | 'boatSpeed' | 'boatHull' | 'boatDeck' | 'net' | 'fins' | 'tank' | 'lamp' | 'sonar';
 export type UpgradeLevel = 1 | 2 | 3;
@@ -132,6 +134,7 @@ const builders: Record<UpgradeId, (level: UpgradeLevel) => THREE.Group> = {
 export interface UpgradeModelOptions {
   /** Keep the physical growth between levels in a shared display frame. */
   preserveTierScale?: boolean;
+  lampPath?: LampPath;
 }
 
 type TierBounds = readonly [number, number, number];
@@ -154,6 +157,14 @@ function tierBounds(id: UpgradeId): TierBounds {
   const cached = tierBoundsCache.get(id);
   if (cached) return cached;
   const values = ([1, 2, 3] as const).map((level) => {
+    if (id === 'lamp') {
+      return Math.max(...(['focus', 'wideLamp'] as const).map(path => {
+        const probe = buildLamp(level, path);
+        const size = new THREE.Box3().setFromObject(probe).getSize(new THREE.Vector3());
+        disposeBoundsProbe(probe);
+        return Math.max(size.x, size.y, size.z);
+      }));
+    }
     const probe = builders[id](level);
     probe.updateMatrixWorld(true);
     const size = new THREE.Box3().setFromObject(probe).getSize(new THREE.Vector3());
@@ -203,7 +214,7 @@ function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
 
 /** Build a centred, two-unit display model shared by the workbench and catalog. */
 export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel, options: UpgradeModelOptions = {}): THREE.Group {
-  const inner = builders[id](level);
+  const inner = id === 'lamp' ? buildLamp(level, options.lampPath) : builders[id](level);
   const bounds = new THREE.Box3().setFromObject(inner);
   const centre = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
@@ -229,6 +240,7 @@ export function buildUpgradeModel(id: UpgradeId, level: UpgradeLevel, options: U
   outer.userData = {
     upgradeId: id,
     level,
+    ...(id === 'lamp' ? { lampPath: lampPath(level, options.lampPath) } : {}),
     source: 'buildUpgradeModel',
     visualOnly: true,
     // Consumers that put different gear families on one table can preserve

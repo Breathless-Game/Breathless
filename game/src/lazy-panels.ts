@@ -11,7 +11,7 @@ import type { GearInspector, InspectHooks } from './inspect';
 import type { MapDef } from './maps';
 import type { Report } from './report';
 import type { SettingsDesk } from './settings-desk';
-import type { UpgradeDef } from './upgrades';
+import type { UpgradeDef, UpgradeLevel } from './upgrades';
 import type { Vault } from './vault';
 
 /** Build `T` once its module is in; idle time starts it, and so does the first use. */
@@ -153,8 +153,8 @@ export class LazyGearInspector {
       fn(i);
     });
   }
-  show(def: UpgradeDef, from: { x: number; y: number }) {
-    this.open((i) => i.show(def, from));
+  show(def: UpgradeDef, from: { x: number; y: number }, level?: UpgradeLevel) {
+    this.open((i) => i.show(def, from, level));
   }
   showShips(from: { x: number; y: number }) {
     this.open((i) => i.showShips(from));

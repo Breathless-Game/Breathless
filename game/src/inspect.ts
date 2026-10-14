@@ -3,6 +3,9 @@ import { buildUpgradeModel, upgradeEffect, type UpgradeDef, type UpgradeLevel } 
 import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { t, lang, onLangChange } from './i18n';
+import { lampEffect, lampPath } from './lamp-upgrades';
+import { disposeMeshes } from './headlamp-model';
+import type { LampPath } from './lamp-lighting';
 
 // A closer look at one piece of gear from the workbench: it grows from where it
 // lies on the table to the middle of the screen over the blurred table, turning
@@ -42,7 +45,7 @@ export interface InspectHooks {
   /** The two branches this gear can run from Lv2 (null: it has none), and which one it runs. */
   paths(def: UpgradeDef): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
   activePath(def: UpgradeDef): string | null;
-  selectPath(def: UpgradeDef, id: string): void;
+  selectPath(def: UpgradeDef, id: string): Promise<void> | void;
   /** The ships, for the boat (showShips). */
   ships: ShipHooks;
   /** Dressing the diver figure (showDiver). What it wears is what's in the ready tray (isReady / setReady). */
@@ -115,6 +118,10 @@ export class GearInspector {
   private raf = 0;
   private last = 0;
   private buying = false;
+  private changingPath = false;
+  private previewLampPath: LampPath | null = null;
+  private lampModelPath: LampPath | null = null;
+  private lampState = '';
   private notice: [string, string] | null = null;
   private noticeText(): string { return this.notice ? t(this.notice[0], this.notice[1]) : ''; }
 
@@ -210,10 +217,13 @@ export class GearInspector {
   }
 
   /** Look at `def`, growing it out of the screen point `from` (where it lies on the table). */
-  show(def: UpgradeDef, from: { x: number; y: number }) {
+  show(def: UpgradeDef, from: { x: number; y: number }, level?: UpgradeLevel) {
     this.def = def;
     this.shipMode = this.diverMode = false;
-    this.level = Math.min(3, Math.max(1, this.hooks.owned(def)));
+    this.level = level ?? Math.min(3, Math.max(1, this.hooks.owned(def)));
+    this.previewLampPath = null;
+    this.lampModelPath = this.selectedLampPath();
+    this.lampState = '';
     this.open3d(from);
   }
 
@@ -279,8 +289,7 @@ export class GearInspector {
     this.notice = null;
     this.orbitYaw = 0;
     this.orbitTilt = 0;
-    this.models.forEach((m) => this.turntable.remove(m));
-    this.models.clear();
+    this.clearModels();
     this.swap = null;
     this.spin = -0.6;
     this.turntable.add(this.model(this.level));
@@ -361,11 +370,55 @@ export class GearInspector {
       } else if (this.diverMode) {
         m = new THREE.Group();
         m.add(this.hooks.diver.model()); // already centred, standing
-      } else m = buildUpgradeModel(this.def!.id, level as UpgradeLevel, { preserveTierScale: true });
+      } else m = buildUpgradeModel(this.def!.id, level as UpgradeLevel, { preserveTierScale: true, lampPath: this.selectedLampPath() });
       m.scale.setScalar(1.15); // preserve the tier silhouette inside the inspector frame
       this.models.set(level, m);
     }
     return m;
+  }
+
+  private clearModels() {
+    this.models.forEach(model => {
+      this.turntable.remove(model);
+      if (model.userData.upgradeId === 'lamp') disposeMeshes(model);
+    });
+    this.models.clear();
+    this.swap = null;
+  }
+
+  private selectedLampPath(): LampPath {
+    return this.previewLampPath ?? lampPath(this.def ? this.hooks.owned(this.def) : 1, this.def ? this.hooks.activePath(this.def) : null);
+  }
+
+  private syncLampModel() {
+    if (this.def?.id !== 'lamp') return;
+    const path = this.selectedLampPath();
+    if (path === this.lampModelPath) return;
+    this.clearModels();
+    this.lampModelPath = path;
+    this.turntable.add(this.model(this.level));
+  }
+
+  private renderLampPreview() {
+    const host = $('wb-inspect-lamp-preview');
+    host.classList.toggle('hidden', this.def?.id !== 'lamp');
+    if (this.def?.id !== 'lamp') return;
+    const label = document.createElement('small');
+    label.textContent = t('Preview optics', '预览专精');
+    host.replaceChildren(label, ...(['focus', 'wideLamp'] as const).map(path => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = path === 'focus' ? t('Focus', '聚光') : t('Wide', '广角');
+      button.dataset.lampPreview = path;
+      button.setAttribute('aria-pressed', String(this.selectedLampPath() === path));
+      button.disabled = this.level < 2;
+      button.addEventListener('click', () => {
+        this.previewLampPath = path;
+        this.syncLampModel();
+        this.renderInfo();
+      });
+      return button;
+    }));
   }
 
   /** A low, dark plinth separates the model from the backdrop and catches its silhouette. */
@@ -387,6 +440,7 @@ export class GearInspector {
   }
 
   private renderInfo() {
+    this.renderLampPreview();
     if (this.shipMode) return this.renderShip();
     if (this.diverMode) return this.renderDiver();
     const def = this.def;
@@ -401,7 +455,10 @@ export class GearInspector {
     $('wb-inspect-kind').textContent = def.group === 'dive' ? t('Dive gear', '潜水装备') : t('Boat gear', '船上装备');
     $('wb-inspect-level').textContent = t(`Level ${lv} / 3${unlocked ? '' : ' · locked'}`, `${lv} / 3 级${unlocked ? '' : ' · 未解锁'}`);
     $('wb-inspect-level').classList.toggle('locked', !unlocked);
-    $('wb-inspect-effect').textContent = upgradeEffect(def, lv);
+    const effect = (level: number, preview = true) => def.id === 'lamp'
+      ? lampEffect(level, preview ? this.selectedLampPath() : lampPath(owned, this.hooks.activePath(def)), lang() === 'zh')
+      : upgradeEffect(def, level);
+    $('wb-inspect-effect').textContent = effect(lv);
     const sonarColor = $<HTMLLabelElement>('wb-inspect-sonar-color');
     const sonarInput = $<HTMLInputElement>('wb-inspect-sonar-input');
     const isSonar = def.id === 'sonar';
@@ -411,7 +468,7 @@ export class GearInspector {
     $('wb-inspect-levels').replaceChildren(
       ...LEVELS.map((l) => {
         const li = document.createElement('li');
-        li.textContent = `Lv ${l} · ${upgradeEffect(def, l)}`;
+        li.textContent = `Lv ${l} · ${effect(l)}`;
         li.classList.toggle('on', l === lv);
         li.classList.toggle('locked', l > owned);
         return li;
@@ -430,10 +487,10 @@ export class GearInspector {
     const pearls = this.hooks.pearls();
     const short = !maxed && pearls < price;
     $('wb-inspect-up-title').textContent = maxed ? t('Fully upgraded', '已满级') : t(`Upgrade to level ${nextLv}`, `升级到 ${nextLv} 级`);
-    $('wb-inspect-up-effect').textContent = maxed ? upgradeEffect(def, 3) : upgradeEffect(def, nextLv);
+    $('wb-inspect-up-effect').textContent = effect(maxed ? 3 : nextLv, false);
     $('wb-inspect-up-price').textContent = maxed ? '' : t(`${price} Pearls`, `${price} 珍珠`);
     const buy = $<HTMLButtonElement>('wb-inspect-buy');
-    buy.disabled = maxed || short || this.buying;
+    buy.disabled = maxed || short || this.buying || this.changingPath;
     buy.classList.toggle('primary', !buy.disabled);
     buy.textContent = this.buying ? t('Upgrading…', '升级中…') : short ? t(`Need ${price - pearls} more`, `还差 ${price - pearls} 珍珠`) : t(`Upgrade (${price})`, `升级 (${price})`);
     buy.classList.toggle('hidden', maxed);
@@ -637,15 +694,24 @@ export class GearInspector {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = `wb-path${p.id === active && owned >= 2 ? ' on' : ''}`;
-        b.disabled = owned < 2;
+        b.disabled = owned < 2 || this.buying || this.changingPath;
         const name = document.createElement('b');
         name.textContent = lang() === 'zh' ? p.nameZh : p.name;
         const effect = document.createElement('small');
         effect.textContent = owned < 2 ? `${t('Unlocks at Lv2', '2 级解锁')} · ${p.summary}` : p.effects[this.level - 1] ?? p.summary;
         b.append(name, effect);
-        b.addEventListener('click', () => {
-          this.hooks.selectPath(def, p.id);
+        b.addEventListener('click', async () => {
+          this.changingPath = true;
+          this.previewLampPath = null;
+          this.syncLampModel();
           this.renderInfo();
+          try {
+            await this.hooks.selectPath(def, p.id);
+          } finally {
+            this.changingPath = false;
+            this.syncLampModel();
+            this.renderInfo();
+          }
         });
         return b;
       }),
@@ -662,6 +728,14 @@ export class GearInspector {
   }
 
   private frame(dt: number) {
+    if (this.def?.id === 'lamp') {
+      const state = [this.hooks.owned(this.def), this.hooks.activePath(this.def), this.hooks.pearls(), ...this.def.prices].join(':');
+      if (state !== this.lampState) {
+        this.lampState = state;
+        this.syncLampModel();
+        this.renderInfo();
+      }
+    }
     this.spin += dt * SPIN;
     const w = this.canvas.clientWidth || 1;
     // A swipe in progress pulls the model along a little (in world units at its depth).

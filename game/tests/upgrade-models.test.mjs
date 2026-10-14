@@ -99,6 +99,24 @@ test('each upgrade tier has a distinct normalized display geometry', () => {
   }
 });
 
+test('headlamp specialisations have five physical designs and one shared starter', () => {
+  const starter = buildUpgradeModel('lamp', 1);
+  assert.equal(geometrySignature(starter), geometrySignature(buildUpgradeModel('lamp', 1, { lampPath: 'wideLamp' })));
+  const variants = [starter];
+  for (const path of ['focus', 'wideLamp']) for (const level of [2, 3]) {
+    const model = buildUpgradeModel('lamp', level, { lampPath: path });
+    variants.push(model);
+    assert.equal(model.userData.lampPath, path);
+    assert.ok(new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3()).length() < 1e-6);
+    assert.equal(count(model, 'unlit-led-chip'), path === 'wideLamp' && level === 3 ? 2 : 1);
+    assert.equal(count(model, 'diffuser-lens-rib'), path === 'wideLamp' ? (level === 3 ? 6 : 3) : 0);
+    assert.equal(count(model, 'twin-diffuser-bridge'), path === 'wideLamp' && level === 3 ? 1 : 0);
+    assert.equal(count(model, 'long-focus-optic-retainer'), path === 'focus' && level === 3 ? 1 : 0);
+    for (const surface of surfaces(model)) assert.equal(surface.emissive?.getHex() ?? 0, 0);
+  }
+  assert.equal(new Set(variants.map(geometrySignature)).size, 5);
+});
+
 test('preserveTierScale keeps real growth without letting a replacement shrink', () => {
   for (const id of ['rod', 'fins', 'sonar', 'boatSpeed']) {
     const sizes = [1, 2, 3].map((level) => {

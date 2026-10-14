@@ -21,13 +21,14 @@ async function moduleUrl(file, dependencies = {}) {
 const gearUrl = await moduleUrl('gear');
 const fxUrl = await moduleUrl('fx');
 const lampLightingUrl = await moduleUrl('lamp-lighting');
+const lampUpgradesUrl = await moduleUrl('lamp-upgrades', { './lamp-lighting': lampLightingUrl });
 const conceptUrl = await moduleUrl('diver-designs');
 const commonUrl = await moduleUrl('upgrade-models/common');
 const divingUrl = await moduleUrl('upgrade-models/diving', { './common': commonUrl });
 const headlampUrl = await moduleUrl('headlamp-model', { './upgrade-models/diving': divingUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
 const { buildHeadlamp } = await import(headlampUrl);
 const { buildLamp } = await import(divingUrl);
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './diver-designs': conceptUrl, './headlamp-model': headlampUrl }));
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './lamp-upgrades': lampUpgradesUrl, './diver-designs': conceptUrl, './headlamp-model': headlampUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
@@ -417,21 +418,21 @@ test('headlamp illuminates surfaces and the diver without beam geometry', () => 
 });
 
 test('mounted lamps preserve catalogue geometry while batching hardware into at most twelve meshes', () => {
-  for (const level of [1, 2, 3]) {
-    const { group, origin, emitters } = buildHeadlamp(level);
-    const reference = new THREE.Box3().setFromObject(buildLamp(level));
+  for (const path of ['focus', 'wideLamp']) for (const level of [1, 2, 3]) {
+    const { group, origin, emitters } = buildHeadlamp(level, path);
+    const reference = new THREE.Box3().setFromObject(buildLamp(level, path));
     const bounds = new THREE.Box3().setFromObject(group);
     assert.ok(bounds.min.distanceTo(reference.min) < 1e-6);
     assert.ok(bounds.max.distanceTo(reference.max) < 1e-6);
     assert.ok(group.children.length <= 12, `Lv${level} draw-call budget`);
-    assert.equal(emitters.length, level === 3 ? 2 : 1);
+    assert.equal(emitters.length, level === 3 && path === 'wideLamp' ? 2 : 1);
     assert.ok(origin.z > 0.5 && origin.x === 0);
   }
 });
 
 test('skin changes move the existing lamp, net and breath anchor without disposing their resources', () => {
   const { diver } = createDiver();
-  diver.setLampLevel(3);
+  diver.setLampLevel(3, 'wideLamp');
   const lamp = diver.group.getObjectByName('diver-headlamp-hardware');
   let disposals = 0;
   lamp.traverse(object => {
@@ -454,6 +455,31 @@ test('skin changes move the existing lamp, net and breath anchor without disposi
     diver.group.updateMatrixWorld(true);
     assert.ok(diver.headlamp.getWorldPosition(new THREE.Vector3()).distanceTo(diver.breathPoint.getWorldPosition(new THREE.Vector3())) < 0.5);
   }
+});
+
+test('same-tier specialisation changes replace hardware and optics only once', () => {
+  const { diver } = createDiver();
+  diver.setLampLevel(3, 'focus');
+  const focused = diver.group.getObjectByName('diver-headlamp-hardware').children[0];
+  const geometries = new Set();
+  const materials = new Set();
+  focused.traverse(object => {
+    if (object.isMesh) { geometries.add(object.geometry); materials.add(object.material); }
+  });
+  let freed = 0;
+  [...geometries, ...materials].forEach(resource => resource.addEventListener('dispose', () => freed++));
+  diver.setLampLevel(3, 'wideLamp');
+  const wide = diver.group.getObjectByName('diver-headlamp-hardware').children[0];
+  assert.notEqual(wide, focused);
+  assert.equal(wide.userData.lampPath, 'wideLamp');
+  assert.equal(freed, geometries.size + materials.size);
+  assert.equal(diver.headlamp.distance, 32);
+  assert.equal(diver.headlamp.angle, 1.25);
+  diver.setLampLevel(3, 'wideLamp');
+  assert.equal(diver.group.getObjectByName('diver-headlamp-hardware').children[0], wide);
+  diver.setLampLevel(1, 'wideLamp');
+  assert.equal(diver.group.getObjectByName('diver-headlamp-hardware').children[0].userData.lampPath, 'focus');
+  assert.equal(diver.headlamp.distance, 18);
 });
 
 test('lamp upgrades improve actual lighting and unequipped lamps emit no light', () => {

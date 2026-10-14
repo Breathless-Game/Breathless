@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildLamp } from './upgrade-models/diving';
 import type { UpgradeLevel } from './upgrades';
+import type { LampPath } from './lamp-lighting';
 
 /** Reuse the catalogue's hardware, batching rigid parts by material for gameplay. */
-export function buildHeadlamp(level: UpgradeLevel) {
-  const group = buildLamp(level);
+export function buildHeadlamp(level: UpgradeLevel, path: LampPath = 'focus') {
+  const group = buildLamp(level, path);
   const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
   const sources = new Set<THREE.BufferGeometry>();
   const emitters: THREE.MeshStandardMaterial[] = [];
