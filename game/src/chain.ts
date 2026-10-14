@@ -61,7 +61,8 @@ export async function airdrop(amount = 1): Promise<void> {
 function zoneLabel(spec: FishSpec): string {
   if (!spec.map || !(spec.map in MAPS)) return zoneName(spec.depthM);
   const map = MAPS[spec.map as MapId];
-  if (spec.depthM >= mapDepth(map)) return 'The Trench';
+  // Preserve the zone of historical deep catches from before finite floors were introduced.
+  if (spec.depthM >= mapDepth(map) && (map.hasTrench || spec.depthM > mapDepth(map) + 5)) return 'The Trench';
   // Just above the shelf (e.g. 18–20 m on the fjord) still counts as the last open zone.
   return map.zoneLabels[Math.min(ZONES.indexOf(zoneForDepth(spec.depthM)), map.zoneLabels.length - 1)];
 }

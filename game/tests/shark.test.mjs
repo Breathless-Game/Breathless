@@ -93,18 +93,37 @@ function chase(intensity, speed, seconds = 12, depth = 30) {
   return { bitten: false, charged, shark };
 }
 
-test('a calm diver outswims a shark; a frightened one does not', () => {
-  // Eight seconds: the six of the charge, and two more to see it has given up.
+test('a swimming diver can escape even a frenzied shark, while standing still remains dangerous', () => {
   const calm = chase(0, 7.5, 8);
   assert.equal(calm.charged, true, 'it does try');
   assert.equal(calm.bitten, false);
   assert.equal(calm.shark.mode, 'patrol', 'and gives up');
   assert.ok(calm.shark.wait > 0);
-  assert.equal(chase(1, 7.5).bitten, true);
+  const sprint = chase(1, 7.5);
+  assert.equal(sprint.charged, true);
+  assert.equal(sprint.bitten, false, 'full-speed swimming gives a reliable escape');
   assert.equal(chase(1, 0).bitten, true);
   // After the bite it clears off before it circles back.
   const after = chase(1, 0).shark;
   assert.equal(after.mode, 'flee');
+});
+
+test('a missed attack gives the diver a full recovery interval even in a frenzy', () => {
+  const shark = new Shark(-8, -30, dice(3));
+  shark.wait = 0;
+  const prey = { x: 0, y: -30 };
+  assert.equal(shark.step(DT, prey, 1, -Infinity), 'charge');
+  // Keep the diver visible but just beyond the bite, until this charge expires.
+  for (let t = 0; t < SHARK.chargeSeconds + DT; t += DT) {
+    prey.x = shark.x + 3;
+    assert.notEqual(shark.step(DT, prey, 1, -Infinity), 'bite');
+  }
+  assert.equal(shark.mode, 'patrol');
+  assert.ok(shark.wait >= SHARK.waitFrenzy - 2 * DT);
+  for (let t = 0; t < SHARK.waitFrenzy - 3 * DT; t += DT) {
+    prey.x = shark.x + 3;
+    assert.equal(shark.step(DT, prey, 1, -Infinity), null);
+  }
 });
 
 test('sharks keep clear of the surface and of the seabed, and do not bite a diver who has reached the top', () => {

@@ -17,7 +17,7 @@ export interface ShelfBounds {
 
 /** Height of the sand above the shelf level at (x, z), before per-vertex noise. It rolls off at the trench edge. */
 export function shelfHeight(x: number, z: number, trench: number): number {
-  const edge = Math.max(0, 1 - (Math.abs(x) - trench) / 4);
+  const edge = trench > 0 ? Math.max(0, 1 - (Math.abs(x) - trench) / 4) : 0;
   return Math.sin(x * 0.08) * 2.2 + Math.cos(z * 0.15 + 3.75 + x * 0.03) * 1.5 - edge * 1.5;
 }
 
@@ -50,6 +50,12 @@ export class Shelf {
       }
       return grid;
     }) as [Float32Array, Float32Array];
+    // A closed floor shares its centre vertices; independent noise would tear a seam at x = 0.
+    if (trench === 0) {
+      for (let r = 0; r <= this.rows; r++) {
+        this.heights[1][r * (this.columns + 1)] = this.heights[0][r * (this.columns + 1) + this.columns];
+      }
+    }
   }
 
   private x(side: number, column: number) {
@@ -213,20 +219,21 @@ export function layoutSeabed(shelf: Shelf, options: LayoutOptions): SeabedLayout
   // ---- Back wall: stacks piled from the bottom, never a rock hanging in open water ----
   const stacks: RockSlot[] = [];
   const bases: RockSlot[] = [];
-  const headroom = Math.max(4, options.depth - 10);
+  const headroom = Math.max(4, Math.min(24, options.depth - 10));
   for (const side of [-1, 1]) {
     for (let x = trench + 6 + rng.range(0, 5); x < within(options.reach + 24) - 9; x += rng.range(8, 13)) {
       const z = rng.range(-35, -17);
       let r = rng.range(4.5, 8.5);
-      let rock = settle(side * x, z, r, rng.range(0.7, 1.05), 1, 0.3);
+      let rock = settle(side * x, z, r, rng.range(0.5, 0.75), 1, 0.3);
       bases.push(rock);
       stacks.push(rock);
       // Most stacks stay low; a few climb most of the way to the surface.
-      const summit = headroom * Math.pow(rng.next(), 1.6);
+      const ridge = 0.45 + 0.25 * Math.sin(x * 0.075 + side * 1.7) + rng.range(-0.15, 0.15);
+      const summit = headroom * ridge;
       for (let n = 0; n < 9 && rock.y + rock.r * rock.squash < summit; n++) {
         r *= rng.range(0.84, 0.94);
         if (r < 1.8) break;
-        const squash = rng.range(0.7, 1.05);
+        const squash = rng.range(0.45, 0.75);
         const next: RockSlot = {
           x: rock.x + rng.range(-0.3, 0.3) * rock.r,
           // Sunk into the rock below, so the pile reads as one mass.

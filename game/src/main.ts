@@ -23,6 +23,7 @@ import { Workbench, type WorkbenchConditions } from './workbench';
 import { syncBoatPrices, syncUpgradePrices, UPGRADES, type UpgradeId } from './upgrades';
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
+import { insideTrench } from './terrain-depth';
 import {
   advanceWorldBounds,
   cameraTargetXToBounds,
@@ -98,9 +99,6 @@ const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
 // Keep encounter density stable as the playable width doubles.
 const FISH_PER_ZONE = [32, 32, 24];
-// Every map's seabed is a shelf; under the boat a trench drops away with no
-// bottom. The map only sets how deep the shelf is (world.seabedY).
-const DEPTH_LIMIT = Infinity;
 const TRENCH_X = TRENCH_HALF_WIDTH - 1.2; // how far left/right the diver can go inside it
 // The trench is too deep to stock up front: a school of fish follows the
 // diver down, each one rolled for the depth it's spawned at.
@@ -301,6 +299,7 @@ function headToward(f: Fish, diverDepth: number, radius = NEAR_M): boolean {
 }
 
 function tendTrench(diverDepth: number) {
+  if (!world.map.hasTrench) return;
   const [top, bottom] = trenchWindow(diverDepth);
   for (const f of [...trenchFish]) {
     const d = -f.pos.y;
@@ -333,9 +332,8 @@ function tendTrench(diverDepth: number) {
 }
 
 /**
- * Stock the current map: the zones it opens across the whole width, and a fresh
- * trench school under its shelf. Deeper zones are only reachable down the
- * trench, where that school covers them.
+ * Stock each open zone across the whole width. Only the ocean adds a following
+ * school below its shelf; finite maps have no fish beyond their seabed.
  */
 function populate() {
   for (const f of [...fishes]) removeFish(f);
@@ -345,7 +343,7 @@ function populate() {
   mapZones(world.map).forEach((zone) => {
     for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
   });
-  for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
+  if (world.map.hasTrench) for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
 }
 
 /** Keep encounter density continuous when a newly opened edge becomes reachable. */
@@ -1555,10 +1553,8 @@ function deploySonar() {
   top.z = 0;
   target.y -= 1;
   target.z = 0;
-  // Same floor rule as update(): the trench under the boat has no floor, the
-  // shelf does. Over the shelf, stop the weighted end on the seabed instead of
-  // lowering it through the ground (it still stays under the surface).
-  const floorY = Math.abs(target.x) <= TRENCH_X ? -Infinity : world.seabedY;
+  // Stop the weighted end on the drawn floor, except in the ocean's open trench.
+  const floorY = world.floorY(target.x);
   target.y = Math.min(-0.6, Math.max(target.y, floorY + sonar.length + SONAR_ANCHOR_DROP));
   sonar.group.position.copy(top);
   sonar.deploy(target);
@@ -1687,7 +1683,7 @@ function applyMapProgress(snap: ReturnType<typeof playerChain>, announce: boolea
 }
 
 /** The maps' zone names (maps.ts keeps them in English) in the UI language. */
-const ZONE_ZH: Record<string, string> = { Shallows: '浅水区', 'Sunken Forest': '沉林', Reef: '珊瑚礁', Abyss: '深渊' };
+const ZONE_ZH: Record<string, string> = { Shallows: '浅水区', 'Kelp Forest': '海带林', 'Sunken Forest': '沉林', 'Deep Basin': '深水盆地', Reef: '珊瑚礁', Abyss: '深渊' };
 const zoneLabel = (label: string) => t(label, ZONE_ZH[label] ?? label);
 
 function showMapOnHud() {
@@ -1696,6 +1692,7 @@ function showMapOnHud() {
     mapZones(map).map((z, i) => ({ label: zoneLabel(map.zoneLabels[i]), top: z.top, bottom: z.bottom })),
     mapDepth(map),
     map.water,
+    map.hasTrench,
   );
 }
 
@@ -2810,10 +2807,7 @@ function update(dt: number, time: number) {
     }
   }
   hud.setBoardPrompt(canBoard());
-  const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench (as in swimPhysics)
-
-  // Over the shelf the seabed is the sharks' floor; down the trench there is none.
-  tendSharks(dt, s.pulse, s.holding, Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY ? -Infinity : world.seabedY);
+  tendSharks(dt, s.pulse, s.holding, world.floorY(diver.pos.x, diver.pos.z));
 
   // Rough seas: only during a dive, and only where a storm piles up the swell.
   const stormEvent = stormSea.tick(dt, world.weather.state.storm, phase === 'play' && world.map.stormSwell > 0);
@@ -2854,6 +2848,13 @@ function update(dt: number, time: number) {
     const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
     // A threat just behind each nearby fish, on the diver's side: it darts away.
     f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
+    const fishFloor = world.floorY(f.pos.x, f.pos.z) + 0.8;
+    if (f.pos.y < fishFloor) {
+      f.pos.y = fishFloor;
+      f.target.y = Math.max(f.target.y, fishFloor);
+      f.vel.y = Math.max(0, f.vel.y);
+      f.mesh.group.position.copy(f.pos);
+    }
   }
   world.setDiver(diver.pos, diver.vel);
   world.update(time, camera.position.y, camera.position.x);
@@ -2900,9 +2901,8 @@ function update(dt: number, time: number) {
     eventCtx.aspect = camera.aspect;
     eventCtx.depth = -diver.pos.y;
     eventCtx.night = world.night;
-    eventCtx.shelfDepth = mapDepth(world.map); // below it is the trench
-    const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY; // as in cameraTarget()
-    eventCtx.floorY = inTrench ? -Infinity : world.seabedY; // the trench has no floor
+    eventCtx.shelfDepth = world.map.hasTrench ? mapDepth(world.map) : Infinity;
+    eventCtx.floorY = world.floorY(diver.pos.x, diver.pos.z);
     eventCtx.lightingEffects = world.lightingEffectsEnabled;
     eventCtx.storm = weather.storm;
     eventCtx.cloud = weather.cloud;
@@ -2931,12 +2931,10 @@ function swimPhysics(dt: number, s: BreathState) {
   const cap = outOfAir ? 10 : currentStats().swimSpeed;
   if (diver.vel.length() > cap) diver.vel.setLength(cap);
   if (!s.holding && !outOfAir && -diver.pos.y < 3) diver.vel.y += 6 * dt;
-  // Below the shelf you're inside the trench; above it, the shelf is the floor
-  // everywhere except over the trench mouth. The shelf depth is per map.
-  const shelfY = world.seabedY + 1.2; // lowest the diver can go outside the trench
+  // Finite maps have a floor everywhere. Only the ocean confines deep swimming to its trench.
   // The trench walls follow where the diver was before this step: otherwise
   // pressing down on the shelf would pull the diver sideways into the trench.
-  const wall = diver.pos.y < shelfY ? TRENCH_X : HALF_WIDTH;
+  const wall = insideTrench(world.map.hasTrench, diver.pos.x, diver.pos.y, world.seabedY) ? TRENCH_X : HALF_WIDTH;
   diver.pos.addScaledVector(diver.vel, dt);
   advanceWorldBounds(worldBounds, diver.pos.x, diver.vel.x, dt);
   extendFishCoverage();
@@ -2944,8 +2942,9 @@ function swimPhysics(dt: number, s: BreathState) {
   diver.pos.x = wall === TRENCH_X
     ? THREE.MathUtils.clamp(diver.pos.x, -TRENCH_X, TRENCH_X)
     : clampWorldXToBounds(diver.pos.x, worldBounds);
-  const floor = Math.abs(diver.pos.x) > TRENCH_X ? shelfY : -DEPTH_LIMIT;
+  const floor = world.floorY(diver.pos.x, diver.pos.z) + 1.2;
   diver.pos.y = THREE.MathUtils.clamp(diver.pos.y, floor, -0.05);
+  if (diver.pos.y === floor) diver.vel.y = Math.max(0, diver.vel.y);
 
   if (-diver.pos.y <= SURFACE_DEPTH) {
     // Only in play: during the blackout the lift can still carry you up, and that's no rescue.
@@ -2990,9 +2989,7 @@ function cameraTarget(out: THREE.Vector3, drop: number) {
   // At the surface it rides above the swell, higher in a storm on the open ocean.
   const camY = diver.pos.y > -2.5 ? 2.2 + world.surfaceLift : Math.min(diver.pos.y + 1.2, -1.2);
   // Over the shelf the camera stays above the seabed; in the trench it follows you down.
-  const shelfY = world.seabedY + 1.2; // as in update(): lowest the diver can go outside the trench
-  const inTrench = Math.abs(diver.pos.x) <= TRENCH_X && diver.pos.y < shelfY;
-  const camFloor = inTrench ? -Infinity : world.seabedY + 9;
+  const camFloor = world.floorY(diver.pos.x, diver.pos.z) + 9;
   return out.set(cameraTargetXToBounds(diver.pos.x, diver.vel.x, worldBounds), Math.max(camY, camFloor) - drop, 22);
 }
 

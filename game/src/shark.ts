@@ -14,23 +14,23 @@ export const SHARK = {
   frenzy: 42,
   /** How near (m) a shark notices the diver at a calm pulse, and how much farther in a frenzy. */
   sense: 9,
-  senseGain: 22,
+  senseGain: 15,
   /** Speeds in m/s: circling, and charging at a calm pulse plus the extra in a frenzy. The diver swims about 7.5. */
   cruise: 3.2,
-  charge: 4.6,
-  chargeGain: 5.4,
+  charge: 4.2,
+  chargeGain: 2.6,
   /** How hard it can pull its course round while charging (m/s²), calm and extra in a frenzy. */
-  grip: 9,
-  gripGain: 12,
+  grip: 6,
+  gripGain: 6,
   /** A charge that has not caught the diver in this long (s) is broken off. */
-  chargeSeconds: 6,
+  chargeSeconds: 3.5,
   /** Close enough (m) to bite. */
-  bite: 1.5,
+  bite: 1.1,
   /** Seconds a shark keeps away after a bite or a failed charge, at a calm pulse and in a frenzy. */
-  wait: 9,
-  waitFrenzy: 4,
+  wait: 14,
+  waitFrenzy: 8,
   /** Sharks do not follow the diver this close (m) to the surface, and never swim higher than `ceiling` m deep. */
-  safeDepth: 3.5,
+  safeDepth: 5,
   ceiling: 2.5,
   /** They circle this far (m) from the diver, and arrive from this far to one side. */
   orbit: [14, 20],
@@ -130,7 +130,7 @@ export class Shark {
     this.turn = rng() < 0.5 ? 1 : -1;
     this.radius = SHARK.orbit[0] + (SHARK.orbit[1] - SHARK.orbit[0]) * rng();
     // A moment to be seen before the first charge.
-    this.wait = 3 + rng() * 3;
+    this.wait = 5 + rng() * 3;
   }
 
   /** Swim off when the mode is disabled, or when the second shark leaves at dawn. */
@@ -176,7 +176,7 @@ export class Shark {
         this.timer = 2.2;
       } else if (this.timer <= 0 || safe) {
         // Missed, or the diver reached the surface: it gives up for a while.
-        this.breakOff(intensity, 0.6);
+        this.breakOff(intensity, 1);
       }
     } else {
       // Circling: a point on a flattened ring round the diver, a little below them.

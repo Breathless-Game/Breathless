@@ -57,18 +57,18 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | | Fjord 峡湾 (Norway / Iceland) | Heaven Lake 天池 (Zhangjiajie / Changbai) | Open Ocean 汪洋 |
 | --- | --- | --- | --- |
 | Difficulty | Casual | Normal | Hard |
-| Zones on the shelf | 0–18 m, Shallows only | 0–38 m, Shallows + Sunken Forest | 0–60 m, Shallows + Coral Reef + The Abyss |
-| Shelf (seabed) | 20 m, then the bottomless trench | 40 m, then the bottomless trench | 62 m, then the bottomless trench |
+| Zones above the seabed | 0–38 m, Shallows + Kelp Forest | 0–60 m, Shallows + Sunken Forest + Deep Basin | 0–60 m, Shallows + Coral Reef + The Abyss |
+| Seabed | About 40 m, continuous rocky floor | About 62 m, continuous lake floor | 62 m shelf, then the bottomless trench |
 | Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, two fishing cabins and a pier, ice floes; lit windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
 | Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
-| Sharks | None | None | One or two by day, two to four at night if you opt in; hunt by your heart rate; rarer fish |
+| Sharks | None | None | One or two by day, two to four at night; hunt by your heart rate; rarer fish |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
-- **The trench**: on every map the seabed is a shelf, and under the boat a trench drops away with no bottom. There is no depth limit on any map; the deeper you go, the rarer the fish and the higher their catch value (section 7). The zones a map does not open on its shelf (e.g. below 18 m on the Fjord) are only reachable down the trench.
-- **Depth zones**: "Sunken Forest" is the second depth zone on Heaven Lake. It is the Coral Reef depth range with a different look and gauge label; drop rates depend on depth alone. Fish are stocked across the shelf only in the zones a map opens, and a school of trench fish follows the diver down below the shelf. The depth gauge on the right shows the map's open zones and then a Trench band from the shelf down.
-- **Unlocking** (the thresholds exist, but the on-chain check from `player_state` v2 is coming next; all maps are still open today): a map opens by the lifetime catch value of every fish ever banked (see "Catch value" in section 7). Selling fish never lowers it, so a map never re-locks and progress never stalls. Every map already reaches any depth down its trench, so unlocking opens new scenery and a deeper, wider shelf, not more depth. When a dive banks enough to open a new map, a message says so.
+- **The trench**: only the Open Ocean has a bottomless trench under the boat. Fjord and Heaven Lake have continuous floors across the full width, with local height variation around 40 m and 62 m. The diver, fish, camera and sonar respect the drawn floor.
+- **Depth zones**: Fjord opens Shallows and Kelp Forest; Heaven Lake opens Shallows, Sunken Forest and Deep Basin. Drop rates depend on absolute depth. Only the Open Ocean spawns a following trench school and shows an infinite Trench band; finite maps use a depth gauge scaled to their seabed.
+- **Unlocking** (the thresholds exist, but the on-chain check from `player_state` v2 is coming next; all maps are still open today): a map opens by the lifetime catch value of every fish ever banked (see "Catch value" in section 7). Selling fish never lowers it, so a map never re-locks and progress never stalls. Unlocking Heaven Lake opens a deeper finite floor; Open Ocean adds the bottomless trench. When a dive banks enough to open a new map, a message says so.
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
 - **Saved progress**: the selected map, the lifetime banked value and the demo switch are stored in localStorage under the key `deepbreath.maps`. Unlock gating on lifetime banked value moves on chain with player_state v2, which is coming next; until then all maps are open.
 - **Still design only, not built yet**: night creatures (Fjord: deer and bear; Heaven Lake: bear and giant; Open Ocean: big waves and a sea monster), map-specific daylight hours (05:00–20:00 day on the Fjord), fishing from the boat driven by heart rate, boat durability, and losing all gear for good when the boat sinks on the Open Ocean.
@@ -498,7 +498,7 @@ Pictures and per-species numbers for all 17 fish species and the fishing rod are
 
 ### Depth zones and drop rates (`RARITY_BY_DEPTH` in `depth-odds.ts`)
 
-The sea has no bottom. On every map the seabed is a shelf (20 m on the Fjord, 40 m on Heaven Lake, 62 m on the Open Ocean), and under the boat a trench goes down forever. Zones are names only and do not set the odds: Shallows 0–18 m · Coral Reef 18–38 m · The Abyss 38–60 m · **The Trench 60 m+**. On a map, the depth gauge and the NFT `Zone` attribute use that map's own zone labels, and everything below its shelf is The Trench. Drop rates and catch value depend only on absolute depth: 30 m in the Fjord's trench rolls exactly like 30 m on the Open Ocean's reef.
+Fjord has a finite seabed around 40 m; Heaven Lake's is around 62 m. Only the Open Ocean continues forever below its 62 m shelf. The shared depth bands are 0–18 m, 18–38 m and 38–60 m, with map-specific names in the gauge and NFT metadata. Drop rates and catch value depend only on absolute depth: 30 m in Fjord's Kelp Forest rolls exactly like 30 m on the Open Ocean's reef.
 
 Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Epic only appears below 15 m, legendary below 30 m, mythic below 50 m. The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
 
@@ -540,7 +540,7 @@ The rarer the fish, the faster it swims, the more easily it flees, and the brigh
 
 ### Main loop constants (`main.ts`)
 
-`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [32, 32, 24]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) · `DEPTH_LIMIT Infinity` (the trench is bottomless on every map)
+`SWIM_ACCEL 24` · `DRAG 2.4` · `MAX_SPEED 7.5` · `SURFACE_DEPTH 0.9` · `EMERGENCY_SECONDS 3.2` (time left after you breathe) · `EMERGENCY_LIFT 18` (strength of the emergency ascent) · `FISH_PER_ZONE [32, 32, 24]` (fish per zone, for the zones a map opens on its shelf) · `TRENCH_FISH 12` (a school kept in a window around the diver's depth in the trench, each rolled for the depth it spawns at) (only Open Ocean generates the bottomless trench)
 
 The playable corridor over the shelf is 280 m wide (`x = -140…140`); below the shelf, the trench walls keep the diver under the boat. Diver movement and camera look-ahead share the same clamped boundary, so pressing into either edge never reveals the empty side of the map.
 
@@ -728,9 +728,9 @@ Morning highlights are gently warm, afternoon highlights become golden, and nigh
 
 ### Seabed, rocks and kelp
 
-Everything on the shelf rests on something. The sand is a height grid; rocks and plants are placed by reading the same triangles the sand is drawn with. On the near shelf, rocks form outcrops: one part-buried boulder, two or three rocks leaning on it and scree around it, with open sand between outcrops and no boulder in the lane the diver swims in. Along the back, rock is piled on rock from the bottom up, so the wall has tall stacks but nothing hangs in open water. Coral grows on the wall's rocks and on the sand; Heaven Lake's ledges jut out of its stacks.
+Rock meshes use the same bounds as their placement data, so jitter and rotation cannot lift them off their supports. Broad layered outcrops replace tall stacks of pointed stones. Moss coats lit upward-facing facets in coherent patches and fades out below 85 m, without a separate floating mesh. Everything on the shelf rests on something. The sand is a height grid; rocks and plants are placed by reading the same triangles the sand is drawn with. On the near shelf, rocks form outcrops: one part-buried boulder, two or three rocks leaning on it and scree around it, with open sand between outcrops and no boulder in the lane the diver swims in. Along the back, rock is piled on rock from the bottom up, so the wall has tall stacks but nothing hangs in open water. Coral grows on the wall's rocks and on the sand; Heaven Lake's ledges jut out of its stacks.
 
-Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 5 m short of the surface (about 15 m on the Fjord, 35 m on Heaven Lake, 48 m on the Open Ocean). It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Outcrops, groves and meadows are counted per metre of shelf and laid out to the farthest edge a map can open (200 m each way), so the forest is as dense at the ends as under the boat. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
+Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 5 m short of the surface (about 35 m on the Fjord and up to 48 m on Heaven Lake and the Open Ocean). It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Outcrops, groves and meadows are counted per metre of shelf and laid out to the farthest edge a map can open (200 m each way), so the forest is as dense at the ends as under the boat. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
 
 Plants sway in the vertex shader. A slow wave of current crosses the bed, so neighbors move one after another; tall kelp bends into an S and its tips trace loops; leaf tips flutter; the swell that rocks the boat moves the upper water back and forth; wind makes all of it stronger. Plants within 4.5 m of the diver bend away and trail in the direction of the swim.
 
@@ -738,22 +738,22 @@ Plants sway in the vertex shader. A slow wave of current crosses the bed, so nei
 
 ### Sharks (Open Ocean)
 
-The first time a dive starts on the Open Ocean the game asks whether you want sharks, and says what it costs and what it pays. The answer is saved; Esc → Settings → "Sharks" changes it (On / Off / Ask before a dive).
+Sharks always hunt on the Open Ocean. Before the first dive there, the game shows a warning explaining the bite penalty.
 
-With sharks on, one or two hunt during daytime dives (morning and afternoon), and two to four at night. The group size is picked once for each day/night period, independently of your pulse; hunting intensity does:
+One or two hunt during daytime dives (morning and afternoon), and two to four at night. The group size is picked once for each day/night period, independently of your pulse; hunting intensity does:
 
-| Your pulse above rest | Notice you from | Charge at | A bite takes |
-| --- | --- | --- | --- |
-| Up to 4 bpm | 9 m | 4.6 m/s | 1 fish |
-| About 23 bpm | 20 m | 7.3 m/s | 2 fish |
-| 42 bpm or more | 31 m | 10 m/s | 3 fish |
+| Your pulse above rest | Notice you from | Charge at |
+| --- | --- | --- |
+| Up to 4 bpm | 9 m | 4.2 m/s |
+| About 23 bpm | 16.5 m | 5.5 m/s |
+| 42 bpm or more | 24 m | 6.8 m/s |
 
-Hunting intensity scales smoothly between these values. The diver swims about 7.5 m/s, so a calm diver can outswim a charge and a frightened one cannot. A charge that has not caught you in 6 s is broken off and the shark keeps away for about 5 s (2 s in a frenzy); after a bite it keeps away for 9 s (4 s). Sharks do not follow you within 3.5 m of the surface. A bite tears fish out of the net (never banked fish) and knocks you aside; with an empty net it only rams you. Their faceted skin responds to sunlight, moonlight and the diver’s headlamp, with moving caustics that fade at depth and at night. Each charging shark gradually warms its eyes, exposes its teeth and jaw, and sweeps its tail harder; nearby sharks keep their own state. At dawn the group returns to the daytime range. Climbing aboard immediately clears the sharks, so the boat is a safe zone. Disabling sharks dismisses them all.
+Hunting intensity scales smoothly between these values. At full speed (about 7.5 m/s), the diver can escape even a frenzied shark. Charges break off after 3.5 s, with a full 14 s recovery at a calm pulse or 8 s in a frenzy; turning acceleration is also lower. The first charge waits 5–8 s and sharks do not attack within 5 m of the surface. A bite still ends the dive, forfeits its unsettled catch and resets dive gear; weakening attacks changes the opportunity to escape. Their faceted skin responds to sunlight, moonlight and the headlamp; individual charges warm the eyes, open the jaws and strengthen the tail beat.
 
 - **The pulse** is Presage's heart rate, compared with your own resting pulse, learned while you float at the surface. In keyboard mode there is no sensor, so the game estimates a pulse from how hard you swim (shown as `♥ ~80`): drifting slowly past a shark keeps it low.
 - **What it pays**: while sharks are out, every newly spawned fish rolls its rarity three times instead of the usual one by day or two at night and keeps the best.
 - **What it costs**: those dives are left out of the heart-rate figures in the health report (section 9).
-- `npm --prefix game test` covers the pulse scale, pack size, bites, the chase a calm diver wins and a frightened one loses, the safe surface and day/night transitions, rapid setting changes and departure when disabled.
+- `npm --prefix game test` covers the pulse scale, pack size, bites, escape at full speed even at a high pulse, full recovery after a missed charge, the safe surface and day/night transitions, rapid setting changes and departure when disabled.
 - In the console, `sharkPack.sharks` lists them.
 
 ### Rough seas (Open Ocean)
@@ -798,7 +798,7 @@ Pause and background states freeze automatic weather and rain animation; manual 
 - Health report (built on demand)
 - Natural day / night cycle, water reflections and a saved lighting-effects switch
 - Natural weather plus clear / cloudy / rain / storm presets, with quality-scaled clouds and rain
-- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, a seabed shelf of a different depth on each map with a bottomless trench under the boat, map picker on the start card, unlock by total banked fish value
+- Three maps (Fjord, Heaven Lake, Open Ocean): above-water scenery, deeper finite seabeds on Fjord and Heaven Lake, and a bottomless trench only on Open Ocean, map picker on the start card, unlock by total banked fish value
 - Faceted PBR models for all nine equipment categories at three levels, used by the workbench, with PNG/GLB assets and an interactive equipment catalog
 - Rod / net upgrade MVP: three tiers of capacity and catch radius, a visibly bigger hoop, saved locally
 - Fish economy: every banked fish auto-minted as an NFT, selling burns it for Pearls, map progress counts lifetime value

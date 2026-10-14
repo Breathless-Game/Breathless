@@ -30,6 +30,10 @@ const BEST_MIN_M = 5;
 const BEST_LABEL_GAP = 0.04;
 
 export class Hud {
+  private depthRange = Infinity;
+  private depthPosition(d: number) {
+    return Number.isFinite(this.depthRange) ? Math.min(1, Math.max(0, d) / this.depthRange) : depthPos(d);
+  }
   private chip = $('breath-chip');
   private holdTime = $('hold-time');
   private trace = $<HTMLCanvasElement>('trace');
@@ -93,12 +97,16 @@ export class Hud {
 
   /** Tick marks (right of the bar), placed with the same scale as the marker. */
   private buildDepthTicks() {
+    this.depthGauge.querySelectorAll('.tick').forEach(el => el.remove());
     const frag = document.createDocumentFragment();
-    for (const m of DEPTH_TICKS) {
+    const ticks = Number.isFinite(this.depthRange)
+      ? Array.from({ length: Math.floor(this.depthRange / 10) + 1 }, (_, i) => i * 10)
+      : DEPTH_TICKS;
+    for (const m of ticks) {
       const el = document.createElement('div');
       el.className = 'tick';
       el.textContent = String(m);
-      el.style.top = `${(depthPos(m) * 100).toFixed(2)}%`;
+      el.style.top = `${(this.depthPosition(m) * 100).toFixed(2)}%`;
       frag.appendChild(el);
     }
     // Before the markers, so the best tick and the current marker draw on top.
@@ -114,24 +122,28 @@ export class Hud {
     zones: { label: string; top: number; bottom: number }[],
     shelfM: number,
     water: readonly (readonly [number, string])[],
+    hasTrench = true,
   ) {
-    this.lastZones = [zones, shelfM, water];
+    this.lastZones = [zones, shelfM, water, hasTrench];
+    this.depthRange = hasTrench ? Infinity : shelfM + 5;
+    this.buildDepthTicks();
+    this.depthBest.style.top = `${this.depthPosition(this.bestDepth) * 100}%`;
     const gauge = this.depthGauge;
     gauge.querySelectorAll('.zone').forEach((el) => el.remove());
-    const stops = water.map(([d, c]) => `${c} ${(depthPos(d) * 100).toFixed(1)}%`);
+    const stops = water.map(([d, c]) => `${c} ${(this.depthPosition(d) * 100).toFixed(1)}%`);
     gauge.style.background = `linear-gradient(${[...stops, '#000408'].join(', ')})`;
     const bands = [
-      ...zones.map((z, i) => ({ ...z, cls: ZONE_TINT[i] ?? '' })),
-      { label: t('Trench', '海沟'), top: shelfM, bottom: Infinity, cls: 'trench' },
+      ...zones.map((z, i) => ({ ...z, bottom: !hasTrench && i === zones.length - 1 ? shelfM : z.bottom, cls: ZONE_TINT[i] ?? '' })),
+      ...(hasTrench ? [{ label: t('Trench', '海沟'), top: shelfM, bottom: Infinity, cls: 'trench' }] : []),
     ];
     const frag = document.createDocumentFragment();
     for (const b of bands) {
-      const top = depthPos(b.top);
+      const top = this.depthPosition(b.top);
       const el = document.createElement('div');
       el.className = `zone ${b.cls}`.trim();
       el.textContent = b.label;
       el.style.setProperty('--top', `${(top * 100).toFixed(2)}%`);
-      el.style.setProperty('--h', `${((depthPos(b.bottom) - top) * 100).toFixed(2)}%`);
+      el.style.setProperty('--h', `${((this.depthPosition(b.bottom) - top) * 100).toFixed(2)}%`);
       frag.appendChild(el);
     }
     gauge.insertBefore(frag, this.depthBest);
@@ -203,7 +215,7 @@ export class Hud {
 
   setDepth(depth: number) {
     const d = Number.isFinite(depth) ? Math.max(0, depth) : 0;
-    const pos = depthPos(d);
+    const pos = this.depthPosition(d);
     this.depthMarker.style.top = `${pos * 100}%`;
     const label = `${d.toFixed(0)} m`;
     if (this.depthLabel.textContent !== label) this.depthLabel.textContent = label;
@@ -220,7 +232,7 @@ export class Hud {
     }
     if (this.bestDepth >= BEST_MIN_M) {
       // While descending the best tick sits under the marker; only label it once the diver rises off it.
-      this.depthBestLabel.classList.toggle('hidden', depthPos(this.bestDepth) - pos < BEST_LABEL_GAP);
+      this.depthBestLabel.classList.toggle('hidden', this.depthPosition(this.bestDepth) - pos < BEST_LABEL_GAP);
     }
   }
 
