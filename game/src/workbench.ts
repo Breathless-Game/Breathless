@@ -1944,12 +1944,12 @@ export class Workbench {
       const zones = map.zoneLabels.map((z) => mapZoneLabel(z));
       $('wb-place-title').textContent = pickName(map);
       $('wb-place-sub').textContent = t(
-        `Chapter ${roman} · ${mapDifficulty(map)} · Shelf ${mapDepth(map)} m · Trench ∞ · ${mapPlace(map)}`,
-        `第${roman}章 · ${mapDifficulty(map)} · 浅海 ${mapDepth(map)} m · 海沟 ∞ · ${mapPlace(map)}`,
+        `Chapter ${roman} · ${mapDifficulty(map)} · Seabed ${mapDepth(map)} m${map.hasTrench ? ' · Trench ∞' : ''} · ${mapPlace(map)}`,
+        `第${roman}章 · ${mapDifficulty(map)} · 海底 ${mapDepth(map)} m${map.hasTrench ? ' · 海沟 ∞' : ''} · ${mapPlace(map)}`,
       );
       $('wb-place-text').textContent = t(
-        `${mapBlurb(map)} Zones: ${zones.join(', ')}, then the Trench with no bottom.`,
-        `${mapBlurb(map)} 区域：${zones.join('、')}，再往下是深不见底的海沟。`,
+        `${mapBlurb(map)} Zones: ${zones.join(', ')}${map.hasTrench ? ', then the Trench with no bottom.' : '.'}`,
+        `${mapBlurb(map)} 区域：${zones.join('、')}${map.hasTrench ? '，再往下是深不见底的海沟。' : '。'}`,
       );
       // Shark waters say what a bite costs every time the place is picked, before Dive.
       const warn = $('wb-place-warn');

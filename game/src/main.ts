@@ -340,8 +340,10 @@ function populate() {
   fishes.length = 0;
   fishCoverageLeft = worldBounds.left;
   fishCoverageRight = worldBounds.right;
-  mapZones(world.map).forEach((zone) => {
-    for (let k = 0; k < FISH_PER_ZONE[ZONES.indexOf(zone)]; k++) spawnFish(zone);
+  mapZones(world.map).forEach((zone, i) => {
+    const original = ZONES[i];
+    const count = Math.ceil(FISH_PER_ZONE[i] * (zone.bottom - zone.top) / (original.bottom - original.top));
+    for (let k = 0; k < count; k++) spawnFish(zone);
   });
   if (world.map.hasTrench) for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
 }

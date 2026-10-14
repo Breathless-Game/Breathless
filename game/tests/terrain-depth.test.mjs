@@ -12,7 +12,7 @@ const { terrainFloorY, insideTrench, TRENCH_SWIM_HALF_WIDTH } = await import(
 );
 
 test('finite maps have a floor everywhere, including under the boat and below the nominal depth', () => {
-  for (const depth of [40, 62]) for (let x = -200; x <= 200; x += 5) {
+  for (const depth of [60, 100]) for (let x = -200; x <= 200; x += 5) {
     const sandY = -depth + Math.sin(x * 0.08) * 2;
     assert.equal(terrainFloorY(false, x, sandY), sandY);
     assert.equal(insideTrench(false, x, -1000, sandY), false);

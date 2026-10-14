@@ -4,16 +4,18 @@ import test from 'node:test';
 import * as THREE from 'three';
 import ts from 'typescript';
 
-async function load(file) {
+async function moduleUrl(file, imports = {}) {
   const source = await readFile(new URL(file, import.meta.url), 'utf8');
   let { outputText } = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
   });
   outputText = outputText.replace("from 'three'", `from '${import.meta.resolve('three')}'`);
-  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+  for (const [name, url] of Object.entries(imports)) outputText = outputText.replace(`from '${name}'`, `from '${url}'`);
+  return `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`;
 }
-const { SharkFx } = await load('../src/shark-fx.ts');
-const { SceneColorGrade } = await load('../src/color-grade.ts');
+const { SharkFx } = await import(await moduleUrl('../src/shark-fx.ts'));
+const haze = await moduleUrl('../src/underwater-haze.ts');
+const { SceneColorGrade } = await import(await moduleUrl('../src/color-grade.ts', { './underwater-haze': haze }));
 const shark = (mode = 'patrol', x = 0) => ({ mode, x, y: -25, vx: 5, vy: 0 });
 const body = root => root.children[0].children[0];
 
@@ -48,11 +50,11 @@ test('lighting composes with the scene color grade and keeps fog and standard li
   material.onBeforeCompile(shader, {});
   assert.ok(shader.fragmentShader.includes('sharkCaustic'));
   assert.ok(shader.fragmentShader.includes('uGradeShadows'));
-  assert.ok(shader.fragmentShader.includes('#include <fog_fragment>'));
+  assert.ok(shader.fragmentShader.includes('float fogFactor = mix(baseFog, waterBlend'));
   assert.ok(shader.fragmentShader.includes('#include <lights_fragment_begin>'));
   assert.ok(shader.vertexShader.includes('vSharkWorld = (modelMatrix'));
   assert.equal(shader.uniforms.uSharkTime, fx.uniforms.uSharkTime);
-  assert.match(material.customProgramCacheKey(), /shark-water-light-v1\|day-color-grade-v1/);
+  assert.match(material.customProgramCacheKey(), /shark-water-light-v1\|underwater-haze-v1\|day-color-grade-v1/);
 });
 
 test('a reused render slot starts at its new shark instead of the old depth and attack pose', () => {
