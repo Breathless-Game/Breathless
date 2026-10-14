@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { DiverConcept } from './diver-designs';
 import { Splash } from './fx';
-import { buildFishingNetMesh } from './gear';
+import { buildFishingNetMesh, buildMountedNetHead } from './gear';
 import { buildHeadlamp, disposeMeshes } from './headlamp-model';
 import { lampActivation, lampProfile, type LampProfile, type LampPath } from './lamp-lighting';
 import { lampPath } from './lamp-upgrades';
@@ -73,6 +73,7 @@ export class Diver {
   private netArm: THREE.Group;
   private netMouth: THREE.Group;
   private netTip: THREE.Object3D;
+  private netWeb: THREE.Object3D;
   private reelGroup: THREE.Group | null = null;
   /** Visible emergency-tank model; level one deliberately has no cylinder. */
   private tankGroup = new THREE.Group();
@@ -97,7 +98,7 @@ export class Diver {
   /** While set, the diver sits here (it rides along with the boat), not at `pos`. */
   private seat: THREE.Object3D | null = null;
   private jump: { t: number; from: THREE.Vector3; to: THREE.Vector3 } | null = null;
-  private netScale = 1;
+  private netLevel = 1;
   private rodReachScale = 1;
   private reelRecovery = 1;
   private lampMaxIntensity = 48;
@@ -201,6 +202,7 @@ export class Diver {
     this.netMouth = net.mouth;
     this.netArm.position.set(0.6, 0, 0.3);
     this.netTip = net.tip;
+    this.netWeb = this.netMouth.getObjectByName('Nylon_Diamond_Web')!;
     this.reelGroup = this.netArm.getObjectByName('Fishing_Reel') as THREE.Group | null;
     this.body.add(this.netArm);
     this.originalSuit=[torso,stripe,hood,head,mask,snorkel,this.legL,this.legR,this.freeArm];
@@ -443,9 +445,20 @@ export class Diver {
     return this.netPointWorld.clone();
   }
 
-  /** Make the visible hoop grow with the equipped net tier. */
+  /** Replace the working head without rebuilding the grip, reel or arm. */
   setNetLevel(level: number) {
-    this.netScale = [1, 1.22, 1.46][THREE.MathUtils.clamp(Math.floor(level), 1, 3) - 1];
+    const tier = Number.isFinite(level) ? THREE.MathUtils.clamp(Math.floor(level), 1, 3) : 1;
+    if (tier !== this.netLevel) {
+      this.netLevel = tier;
+      this.netArm.userData.level = tier;
+      disposeMeshes(this.netMouth);
+      this.netMouth.clear();
+      const head = buildMountedNetHead(tier as 1 | 2 | 3);
+      this.netMouth.add(head);
+      this.netTip = head.getObjectByName('Catch_Centre')!;
+      this.netWeb = head.getObjectByName('Nylon_Diamond_Web')!;
+      this.materialBinder?.(this.netMouth);
+    }
     this.updateNetScale();
   }
 
@@ -461,11 +474,10 @@ export class Diver {
     this.updateNetScale();
   }
 
-  // The shaft slot stretches the whole tool along its length; the net tier
-  // grows only the hoop, kept round by undoing the shaft's stretch on it.
+  // The head owns its tier geometry; cancel the shaft stretch on that head.
   private updateNetScale() {
     this.netArm.scale.set(this.rodReachScale, 1, 1);
-    this.netMouth.scale.set(this.netScale / this.rodReachScale, this.netScale, this.netScale);
+    this.netMouth.scale.set(1 / this.rodReachScale, 1, 1);
   }
 
   /** Update the visible fin size for the selected diver upgrade tier. */
@@ -705,6 +717,8 @@ export class Diver {
       this.netArm.rotation.z = -0.35;
     }
     this.playtestModel.update(this.modelTime,this.netSwing);
+    // A small pocket lag follows the stroke; the rigid rim and catch marker stay put.
+    this.netWeb.rotation.z = Math.sin(this.netSwing * Math.PI * 2) * 0.025;
 
     this.updateLamp(depth);
     this.updateWaterContact(dt, heave);

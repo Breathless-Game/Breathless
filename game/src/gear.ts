@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { buildNetHead } from './upgrade-models/net';
+import type { UpgradeLevel } from './upgrades';
 
 type Material = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
 
@@ -49,72 +52,6 @@ function cylinderBetween(a: THREE.Vector3, b: THREE.Vector3, radius: number, mat
   return mesh;
 }
 
-function addLineSegment(positions: number[], a: THREE.Vector3, b: THREE.Vector3) {
-  positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-}
-
-/**
- * A shallow diamond-weave net. The diagonals are intentionally fine and
- * low-opacity, so the fabric reads as nylon instead of a glowing wireframe.
- */
-function buildNetWeb(backX: number, length: number, radiusY: number, radiusZ: number): THREE.LineSegments {
-  const rings = 6;
-  const sides = 16;
-  const positions: number[] = [];
-  const points: THREE.Vector3[][] = [];
-
-  for (let ring = 0; ring <= rings; ring++) {
-    const t = ring / rings;
-    const x = backX + length * t;
-    const y = THREE.MathUtils.lerp(0.075, radiusY, t);
-    const z = THREE.MathUtils.lerp(0.075, radiusZ, t);
-    const row: THREE.Vector3[] = [];
-    for (let side = 0; side < sides; side++) {
-      const angle = ((side + (ring % 2) * 0.5) / sides) * Math.PI * 2;
-      row.push(new THREE.Vector3(x, Math.sin(angle) * y, Math.cos(angle) * z));
-    }
-    points.push(row);
-  }
-
-  // Only the gathered end and rim have circumferential seams. Alternating
-  // half-cell offsets form diamonds rather than a triangulated wire cage.
-  for (const row of [points[0], points[rings]]) {
-    for (let side = 0; side < sides; side++) addLineSegment(positions, row[side], row[(side + 1) % sides]);
-  }
-  for (let ring = 0; ring < rings; ring++) {
-    for (let side = 0; side < sides; side++) {
-      const nextSide = (side + (ring % 2 === 0 ? -1 : 1) + sides) % sides;
-      addLineSegment(positions, points[ring][side], points[ring + 1][side]);
-      addLineSegment(positions, points[ring][side], points[ring + 1][nextSide]);
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  const net = new THREE.LineSegments(
-    geometry,
-    new THREE.LineBasicMaterial({
-      color: '#b9d6d7',
-      transparent: true,
-      opacity: 0.38,
-      depthWrite: false,
-    }),
-  );
-  net.renderOrder = 2;
-  return net;
-}
-
-function buildEllipticalHoop(radiusY: number, radiusZ: number, material: Material): THREE.Mesh {
-  const points: THREE.Vector3[] = [];
-  const count = 32;
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2;
-    points.push(new THREE.Vector3(0, Math.sin(angle) * radiusY, Math.cos(angle) * radiusZ));
-  }
-  const curve = new THREE.CatmullRomCurve3(points, true, 'centripetal');
-  return new THREE.Mesh(new THREE.TubeGeometry(curve, count, 0.038, 8, true), material);
-}
-
 function buildSpinningReel(reelMaterial: Material, metalMaterial: Material): THREE.Group {
   const reel = new THREE.Group();
   reel.name = 'Fishing_Reel';
@@ -152,7 +89,7 @@ function buildSpinningReel(reelMaterial: Material, metalMaterial: Material): THR
 export interface FishingNetMesh {
   /** Group attached to the diver's shoulder and rotated during a swing. */
   group: THREE.Group;
-  /** Mouth pivot; only the hoop and fabric scale as equipment is upgraded. */
+  /** Stable pole mounting pivot; upgrades replace its scoop head. */
   mouth: THREE.Group;
   /** World-space catch marker, aligned with the hoop centre. */
   tip: THREE.Object3D;
@@ -161,17 +98,17 @@ export interface FishingNetMesh {
 /**
  * Build the reusable fishing tool asset. The fused game design represents the
  * old fishing-rod item as an underwater scoop net, with a carbon blank,
- * EVA-grip, spinning reel, guide rings, elliptical hoop and nylon web.
+ * EVA-grip, spinning reel, guide rings, faceted hoop and nylon pocket.
  */
-export function buildFishingNetMesh(): FishingNetMesh {
+export function buildFishingNetMesh(level: UpgradeLevel = 1): FishingNetMesh {
   const group = new THREE.Group();
   group.name = 'HackRU_Faceted_Fishing_Net';
+  group.userData.level = level;
   const carbon = physical('#17242d', { metalness: 0.28, roughness: 0.3, clearcoat: 0.35, clearcoatRoughness: 0.2 });
   const carbonAccent = standard('#46616a', { metalness: 0.55, roughness: 0.3 });
   const grip = physical('#9b5d3c', { roughness: 0.88, clearcoat: 0.05 });
   const reelBody = physical('#263b46', { metalness: 0.68, roughness: 0.3, clearcoat: 0.2 });
   const metal = standard('#9eafb2', { metalness: 0.86, roughness: 0.26 });
-  const hoopMaterial = standard('#6f9698', { metalness: 0.66, roughness: 0.32 });
   const dark = standard('#142027', { metalness: 0.5, roughness: 0.36 });
   const suit = standard('#1d2b3a', { roughness: 0.76 });
 
@@ -220,15 +157,47 @@ export function buildFishingNetMesh(): FishingNetMesh {
   mouth.name = 'Net_Mouth';
   const hoopX = 2.7;
   mouth.position.x = hoopX;
-  const hoop = buildEllipticalHoop(0.52, 0.47, hoopMaterial);
-  const hoopGuard = buildEllipticalHoop(0.47, 0.42, carbonAccent);
-  const web = buildNetWeb(-0.78, 0.78, 0.52, 0.47);
-  const upperBrace = cylinderBetween(new THREE.Vector3(-0.2, 0, 0), new THREE.Vector3(0, 0.52, 0), 0.014, hoopMaterial, 8);
-  const lowerBrace = cylinderBetween(new THREE.Vector3(-0.2, 0, 0), new THREE.Vector3(0, -0.52, 0), 0.014, hoopMaterial, 8);
-  const tip = new THREE.Object3D();
-  tip.name = 'Catch_Centre';
-  mouth.add(hoop, hoopGuard, web, upperBrace, lowerBrace, tip);
+  const head = buildMountedNetHead(level);
+  mouth.add(head);
+  const tip = head.getObjectByName('Catch_Centre')!;
 
   group.add(arm, buttCap, rearGrip, gripBandA, gripBandB, reelSeat, reelSeatRing, rodBlank, rodHighlight, reel, guides, mouth);
   return { group, mouth, tip };
+}
+
+/** Preserve the nylon pocket as a flexible part, batching rigid frame hardware. */
+export function buildMountedNetHead(level: UpgradeLevel): THREE.Group {
+  const head = buildNetHead(level);
+  head.rotation.z = -Math.PI / 2;
+  // Keep the pocket below the pole, mounted at its throat instead of piercing the bag.
+  head.position.y = head.userData.socketOffset * head.scale.x;
+  const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const sources = new Set<THREE.BufferGeometry>();
+  head.updateMatrixWorld(true);
+  const inverse = head.matrixWorld.clone().invert();
+  const web = head.getObjectByName('Nylon_Diamond_Web')!;
+  const tip = head.getObjectByName('Catch_Centre')!;
+  head.traverse(object => {
+    if (!(object instanceof THREE.Mesh) || object === web) return;
+    const geometry = object.geometry.index ? object.geometry.toNonIndexed() : object.geometry.clone();
+    geometry.applyMatrix4(inverse.clone().multiply(object.matrixWorld));
+    for (const name of Object.keys(geometry.attributes)) if (name !== 'position' && name !== 'normal') geometry.deleteAttribute(name);
+    geometry.clearGroups();
+    const material = object.material as THREE.Material;
+    const batch = parts.get(material) ?? [];
+    batch.push(geometry); parts.set(material, batch); sources.add(object.geometry);
+  });
+  head.clear();
+  head.add(web, tip);
+  for (const [material, geometries] of parts) {
+    const geometry = mergeGeometries(geometries);
+    if (!geometry) throw new Error('Net frame parts have incompatible geometry');
+    const part = new THREE.Mesh(geometry, material);
+    part.name = 'Batched_Net_Frame';
+    part.castShadow = part.receiveShadow = true;
+    head.add(part);
+    geometries.forEach(source => source.dispose());
+  }
+  sources.forEach(source => source.dispose());
+  return head;
 }
