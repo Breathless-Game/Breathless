@@ -4,6 +4,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { UPGRADES, buildUpgradeModel, type UpgradeId, type UpgradeLevel } from './upgrades';
 import { ModelStudio, addEquipmentLights, blobDataUrl, disposeModel, modelGlb } from './model-assets';
+import { lampEffect } from './lamp-upgrades';
+import type { LampPath } from './lamp-lighting';
 
 const viewport = document.querySelector<HTMLDivElement>('#viewport')!;
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -30,6 +32,12 @@ let current: THREE.Group;
 let currentId: UpgradeId = 'rod';
 let currentLevel: UpgradeLevel = 1;
 const select = document.querySelector<HTMLSelectElement>('#equipment')!;
+const pathSelect = document.createElement('select');
+pathSelect.setAttribute('aria-label', '头灯专精');
+pathSelect.add(new Option('聚光', 'focus'));
+pathSelect.add(new Option('广角', 'wideLamp'));
+select.after(pathSelect);
+let currentPath: LampPath = 'focus';
 UPGRADES.forEach((definition) => select.add(new Option(definition.nameZh, definition.id)));
 
 function resetView() {
@@ -37,9 +45,11 @@ function resetView() {
   // silently zooms it back down to the starter's apparent size.
   const bounds = new THREE.Box3();
   for (const level of [1, 2, 3] as UpgradeLevel[]) {
-    const reference = buildUpgradeModel(currentId, level, { preserveTierScale: true });
-    bounds.union(new THREE.Box3().setFromObject(reference));
-    disposeModel(reference);
+    for (const path of (currentId === 'lamp' ? ['focus', 'wideLamp'] : ['focus']) as LampPath[]) {
+      const reference = buildUpgradeModel(currentId, level, { preserveTierScale: true, lampPath: path });
+      bounds.union(new THREE.Box3().setFromObject(reference));
+      disposeModel(reference);
+    }
   }
   const centre = bounds.getCenter(new THREE.Vector3());
   const direction = new THREE.Vector3(3, 2.4, 5).normalize();
@@ -65,15 +75,18 @@ function show(id: UpgradeId, level: UpgradeLevel) {
   if (current) { scene.remove(current); disposeModel(current); }
   currentId = id;
   currentLevel = level;
-  current = buildUpgradeModel(id, level, { preserveTierScale: true });
+  current = buildUpgradeModel(id, level, { preserveTierScale: true, lampPath: currentPath });
   scene.add(current);
   select.value = id;
+  pathSelect.hidden = id !== 'lamp';
+  pathSelect.disabled = level === 1;
   document.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.level) === level)));
   const definition = UPGRADES.find((item) => item.id === id)!;
-  document.querySelector('#effect')!.textContent = `${definition.nameZh} · Lv${level} · ${definition.effects[level - 1]}`;
+  document.querySelector('#effect')!.textContent = `${definition.nameZh} · Lv${level} · ${id === 'lamp' ? lampEffect(level, currentPath, true) : definition.effects[level - 1]}`;
   if (changedType) resetView();
 }
 select.addEventListener('change', () => show(select.value as UpgradeId, currentLevel));
+pathSelect.addEventListener('change', () => { currentPath = pathSelect.value as LampPath; show(currentId, currentLevel); });
 document.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((button) => button.addEventListener('click', () => show(currentId, Number(button.dataset.level) as UpgradeLevel)));
 document.querySelector('#reset-view')!.addEventListener('click', resetView);
 let fitted = false;

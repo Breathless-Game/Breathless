@@ -408,7 +408,7 @@ function applyEquipmentVisuals() {
   diver.setRodRange(stats.rodRange);
   diver.setFinsLevel(activeLevel('fins'));
   diver.setTankLevel(activeLevel('tank'));
-  diver.setLampLevel(activeLevel('lamp'));
+  diver.setLampLevel(activeLevel('lamp'), activePath(equipment, 'lamp') === 'wideLamp' ? 'wideLamp' : 'focus');
   diver.setLampStats(
     stats.lampDistance,
     stats.lampIntensity,
@@ -803,7 +803,7 @@ const report = new Report(health, () => {
   if (tripReport.open) tripReport.close();
   healthDesk.forget();
 });
-const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => void selectEquipmentPath(slot, path));
+const gear = new GearPanel((slot) => buyNextUpgrade(slot), (slot, path) => void selectEquipmentPath(slot, path), level => workbench.inspectLamp(level));
 gear.setLock(() => chainBlocked());
 gear.render(equipment);
 hud.setEquipment(equipment, currentTier());
@@ -2381,7 +2381,7 @@ const workbench = new Workbench({
       ? EQUIPMENT_PATHS[id].map((p) => ({ id: p.id, name: p.name, nameZh: p.nameZh, summary: pathSummary(p), effects: [1, 2, 3].map((lv) => pathEffect(p, lv)) }))
       : null,
   activePath: (id) => (isEquipmentSlot(id) ? activePath(equipment, id) : null),
-  selectPath: (id, path) => isEquipmentSlot(id) && selectEquipmentPath(id, path as EquipmentPathId),
+  selectPath: (id, path) => { if (isEquipmentSlot(id)) return selectEquipmentPath(id, path as EquipmentPathId); },
   ship: () => ({ key: shipyard.shipIndex, model: shipyard.shipModel() }),
   // The boat opens the ships in the inspector (the same as gear): the shipyard's ships, unlocks and equip.
   ships: {

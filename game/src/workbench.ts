@@ -23,6 +23,9 @@ import { setDeepSonarColor } from './deep-sonar';
 import { loadSonarConfig } from './sonar-config';
 import type { LessonId } from './tutorial';
 import { SYNTHESIS_ENABLED } from './synthesis';
+import { lampPath } from './lamp-upgrades';
+import type { LampPath } from './lamp-lighting';
+import { disposeMeshes } from './headlamp-model';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -57,7 +60,7 @@ export interface WorkbenchHooks {
   /** The piece's two branches from Lv2 (null: none), the one it runs, and switching. */
   paths(id: UpgradeId): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
   activePath(id: UpgradeId): string | null;
-  selectPath(id: UpgradeId, path: string): void;
+  selectPath(id: UpgradeId, path: string): Promise<void> | void;
   /** The ship you sail (ships.ts): which one (key), and a fresh copy of its model once loaded. */
   ship(): { key: number; model: THREE.Object3D | null };
   /** The ships the boat on the table opens on (in the inspector). */
@@ -183,6 +186,7 @@ interface Piece {
   id: UpgradeId;
   /** What its model shows: the level owned, or for the boat which ship (-1: the stand-in). */
   key: number;
+  lampPath?: LampPath;
   def: UpgradeDef;
   obj: THREE.Group;
   hit: THREE.Mesh;
@@ -408,6 +412,14 @@ export class Workbench {
   /** The bare table, nothing open or moving: Esc from here leaves it. */
   get atRest() {
     return this.state === 'idle';
+  }
+
+  inspectLamp(level: 1 | 2 | 3): boolean {
+    if (!this.visible || !this.atRest || this.blocked()) return false;
+    const def = UPGRADES.find(item => item.id === 'lamp')!;
+    this.state = 'inspect';
+    this.inspector.show(def, { x: window.innerWidth / 2, y: window.innerHeight / 2 }, level);
+    return true;
   }
 
   /** Ready gear, in tray order. */
@@ -738,7 +750,7 @@ export class Workbench {
     const level = (id: UpgradeId) => (packed.has(id) ? Math.min(3, Math.max(1, this.hooks.owned(id))) : 1);
     d.setFinsLevel(level('fins'));
     d.setTankLevel(level('tank'));
-    d.setLampLevel(level('lamp'));
+    d.setLampLevel(level('lamp'), lampPath(level('lamp'), this.hooks.activePath('lamp')));
     d.setNetLevel(level('net'));
     d.setRodLevel(Math.min(3, Math.max(1, this.hooks.owned('rod')))); // the shaft always comes with the net
     d.setWorn({ fins: packed.has('fins'), tank: packed.has('tank'), lamp: packed.has('lamp'), net: packed.has('net') });
@@ -781,7 +793,7 @@ export class Workbench {
     // Keep the tier's physical growth visible after the workbench applies its
     // family-level tray size. buildUpgradeModel stores the relative scale in
     // userData so a long Lv3 rod is not shrunk back to the Lv1 silhouette.
-    return { model: buildUpgradeModel(id, level, { preserveTierScale: true }), key: level };
+    return { model: buildUpgradeModel(id, level, { preserveTierScale: true, lampPath: id === 'lamp' ? lampPath(level, this.hooks.activePath(id)) : undefined }), key: level };
   }
 
   /** Apply the persisted beacon accent to the table piece and open inspector. */
@@ -839,6 +851,7 @@ export class Workbench {
     return {
       id,
       key,
+      lampPath: id === 'lamp' ? lampPath(key, this.hooks.activePath(id)) : undefined,
       def: UPGRADES.find((u) => u.id === id)!,
       obj,
       hit,
@@ -876,7 +889,7 @@ export class Workbench {
       if (old.mode === 'held' || old.mode === 'moving') return;
       const want = old.id === 'boat' ? this.hooks.ship() : null;
       const key = want ? (want.model ? want.key : -1) : Math.min(3, Math.max(1, this.hooks.owned(old.id)));
-      if (key === old.key) return;
+      if (key === old.key && (old.id !== 'lamp' || old.lampPath === lampPath(key, this.hooks.activePath('lamp')))) return;
       const p = this.buildPiece(old.id, GEAR.indexOf(old.id));
       p.obj.visible = old.obj.visible;
       p.mode = old.mode;
@@ -893,7 +906,8 @@ export class Workbench {
       }
       if (old.obj.visible) this.puff(p.pos.x, p.pos.z, p.r * 1.4);
       this.scene.remove(old.obj);
-      old.obj.traverse((o) => {
+      if (old.id === 'lamp') disposeMeshes(old.obj);
+      else old.obj.traverse((o) => {
         if (o instanceof THREE.Mesh) o.geometry.dispose();
       });
       if (this.hovered === old) this.hovered = null;

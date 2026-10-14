@@ -2925,6 +2925,37 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   line-height: 1.35;
 }
 
+#gear-lamp-progression {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.lamp-tier {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.lamp-tier.next { border-color: var(--hold); }
+.lamp-tier.locked { color: var(--muted); }
+.lamp-tier small { color: var(--muted); }
+.has-lamp-progression .gear-card,
+.has-lamp-progression .gear-upgrade-card { flex-shrink: 0; }
+@media (min-width: 641px) and (min-height: 701px) {
+  .has-lamp-progression .gear-slots { min-height: 180px; }
+}
+#wb-inspect-lamp-preview { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+#wb-inspect-lamp-preview small { flex-basis: 100%; color: var(--muted); }
+#wb-inspect-lamp-preview [aria-pressed="true"] { border-color: var(--hold); color: var(--hold); }
+@media (max-width: 640px) {
+  #gear-lamp-progression { grid-template-columns: 1fr; }
+}
+
 #gear-progress {
   width: 100%;
   height: 10px;
@@ -3821,6 +3852,11 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
 /* A level not owned yet: a dark silhouette with its price. */
 #wb-inspect-stage.locked #wb-inspect-gl {
   filter: brightness(0.15) saturate(0) drop-shadow(0 0 1px rgba(160, 230, 255, 0.6));
+}
+
+/* Headlamp previews show the optics before purchase; ownership stays labelled. */
+#wb-inspect.lamp #wb-inspect-stage.locked #wb-inspect-gl {
+  filter: none;
 }
 
 #wb-inspect-lock {

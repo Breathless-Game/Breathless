@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { UpgradeLevel } from '../upgrades';
+import type { LampPath } from '../lamp-lighting';
 import { beam, material, mesh, palette, ring, tube, type Point } from './common';
 
 /** A closed, thin strip; rings are listed around its perimeter. */
@@ -280,7 +281,7 @@ function topHeadband(group: THREE.Group, surface: THREE.Material) {
   }
 }
 
-function lampHead(group: THREE.Group, x: number, radius: number, depth: number, colors: ReturnType<typeof palette>, guard: boolean, coolingRibs = false) {
+function lampHead(group: THREE.Group, x: number, radius: number, depth: number, colors: ReturnType<typeof palette>, guard: boolean, coolingRibs = false, diffuser = false) {
   const z = 0.47;
   const front = z + depth;
   const housing = new THREE.Shape();
@@ -302,7 +303,7 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
   mesh(group, new THREE.ExtrudeGeometry(housing, { depth, bevelEnabled: false }), colors.rubber, [x, 0.015, z], 'compact-angular-lamp-housing');
   mesh(group, new THREE.BoxGeometry(width * 1.9, height * 1.9, 0.028), colors.rubber, [x, 0.015, z + 0.012], 'sealed-rear-housing');
   // Only three shoulder rings create broad reflector facets; no glowing bulb.
-  const reflectorProfile = [[0.025, 0], [radius * 0.43, depth * 0.31], [radius * 0.87, depth * 0.77]].map(([r, y]) => new THREE.Vector2(r, y));
+  const reflectorProfile = [[0.025, 0], [radius * 0.43, depth * 0.25], [radius * 0.87, Math.max(0.01, depth * 0.84 - 0.025)]].map(([r, y]) => new THREE.Vector2(r, y));
   const reflector = mesh(group, new THREE.LatheGeometry(reflectorProfile, 8), colors.metal, [x, 0.015, z + depth * 0.16], 'recessed-faceted-reflector');
   reflector.rotation.x = Math.PI / 2;
   reflector.material = colors.metal.clone();
@@ -311,6 +312,15 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
   mesh(group, new THREE.BoxGeometry(0.026, 0.026, 0.009), diode, [x, 0.015, z + depth * 0.18], 'unlit-led-chip');
   ring(group, radius * 0.91, 0.012, colors.rubber, [x, 0.015, front - 0.006], 'z', 8).name = 'flush-lens-seal';
   const glazing = new THREE.MeshPhysicalMaterial({ color: '#d3d8d3', flatShading: true, roughness: 0.29, metalness: 0, transparent: true, opacity: 0.22, transmission: 0.15, thickness: 0.008, emissive: '#000000', emissiveIntensity: 0, depthWrite: false });
+  if (diffuser) {
+    glazing.roughness = 0.72;
+    glazing.opacity = 0.58;
+    glazing.transmission = 0;
+    // The etched ribs are physical lens parts; they produce no glow or beam mesh.
+    for (const offset of [-0.4, 0, 0.4]) {
+      mesh(group, new THREE.BoxGeometry(radius * 0.025, radius * 1.4, 0.003), colors.glass, [x + offset * radius, 0.015, front - 0.007], 'diffuser-lens-rib');
+    }
+  }
   cylinderZ(group, radius * 0.84, 0.008, glazing, [x, 0.015, front - 0.013], 8).name = 'flat-protective-lens';
   if (guard) {
     ring(group, radius + 0.008, 0.014, colors.rubber, [x, 0.015, front + 0.004], 'z', 8).name = 'integrated-impact-guard';
@@ -319,38 +329,50 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
     // Lv2's deeper barrel has real stepped heat-sink collars around its body.
     // They are deliberately matte metal so the lamp remains unlit in the studio.
     const collar = material('#646e70', { metalness: 0.52, roughness: 0.62 });
-    for (const offset of [0.035, 0.11, 0.185]) {
+    for (const offset of [0.12, 0.4, 0.68].map(fraction => fraction * depth)) {
       ring(group, radius * 1.27, 0.017, collar, [x, 0.015, z + offset], 'z', 8).name = 'barrel-heat-sink-collar';
     }
     mesh(group, new THREE.BoxGeometry(radius * 2.72, radius * 0.31, 0.06), collar, [x, 0.015, z - 0.025], 'deep-barrel-rear-collar');
   }
 }
 
-export function buildLamp(level: UpgradeLevel) {
+export function buildLamp(level: UpgradeLevel, path: LampPath = 'focus') {
   const group = new THREE.Group();
   group.name = `headlamp-level-${level}`;
+  const wide = level > 1 && path === 'wideLamp';
+  group.userData = { lampPath: wide ? 'wideLamp' : 'focus', level };
   const colors = palette(level);
   solidBelt(group, 0.46, 0.43, 0.015, 0.075, colors.rubber);
   topHeadband(group, colors.rubber);
-  mesh(group, new THREE.BoxGeometry(level === 3 ? 0.55 : 0.32, 0.135, 0.065), colors.rubber, [0, 0.015, 0.442], 'front-mount');
-  if (level === 3) {
-    // Twin reinforced optics sit on a wider bridge; their deeper barrels and
-    // separate guards read as a real dual-head assembly at catalogue scale.
-    lampHead(group, -0.138, 0.112, 0.23, colors, true);
-    lampHead(group, 0.138, 0.108, 0.28, colors, true);
+  mesh(group, new THREE.BoxGeometry(wide && level === 3 ? 0.65 : 0.32, 0.135, 0.065), colors.rubber, [0, 0.015, 0.442], 'front-mount');
+  if (wide && level === 3) {
+    lampHead(group, -0.165, 0.13, 0.16, colors, true, false, true);
+    lampHead(group, 0.165, 0.13, 0.16, colors, true, false, true);
+    mesh(group, new THREE.BoxGeometry(0.62, 0.035, 0.065), colors.metal, [0, -0.15, 0.52], 'twin-diffuser-bridge');
+  } else if (wide) {
+    lampHead(group, 0, 0.2, 0.12, colors, true, false, true);
+    ring(group, 0.21, 0.016, colors.metal, [0, 0.015, 0.60], 'z', 8).name = 'wide-diffuser-carrier';
+  } else if (level === 3) {
+    lampHead(group, 0, 0.17, 0.42, colors, true, true);
+    ring(group, 0.165, 0.012, colors.metal, [0, 0.015, 0.90], 'z', 8).name = 'long-focus-optic-retainer';
+    for (const side of [-1, 1]) mesh(group, new THREE.BoxGeometry(0.022, 0.19, 0.24), colors.body, [side * 0.24, 0.015, 0.59], 'projector-side-brace');
   } else if (level === 2) {
     // A single, visibly deep barrel with an impact ring and heat-sink collars.
-    lampHead(group, 0, 0.16, 0.265, colors, true, true);
+    lampHead(group, 0, 0.15, 0.29, colors, true, true);
   } else {
     lampHead(group, 0, 0.115, 0.14, colors, false);
   }
-  mesh(group, new THREE.BoxGeometry(0.07, 0.024, 0.055), colors.rubber, [level === 3 ? -0.138 : 0, level === 3 ? 0.144 : level === 2 ? 0.184 : 0.155, 0.51], 'recessed-power-switch');
-  const batteryWidth = [0.24, 0.28, 0.33][level - 1];
+  const switchY = wide ? (level === 3 ? 0.176 : 0.258) : level === 3 ? 0.22 : level === 2 ? 0.19 : 0.155;
+  mesh(group, new THREE.BoxGeometry(0.07, 0.024, 0.055), colors.rubber, [wide && level === 3 ? -0.165 : 0, switchY, 0.51], 'recessed-power-switch');
+  const batteryWidth = [0.24, 0.29, 0.38][level - 1];
   const batteryDepth = [0.09, 0.11, 0.13][level - 1];
   const batteryZ = -0.455 - batteryDepth / 2;
   mesh(group, new THREE.BoxGeometry(batteryWidth + 0.025, 0.18, 0.04), colors.rubber, [0, 0.025, -0.44], 'rear-battery-mount');
   mesh(group, new THREE.BoxGeometry(batteryWidth, 0.165, batteryDepth), colors.rubber, [0, 0.025, batteryZ], 'sealed-rear-battery');
   mesh(group, new THREE.BoxGeometry(batteryWidth + 0.006, 0.026, batteryDepth + 0.004), colors.body, [0, -0.048, batteryZ], 'battery-cover-seam');
+  if (level >= 2) {
+    for (const side of [-1, 1]) cylinderZ(group, 0.016, 0.008, colors.metal, [side * batteryWidth * 0.32, 0.025, batteryZ - batteryDepth / 2 - 0.004], 6).name = 'battery-cover-fastener';
+  }
   tube(group, [[level === 3 ? 0.26 : 0.14, 0.04, 0.47], [0.39, 0.046, 0.26], [0.46, 0.047, 0], [0.36, 0.047, -0.27], [batteryWidth / 2, 0.04, -0.46]], 0.011, colors.rubber, 4).name = 'battery-power-cable';
   for (const side of [-1, 1]) {
     const buckle = new THREE.Shape();

@@ -18,6 +18,8 @@ import {
 } from './equipment';
 import { ACCESSORIES, type AccessoryDef, type AccessoryId, type AccessorySlot } from './accessories';
 import { pearls as pearlText } from './market';
+import { lampEffect, lampPath, lampUpgradeSteps } from './lamp-upgrades';
+import type { UpgradeLevel } from './upgrades';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -127,7 +129,7 @@ function statSummary(stats: ReturnType<typeof deriveStats>, slot: EquipmentSlot,
     case 'reel': return language === 'zh' ? `恢复倍率 ${Math.round(stats.reelRecovery * 100)}%` : `${Math.round(stats.reelRecovery * 100)}% recovery rate`;
     case 'fins': return language === 'zh' ? `${stats.swimSpeed.toFixed(1)} m/s 游速 · ${stats.swimAcceleration.toFixed(1)} 加速度` : `${stats.swimSpeed.toFixed(1)} m/s swim speed · ${stats.swimAcceleration.toFixed(1)} acceleration`;
     case 'tank': return language === 'zh' ? `${stats.emergencySeconds.toFixed(1)} s 紧急返航窗口` : `${stats.emergencySeconds.toFixed(1)} s emergency return window`;
-    case 'lamp': return language === 'zh' ? `${stats.lampDistance.toFixed(0)} m 光距 · 直射 ${Math.round(stats.lampIntensity)} · ${Math.round(stats.lampAngle * 57.3)}°` : `${stats.lampDistance.toFixed(0)} m range · direct ${Math.round(stats.lampIntensity)} · ${Math.round(stats.lampAngle * 57.3)}°`;
+    case 'lamp': return language === 'zh' ? `${stats.lampDistance.toFixed(0)} m 光距 · 亮度 ${Math.round(stats.lampIntensity)} cd · ${Math.round(stats.lampAngle * 360 / Math.PI)}°` : `${stats.lampDistance.toFixed(0)} m range · ${Math.round(stats.lampIntensity)} cd · ${Math.round(stats.lampAngle * 360 / Math.PI)}°`;
   }
 }
 
@@ -138,7 +140,7 @@ function statCompare(before: ReturnType<typeof deriveStats>, after: ReturnType<t
     case 'reel': return language === 'zh' ? `回收效率 ${Math.round(before.reelRecovery * 100)}% → ${Math.round(after.reelRecovery * 100)}%` : `Recovery ${Math.round(before.reelRecovery * 100)}% → ${Math.round(after.reelRecovery * 100)}%`;
     case 'fins': return language === 'zh' ? `游速 ${before.swimSpeed.toFixed(1)} → ${after.swimSpeed.toFixed(1)} m/s` : `Swim speed ${before.swimSpeed.toFixed(1)} → ${after.swimSpeed.toFixed(1)} m/s`;
     case 'tank': return language === 'zh' ? `返航窗口 ${before.emergencySeconds.toFixed(1)} → ${after.emergencySeconds.toFixed(1)} s` : `Return window ${before.emergencySeconds.toFixed(1)} → ${after.emergencySeconds.toFixed(1)} s`;
-    case 'lamp': return language === 'zh' ? `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 直射 ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} · 散射 ${Math.round(before.lampScatter * 100)}% → ${Math.round(after.lampScatter * 100)}% · ${Math.round(after.lampAngle * 57.3)}°` : `Range ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · direct ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} · scatter ${Math.round(before.lampScatter * 100)}% → ${Math.round(after.lampScatter * 100)}% · ${Math.round(after.lampAngle * 57.3)}°`;
+    case 'lamp': return language === 'zh' ? `光距 ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · 亮度 ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} cd · 照射角 ${Math.round(before.lampAngle * 360 / Math.PI)} → ${Math.round(after.lampAngle * 360 / Math.PI)}°` : `Range ${before.lampDistance.toFixed(0)} → ${after.lampDistance.toFixed(0)} m · ${Math.round(before.lampIntensity)} → ${Math.round(after.lampIntensity)} cd · coverage ${Math.round(before.lampAngle * 360 / Math.PI)} → ${Math.round(after.lampAngle * 360 / Math.PI)}°`;
   }
 }
 
@@ -154,6 +156,7 @@ export class GearPanel {
   private progressLabel = $('gear-progress-label');
   private next = $('gear-next');
   private compare = $('gear-compare');
+  private lampProgression = $('gear-lamp-progression');
   private upgrade = $<HTMLButtonElement>('gear-upgrade');
   private notice = $('gear-notice');
   private icon = $('gear-icon');
@@ -175,7 +178,7 @@ export class GearPanel {
   private busy = false;
   private closeTimer = 0;
 
-  constructor(onUpgrade: (slot: UpgradeSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}) {
+  constructor(onUpgrade: (slot: UpgradeSlot) => void, onPathChange: (slot: EquipmentSlot, path: EquipmentPathId) => void = () => {}, private inspectLamp: (level: UpgradeLevel) => boolean = () => false) {
     this.onUpgrade = onUpgrade;
     this.onPathChange = onPathChange;
     this.renderLanguage();
@@ -398,6 +401,7 @@ export class GearPanel {
     const stats = deriveStats(state);
     const pearls = spendablePearls(state);
     const currentText = tierText(current, ui.slot, this.language);
+    this.renderLampProgression(state);
     this.icon.textContent = ui.icon;
     this.level.textContent = `${this.language === 'zh' ? ui.titleZh : ui.titleEn} · Lv${current.level} · ${currentText.name}`;
     this.effect.textContent = ui.slot === 'sonar' ? currentText.effect : statSummary(stats, ui.slot, this.language);
@@ -430,6 +434,38 @@ export class GearPanel {
     const locked = this.busy ? null : this.lockReason();
     this.upgrade.textContent = this.busy ? copy.spending : locked ?? (missing ? `${copy.need} ${missing} ◇` : `${copy.upgrade} ${next.cost} ◇`);
     this.upgrade.disabled = this.busy || missing > 0 || !!locked;
+  }
+
+  private renderLampProgression(state: EquipmentState) {
+    const visible = this.selectedSlot === 'lamp';
+    this.upgradeView.classList.toggle('has-lamp-progression', visible);
+    this.lampProgression.classList.toggle('hidden', !visible);
+    if (!visible) return;
+    const chinese = this.language === 'zh';
+    const path = lampPath(state.lampLevel, activePath(state, 'lamp'));
+    const steps = lampUpgradeSteps(state.lampLevel, spendablePearls(state), EQUIPMENT_TIERS.lamp.map(tier => tier.cost), path);
+    this.lampProgression.replaceChildren(...steps.map(step => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `lamp-tier ${step.status}`;
+      button.dataset.lampLevel = String(step.level);
+      button.setAttribute('aria-label', chinese ? `预览 ${step.level} 级头灯` : `Preview headlamp level ${step.level}`);
+      const title = document.createElement('strong');
+      const status = step.level === state.lampLevel ? (chinese ? '当前' : 'Current') : step.status === 'owned' ? (chinese ? '已拥有' : 'Owned') : step.status === 'next' ? (chinese ? '下一等级' : 'Next') : (chinese ? '待解锁' : 'Locked');
+      title.textContent = `Lv${step.level} · ${status}`;
+      const effect = document.createElement('span');
+      effect.textContent = lampEffect(step.level, path, chinese);
+      const price = document.createElement('small');
+      price.textContent = step.status === 'owned' ? (chinese ? '已解锁' : 'Unlocked') : step.price === null ? (chinese ? '价格加载中' : 'Loading price') : `${step.price} PEARL${step.status === 'locked' ? (chinese ? ' · 逐级解锁' : ' · sequential upgrade') : step.shortfall ? (chinese ? ` · 还差 ${step.shortfall}` : ` · need ${step.shortfall} more`) : (chinese ? ' · 余额充足' : ' · enough pearls')}`;
+      const preview = document.createElement('small');
+      preview.textContent = chinese ? '查看 3D 模型' : 'View 3D model';
+      button.append(title, effect, price, preview);
+      button.addEventListener('click', () => {
+        if (this.inspectLamp(step.level)) this.toggle(false);
+        else this.showNotice(chinese ? '请回到工作台查看模型' : 'Return to the workbench to inspect models');
+      });
+      return button;
+    }));
   }
 
   private offsetSlot(delta: number): UpgradeSlot {

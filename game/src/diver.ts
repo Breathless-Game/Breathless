@@ -3,7 +3,8 @@ import { DiverConcept } from './diver-designs';
 import { Splash } from './fx';
 import { buildFishingNetMesh } from './gear';
 import { buildHeadlamp, disposeMeshes } from './headlamp-model';
-import { lampActivation, lampProfile, type LampProfile } from './lamp-lighting';
+import { lampActivation, lampProfile, type LampProfile, type LampPath } from './lamp-lighting';
+import { lampPath } from './lamp-upgrades';
 import type { RenderQuality } from './render-quality';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
@@ -85,6 +86,7 @@ export class Diver {
   private lampFill: THREE.PointLight;
   private lampOptics: LampProfile = lampProfile(1);
   private lampLevel = 1;
+  private lampSpecialisation: LampPath = 'focus';
   private lampNight = 0;
   private lampEffects = true;
   private breathPoint: THREE.Object3D;
@@ -483,13 +485,15 @@ export class Diver {
   }
 
   /** Set lamp visual tier and its light reach; intensity still follows depth. */
-  setLampLevel(level: number) {
-    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
-    if (tier !== this.lampLevel) {
+  setLampLevel(level: number, path: LampPath = this.lampSpecialisation) {
+    const tier = Number.isFinite(level) ? THREE.MathUtils.clamp(Math.floor(level), 1, 3) : 1;
+    const selected = lampPath(tier, path);
+    if (tier !== this.lampLevel || selected !== this.lampSpecialisation) {
       this.lampLevel = tier;
+      this.lampSpecialisation = selected;
       this.replaceLampModel();
     }
-    this.lampOptics = lampProfile(this.lampLevel);
+    this.lampOptics = lampProfile(this.lampLevel, this.lampSpecialisation);
     this.headlamp.distance = this.lampOptics.distance;
     this.headlamp.angle = this.lampOptics.angle;
     this.headlamp.penumbra = this.lampOptics.penumbra;
@@ -500,7 +504,7 @@ export class Diver {
   private replaceLampModel() {
     disposeMeshes(this.lampGroup);
     this.lampGroup.clear();
-    const model = buildHeadlamp(this.lampLevel as 1 | 2 | 3);
+    const model = buildHeadlamp(this.lampLevel as 1 | 2 | 3, this.lampSpecialisation);
     this.lampGroup.add(model.group);
     this.lampOrigin.copy(model.origin);
     this.lampEmitters = model.emitters;

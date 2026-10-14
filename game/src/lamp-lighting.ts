@@ -1,4 +1,6 @@
 /** Optical settings for the spotlight and nearby reflected illumination. */
+export type LampPath = 'focus' | 'wideLamp';
+
 export interface LampProfile {
   /** Beam cutoff in metres from the lens. */
   readonly distance: number;
@@ -40,7 +42,7 @@ const smoothstep = (edge0: number, edge1: number, value: number): number => {
 };
 
 /** Tier one is the safe fallback; both specialisations use its mask lamp. */
-export function lampProfile(level: number, path: 'focus' | 'wideLamp' = 'focus'): LampProfile {
+export function lampProfile(level: number, path: LampPath = 'focus'): LampProfile {
   const tier = Number.isFinite(level) ? Math.max(1, Math.min(3, Math.floor(level))) : 1;
   return (path === 'wideLamp' ? WIDE : FOCUS)[tier - 1];
 }
