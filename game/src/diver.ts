@@ -5,6 +5,7 @@ import { buildFishingNetMesh, buildMountedNetHead } from './gear';
 import { buildHeadlamp, disposeMeshes } from './headlamp-model';
 import { lampActivation, lampProfile, type LampProfile, type LampPath } from './lamp-lighting';
 import { lampPath } from './lamp-upgrades';
+import { buildWornFins, buildWornTank, disposeWornFins, type WornFins } from './dive-gear-model';
 import type { RenderQuality } from './render-quality';
 
 function mat(color: THREE.ColorRepresentation, extra: THREE.MeshStandardMaterialParameters = {}) {
@@ -57,6 +58,7 @@ export class Diver {
     this.playtestModel=new DiverConcept(this.skinIndex);
     this.body.add(this.playtestModel.group);
     this.attachHeadGear();
+    this.attachDiveGear();
     this.playtestModel.attachTool(this.netArm);
     this.playtestModel.update(this.modelTime,0);
     this.materialBinder?.(this.playtestModel.group);
@@ -77,7 +79,10 @@ export class Diver {
   private reelGroup: THREE.Group | null = null;
   /** Visible emergency-tank model; level one deliberately has no cylinder. */
   private tankGroup = new THREE.Group();
-  private tankBody: THREE.Mesh | null = null;
+  private tankLevel = 1;
+  private tankWorn = true;
+  private finsWorn = true;
+  private wornFins: WornFins = buildWornFins(1);
   /** Catalogue hardware and lighting share the current suit's animated head frame. */
   private lampGroup = new THREE.Group();
   private lampAnchor = new THREE.Group();
@@ -181,13 +186,7 @@ export class Diver {
     // Optional dive accessories are attached to the diver body so they follow
     // the same pitch/yaw animation as the suit.  Keep the tank hidden until a
     // reserve-air tier is selected by the loadout.
-    this.tankGroup.position.set(-0.25, 0, -0.34);
-    this.tankGroup.rotation.z = Math.PI / 2;
-    this.tankBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.18, 0.82, 8),
-      mat('#287ea6', { metalness: 0.25, roughness: 0.45 }),
-    );
-    this.tankGroup.add(this.tankBody);
+    this.tankGroup.name = 'diver-reserve-air';
     this.tankGroup.visible = false;
     this.body.add(this.tankGroup);
 
@@ -480,20 +479,50 @@ export class Diver {
     this.netMouth.scale.set(1 / this.rodReachScale, 1, 1);
   }
 
-  /** Update the visible fin size for the selected diver upgrade tier. */
+  /** The active suit wears the catalogue's tier-specific foot pockets and blades. */
   setFinsLevel(level: number) {
-    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
+    const tier = Number.isFinite(level) ? THREE.MathUtils.clamp(Math.floor(level), 1, 3) : 1;
+    if (tier !== this.wornFins.level) {
+      disposeWornFins(this.wornFins);
+      this.wornFins = buildWornFins(tier as 1 | 2 | 3);
+      this.attachDiveGear();
+      this.wornFins.feet.forEach(foot => this.materialBinder?.(foot));
+    }
     const length = [1, 1.2, 1.42][tier - 1];
     const width = [0.95, 1.06, 1.18][tier - 1];
     this.finL.scale.set(length, 1, width);
     this.finR.scale.set(length, 1, width);
   }
 
-  /** Toggle and size the emergency tank model. Level one is the no-tank tier. */
+  /** Bare at Lv1, a single cylinder at Lv2 and a manifold-linked pair at Lv3. */
   setTankLevel(level: number) {
-    const tier = THREE.MathUtils.clamp(Math.floor(level), 1, 3);
-    this.tankGroup.visible = tier >= 2;
-    this.tankGroup.scale.setScalar([1, 1.12, 1.3][tier - 1]);
+    const tier = Number.isFinite(level) ? THREE.MathUtils.clamp(Math.floor(level), 1, 3) : 1;
+    if (tier !== this.tankLevel) {
+      this.tankLevel = tier;
+      disposeMeshes(this.tankGroup);
+      this.tankGroup.clear();
+      if (tier >= 2) this.tankGroup.add(buildWornTank(tier as 2 | 3));
+      this.materialBinder?.(this.tankGroup);
+    }
+    this.tankGroup.userData.level = tier;
+    this.tankGroup.visible = this.tankWorn && tier >= 2;
+  }
+
+  private attachDiveGear() {
+    this.wornFins.feet.forEach((foot, i) => {
+      this.playtestModel.footFrames[i].add(foot);
+      foot.visible = this.finsWorn;
+    });
+    this.playtestModel.useExternalFins(this.finsWorn);
+    this.tankGroup.position.set(0.15, this.skinIndex === 2 ? 0.43 : 0.4, 0);
+    this.playtestModel.torsoFrame.add(this.tankGroup);
+  }
+
+  private updateFinFlex(time: number, active = true) {
+    const flex = [0.12, 0.09, 0.055][this.wornFins.level - 1];
+    this.wornFins.blades.forEach((blade, i) => {
+      blade.rotation.x = active && this.finsWorn ? Math.sin(time * 2.8 + i * Math.PI - 1.6) * flex : 0;
+    });
   }
 
   /** Set lamp visual tier and its light reach; intensity still follows depth. */
@@ -595,8 +624,12 @@ export class Diver {
    * housing, and the net on its shaft.
    */
   setWorn(worn: { fins: boolean; tank: boolean; lamp: boolean; net: boolean }) {
+    this.finsWorn = worn.fins;
+    this.tankWorn = worn.tank;
+    this.wornFins.feet.forEach(foot => { foot.visible = worn.fins; });
+    this.playtestModel.useExternalFins(worn.fins);
     this.finL.visible = this.finR.visible = worn.fins;
-    if (!worn.tank) this.tankGroup.visible = false;
+    this.tankGroup.visible = worn.tank && this.tankLevel >= 2;
     this.lampGroup.visible = worn.lamp;
     this.netArm.visible = worn.net;
   }
@@ -717,6 +750,7 @@ export class Diver {
       this.netArm.rotation.z = -0.35;
     }
     this.playtestModel.update(this.modelTime,this.netSwing);
+    this.updateFinFlex(this.modelTime);
     // A small pocket lag follows the stroke; the rigid rim and catch marker stay put.
     this.netWeb.rotation.z = Math.sin(this.netSwing * Math.PI * 2) * 0.025;
 
@@ -755,7 +789,7 @@ export class Diver {
     this.originalSuit.forEach(part=>part.visible=!active);
     this.playtestModel.group.visible=active;
     this.body.scale.setScalar(active?DIVER_SCALE:1);
-    if(active) {this.playtestModel.attachTool(this.netArm);this.attachHeadGear();}
+    if(active) {this.playtestModel.attachTool(this.netArm);this.attachHeadGear();this.attachDiveGear();}
     else {this.body.add(this.netArm);this.netArm.position.set(0.6,0,0.3);}
   }
 
@@ -768,6 +802,7 @@ export class Diver {
     this.body.position.y = 0.57*DIVER_SCALE;
     this.playtestModel.update(time,0);
     this.playtestModel.restPose(1.48,Math.PI+0.1,-1.38,-1.12,time);
+    this.updateFinFlex(time, false);
     this.legL.rotation.z = SIT_LEGS + Math.sin(time * 1.3) * 0.12;
     this.legR.rotation.z = SIT_LEGS + Math.sin(time * 1.3 + 1.9) * 0.12;
     this.netArm.rotation.z = SIT_ARM + Math.sin(time * 0.9) * 0.04;
@@ -788,6 +823,7 @@ export class Diver {
     const e = easeInOut(u);
     this.playtestModel.update(this.modelTime,0);
     this.playtestModel.restPose(1.48*(1-e),(Math.PI+0.1)*(1-e),-1.38*(1-e)-0.22*e,-1.12*(1-e));
+    this.updateFinFlex(this.modelTime, false);
     this.body.rotation.z = (SIT_TORSO-0.08) + (DIVE_PITCH - (SIT_TORSO-0.08)) * e;
     this.body.position.y = 0.57 * DIVER_SCALE * (1 - e);
     // Legs straighten out behind, net tucks in.

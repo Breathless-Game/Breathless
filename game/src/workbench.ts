@@ -292,6 +292,7 @@ export class Workbench {
   // The diver figure on its stand (not a piece: it never moves). It wears what's in the tray.
   private figure = new THREE.Group();
   private figureDiver!: Diver;
+  private figureDisplay!: THREE.Group;
   private figureHit!: THREE.Mesh;
   private guideReturning = false;
   private guide = new THREE.Group();
@@ -701,6 +702,7 @@ export class Workbench {
     const { group, diver } = this.figureModel();
     group.position.y = 0.1 + FIGURE_H / 2;
     this.figureDiver = diver;
+    this.figureDisplay = group;
     this.figureHit = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, FIGURE_H + 0.1, 12), new THREE.MeshBasicMaterial({ visible: false }));
     this.figureHit.position.y = (FIGURE_H + 0.1) / 2;
     this.figure.add(stand, group, this.figureHit);
@@ -728,20 +730,29 @@ export class Workbench {
     });
     const group = new THREE.Group();
     group.add(upright);
-    // Sized and centred on its body, fins included but not the net held out at its side
-    // (it would pull the figure off its stand).
-    diver.setWorn({ fins: true, tank: false, lamp: true, net: false });
-    group.updateMatrixWorld(true);
-    const box = new THREE.Box3();
-    group.traverseVisible((o) => {
-      if (o instanceof THREE.Mesh) box.expandByObject(o);
-    });
-    this.dress(diver);
-    const size = box.getSize(new THREE.Vector3());
-    const k = FIGURE_H / size.y;
-    upright.scale.setScalar(k);
-    upright.position.copy(box.getCenter(new THREE.Vector3())).multiplyScalar(-k);
+    this.fitFigure(group);
     return { group, diver };
+  }
+
+  /** Fit the current body and footwear above the stand, excluding tools and the air pack. */
+  private fitFigure(group: THREE.Group) {
+    const upright = group.children[0] as THREE.Group;
+    const accessories = ['HackRU_Faceted_Fishing_Net', 'diver-reserve-air']
+      .map(name => group.getObjectByName(name)).filter((part): part is THREE.Object3D => !!part);
+    const visibility = accessories.map(part => part.visible);
+    accessories.forEach(part => { part.visible = false; });
+    group.updateWorldMatrix(true, true);
+    const inverse = upright.matrixWorld.clone().invert();
+    const box = new THREE.Box3();
+    upright.traverseVisible(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.geometry.computeBoundingBox();
+      box.union(object.geometry.boundingBox!.clone().applyMatrix4(inverse.clone().multiply(object.matrixWorld)));
+    });
+    accessories.forEach((part, i) => { part.visible = visibility[i]; });
+    const scale = FIGURE_H / Math.max(0.001, box.getSize(new THREE.Vector3()).y);
+    upright.scale.setScalar(scale);
+    upright.position.copy(box.getCenter(new THREE.Vector3())).applyQuaternion(upright.quaternion).multiplyScalar(-scale);
   }
 
   /** What the diver has on: the packed gear at the level owned; the rest it goes without. */
@@ -759,6 +770,7 @@ export class Workbench {
   /** The tray changed: the figure wears what's in it now, and it's saved for next time. */
   private trayChanged() {
     this.dress(this.figureDiver);
+    this.fitFigure(this.figureDisplay);
     this.hooks.saveLoadout(this.packed);
   }
 
@@ -913,7 +925,8 @@ export class Workbench {
       if (this.hovered === old) this.hovered = null;
       this.pieces[i] = p;
     });
-    this.dress(this.figureDiver); // a level bought shows on the figure too
+    this.dress(this.figureDiver);
+    this.fitFigure(this.figureDisplay); // a level bought shows on the figure too
   }
 
   /**
@@ -977,6 +990,7 @@ export class Workbench {
       }
     });
     this.dress(this.figureDiver);
+    this.fitFigure(this.figureDisplay);
   }
 
   /**

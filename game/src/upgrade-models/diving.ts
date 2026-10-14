@@ -133,35 +133,40 @@ export function buildFins(level: UpgradeLevel) {
     fin.position.x = side * (level === 2 ? 0.49 : 0.405);
     fin.rotation.z = side * 0.075;
     group.add(fin);
-    footPocket(fin, flexible, colors.rubber);
-    mesh(fin, bladeGeometry(length, widths, level === 2 ? 0.065 : 0, level === 1), blade, [0, 0, 0], 'thin-flexible-blade');
+    const pocket = new THREE.Group(); pocket.name = 'fin-foot-pocket'; fin.add(pocket);
+    footPocket(pocket, flexible, colors.rubber);
+    const plate = new THREE.Group(); plate.name = 'fin-blade-assembly'; fin.add(plate);
+    mesh(plate, bladeGeometry(length, widths, level === 2 ? 0.065 : 0, level === 1), blade, [0, 0, 0], 'thin-flexible-blade');
     for (const edge of [-1, 1]) {
-      const rail = tube(fin, widths.map((width, row): Point => [edge * width, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? 0.085 : 0), -0.008 - row / (widths.length - 1) * 0.12]), level === 3 ? 0.012 : level === 2 ? 0.038 : 0.021, colors.rubber, 4);
+      const rail = tube(plate, widths.map((width, row): Point => [edge * width, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? 0.085 : 0), -0.008 - row / (widths.length - 1) * 0.12]), level === 3 ? 0.012 : level === 2 ? 0.038 : 0.021, colors.rubber, 4);
       rail.name = level === 2 ? 'raised-channel-side-rail' : level === 3 ? 'composite-plate-edge' : 'rubber-blade-edge';
-      tube(fin, [[edge * 0.18, 0.25, 0.09], [edge * 0.18, -0.1, 0.08], [edge * 0.14, -0.34, -0.003]], level === 2 ? 0.029 : 0.02, colors.rubber, 4).name = 'foot-pocket-to-blade-tendon';
+      tube(plate, [[edge * 0.18, 0.25, 0.09], [edge * 0.18, -0.1, 0.08], [edge * 0.14, -0.34, -0.003]], level === 2 ? 0.029 : 0.02, colors.rubber, 4).name = 'foot-pocket-to-blade-tendon';
     }
     const ribs = level === 1 ? [-0.35, 0.35] : level === 2 ? [-0.48, 0, 0.48] : [-0.38, 0.38];
     for (const fraction of ribs) {
-      tube(fin, widths.map((width, row): Point => [width * fraction, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? Math.abs(fraction) * 0.085 : 0), (level === 2 ? 0.016 : 0.004) - row / (widths.length - 1) * 0.12]), level === 3 ? 0.007 : level === 2 ? 0.028 : 0.016, colors.rubber, 4).name = level === 2 ? 'moulded-water-channel-rib' : 'longitudinal-blade-rib';
+      tube(plate, widths.map((width, row): Point => [width * fraction, -0.14 - length * row / (widths.length - 1) + (row === widths.length - 1 ? Math.abs(fraction) * 0.085 : 0), (level === 2 ? 0.016 : 0.004) - row / (widths.length - 1) * 0.12]), level === 3 ? 0.007 : level === 2 ? 0.028 : 0.016, colors.rubber, 4).name = level === 2 ? 'moulded-water-channel-rib' : 'longitudinal-blade-rib';
     }
     if (level === 2) {
       // A moulded root bridge supports the broad blade before its channels
       // flex. The stepped rails and deep channels remain visible in profile.
-      mesh(fin, new THREE.BoxGeometry(0.49, 0.095, 0.065), flexible, [0, -0.31, 0.006], 'broad-channel-root-bridge');
+      mesh(plate, new THREE.BoxGeometry(0.49, 0.095, 0.065), flexible, [0, -0.31, 0.006], 'broad-channel-root-bridge');
       for (const edge of [-1, 1]) {
-        beam(fin, [edge * 0.20, -0.30, 0.026], [edge * 0.34, -0.68, -0.011], 0.029, flexible, 4).name = 'channel-fin-root-brace';
+        beam(plate, [edge * 0.20, -0.30, 0.026], [edge * 0.34, -0.68, -0.011], 0.029, flexible, 4).name = 'channel-fin-root-brace';
       }
     } else if (level === 3) {
       // The replaceable long plate is clamped into the foot pocket. Four
       // exposed fasteners distinguish this construction from moulded fins.
-      mesh(fin, new THREE.BoxGeometry(0.40, 0.20, 0.045), composite, [0, -0.25, 0.011], 'replaceable-composite-blade-carrier');
+      mesh(plate, new THREE.BoxGeometry(0.40, 0.20, 0.045), composite, [0, -0.25, 0.011], 'replaceable-composite-blade-carrier');
       for (const x of [-0.14, 0.14]) {
-        mesh(fin, new THREE.BoxGeometry(0.065, 0.25, 0.055), colors.rubber, [x, -0.25, 0.025], 'composite-blade-clamp');
-        for (const y of [-0.18, -0.32]) cylinderZ(fin, 0.020, 0.016, colors.metal, [x, y, 0.059], 6).name = 'exposed-blade-clamp-bolt';
+        mesh(plate, new THREE.BoxGeometry(0.065, 0.25, 0.055), colors.rubber, [x, -0.25, 0.025], 'composite-blade-clamp');
+        for (const y of [-0.18, -0.32]) cylinderZ(plate, 0.020, 0.016, colors.metal, [x, y, 0.059], 6).name = 'exposed-blade-clamp-bolt';
       }
     } else {
-      for (const x of [-0.13, 0.13]) mesh(fin, new THREE.BoxGeometry(0.05, 0.12, 0.022), colors.rubber, [x, -0.23, 0.015], 'moulded-rubber-blade-root');
+      for (const x of [-0.13, 0.13]) mesh(plate, new THREE.BoxGeometry(0.05, 0.12, 0.022), colors.rubber, [x, -0.23, 0.015], 'moulded-rubber-blade-root');
     }
+    // Keep the heel fixed while the complete blade assembly flexes at its root.
+    plate.position.y = -0.14;
+    plate.children.forEach(part => { part.position.y += 0.14; });
   }
   group.userData.structure = ['short-vented-rubber-blade', 'wide-deep-channel-blade', 'long-replaceable-composite-plate'][level - 1];
   return group;

@@ -29,9 +29,12 @@ const { buildMountedNetHead } = await import(gearUrl);
 const { buildNetHead } = await import(netUrl);
 const divingUrl = await moduleUrl('upgrade-models/diving', { './common': commonUrl });
 const headlampUrl = await moduleUrl('headlamp-model', { './upgrade-models/diving': divingUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
+const wornGearUrl = await moduleUrl('dive-gear-model', { './upgrade-models/diving': divingUrl, './headlamp-model': headlampUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
+const { buildWornFins, buildWornTank, disposeWornFins } = await import(wornGearUrl);
+const { buildFins, buildTank } = await import(divingUrl);
 const { buildHeadlamp } = await import(headlampUrl);
 const { buildLamp } = await import(divingUrl);
-const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './lamp-upgrades': lampUpgradesUrl, './diver-designs': conceptUrl, './headlamp-model': headlampUrl }));
+const { Diver } = await import(await moduleUrl('diver', { './gear': gearUrl, './fx': fxUrl, './lamp-lighting': lampLightingUrl, './lamp-upgrades': lampUpgradesUrl, './dive-gear-model': wornGearUrl, './diver-designs': conceptUrl, './headlamp-model': headlampUrl }));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
 const rngUrl = await moduleUrl('rng');
 const depthOddsUrl = await moduleUrl('depth-odds');
@@ -98,6 +101,128 @@ function simulate(diver, seconds, fps = 120, startTime = 0) {
     diver.update(1 / fps, startTime + frame / fps, -diver.pos.y);
   }
 }
+
+function resourcesOf(...roots) {
+  const resources = new Set();
+  roots.forEach(root => root.traverse(object => {
+    if (object.isMesh) {
+      resources.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) resources.add(material);
+    }
+  }));
+  return resources;
+}
+
+test('worn fins retain catalogue geometry and a bounded mesh budget at every tier', () => {
+  for (const level of [1, 2, 3]) {
+    const worn = buildWornFins(level);
+    const source = buildFins(level);
+    for (const [i, name] of ['left-fin', 'right-fin'].entries()) {
+      const fin = source.getObjectByName(name);
+      fin.position.set(0, 0, 0);
+      const reference = new THREE.Group();
+      reference.position.copy(worn.feet[i].position);
+      reference.quaternion.copy(worn.feet[i].quaternion);
+      reference.scale.copy(worn.feet[i].scale);
+      reference.add(fin);
+      const expected = new THREE.Box3().setFromObject(reference, true);
+      const actual = new THREE.Box3().setFromObject(worn.feet[i], true);
+      assert.ok(actual.min.distanceTo(expected.min) < 1e-6);
+      assert.ok(actual.max.distanceTo(expected.max) < 1e-6);
+      let meshes = 0;
+      worn.feet[i].traverse(object => { if (object.isMesh) meshes++; });
+      assert.ok(meshes <= 6, `${name} Lv${level} fits six draw calls`);
+      assert.equal(worn.blades[i].parent.name, name);
+    }
+    disposeWornFins(worn);
+  }
+});
+
+test('worn air packs preserve the single and twin catalogue vessels and render no Lv1 cylinder', () => {
+  assert.equal(buildWornTank(1).children.length, 0);
+  for (const level of [2, 3]) {
+    const worn = buildWornTank(level);
+    const reference = new THREE.Group();
+    reference.quaternion.copy(worn.quaternion);
+    reference.scale.copy(worn.scale);
+    reference.add(buildTank(level));
+    const expected = new THREE.Box3().setFromObject(reference, true);
+    const actual = new THREE.Box3().setFromObject(worn, true);
+    assert.ok(actual.min.distanceTo(expected.min) < 1e-6);
+    assert.ok(actual.max.distanceTo(expected.max) < 1e-6);
+    assert.equal(worn.userData.cylinders, level === 2 ? 1 : 2);
+    let meshes = 0;
+    worn.traverse(object => { if (object.isMesh) meshes++; });
+    assert.ok(meshes <= 5);
+  }
+});
+
+test('fin and reserve-air tiers survive suit changes without disposing or rebuilding equipped parts', () => {
+  const { diver } = createDiver();
+  diver.setFinsLevel(3); diver.setTankLevel(3);
+  const fins = diver.wornFins;
+  const tank = diver.tankGroup.children[0];
+  let disposed = 0;
+  resourcesOf(...fins.feet, tank).forEach(resource => resource.addEventListener('dispose', () => disposed++));
+  diver.setFinsLevel(3); diver.setTankLevel(3);
+  for (const skin of [1, 2, 0]) {
+    diver.setSkin(skin);
+    simulate(diver, 0.2);
+    assert.equal(diver.wornFins, fins);
+    assert.equal(diver.tankGroup.children[0], tank);
+    fins.feet.forEach((foot, i) => assert.equal(foot.parent, diver.playtestModel.footFrames[i]));
+    assert.equal(diver.tankGroup.parent, diver.playtestModel.torsoFrame);
+    assert.ok(diver.tankGroup.visible);
+    assert.equal(disposed, 0);
+  }
+});
+
+test('packing, removing and re-equipping fins and air packs updates the visible suit immediately', () => {
+  const { diver } = createDiver();
+  const worn = { fins: false, tank: false, lamp: true, net: true };
+  diver.setWorn(worn);
+  diver.setFinsLevel(2); diver.setTankLevel(3);
+  diver.setSkin(2);
+  assert.ok(diver.wornFins.feet.every(foot => !foot.visible));
+  assert.equal(diver.tankGroup.visible, false);
+  assert.ok(diver.playtestModel.footBoots.every(boot => boot.visible));
+  assert.ok(diver.playtestModel.blades.every(blade => !blade.mesh.visible));
+  diver.setWorn({ ...worn, fins: true, tank: true });
+  assert.ok(diver.wornFins.feet.every(foot => foot.visible));
+  assert.ok(diver.tankGroup.visible);
+  assert.ok(diver.playtestModel.footBoots.every(boot => !boot.visible));
+  diver.setTankLevel(1);
+  assert.equal(diver.tankGroup.visible, false);
+  assert.equal(diver.tankGroup.children.length, 0);
+  diver.setTankLevel(2);
+  assert.ok(diver.tankGroup.visible);
+});
+
+test('replacing fin and tank tiers releases owned resources once and sanitises invalid levels', () => {
+  const { diver } = createDiver();
+  diver.setFinsLevel(3); diver.setTankLevel(3);
+  const resources = resourcesOf(...diver.wornFins.feet, diver.tankGroup);
+  let disposed = 0;
+  resources.forEach(resource => resource.addEventListener('dispose', () => disposed++));
+  diver.setFinsLevel(NaN); diver.setTankLevel(Infinity);
+  assert.equal(disposed, resources.size);
+  assert.equal(diver.wornFins.level, 1);
+  assert.equal(diver.tankGroup.userData.level, 1);
+  assert.ok(new THREE.Box3().setFromObject(diver.wornFins.feet[0], true).getSize(new THREE.Vector3()).toArray().every(Number.isFinite));
+});
+
+test('fin flex follows opposite leg strokes and rests on the seated pose', () => {
+  const { diver } = createDiver();
+  diver.setFinsLevel(2);
+  simulate(diver, 0.3);
+  const blades = diver.wornFins.blades;
+  assert.ok(Math.abs(blades[0].rotation.x) > 0.01);
+  assert.ok(Math.abs(blades[0].rotation.x + blades[1].rotation.x) < 1e-6);
+  const seat = new THREE.Object3D();
+  diver.sit(seat);
+  simulate(diver, 0.2);
+  assert.ok(blades.every(blade => blade.rotation.x === 0));
+});
 
 test('quality budgets limit emitted particles and repeated bursts cannot exceed the cap', () => {
   const burstCounts = [];
