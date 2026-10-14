@@ -104,6 +104,14 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
           float facetValue = mix(0.86, 1.08, facetTone);
           outgoingLight *= mix(vec3(1.0), facetPalette * facetValue, 0.82 * uWaterAbove + 0.18);
 
+          if (uWaterDetail > 1.5 && uWaterEffects > 0.5) {
+            float rippleFootprint = length(fwidth(vWaterSurface.xz));
+            float rippleDetail = 1.0 - smoothstep(0.035, 0.16, rippleFootprint);
+            float smallRipple = sin(vWaterSurface.x * 8.5 + vWaterSurface.z * 3.2 - uWaterTime * 1.8)
+              * cos(vWaterSurface.z * 6.7 - vWaterSurface.x * 1.1 + uWaterTime * 0.7);
+            outgoingLight *= 1.0 + smallRipple * rippleDetail * 0.065 * uWaterAbove;
+          }
+
           if (uWaterEffects > 0.5) {
             vec3 waterView = normalize(cameraPosition - vWaterFacetCenter);
             float waterFacing = clamp(dot(waterNormal, waterView), 0.0, 1.0);
@@ -200,7 +208,7 @@ export class WaterSurfaceMaterial extends THREE.MeshStandardMaterial {
   }
 
   customProgramCacheKey(): string {
-    return 'deepbreath-water-facets-v5';
+    return 'deepbreath-water-facets-v6';
   }
 
   setEffectsEnabled(enabled: boolean): void {
