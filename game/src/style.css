@@ -3854,6 +3854,11 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
   filter: brightness(0.15) saturate(0) drop-shadow(0 0 1px rgba(160, 230, 255, 0.6));
 }
 
+/* Headlamp previews show the optics before purchase; ownership stays labelled. */
+#wb-inspect.lamp #wb-inspect-stage.locked #wb-inspect-gl {
+  filter: none;
+}
+
 #wb-inspect-lock {
   position: absolute;
   left: 0;

@@ -401,6 +401,7 @@ export class GearInspector {
 
   private renderLampPreview() {
     const host = $('wb-inspect-lamp-preview');
+    this.root.classList.toggle('lamp', this.def?.id === 'lamp');
     host.classList.toggle('hidden', this.def?.id !== 'lamp');
     if (this.def?.id !== 'lamp') return;
     const label = document.createElement('small');
