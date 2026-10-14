@@ -15,12 +15,12 @@ const rng = await sourceUrl('../src/rng.ts');
 const { FLORA, understorySpecies, depthTint } = await import(await sourceUrl('../src/flora.ts'));
 const { Shelf, layoutSeabed, plantHeight } = await import(await sourceUrl('../src/seabed-layout.ts', { './rng': rng }));
 
-// The shelf world.ts builds: sand out to 210 m, the diver's widest corridor 200 m, and
+// The shelf world.ts builds: sand out to 290 m, the diver's widest corridor 200 m, and
 // kelp counted per 140 m of shelf (55 / 26 / 55 on the three maps).
-const BOUNDS = { trench: 14, outer: 210, zMin: -70, zMax: 20 };
+const BOUNDS = { trench: 14, outer: 290, zMin: -115, zMax: 65 };
 const REACH = 200;
 const SCALE = (REACH * 2) / 140;
-const MAPS = { fjord: [0xf10d5ea, 40, 55], tianchi: [0x71a2c41, 62, 26], ocean: [20261010, 62, 55] };
+const MAPS = { fjord: [0xf10d5ea, 60, 55], tianchi: [0x71a2c41, 100, 26], ocean: [20261010, 62, 55] };
 
 function build(id) {
   const [seed, depth, perSpan] = MAPS[id];

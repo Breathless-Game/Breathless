@@ -57,8 +57,8 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | | Fjord 峡湾 (Norway / Iceland) | Heaven Lake 天池 (Zhangjiajie / Changbai) | Open Ocean 汪洋 |
 | --- | --- | --- | --- |
 | Difficulty | Casual | Normal | Hard |
-| Zones above the seabed | 0–38 m, Shallows + Kelp Forest | 0–60 m, Shallows + Sunken Forest + Deep Basin | 0–60 m, Shallows + Coral Reef + The Abyss |
-| Seabed | About 40 m, continuous rocky floor | About 62 m, continuous lake floor | 62 m shelf, then the bottomless trench |
+| Zones above the seabed | 0–58 m, Shallows + Kelp Forest | 0–98 m, Shallows + Sunken Forest + Deep Basin | 0–60 m, Shallows + Coral Reef + The Abyss |
+| Seabed | About 60 m, continuous rocky floor | About 100 m, continuous lake floor | 62 m shelf, then the bottomless trench |
 | Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, two fishing cabins and a pier, ice floes; lit windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
@@ -66,7 +66,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Sharks | None | None | One or two by day, two to four at night; hunt by your heart rate; rarer fish |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
-- **The trench**: only the Open Ocean has a bottomless trench under the boat. Fjord and Heaven Lake have continuous floors across the full width, with local height variation around 40 m and 62 m. The diver, fish, camera and sonar respect the drawn floor.
+- **The trench**: only the Open Ocean has a bottomless trench under the boat. Fjord and Heaven Lake have continuous floors across the full width, with local height variation around 60 m and 100 m. The diver, fish, camera and sonar respect the drawn floor.
 - **Depth zones**: Fjord opens Shallows and Kelp Forest; Heaven Lake opens Shallows, Sunken Forest and Deep Basin. Drop rates depend on absolute depth. Only the Open Ocean spawns a following trench school and shows an infinite Trench band; finite maps use a depth gauge scaled to their seabed.
 - **Unlocking** (the thresholds exist, but the on-chain check from `player_state` v2 is coming next; all maps are still open today): a map opens by the lifetime catch value of every fish ever banked (see "Catch value" in section 7). Selling fish never lowers it, so a map never re-locks and progress never stalls. Unlocking Heaven Lake opens a deeper finite floor; Open Ocean adds the bottomless trench. When a dive banks enough to open a new map, a message says so.
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
@@ -498,7 +498,7 @@ Pictures and per-species numbers for all 17 fish species and the fishing rod are
 
 ### Depth zones and drop rates (`RARITY_BY_DEPTH` in `depth-odds.ts`)
 
-Fjord has a finite seabed around 40 m; Heaven Lake's is around 62 m. Only the Open Ocean continues forever below its 62 m shelf. The shared depth bands are 0–18 m, 18–38 m and 38–60 m, with map-specific names in the gauge and NFT metadata. Drop rates and catch value depend only on absolute depth: 30 m in Fjord's Kelp Forest rolls exactly like 30 m on the Open Ocean's reef.
+Fjord has a finite seabed around 60 m; Heaven Lake's is around 100 m. Only the Open Ocean continues forever below its 62 m shelf. Each finite map's last named zone extends to 2 m above its nominal floor: Kelp Forest is 18–58 m and Deep Basin is 38–98 m. Fish counts grow with the depth span, keeping the expanded water stocked. Drop rates and catch value still depend on absolute depth: 30 m in Fjord's Kelp Forest rolls exactly like 30 m on the Open Ocean's reef.
 
 Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Epic only appears below 15 m, legendary below 30 m, mythic below 50 m. The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
 
@@ -728,9 +728,11 @@ Morning highlights are gently warm, afternoon highlights become golden, and nigh
 
 ### Seabed, rocks and kelp
 
+Underwater boundaries use radial distance haze with a smooth fade at both ends. The lateral transition starts beyond the playable ±200 m corridor and reaches the water colour before the sand mesh ends at ±290 m; the floor also extends farther forward and backward. Near rocks, fish and plants stay readable while distant silhouettes dissolve into the water, without a fullscreen blur pass. Above-water fog is unchanged, and only Open Ocean widens visibility for trench walls.
+
 Rock meshes use the same bounds as their placement data, so jitter and rotation cannot lift them off their supports. Broad layered outcrops replace tall stacks of pointed stones. Moss coats lit upward-facing facets in coherent patches and fades out below 85 m, without a separate floating mesh. Everything on the shelf rests on something. The sand is a height grid; rocks and plants are placed by reading the same triangles the sand is drawn with. On the near shelf, rocks form outcrops: one part-buried boulder, two or three rocks leaning on it and scree around it, with open sand between outcrops and no boulder in the lane the diver swims in. Along the back, rock is piled on rock from the bottom up, so the wall has tall stacks but nothing hangs in open water. Coral grows on the wall's rocks and on the sand; Heaven Lake's ledges jut out of its stacks.
 
-Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 5 m short of the surface (about 35 m on the Fjord and up to 48 m on Heaven Lake and the Open Ocean). It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Outcrops, groves and meadows are counted per metre of shelf and laid out to the farthest edge a map can open (200 m each way), so the forest is as dense at the ends as under the boat. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
+Four plants grow there, all built from flat quads and triangles with one color per face, like the sand and rocks. Giant kelp is the forest: kinked straps with triangular leaves, up to 48 m tall and at least 5 m short of the surface. It stands in groves around the outcrops; one plant in ten stands in the diver's lane and about one in seven in front of it. Outcrops, groves and meadows are counted per metre of shelf and laid out to the farthest edge a map can open (200 m each way), so the forest is as dense at the ends as under the boat. Seagrass grows in meadows on open sand; broad-leaved kelp and sea ferns keep to the rocks. Each map has its own mix and colors (`flora.ts`): dark olive kelp with red sea ferns on the Fjord, yellow-green weeds on Heaven Lake, emerald kelp with teal fans and purple ferns on the Open Ocean. Faces are brighter and warmer near the surface and dimmer and bluer at depth.
 
 Plants sway in the vertex shader. A slow wave of current crosses the bed, so neighbors move one after another; tall kelp bends into an S and its tips trace loops; leaf tips flutter; the swell that rocks the boat moves the upper water back and forth; wind makes all of it stronger. Plants within 4.5 m of the diver bend away and trail in the direction of the swim.
 

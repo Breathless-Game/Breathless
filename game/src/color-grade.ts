@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import type { LightingState } from './daylight';
 import type { WeatherState } from './weather';
+import { UnderwaterHaze } from './underwater-haze';
 
 /** Shared color balance in existing material shaders; no fullscreen render pass. */
 export class SceneColorGrade {
+  readonly haze = new UnderwaterHaze();
   private readonly attached = new WeakSet<THREE.Material>();
   readonly uniforms = {
     uGradeShadows: { value: new THREE.Vector3(1, 1, 1) },
@@ -12,6 +14,7 @@ export class SceneColorGrade {
   };
 
   apply(root: THREE.Object3D): void {
+    this.haze.apply(root);
     root.traverse((object) => {
       const material = (object as THREE.Mesh).material;
       if (!material) return;

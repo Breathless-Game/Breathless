@@ -1,4 +1,4 @@
-import { ZONES, fishValue, type FishSpec, type Zone } from './fish';
+import { ZONES, fishValue, type FishSpec, type Band } from './fish';
 import { storageKey } from './wallet';
 import type { Climate } from './weather';
 import { t } from './i18n';
@@ -21,6 +21,8 @@ export interface MapDef {
   difficulty: 'Casual' | 'Normal' | 'Hard';
   /** How many depth zones the shelf spans, counted down from the surface. */
   zoneCount: 1 | 2 | 3;
+  /** Nominal floor depth, independent of the number of named zones. */
+  seabedDepth: number;
   /** Whether the seabed opens into a bottomless trench under the boat. */
   hasTrench: boolean;
   /** Names shown on the depth gauge for the shelf zones. */
@@ -70,10 +72,11 @@ export const MAPS: Record<MapId, MapDef> = {
     surfaceTempC: 7,
     difficulty: 'Casual',
     zoneCount: 2,
+    seabedDepth: 60,
     hasTrench: false,
     zoneLabels: ['Shallows', 'Kelp Forest'],
     unlockValue: 0,
-    blurb: 'Calm glacial water between snow peaks. Kelp forests reach a rocky floor at 40 m.',
+    blurb: 'Calm glacial water between snow peaks. Kelp forests reach a rocky floor at 60 m.',
     sky: '#bfe6f2',
     nightSky: '#07122b',
     haze: [50, 240],
@@ -88,6 +91,7 @@ export const MAPS: Record<MapId, MapDef> = {
       [20, '#135a72'],
       [40, '#0a3350'],
       [60, '#04162b'],
+      [100, '#020d1d'],
     ],
     sand: '#9aa7ad',
     rocks: ['#5b6b78', '#46535f', '#6f7f8a', '#39444f'],
@@ -102,10 +106,11 @@ export const MAPS: Record<MapId, MapDef> = {
     surfaceTempC: 14,
     difficulty: 'Normal',
     zoneCount: 3,
+    seabedDepth: 100,
     hasTrench: false,
     zoneLabels: ['Shallows', 'Sunken Forest', 'Deep Basin'],
     unlockValue: 150,
-    blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees and a deep basin at 62 m.',
+    blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees and a deep basin at 100 m.',
     sky: '#d6e6dc',
     nightSky: '#0a1620',
     haze: [30, 190],
@@ -120,6 +125,7 @@ export const MAPS: Record<MapId, MapDef> = {
       [25, '#0f5a55'],
       [45, '#06302f'],
       [60, '#021514'],
+      [100, '#010b0e'],
     ],
     sand: '#7d7a63',
     rocks: ['#6a6657', '#55513f', '#7b7765', '#403d31'],
@@ -134,6 +140,7 @@ export const MAPS: Record<MapId, MapDef> = {
     surfaceTempC: 22,
     difficulty: 'Hard',
     zoneCount: 3,
+    seabedDepth: 62,
     hasTrench: true,
     zoneLabels: ['Shallows', 'Reef', 'Abyss'],
     unlockValue: 1000,
@@ -152,6 +159,7 @@ export const MAPS: Record<MapId, MapDef> = {
       [30, '#0d4d73'],
       [45, '#06213f'],
       [60, '#020a1a'],
+      [140, '#010510'],
     ],
     sand: '#c2a874',
     rocks: ['#5d6f7a', '#4a5b68', '#6b7d85', '#3e4c59'],
@@ -162,13 +170,15 @@ export const MAPS: Record<MapId, MapDef> = {
 
 export const MAP_ORDER: readonly MapId[] = ['fjord', 'tianchi', 'ocean'];
 
-export function mapZones(map: MapDef): readonly Zone[] {
-  return ZONES.slice(0, map.zoneCount);
+export function mapZones(map: MapDef): readonly (Band & { name: string; rewardMultiplier: number })[] {
+  return ZONES.slice(0, map.zoneCount).map((zone, i) => i === map.zoneCount - 1
+    ? { ...zone, bottom: map.seabedDepth - 2 }
+    : zone);
 }
 
-/** Seabed depth in metres: the deepest open zone plus a little floor clearance. */
+/** Nominal seabed depth; local terrain has a few metres of height variation. */
 export function mapDepth(map: MapDef): number {
-  return ZONES[map.zoneCount - 1].bottom + 2;
+  return map.seabedDepth;
 }
 
 // Display text in the player's language. The data above stays English (chain.ts reads
@@ -179,8 +189,8 @@ const PLACE_ZH: Record<string, string> = {
   'The deep sea': '深海',
 };
 const BLURB_ZH: Record<string, string> = {
-  'Calm glacial water between snow peaks. Kelp forests reach a rocky floor at 40 m.': '雪峰间平静的冰川水域。海带森林一直延伸到 40 米深的岩石海底。',
-  'A misty mountain lake ringed by stone pillars. Drowned trees and a deep basin at 62 m.': '石柱环绕的雾锁山湖。沉没的树林下方，是 62 米深的湖底盆地。',
+  'Calm glacial water between snow peaks. Kelp forests reach a rocky floor at 60 m.': '雪峰间平静的冰川水域。海带森林一直延伸到 60 米深的岩石海底。',
+  'A misty mountain lake ringed by stone pillars. Drowned trees and a deep basin at 100 m.': '石柱环绕的雾锁山湖。沉没的树林下方，是 100 米深的湖底盆地。',
   'Open water under a storm front. Reef and abyss on the widest shelf.': '暴风前线下的开阔海面，最宽的大陆架上有礁区和深渊。',
 };
 const ZONE_ZH: Record<string, string> = { Shallows: '浅滩', 'Kelp Forest': '海带林', 'Sunken Forest': '沉林', 'Deep Basin': '深水盆地', Reef: '礁区', Abyss: '深渊' };

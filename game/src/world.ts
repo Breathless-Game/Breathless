@@ -20,6 +20,7 @@ import { KelpBed, type KelpPlant } from './kelp';
 import { Shelf, layoutSeabed, plantHeight, type RockSlot, type SeabedLayout } from './seabed-layout';
 import { rockGeometry, paintRock } from './rock-surface';
 import { TRENCH_HALF_WIDTH, terrainFloorY } from './terrain-depth';
+import { underwaterHazeRange } from './underwater-haze';
 export { TRENCH_HALF_WIDTH } from './terrain-depth';
 
 /** Seconds for one full day/night cycle. */
@@ -41,11 +42,11 @@ const CHUNK_HEIGHT = 40;
 /** Below this depth (m) the walls carry glowing specks. */
 const GLOW_DEPTH = 120;
 // Keep the full generated floor under the maximum interactive corridor.
-// The extra ten metres on each side gives the camera a small visual buffer.
-const SEABED_WIDTH = MAX_HALF_WIDTH * 2 + 20;
+// A wide visual apron dissolves into water before the drawn mesh ends.
+const SEABED_WIDTH = (MAX_HALF_WIDTH + 90) * 2;
 // Preserve the old seabed triangle density while widening the floor to cover
 // the full dynamic corridor plus a small camera buffer.
-const SEABED_SEGMENTS_X = 120;
+const SEABED_SEGMENTS_X = Math.round(SEABED_WIDTH / 3.5);
 /**
  * `map.kelp.count` and `quality.kelpCount` are tall kelp per this many metres of
  * shelf (the width of the first corridor). A wider shelf grows more, so the
@@ -66,7 +67,7 @@ const toPalette = (map: MapDef): Palette => map.water.map(([d, c]) => [d, new TH
 let waterColors = toPalette(MAPS.ocean);
 
 export function waterColorAt(depth: number, night = false): THREE.Color {
-  const d = THREE.MathUtils.clamp(depth, 0, 60);
+  const d = THREE.MathUtils.clamp(depth, 0, waterColors[waterColors.length - 1][0]);
   let c = waterColors[waterColors.length - 1][1].clone();
   for (let i = 0; i < waterColors.length - 1; i++) {
     const [d0, c0] = waterColors[i];
@@ -109,22 +110,6 @@ function wallTint(base: THREE.Color, depth: number, out: THREE.Color) {
 /** Share of trench-wall rocks to build: all on high, fewer but larger ones on lower settings. */
 function wallDensity(quality: RenderQuality) {
   return 0.45 + 0.55 * Math.min(1, quality.kelpCount / RENDER_QUALITY.high.kelpCount);
-}
-
-/** Underwater fog reach (m) once the camera is inside the trench: far enough that the side and back walls read as a slot in the rock. */
-const TRENCH_FOG_FAR = 50;
-/** Metres below the shelf over which the fog eases out to TRENCH_FOG_FAR. */
-const TRENCH_FOG_EASE = 10;
-
-/**
- * Fog far distance for a camera `depth` m under water. Open water closes in from 70 m to 34 m
- * by 60 m deep. The camera only drops below the shelf inside the trench (over the shelf it stays
- * 9 m above the sand), and there the fog pulls back so the walls don't vanish into it.
- */
-function underwaterFogFar(depth: number, shelfDepth: number) {
-  const open = THREE.MathUtils.lerp(70, 34, Math.min(1, depth / 60));
-  const inTrench = THREE.MathUtils.smoothstep(depth, shelfDepth, shelfDepth + TRENCH_FOG_EASE);
-  return Math.max(open, THREE.MathUtils.lerp(open, TRENCH_FOG_FAR, inTrench));
 }
 
 /** Marine snow drifts in a band from 45 m below the camera to 35 m above it, never above the surface. */
@@ -264,7 +249,7 @@ export class World {
     const outer = SEABED_WIDTH / 2;
     this.shelf = new Shelf(
       TERRAIN_SEED[map.id],
-      { trench: map.hasTrench ? TRENCH_HALF_WIDTH : 0, outer, zMin: SEABED_Z - 45, zMax: SEABED_Z + 45 },
+      { trench: map.hasTrench ? TRENCH_HALF_WIDTH : 0, outer, zMin: SEABED_Z - 90, zMax: SEABED_Z + 90 },
       SEABED_WIDTH / SEABED_SEGMENTS_X,
     );
     // Laid out once at full density; quality only shows a prefix, so plants never move.
@@ -802,6 +787,7 @@ export class World {
 
     // The same continuous light state drives both sides of the waterline.
     const depth = -cameraY;
+    this.colorGrade.haze.update(depth, -this.seabedY, this.map.hasTrench);
     const fog = this.scene.fog as THREE.Fog;
     if (depth < 0) {
       this.scene.background = this.horizonColor;
@@ -819,8 +805,7 @@ export class World {
       this.waterBackground.multiplyScalar(THREE.MathUtils.lerp(1, 0.35, lighting.nightMix) * (1 - weather.cloud * 0.12));
       this.scene.background = this.waterBackground;
       fog.color.copy(this.waterBackground);
-      fog.near = 6;
-      fog.far = underwaterFogFar(depth, -this.seabedY);
+      [fog.near, fog.far] = underwaterHazeRange(depth, -this.seabedY, this.map.hasTrench);
     }
     const light = THREE.MathUtils.clamp(1 - depth / 75, 0.12, 1);
     this.sun.color.setRGB(...lighting.lightColor, THREE.SRGBColorSpace);
