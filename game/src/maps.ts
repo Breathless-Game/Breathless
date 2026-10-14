@@ -5,8 +5,8 @@ import { t } from './i18n';
 
 // The three waters from the design doc (design/game-design-document.md, section 6).
 // A map is pure data: how deep its shelf goes (which shallow zones it has),
-// when it unlocks, and its palette and scenery. Every map has a
-// bottomless trench under the boat, so a map never limits how deep you dive.
+// when it unlocks, and its palette and scenery. The first two maps have a
+// continuous floor; only the open ocean has a bottomless trench.
 // world.ts builds the underwater terrain from it, scenery.ts the shoreline.
 
 export type MapId = 'fjord' | 'tianchi' | 'ocean';
@@ -21,7 +21,9 @@ export interface MapDef {
   difficulty: 'Casual' | 'Normal' | 'Hard';
   /** How many depth zones the shelf spans, counted down from the surface. */
   zoneCount: 1 | 2 | 3;
-  /** Names shown on the depth gauge for the shelf zones; the gauge adds the Trench below them. */
+  /** Whether the seabed opens into a bottomless trench under the boat. */
+  hasTrench: boolean;
+  /** Names shown on the depth gauge for the shelf zones. */
   zoneLabels: readonly string[];
   /**
    * Lifetime banked value (player_state Progress.lifetime_value) needed before this map opens.
@@ -67,10 +69,11 @@ export const MAPS: Record<MapId, MapDef> = {
     place: 'Norway / Iceland',
     surfaceTempC: 7,
     difficulty: 'Casual',
-    zoneCount: 1,
-    zoneLabels: ['Shallows'],
+    zoneCount: 2,
+    hasTrench: false,
+    zoneLabels: ['Shallows', 'Kelp Forest'],
     unlockValue: 0,
-    blurb: 'Calm glacial water between snow peaks. A shallow shelf, then a sheer drop.',
+    blurb: 'Calm glacial water between snow peaks. Kelp forests reach a rocky floor at 40 m.',
     sky: '#bfe6f2',
     nightSky: '#07122b',
     haze: [50, 240],
@@ -98,10 +101,11 @@ export const MAPS: Record<MapId, MapDef> = {
     place: 'Zhangjiajie / Changbai',
     surfaceTempC: 14,
     difficulty: 'Normal',
-    zoneCount: 2,
-    zoneLabels: ['Shallows', 'Sunken Forest'],
+    zoneCount: 3,
+    hasTrench: false,
+    zoneLabels: ['Shallows', 'Sunken Forest', 'Deep Basin'],
     unlockValue: 150,
-    blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees below.',
+    blurb: 'A misty mountain lake ringed by stone pillars. Drowned trees and a deep basin at 62 m.',
     sky: '#d6e6dc',
     nightSky: '#0a1620',
     haze: [30, 190],
@@ -130,6 +134,7 @@ export const MAPS: Record<MapId, MapDef> = {
     surfaceTempC: 22,
     difficulty: 'Hard',
     zoneCount: 3,
+    hasTrench: true,
     zoneLabels: ['Shallows', 'Reef', 'Abyss'],
     unlockValue: 1000,
     blurb: 'Open water under a storm front. Reef and abyss on the widest shelf.',
@@ -161,7 +166,7 @@ export function mapZones(map: MapDef): readonly Zone[] {
   return ZONES.slice(0, map.zoneCount);
 }
 
-/** Shelf depth in metres: the bottom of the deepest shelf zone plus a little floor clearance. The trench under the boat drops away from here with no bottom. */
+/** Seabed depth in metres: the deepest open zone plus a little floor clearance. */
 export function mapDepth(map: MapDef): number {
   return ZONES[map.zoneCount - 1].bottom + 2;
 }
@@ -174,11 +179,11 @@ const PLACE_ZH: Record<string, string> = {
   'The deep sea': '深海',
 };
 const BLURB_ZH: Record<string, string> = {
-  'Calm glacial water between snow peaks. A shallow shelf, then a sheer drop.': '雪峰间平静的冰川水域。浅浅的大陆架，之后是陡直的断崖。',
-  'A misty mountain lake ringed by stone pillars. Drowned trees below.': '石柱环绕的雾锁山湖，水下是沉没的树林。',
+  'Calm glacial water between snow peaks. Kelp forests reach a rocky floor at 40 m.': '雪峰间平静的冰川水域。海带森林一直延伸到 40 米深的岩石海底。',
+  'A misty mountain lake ringed by stone pillars. Drowned trees and a deep basin at 62 m.': '石柱环绕的雾锁山湖。沉没的树林下方，是 62 米深的湖底盆地。',
   'Open water under a storm front. Reef and abyss on the widest shelf.': '暴风前线下的开阔海面，最宽的大陆架上有礁区和深渊。',
 };
-const ZONE_ZH: Record<string, string> = { Shallows: '浅滩', 'Sunken Forest': '沉林', Reef: '礁区', Abyss: '深渊' };
+const ZONE_ZH: Record<string, string> = { Shallows: '浅滩', 'Kelp Forest': '海带林', 'Sunken Forest': '沉林', 'Deep Basin': '深水盆地', Reef: '礁区', Abyss: '深渊' };
 const DIFFICULTY_ZH = { Casual: '休闲', Normal: '普通', Hard: '困难' } as const;
 
 export function mapPlace(map: MapDef): string {

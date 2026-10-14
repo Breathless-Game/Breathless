@@ -20,12 +20,12 @@ const { Shelf, layoutSeabed, plantHeight } = await import(await sourceUrl('../sr
 const BOUNDS = { trench: 14, outer: 210, zMin: -70, zMax: 20 };
 const REACH = 200;
 const SCALE = (REACH * 2) / 140;
-const MAPS = { fjord: [0xf10d5ea, 20, 55], tianchi: [0x71a2c41, 40, 26], ocean: [20261010, 60, 55] };
+const MAPS = { fjord: [0xf10d5ea, 40, 55], tianchi: [0x71a2c41, 62, 26], ocean: [20261010, 62, 55] };
 
 function build(id) {
   const [seed, depth, perSpan] = MAPS[id];
   const canopy = Math.round(perSpan * SCALE);
-  const shelf = new Shelf(seed, BOUNDS, 3.5);
+  const shelf = new Shelf(seed, { ...BOUNDS, trench: id === 'ocean' ? BOUNDS.trench : 0 }, 3.5);
   const flora = FLORA[id];
   const understory = Array.from({ length: Math.round(canopy * flora.undergrowth) }, (_, i) => understorySpecies(flora, i));
   return { shelf, depth, canopy, understory, layout: layoutSeabed(shelf, { seed: seed ^ 0x5eabed, depth, reach: REACH, canopy, understory }) };
@@ -56,7 +56,7 @@ for (const id of Object.keys(MAPS)) {
       const ground = shelf.heightAt(rock.x, rock.z);
       assert.ok(rock.y - rock.r * rock.squash < ground - 0.05, 'part-buried');
       assert.ok(rock.y + rock.r * rock.squash > ground, 'not swallowed by the sand');
-      assert.ok(Math.abs(rock.x) > BOUNDS.trench, 'not over the trench');
+      assert.ok(Math.abs(rock.x) > shelf.bounds.trench, 'not over the trench');
       // The diver's lane (z from -5 to 3) stays clear of boulders.
       if (rock.r >= 1.6 && rock.tier === 1 && rock.z > -5 && rock.z < 3) assert.fail(`boulder in the lane at z=${rock.z}`);
     }
@@ -78,7 +78,7 @@ for (const id of Object.keys(MAPS)) {
       list.forEach((plant, i) => {
         const ground = shelf.heightAt(plant.x, plant.z);
         assert.ok(plant.y <= ground && plant.y > ground - 0.3, 'rooted just under the surface of the sand');
-        assert.ok(Math.abs(plant.x) >= BOUNDS.trench + 3 && Math.abs(plant.x) <= BOUNDS.outer - 3);
+        assert.ok(Math.abs(plant.x) >= shelf.bounds.trench + 3 && Math.abs(plant.x) <= BOUNDS.outer - 3);
         for (let j = 0; j < i; j++) assert.ok(Math.hypot(list[j].x - plant.x, list[j].z - plant.z) >= 0.74);
       });
     }
@@ -96,6 +96,26 @@ for (const id of Object.keys(MAPS)) {
     assert.deepEqual(build(id).layout, build(id).layout);
   });
 }
+
+test('finite seabeds meet at the centre with no crack and agree with sampled floor heights', () => {
+  for (const id of ['fjord', 'tianchi']) {
+    const { shelf } = build(id);
+    assert.equal(shelf.bounds.trench, 0);
+    const seam = side => {
+      const p = shelf.triangles(side);
+      const vertices = new Map();
+      for (let i = 0; i < p.length; i += 3) if (Math.abs(p[i]) < 1e-5) vertices.set(p[i + 2], p[i + 1]);
+      return vertices;
+    };
+    const left = seam(0), right = seam(1);
+    assert.ok(left.size > 20, 'the sand spans the centre throughout its depth');
+    assert.deepEqual(left, right);
+    for (const [z, y] of left) assert.ok(Math.abs(shelf.heightAt(0, z) - y) < 1e-5);
+    for (let z = -60; z < 20; z += 1.25) {
+      assert.ok(Math.abs(shelf.heightAt(-1e-5, z) - shelf.heightAt(1e-5, z)) < 1e-4);
+    }
+  }
+});
 
 test('kelp stops short of the surface and low plants stay low', () => {
   // The three shelves are 20, 40 and 60 m deep.

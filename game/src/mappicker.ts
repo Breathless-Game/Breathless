@@ -42,13 +42,13 @@ export class MapPicker {
         // Two short lines under the meta, so every card keeps one line per row in the
         // three-column layout: the shelf's zones then the trench, or what unlocks the map.
         const [zones, below] = open
-          ? [map.zoneLabels.map(mapZoneLabel).join(' · '), t('+ Trench ∞', '+ 海沟 ∞')]
+          ? [map.zoneLabels.map(mapZoneLabel).join(' · '), map.hasTrench ? t('+ Trench ∞', '+ 海沟 ∞') : t('Continuous seabed', '完整海底')]
           : [t(`🔒 Bank ${map.unlockValue} value`, `🔒 入库价值 ${map.unlockValue}`), lockProgress(this.progress)];
         card.append(
           swatch,
           line('map-name', pickName(map)),
           line('map-place small muted', mapPlace(map)),
-          line('map-meta small', `${mapDifficulty(map)} · ${t('Shelf', '大陆架')} ${mapDepth(map)} m`),
+          line('map-meta small', `${mapDifficulty(map)} · ${t('Seabed', '海底')} ${mapDepth(map)} m`),
           line('map-lock small', zones),
           line('map-trench small', below),
         );

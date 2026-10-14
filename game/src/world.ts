@@ -18,6 +18,9 @@ import { auroraGlow } from './aurora';
 import { FLORA, understorySpecies } from './flora';
 import { KelpBed, type KelpPlant } from './kelp';
 import { Shelf, layoutSeabed, plantHeight, type RockSlot, type SeabedLayout } from './seabed-layout';
+import { rockGeometry, paintRock } from './rock-surface';
+import { TRENCH_HALF_WIDTH, terrainFloorY } from './terrain-depth';
+export { TRENCH_HALF_WIDTH } from './terrain-depth';
 
 /** Seconds for one full day/night cycle. */
 const DAY_SECONDS = 180;
@@ -27,12 +30,6 @@ const DAY_SECONDS = 180;
 export const HALF_WIDTH = 140;
 /** Maximum horizontal edge supported by the generated seabed geometry. */
 export const MAX_HALF_WIDTH = HALF_WIDTH + 60;
-/**
- * Every map is a shelf at `seabedY` except a trench straight under the boat:
- * |x| < TRENCH_HALF_WIDTH is open water all the way down.
- */
-export const TRENCH_HALF_WIDTH = 14;
-
 // Inside the trench the diver and fish swim at z in [-5, 3]. No wall rock comes
 // nearer the middle than LANE_HALF_WIDTH anywhere in front of LANE_BACK; behind
 // the lane the walls may reach in to WALL_REACH so the edge looks ragged.
@@ -84,21 +81,12 @@ export function waterColorAt(depth: number, night = false): THREE.Color {
 }
 
 /** Re-roll x in [lo, hi] until the span [x + minX, x + maxX] sits on the shelf, clear of the trench. */
-function shelfX(rng: Rng, lo: number, hi: number, minX: number, maxX: number): number {
+function shelfX(rng: Rng, lo: number, hi: number, minX: number, maxX: number, trench: number): number {
   for (let tries = 0; tries < 64; tries++) {
     const x = rng.range(lo, hi);
-    if (x + minX >= TRENCH_HALF_WIDTH || x + maxX <= -TRENCH_HALF_WIDTH) return x;
+    if (trench === 0 || x + minX >= trench || x + maxX <= -trench) return x;
   }
-  return TRENCH_HALF_WIDTH - minX;
-}
-
-/** A jittered, randomly turned rock with the turn baked in, so its bounding box is exact. */
-function rockGeometry(rng: Rng, r: number, detail: number, squash: number) {
-  const geo = jitter(new THREE.IcosahedronGeometry(r, detail), rng, r * 0.18);
-  geo.rotateX(rng.range(0, Math.PI * 2)).rotateY(rng.range(0, Math.PI * 2)).rotateZ(rng.range(0, Math.PI * 2));
-  geo.scale(1, squash, 1);
-  geo.computeBoundingBox();
-  return geo;
+  return trench - minX;
 }
 
 /**
@@ -222,7 +210,7 @@ export class World {
   private lastCameraY = 1.5;
   private lastCameraX = 0;
   map: MapDef;
-  /** World y of the shelf for the current map (negative). Inside the trench there is no floor. */
+  /** Nominal seabed y (negative); floorY reads the actual terrain and ocean opening. */
   seabedY: number;
 
   constructor(quality: RenderQuality = RENDER_QUALITY.high, map: MapDef = MAPS.ocean) {
@@ -276,7 +264,7 @@ export class World {
     const outer = SEABED_WIDTH / 2;
     this.shelf = new Shelf(
       TERRAIN_SEED[map.id],
-      { trench: TRENCH_HALF_WIDTH, outer, zMin: SEABED_Z - 45, zMax: SEABED_Z + 45 },
+      { trench: map.hasTrench ? TRENCH_HALF_WIDTH : 0, outer, zMin: SEABED_Z - 45, zMax: SEABED_Z + 45 },
       SEABED_WIDTH / SEABED_SEGMENTS_X,
     );
     // Laid out once at full density; quality only shows a prefix, so plants never move.
@@ -319,7 +307,12 @@ export class World {
     return this.seabedY + this.shelf.heightAt(x, z);
   }
 
-  /** The shelf: two halves of sand with the trench open between them, and a broken lip on each edge. */
+  /** Physics and props share the floor drawn by the terrain mesh. */
+  floorY(x: number, z = 0) {
+    return terrainFloorY(this.map.hasTrench, x, this.groundY(x, z));
+  }
+
+  /** Joined sand halves on finite maps, or an open slot and broken lips on the ocean. */
   private buildSeabed(rng: Rng) {
     const sand = new THREE.Color(this.map.sand);
     const c = new THREE.Color();
@@ -338,12 +331,14 @@ export class World {
       mesh.position.y = this.seabedY;
       this.terrain.add(mesh);
     }
-    this.buildLip(rng);
+    if (this.map.hasTrench) this.buildLip(rng);
   }
 
   /** Half-sunk rocks along both edges of the trench mouth so the cut in the sand reads as broken rock. */
   private buildLip(rng: Rng) {
-    const mats = this.map.rocks.map((c) => flatMat(c));
+    const palette = this.map.rocks.map((c) => new THREE.Color(c));
+    const material = flatMat('#ffffff', { vertexColors: true });
+    const moss = new THREE.Color('#486d47');
     const batch = new Batch();
     const span = 30;
     const perSide = 7;
@@ -354,7 +349,8 @@ export class World {
         const geo = rockGeometry(rng, r, 0, rng.range(0.55, 0.9));
         const x = clearLane(side * (TRENCH_HALF_WIDTH + 0.5 + r * rng.range(0, 0.5)), z, geo.boundingBox!, side, 12.5);
         const y = this.groundY(side * TRENCH_HALF_WIDTH, z) - r * rng.range(0.1, 0.4);
-        batch.add(geo, rng.pick(mats), x, y, z);
+        paintRock(geo, rng.pick(palette), moss, { x, y, z }, TERRAIN_SEED[this.map.id]);
+        batch.add(geo, material, x, y, z);
       }
     }
     this.terrain.add(batch.build());
@@ -370,15 +366,14 @@ export class World {
     const material = flatMat('#ffffff', { vertexColors: true });
     const batch = new Batch();
     const tint = new THREE.Color();
-    const shade = new THREE.Color();
+    const moss = new THREE.Color(this.map.id === 'tianchi' ? '#536a38' : '#486d47');
     const add = (slot: RockSlot, detail: number) => {
       if (slot.tier > this.quality.detail) return;
       const rng = new Rng(slot.seed);
       const geo = rockGeometry(rng, slot.r, detail, slot.squash);
       const y = this.seabedY + slot.y;
       wallTint(rng.pick(palette), -y, tint);
-      // Faces darken toward the buried underside, as on the trench walls.
-      paintFaces(geo, (h) => shade.copy(tint).multiplyScalar((0.74 + 0.26 * h) * rng.range(0.86, 1.06)));
+      paintRock(geo, tint, moss, { x: slot.x, y, z: slot.z }, slot.seed);
       batch.add(geo, material, slot.x, y, slot.z);
     };
     for (const slot of this.layout.outcrops) add(slot, 0);
@@ -419,7 +414,7 @@ export class World {
         return depth > 14 && depth < 46 && Math.abs(rock.x) < MAX_HALF_WIDTH + 12;
       });
       if (rng.next() < 0.45 || !reef.length) {
-        const x = shelfX(rng, -MAX_HALF_WIDTH, MAX_HALF_WIDTH, -2, 2);
+        const x = shelfX(rng, -MAX_HALF_WIDTH, MAX_HALF_WIDTH, -2, 2, this.shelf.bounds.trench);
         const z = rng.range(-12, 4);
         group.position.set(x, this.groundY(x, z) + 0.15, z);
       } else {
@@ -463,9 +458,9 @@ export class World {
       const standing = rng.next() < 0.3;
       log.rotation.set(rng.range(-0.2, 0.2), rng.range(0, 6), standing ? rng.range(-0.35, 0.35) : Math.PI / 2 + rng.range(-0.15, 0.15));
       box.setFromObject(log);
-      const x = shelfX(rng, -MAX_HALF_WIDTH, MAX_HALF_WIDTH, box.min.x - 0.5, box.max.x + 0.5);
+      const x = shelfX(rng, -MAX_HALF_WIDTH, MAX_HALF_WIDTH, box.min.x - 0.5, box.max.x + 0.5, this.shelf.bounds.trench);
       const z = rng.range(-14, 4);
-      log.position.set(x, this.groundY(x, z) + (standing ? -0.3 : r * 0.6), z);
+      log.position.set(x, this.groundY(x, z) - box.min.y - r * 0.3, z);
       this.terrain.add(log);
     }
     // Rock ledges jut out of the wall's stacks, toward the camera.
@@ -513,6 +508,7 @@ export class World {
 
   /** Keep the wall chunk the camera is in plus one above and one below; drop the rest. */
   private updateTrench(cameraY: number) {
+    if (!this.map.hasTrench) return;
     const center = Math.max(0, Math.floor((this.seabedY - cameraY) / CHUNK_HEIGHT));
     if (center === this.chunkCenter) return;
     this.chunkCenter = center;
@@ -594,8 +590,7 @@ export class World {
       if (s.side === 0) z = Math.min(z, LANE_BACK - box.max.z);
       else x = clearLane(x, z, box, s.side);
       wallTint(sub.pick(palette), -y, tint);
-      // Faces darken toward the rock's underside.
-      paintFaces(geo, (h) => shade.copy(tint).multiplyScalar((0.78 + 0.22 * h) * sub.range(0.85, 1.05)));
+      paintRock(geo, tint, new THREE.Color('#486d47'), { x, y, z }, s.seed);
 
       // Bioluminescence: a few specks on the faces that look into the trench.
       const depth = -y;
