@@ -21,6 +21,7 @@ import { Shelf, layoutSeabed, plantHeight, type RockSlot, type SeabedLayout } fr
 import { rockGeometry, paintRock } from './rock-surface';
 import { TRENCH_HALF_WIDTH, terrainFloorY } from './terrain-depth';
 import { underwaterHazeRange } from './underwater-haze';
+import { SurfaceTextures } from './surface-textures';
 export { TRENCH_HALF_WIDTH } from './terrain-depth';
 
 /** Seconds for one full day/night cycle. */
@@ -179,7 +180,8 @@ export class World {
   private chunks = new Map<number, THREE.Group>();
   private chunkCenter = NaN;
   private wallDensity: number;
-  private wallMat = flatMat('#ffffff', { vertexColors: true });
+  readonly textures = new SurfaceTextures();
+  private wallMat = this.textures.material('rock', '#ffffff', { vertexColors: true });
   private glowMat = new THREE.MeshBasicMaterial({ color: '#4ff5d2', vertexColors: true, fog: false });
   private scenery: Scenery | null = null;
   // Reused on every tick so animating the shore allocates nothing.
@@ -312,7 +314,7 @@ export class World {
         for (let k = 0; k < 3; k++) c.toArray(colors, i + k * 3);
       }
       g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      const mesh = new THREE.Mesh(g, flatMat('#ffffff', { vertexColors: true }));
+      const mesh = new THREE.Mesh(g, this.textures.material('sand', '#ffffff', { vertexColors: true }));
       mesh.position.y = this.seabedY;
       this.terrain.add(mesh);
     }
@@ -322,7 +324,7 @@ export class World {
   /** Half-sunk rocks along both edges of the trench mouth so the cut in the sand reads as broken rock. */
   private buildLip(rng: Rng) {
     const palette = this.map.rocks.map((c) => new THREE.Color(c));
-    const material = flatMat('#ffffff', { vertexColors: true });
+    const material = this.textures.material('rock', '#ffffff', { vertexColors: true });
     const moss = new THREE.Color('#486d47');
     const batch = new Batch();
     const span = 30;
@@ -348,7 +350,7 @@ export class World {
       disposeTree(this.rocks);
     }
     const palette = this.map.rocks.map((c) => new THREE.Color(c));
-    const material = flatMat('#ffffff', { vertexColors: true });
+    const material = this.textures.material('rock', '#ffffff', { vertexColors: true });
     const batch = new Batch();
     const tint = new THREE.Color();
     const moss = new THREE.Color(this.map.id === 'tianchi' ? '#536a38' : '#486d47');
@@ -638,6 +640,7 @@ export class World {
   }
 
   setQuality(quality: RenderQuality) {
+    this.textures.setQuality(quality);
     const surfaceChanged = this.quality.surfaceSegments !== quality.surfaceSegments;
     const detailChanged = this.quality.detail !== quality.detail;
     const plantsChanged = detailChanged || this.quality.kelpCount !== quality.kelpCount;
