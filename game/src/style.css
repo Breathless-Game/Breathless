@@ -1184,6 +1184,13 @@ button.link {
   pointer-events: none;
 }
 
+#wb-lamp-upgrade {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  pointer-events: auto;
+}
+
 #wb-synth {
   position: absolute;
   inset: 7vh 5vw 5vh;

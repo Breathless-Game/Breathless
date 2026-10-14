@@ -52,6 +52,7 @@ export interface WorkbenchHooks {
   returnHome?(): void;
   /** Buy the next level of a piece (equipment.ts). Resolves with why it didn't happen, or null. */
   buy(id: UpgradeId): Promise<string | null>;
+  upgradeLamp?(): void;
   pearls(): number;
   /** The piece's two branches from Lv2 (null: none), the one it runs, and switching. */
   paths(id: UpgradeId): { id: string; name: string; nameZh: string; summary: string; effects: readonly string[] }[] | null;
@@ -395,6 +396,7 @@ export class Workbench {
       if (this.state === 'chart' && (e.target === this.chartEl || e.target === this.chartBg)) this.closeChart();
     });
     $('wb-dive').addEventListener('click', () => this.state === 'chart' && this.picked && this.dive());
+    $('wb-lamp-upgrade').addEventListener('click', () => this.state === 'idle' && this.hooks.upgradeLamp?.());
     $('wb-return').addEventListener('click', () => this.state === 'chart' && this.hooks.returnHome?.());
     window.addEventListener('resize', () => this.visible && this.resize());
   }
@@ -1102,6 +1104,7 @@ export class Workbench {
   }
 
   private frame(dt: number) {
+    ($('wb-lamp-upgrade') as HTMLButtonElement).disabled = !this.atRest || this.blocked();
     this.time += dt;
     this.chartSecond += dt;
     this.acc += dt;

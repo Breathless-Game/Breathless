@@ -2376,6 +2376,7 @@ const workbench = new Workbench({
   conditions: workbenchConditions,
   // The levels and branches are equipment.ts's (the same the gear panel buys); the boat is the shipyard's ship.
   owned: ownedGearLevel,
+  upgradeLamp: () => gear.openSlot('lamp', equipment),
   buy: (id) => (isUpgradeSlot(id) ? buyNextUpgrade(id) : isBoatId(id) ? buyNextBoat(id) : Promise.resolve(t('Not upgradable here', '这里无法升级'))),
   pearls: () => spendablePearls(equipment),
   paths: (id) =>

@@ -453,9 +453,6 @@ Note: Presage's breathing rate needs a window of about 30 s and is not available
         ├── lowpoly.ts      shared low-poly helpers: flat material, vertex jitter, per-face coloring, a batcher that merges static pieces into one mesh per material
         ├── mappicker.ts    the map cards on the start card
         ├── diver.ts        low-poly diver, kicking, net, headlamp, bubbles
-        ├── diver-designs.ts three character skins, articulated limbs and the shared head attachment frame
-        ├── headlamp-model.ts catalogue lamp hardware batched by material for the worn model
-        ├── diver-preview.ts live character comparison with rotation, arm motion and lamp tiers
         ├── gear.ts         the net model that stands in for the fishing rod: grip, reel, shaft, hoop and mesh
         ├── equipment.ts    rod level, Pearl balance, saved state and the upgrade rule
         ├── gear-panel.ts   the rod / net upgrade panel
@@ -675,18 +672,6 @@ Start the game first (`npm run game`), then run the command below. You need Chro
 ```bash
 npm run showcase:gif
 ```
-
-### Character and headlamp models
-
-![Three playable character skins with the Lv1, Lv2 and Lv3 headlamp models](docs/diver-headlamp-preview.png)
-
-The three playable skins share the animated model in `diver-designs.ts`: Current Runner (teal freediving suit), Tidal Explorer (moss-green suit and glass helmet), and Abyss Scout (indigo suit and armoured visor). The runner's mask has bevelled frames and recessed optical panes. Tapered calves, shaped gloves and closed, thin fin blades keep the silhouette readable while the hips, knees, ankles and arms move.
-
-The worn headlamp uses the same hardware as the workbench catalogue: a compact single optic at Lv1, a deeper guarded barrel with cooling collars at Lv2, and two reinforced optics at Lv3. Tilting pivots, lens retainers, a sealed rear battery and cover fasteners are modelled geometry. The reflector sits behind the protective lens; studio previews show the lamp unlit. Gameplay batches rigid parts by material instead of drawing each screw, strap segment and housing separately.
-
-The lamp housing, spotlight, scatter cone and breath anchor follow the visible head, including seated poses and skin changes. The cone starts at the lens and widens along the light direction; changing skins keeps the equipped lamp and net. This is a visual change: gear prices, breath time and lamp reach remain governed by the existing upgrade rules.
-
-After starting `npm run game`, open `/diver-preview.html` to rotate all three skins, try the arm motion and cycle the lamp tiers or hide the lamp. This page uses the actual game character. `/equipment-preview.html` shows the standalone lamp and its three levels. The model checks run with `npm --prefix game test`; the strict build runs with `npm --prefix game run build`.
 
 ### Automatic render quality
 

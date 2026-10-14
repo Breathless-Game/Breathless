@@ -1,4 +1,4 @@
-/** Optical settings shared by the real spotlight and its underwater beam. */
+/** Optical settings for the spotlight and nearby reflected illumination. */
 export interface LampProfile {
   /** Beam cutoff in metres from the lens. */
   readonly distance: number;
@@ -10,7 +10,7 @@ export interface LampProfile {
   readonly decay: number;
   /** Fraction of the cone devoted to its soft edge, from 0 to 1. */
   readonly penumbra: number;
-  /** Relative strength of visible water scattering, from 0 to 1. */
+  /** Relative strength of nearby reflected light, from 0 to 1. */
   readonly scatter: number;
   /** Water extinction coefficient in inverse metres (Beer–Lambert law). */
   readonly extinction: number;
