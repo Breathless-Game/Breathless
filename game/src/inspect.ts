@@ -442,6 +442,8 @@ export class GearInspector {
 
   private renderInfo() {
     this.root.classList.toggle('net', this.def?.id === 'net');
+    this.root.classList.toggle('fins', this.def?.id === 'fins');
+    this.root.classList.toggle('tank', this.def?.id === 'tank');
     this.renderLampPreview();
     if (this.shipMode) return this.renderShip();
     if (this.diverMode) return this.renderDiver();

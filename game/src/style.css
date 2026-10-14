@@ -3856,7 +3856,9 @@ button.cancel-x { min-width: 28px; padding-left: 8px; padding-right: 8px; }
 
 /* Shared gear previews show their construction; ownership stays labelled. */
 #wb-inspect.lamp #wb-inspect-stage.locked #wb-inspect-gl,
-#wb-inspect.net #wb-inspect-stage.locked #wb-inspect-gl {
+#wb-inspect.net #wb-inspect-stage.locked #wb-inspect-gl,
+#wb-inspect.fins #wb-inspect-stage.locked #wb-inspect-gl,
+#wb-inspect.tank #wb-inspect-stage.locked #wb-inspect-gl {
   filter: none;
 }
 

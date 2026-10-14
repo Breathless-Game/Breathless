@@ -2,6 +2,13 @@ import * as THREE from 'three';
 export class DiverConcept {
   group = new THREE.Group();
   legs: THREE.Group[] = [];
+  private footBoots: THREE.Mesh[] = [];
+  get footFrames(): readonly THREE.Group[] { return this.ankles; }
+  get torsoFrame(): THREE.Group { return this.upperBody; }
+  useExternalFins(worn: boolean) {
+    this.blades.forEach(blade => { blade.mesh.visible = false; });
+    this.footBoots.forEach(boot => { boot.visible = !worn; });
+  }
   private knees: THREE.Group[] = [];
   private ankles: THREE.Group[] = [];
   private holdingArm: THREE.Group | null = null;
@@ -29,7 +36,7 @@ export class DiverConcept {
     tool.position.set(0.18,0.1,0.1);
     arm.add(tool);
   }
-  private blades: { geometry: THREE.BufferGeometry; rest: Float32Array; length: number }[] = [];
+  private blades: { mesh: THREE.Mesh; geometry: THREE.BufferGeometry; rest: Float32Array; length: number }[] = [];
   constructor(public variant: number) {
     const palette = [['#164e58','#ff8656','#81f5d6'],['#506752','#d4ac68','#c3e3d1'],['#252b4b','#d1dced','#60dfff']][variant];
     const mats = palette.map(color => new THREE.MeshStandardMaterial({color,flatShading:true,roughness:0.55}));
@@ -178,7 +185,7 @@ export class DiverConcept {
       add(knee,new THREE.IcosahedronGeometry(0.13,0),mats[1],0,0,0);
       bone(knee,0.66,0.115,mats[0],-0.32,0,0);
       const ankle=new THREE.Group();ankle.position.set(-0.64,0,0);knee.add(ankle);
-      box(ankle,[0.3,0.16,0.23],black,-0.1,0,0);
+      this.footBoots.push(box(ankle,[0.3,0.16,0.23],black,-0.1,0,0));
       const len=[1.22,0.92,1.08][variant];
       // Broad webbed blade: width increases away from the foot, with a scalloped tip.
       const positions:number[]=[];const indices:number[]=[];
@@ -196,7 +203,7 @@ export class DiverConcept {
       const bladeGeo=new THREE.BufferGeometry();bladeGeo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));bladeGeo.setIndex(indices);bladeGeo.computeVertexNormals();
       const bladeMat=mats[1].clone();bladeMat.side=THREE.DoubleSide;
       const blade=add(ankle,bladeGeo,bladeMat,0,0,0);blade.rotation.x=side*0.25;
-      this.blades.push({geometry:bladeGeo,rest:new Float32Array(positions),length:len});
+      this.blades.push({mesh:blade,geometry:bladeGeo,rest:new Float32Array(positions),length:len});
       this.knees.push(knee);this.ankles.push(ankle);
       this.group.add(leg);this.legs.push(leg);
       const hipGeometry=new THREE.BufferGeometry();
@@ -356,7 +363,9 @@ export class DiverConcept {
       leg.rotation.z=Math.sin(phase)*0.24;
       this.knees[i].rotation.z=-0.16-0.28*(0.5+0.5*Math.sin(phase-0.7));
       this.ankles[i].rotation.z=0.12+Math.sin(phase-1.1)*0.2;
-      const blade=this.blades[i];const attr=blade.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const blade=this.blades[i];
+      if (!blade.mesh.visible) return;
+      const attr=blade.geometry.getAttribute('position') as THREE.BufferAttribute;
       for(let vertex=0;vertex<attr.count;vertex++){
         const x=blade.rest[vertex*3];const u=Math.max(0,(-x-0.19)/blade.length);
         attr.setY(vertex,blade.rest[vertex*3+1]+Math.sin(phase-1.6-u*0.65)*0.18*u*u);
