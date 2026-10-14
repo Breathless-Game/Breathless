@@ -18,12 +18,15 @@ async function moduleUrl(file, dependencies = {}) {
   return `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`;
 }
 
-const gearUrl = await moduleUrl('gear');
 const fxUrl = await moduleUrl('fx');
 const lampLightingUrl = await moduleUrl('lamp-lighting');
 const lampUpgradesUrl = await moduleUrl('lamp-upgrades', { './lamp-lighting': lampLightingUrl });
 const conceptUrl = await moduleUrl('diver-designs');
 const commonUrl = await moduleUrl('upgrade-models/common');
+const netUrl = await moduleUrl('upgrade-models/net', { './common': commonUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
+const gearUrl = await moduleUrl('gear', { './upgrade-models/net': netUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
+const { buildMountedNetHead } = await import(gearUrl);
+const { buildNetHead } = await import(netUrl);
 const divingUrl = await moduleUrl('upgrade-models/diving', { './common': commonUrl });
 const headlampUrl = await moduleUrl('headlamp-model', { './upgrade-models/diving': divingUrl, 'three/addons/utils/BufferGeometryUtils.js': import.meta.resolve('three/addons/utils/BufferGeometryUtils.js') });
 const { buildHeadlamp } = await import(headlampUrl);
@@ -110,6 +113,78 @@ test('quality budgets limit emitted particles and repeated bursts cannot exceed 
     assert.equal(bubbles(scene).length, quality.bubbleLimit);
   }
   assert.ok(burstCounts[0] < burstCounts[1] && burstCounts[1] < burstCounts[2]);
+});
+
+test('mounted net heads preserve catalogue geometry with at most five frame and pocket meshes', () => {
+  for (const level of [1, 2, 3]) {
+    const raw = buildNetHead(level);
+    raw.rotation.z = -Math.PI / 2;
+    raw.position.y = raw.userData.socketOffset * raw.scale.x;
+    const mounted = buildMountedNetHead(level);
+    const expected = new THREE.Box3().setFromObject(raw, true);
+    const actual = new THREE.Box3().setFromObject(mounted, true);
+    assert.ok(actual.min.distanceTo(expected.min) < 1e-6);
+    assert.ok(actual.max.distanceTo(expected.max) < 1e-6);
+    let meshes = 0;
+    mounted.traverse(object => {
+      if (object.isMesh) {
+        meshes++;
+        assert.equal(object.material.emissive.getHex(), 0);
+      }
+      assert.equal(Boolean(object.isLineSegments), false, 'the pocket is lit nylon geometry');
+    });
+    assert.ok(meshes <= 5);
+    assert.ok(mounted.getObjectByName('Nylon_Diamond_Web').isMesh);
+    assert.ok(mounted.getObjectByName('Catch_Centre'));
+    assert.ok(mounted.position.y < 0, 'the shaft attaches above the bag');
+  }
+});
+
+test('net upgrades preserve the grip and reel, release replaced heads and resist shaft distortion', () => {
+  const { diver } = createDiver();
+  const arm = diver.netArm;
+  const reel = diver.reelGroup;
+  const old = diver.netMouth.children[0];
+  const resources = new Set();
+  old.traverse(object => { if (object.isMesh) { resources.add(object.geometry); resources.add(object.material); } });
+  let freed = 0;
+  resources.forEach(resource => resource.addEventListener('dispose', () => freed++));
+  diver.setNetLevel(3);
+  const head = diver.netMouth.children[0];
+  assert.notEqual(head, old);
+  assert.equal(head.userData.level, 3);
+  assert.equal(diver.netArm.userData.level, 3);
+  assert.equal(diver.netArm, arm);
+  assert.equal(diver.reelGroup, reel);
+  assert.equal(freed, resources.size);
+  diver.setNetLevel(3);
+  assert.equal(diver.netMouth.children[0], head);
+  diver.setRodRange(1.2);
+  diver.group.updateMatrixWorld(true);
+  const before = new THREE.Box3().setFromObject(diver.netMouth).getSize(new THREE.Vector3());
+  const tipBefore = diver.netPoint();
+  diver.setRodRange(2.1);
+  diver.group.updateMatrixWorld(true);
+  const after = new THREE.Box3().setFromObject(diver.netMouth).getSize(new THREE.Vector3());
+  assert.ok(before.distanceTo(after) < 1e-6, 'extending the shaft cannot flatten the net head');
+  assert.ok(diver.netPoint().distanceTo(tipBefore) > 0.1);
+  diver.setNetLevel(NaN);
+  assert.equal(diver.netMouth.children[0].userData.level, 1);
+  assert.ok(diver.netPoint().toArray().every(Number.isFinite));
+});
+
+test('the net pocket follows a swing and settles without moving its catch marker relative to the head', () => {
+  const { diver } = createDiver();
+  diver.setNetLevel(3);
+  const marker = diver.netTip;
+  const local = marker.position.clone();
+  diver.swing();
+  simulate(diver, 0.08);
+  assert.ok(Math.abs(diver.netWeb.rotation.z) > 0.005);
+  assert.deepEqual(marker.position, local);
+  simulate(diver, 1);
+  assert.equal(diver.netWeb.rotation.z, 0);
+  assert.equal(diver.swinging, false);
 });
 
 test('late-created bubbles pass through the scene material binder', () => {

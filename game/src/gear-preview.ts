@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { buildFishingNetMesh } from './gear';
+import { buildFishingNetMesh, buildMountedNetHead } from './gear';
+import { disposeMeshes } from './headlamp-model';
 
 // Inspection page only: reuse the exact runtime model for previews and export.
 const viewport = document.querySelector<HTMLDivElement>('#viewport')!;
@@ -46,35 +47,60 @@ model.group.traverse((object) => {
   }
 });
 scene.add(model.group);
+const familyBounds = new THREE.Box3();
+for (const level of [1, 2, 3] as const) {
+  const reference = buildFishingNetMesh(level);
+  familyBounds.union(new THREE.Box3().setFromObject(reference.group));
+  disposeMeshes(reference.group);
+}
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: '#11232f', roughness: 0.95 }));
 floor.rotation.x = -Math.PI / 2;
-floor.position.y = -0.73;
+floor.position.y = familyBounds.min.y - 0.08;
 floor.receiveShadow = true;
 scene.add(floor);
 
 const camera = new THREE.PerspectiveCamera(34, 1, 0.01, 100);
 camera.position.set(4.5, 1.9, 4.2);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(1.55, -0.02, 0);
+controls.target.copy(familyBounds.getCenter(new THREE.Vector3()));
 controls.enableDamping = true;
 controls.minDistance = 1.5;
 controls.maxDistance = 10;
 controls.update();
+function fitView() {
+  const vertical = THREE.MathUtils.degToRad(camera.fov / 2);
+  const horizontal = Math.atan(Math.tan(vertical) * camera.aspect);
+  const radius = familyBounds.getBoundingSphere(new THREE.Sphere()).radius;
+  const distance = radius * 1.12 / Math.sin(Math.min(vertical, horizontal));
+  camera.position.copy(controls.target).addScaledVector(new THREE.Vector3(3, 1.5, 4).normalize(), distance);
+  controls.maxDistance = Math.max(10, distance * 1.5);
+  controls.update();
+}
 new ResizeObserver(() => {
   const { width, height } = viewport.getBoundingClientRect();
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  fitView();
 }).observe(viewport);
 renderer.setAnimationLoop(() => {
   controls.update();
   renderer.render(scene, camera);
 });
 
+let selectedLevel: 1 | 2 | 3 = 1;
 document.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((button) => {
   button.addEventListener('click', () => {
-    const level = Number(button.dataset.level);
-    model.mouth.scale.setScalar([1, 1.15, 1.3][level - 1]);
+    const level = Number(button.dataset.level) as 1 | 2 | 3;
+    if (level !== selectedLevel) {
+      disposeMeshes(model.mouth);
+      model.mouth.clear();
+      const head = buildMountedNetHead(level);
+      model.mouth.add(head);
+      model.tip = head.getObjectByName('Catch_Centre')!;
+      model.group.userData.level = level;
+      selectedLevel = level;
+    }
     document.querySelector('#level')!.textContent = String(level);
     document.querySelectorAll('[data-level]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
   });
@@ -82,7 +108,8 @@ document.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((button) =>
 let sideView = false;
 document.querySelector('#angle')!.addEventListener('click', () => {
   sideView = !sideView;
-  camera.position.set(sideView ? 1.55 : 4.5, sideView ? 0.5 : 1.9, sideView ? 5.2 : 4.2);
+  const distance = camera.position.distanceTo(controls.target);
+  camera.position.copy(controls.target).addScaledVector(sideView ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(3, 1.5, 4).normalize(), distance);
   controls.update();
   document.querySelector('#angle')!.textContent = sideView ? '切换立体视角' : '切换侧视角';
 });
@@ -98,7 +125,7 @@ function download(blob: Blob, name: string) {
 document.querySelector('#png')!.addEventListener('click', () => {
   renderer.render(scene, camera);
   renderer.domElement.toBlob((blob) => {
-    if (blob) download(blob, 'fishing-net-faceted-preview.png');
+    if (blob) download(blob, `fishing-net-lv${selectedLevel}.png`);
   }, 'image/png');
 });
 document.querySelector('#glb')!.addEventListener('click', async () => {
@@ -106,7 +133,6 @@ document.querySelector('#glb')!.addEventListener('click', async () => {
   try {
     // Environment, lighting, floor and camera belong to the preview, not the asset.
     const exportModel = model.group.clone(true);
-    exportModel.getObjectByName('Net_Mouth')!.scale.setScalar(1);
     const geometries: THREE.BufferGeometry[] = [];
     exportModel.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -123,8 +149,8 @@ document.querySelector('#glb')!.addEventListener('click', async () => {
       geometries.forEach((geometry) => geometry.dispose());
     }
     if (!(result instanceof ArrayBuffer)) throw new Error('Expected binary GLB output');
-    download(new Blob([result], { type: 'model/gltf-binary' }), 'fishing-net-faceted.glb');
-    status.textContent = 'Lv1 基础 3D 素材已导出';
+    download(new Blob([result], { type: 'model/gltf-binary' }), `fishing-net-lv${selectedLevel}.glb`);
+    status.textContent = `Lv${selectedLevel} 3D 素材已导出`;
   } catch (error) {
     status.textContent = `导出失败：${error instanceof Error ? error.message : String(error)}`;
   }

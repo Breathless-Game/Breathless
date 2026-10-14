@@ -441,6 +441,7 @@ export class GearInspector {
   }
 
   private renderInfo() {
+    this.root.classList.toggle('net', this.def?.id === 'net');
     this.renderLampPreview();
     if (this.shipMode) return this.renderShip();
     if (this.diverMode) return this.renderDiver();
