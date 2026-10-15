@@ -201,12 +201,14 @@ function buildBoat(level: UpgradeLevel): THREE.Group {
   return group;
 }
 
-/** The workbench piece: the sonar's solid faceted parts, without the additive glow halos it shows underwater. */
+/** The workbench piece: solid faceted parts with the beacon light and glow disabled. */
 function buildSonarDisplay(level: UpgradeLevel): THREE.Group {
-  const group = buildDeepSonar({ color: loadSonarConfig().color, lengthLevel: level, detail: 2, startsCarried: false }).group;
+  const group = buildDeepSonar({ color: loadSonarConfig().color, lengthLevel: level, detail: 2, startsCarried: false, lighting: false }).group;
   const halos: THREE.Mesh[] = [];
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshBasicMaterial) halos.push(object);
+    // Recoloring copies the accent into emissive too, so keep every display surface unlit.
+    if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshStandardMaterial) object.material.emissiveIntensity = 0;
   });
   for (const halo of halos) halo.removeFromParent();
   return group;

@@ -659,6 +659,12 @@ To reset, run `localStorage.clear()` in the browser console.
 
 ## 11. Debugging tips
 
+### Catch and banking feedback
+
+While diving, four light brackets mark the nearest fish within the net's actual reach, in its rarity colour. The cue disappears during net recovery and when the net is full. A catch sends out a short coloured ripple and light motes; an empty throw gives a faint broken ripple, and a full net an amber dashed ring. Surfacing with fish gives a wider banking pulse in the most valuable fish's colour. These effects use fixed pools and scale particle counts with graphics quality. Turning Lighting effects off or enabling reduced motion keeps the static targeting cue and suppresses the animated bursts. Pausing freezes the effects; returning to port clears them.
+
+- `npm --prefix game test` checks reach boundaries, pulse lifetimes, pool reuse and reduced-motion behaviour.
+
 - The dev server **does not type-check**. Before opening a PR, run `npm --prefix game run build` (it runs `tsc --noEmit` first).
 - These globals are available in the console: `breath`, `diver`, `fishes`, `keys`, `debugStep(seconds)`.
 - When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.

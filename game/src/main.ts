@@ -8,7 +8,8 @@ import { showTouchNotice } from './touch-only';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
-import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
+import { type Band, Fish, FishSpec, RARITY, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
+import { CatchFeedback, catchTarget } from './catch-feedback';
 import { Hud } from './hud';
 import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
@@ -138,6 +139,9 @@ window.addEventListener('resize', resize);
 resize();
 
 const diver = new Diver(scene);
+const catchFeedback = new CatchFeedback(scene);
+const catchPoint = new THREE.Vector3();
+const feedbackMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 diver.setQuality(renderQuality.settings);
 world.colorGrade.apply(diver.group);
 diver.setMaterialBinder((root) => world.colorGrade.apply(root));
@@ -1598,21 +1602,19 @@ function tryCatch() {
   diver.swing();
   if (diver.pos.y > -SURFACE_DEPTH) return;
   const stats = currentStats();
+  const p = diver.netPoint(catchPoint);
   if (net.length >= stats.netCapacity) {
+    catchFeedback.burst('full', p, '#ffb340');
     hud.message(t('Net full! Surface to bank it.', '网满了！浮上水面入库。'));
     return;
   }
-  const p = diver.netPoint();
-  let best: Fish | null = null;
-  let bestD = stats.catchRadius;
-  for (const f of fishes) {
-    const d = Math.hypot(f.pos.x - p.x, f.pos.y - p.y);
-    if (d < bestD) {
-      best = f;
-      bestD = d;
-    }
+  const best = catchTarget(fishes, p, stats.catchRadius);
+  if (!best) {
+    catchFeedback.burst('miss', p, '#8fbfc9');
+    return;
   }
-  if (!best) return;
+  catchFeedback.burst('catch', best.pos, RARITY[best.spec.rarity].color, 1 + RARITY_ORDER.indexOf(best.spec.rarity) * 0.3);
+  catchFeedback.aim(null);
   const inTrench = trenchFish.has(best);
   removeFish(best);
   // The record stops at MAX_RECORDED_DEPTH_M (the market's limit); the HUD shows the real depth.
@@ -1641,6 +1643,7 @@ function bankNet() {
   for (const entry of entries) diveBanked.add(entry);
   saveBank();
   const rarest = net.reduce((a, f) => (fishValue(f) > fishValue(a) ? f : a));
+  catchFeedback.burst('bank', diver.pos, RARITY[rarest.rarity].color, Math.min(3, 1 + net.length * 0.15));
   hud.message(t(`Banked ${net.length} fish · minting NFTs…`, `已入库 ${net.length} 条鱼 · 正在铸造 NFT…`));
   hud.toast(rarest, t('BANKED', '已入库'));
   // The lifetime value (maps, ships) moves when each fish's co-signed mint records it on chain.
@@ -1762,6 +1765,7 @@ function markCalib(phase: string) {
 }
 
 function startGame() {
+  catchFeedback.clear();
   trip.start(world.map.id); // the first dive starts a trip; later ones (another map) join it
   diver.group.visible = true;
   shipyard.reload(); shipBonus = shipyard.bonus; hud.setNet(net, currentStats().netCapacity);
@@ -1975,6 +1979,7 @@ let leavingBoat = false;
 function climbAboard() {
   endSkinTrial();
   if (aboard) return;
+  catchFeedback.clear();
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
   phase = 'menu';
   // The boat is a safe zone: clear live colliders before the workbench opens.
@@ -2135,6 +2140,7 @@ function onEscape() {
 
 /** Ends the dive: back to the title, with the diver sitting back on the bow. */
 function goToMenu() {
+  catchFeedback.clear();
   endSkinTrial();
   // Abandoning a dive loses the net, but the breath-hold itself still goes in the health log.
   health.end(nowMs, 'surfaced', 0);
@@ -2859,6 +2865,11 @@ function update(dt: number, time: number) {
     }
   }
   world.setDiver(diver.pos, diver.vel);
+  const reachable = playing && !flying && !diver.swinging && underwater && net.length < currentStats().netCapacity
+    ? catchTarget(fishes, diver.netPoint(catchPoint), currentStats().catchRadius) : null;
+  catchFeedback.aim(reachable?.pos ?? null, reachable ? RARITY[reachable.spec.rarity].color : undefined,
+    reachable ? THREE.MathUtils.clamp(0.8 + reachable.spec.lengthCm / 180, 1, 2.5) : 1);
+  catchFeedback.update(dt, world.lightingEffectsEnabled, renderQuality.settings.detail, feedbackMotion.matches);
   world.update(time, camera.position.y, camera.position.x);
   // Read the post-swell hull pose so the wake follows the same crest that is
   // visible in this frame, including the rogue-wave pitch and roll.

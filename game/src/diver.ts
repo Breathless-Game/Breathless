@@ -439,9 +439,9 @@ export class Diver {
   }
 
   /** Point of the net hoop in world space: where catches happen. */
-  netPoint(): THREE.Vector3 {
+  netPoint(target = new THREE.Vector3()): THREE.Vector3 {
     this.netTip.getWorldPosition(this.netPointWorld);
-    return this.netPointWorld.clone();
+    return target.copy(this.netPointWorld);
   }
 
   /** Replace the working head without rebuilding the grip, reel or arm. */
