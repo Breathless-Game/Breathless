@@ -61,3 +61,58 @@ test('other refusals and errors keep their outcome: just the message', () => {
     rejected: true,
   });
 });
+
+// A fish the daily cap refused after its transfer: the market sends it back to the wallet (sensor/market-refund.mjs).
+const marketSrc = readFileSync(new URL('../src/market.ts', import.meta.url), 'utf8');
+const marketJs = ts.transpileModule(marketSrc, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
+const market = await import(`data:text/javascript;base64,${Buffer.from(marketJs).toString('base64')}`);
+const RETURNED = { ...CAP, refunded: true, refundTx: 'Back1111' };
+
+test('a fish sent back carries refunded and its transfer into the outcome, from a single answer or a batch', async () => {
+  assert.deepEqual(pearl.failure('FishA', pearl.refusalOf(RETURNED)), {
+    assetId: 'FishA',
+    error: CAP.error,
+    code: 'daily-cap',
+    retryAfterMs: 3_600_000,
+    refunded: true,
+    refundTx: 'Back1111',
+  });
+  assert.equal(pearl.failure('FishA', pearl.refusalOf({ ...CAP, refunded: 'pending' })).refunded, 'pending');
+  const fetch0 = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(RETURNED), { status: 429 });
+  try {
+    await assert.rejects(pearl.marketInfo(), (e) => e instanceof pearl.MarketError && e.refunded === true && e.refundTx === 'Back1111');
+  } finally {
+    globalThis.fetch = fetch0;
+  }
+});
+
+test('the remembered transfer of a fish sent back is forgotten; one still on its way back, or any other refusal, is kept', () => {
+  const store = new Map();
+  const ls0 = globalThis.localStorage;
+  globalThis.localStorage = { getItem: (k) => store.get(String(k)) ?? null, setItem: (k, v) => store.set(String(k), String(v)) };
+  const KEY = 'undefined'; // storageKey is stubbed out
+  const saved = () => Object.keys(JSON.parse(store.get(KEY) ?? '{}')).sort();
+  try {
+    store.set(KEY, JSON.stringify(Object.fromEntries(['A', 'B', 'C', 'D'].map((id) => [id, { mode: 'server', transferTx: 'T' }]))));
+    assert.equal(pearl.forgetReturned('A', pearl.refusalOf(RETURNED)), true);
+    assert.equal(pearl.forgetReturned('B', pearl.refusalOf({ ...CAP, refunded: 'pending' })), false);
+    assert.equal(pearl.forgetReturned('C', pearl.refusalOf(CAP)), false);
+    assert.equal(pearl.forgetReturned('D', new Error('Sale did not finish')), false);
+    assert.deepEqual(saved(), ['B', 'C', 'D']);
+  } finally {
+    globalThis.localStorage = ls0;
+  }
+});
+
+test('the player is told the fish went back to the wallet, and when it sells again (UTC); other errors keep their text', () => {
+  const now = Date.UTC(2026, 9, 15, 13, 5);
+  const note = market.returnedFishNote(pearl.failure('FishA', pearl.refusalOf(RETURNED)), now);
+  assert.deepEqual(note, {
+    en: 'Daily PEARL limit reached — your fish was returned to your wallet; you can sell it again after 14:05 UTC.',
+    zh: '已达每日 PEARL 上限——这条鱼已退回你的钱包，14:05 UTC 之后可以再次出售。',
+  });
+  assert.match(market.returnedFishNote({ ...RETURNED, refunded: 'pending' }, now).en, /is being returned to your wallet; .* after 14:05 UTC/);
+  assert.equal(market.returnedFishNote(pearl.failure('FishA', pearl.refusalOf(CAP)), now), null, 'a cap refusal before the transfer: the server text');
+  assert.equal(market.returnedFishNote({ error: 'Fish not found' }, now), null);
+});

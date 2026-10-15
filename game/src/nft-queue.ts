@@ -6,6 +6,7 @@ import {
   nextRetryAt,
   nextToMint,
   nftStep,
+  returnedFishNote,
   sellQuote,
   unsettled,
   type BankedFish,
@@ -13,6 +14,7 @@ import {
   type NftEvent,
 } from './market';
 import type { MintStep } from './chain';
+import { t } from './i18n';
 import { nftName, requestSerial } from './nft-uri';
 import type { SellResult, SellStep } from './pearl';
 import { walletState } from './wallet';
@@ -569,8 +571,11 @@ export class NftQueue {
           sold.push({ fish: f, result: o.result });
           return;
         }
+        // Over the daily cap after the transfer: the market sent the fish back to the wallet, and it
+        // stays in the bank (only sold fish leave it), so it can be sold again once the cap allows.
+        const back = returnedFishNote(o, Date.now());
         if (o.rejected) declined++;
-        else this.sellErrors.set(f, (o.error ?? 'Sale failed').slice(0, 200));
+        else this.sellErrors.set(f, back ? t(back.en, back.zh) : (o.error ?? 'Sale failed').slice(0, 200));
         if (o.error && /not in the Breathless Fish collection/.test(o.error)) delete f.trusted; // check it again
         this.apply(f, { type: 'cancel-sell' });
       });
