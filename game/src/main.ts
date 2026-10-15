@@ -35,7 +35,7 @@ import {
 } from './bounds';
 import { MAPS, MAP_ORDER, SHARK_WARNING, isUnlocked, loadMapProgress, mapDepth, mapZones, markSharkWarningSeen, saveMapProgress, setMapThresholds, sharkWarningSeen, type MapId } from './maps';
 import { MapPicker } from './mappicker';
-import { AdaptiveQuality, renderPixelRatio } from './render-quality';
+import { AdaptiveQuality, gpuRendererName, renderPixelRatio } from './render-quality';
 import type { TimeOfDay } from './daylight';
 import { GearPanel } from './gear-panel';
 import { LoadoutWheel, QUICK_SLOTS } from './loadout-wheel';
@@ -113,6 +113,9 @@ const renderQuality = new AdaptiveQuality({
 }, settings.quality);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: renderQuality.settings.antialias, powerPreference: 'high-performance' });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+// The GPU is only known once the renderer's context exists; nothing is built from the tier before this.
+renderQuality.applyGpu(gpuRendererName(renderer.getContext()));
+console.info(`Render quality: ${renderQuality.level} (${renderQuality.mode}) on ${renderQuality.gpu || 'an unknown GPU'}`);
 
 // The map you last played. Maps open on the lifetime banked value read from the chain
 // (applyPlayerChain); until then only the free one is, and the saved choice waits for that read.

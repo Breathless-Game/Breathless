@@ -8,9 +8,14 @@ const source = await readFile(new URL('../src/render-quality.ts', import.meta.ur
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
-const { AdaptiveQuality, initialQuality, renderPixelRatio, RENDER_QUALITY } = await import(
+const { AdaptiveQuality, AUTO_QUALITY_KEY, AUTO_QUALITY_TTL_MS, gpuQualityCap, initialQuality, renderPixelRatio, RENDER_QUALITY } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
+
+// No localStorage under Node: each test opts into a store explicitly.
+function make(hints, mode = 'auto', options = { store: null }) {
+  return new AdaptiveQuality(hints, mode, options);
+}
 
 // Binary-exact frame durations avoid rounding at sampling-window boundaries.
 function runFrames(controller, duration, fps = 32, visible = true) {
@@ -69,57 +74,101 @@ test('character particle budgets scale with quality', () => {
   assert.equal(high.bubbleSegments, 1);
 });
 
-test('sustained slow rendering drops only one quality level after startup grace', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  assert.deepEqual(runFrames(controller, 8), []);
+test('GPU renderer strings cap the starting tier, and unknown GPUs give no information', () => {
+  const cases = [
+    ['ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['ANGLE (Intel, Intel(R) Arc(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['ANGLE (Intel Inc., Intel(R) Iris(TM) Plus Graphics 655, OpenGL 4.1)', 'medium'],
+    ['ANGLE (Intel, ANGLE Metal Renderer: Intel(R) UHD Graphics 630, Unspecified Version)', 'medium'],
+    ['Mesa Intel(R) UHD Graphics 620 (KBL GT2)', 'medium'],
+    ['Intel(R) HD Graphics 400, or similar', 'medium'],
+    ['ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['ANGLE (AMD, AMD Radeon(TM) Vega 8 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['ANGLE (AMD, AMD Radeon 780M Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['Mali-G78 MC24', 'medium'],
+    ['Adreno (TM) 640', 'medium'],
+    ['PowerVR Rogue GE8320', 'medium'],
+    ['ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)', 'low'],
+    ['llvmpipe (LLVM 15.0.7, 256 bits)', 'low'],
+    ['ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0, D3D11)', 'low'],
+    ['ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', null],
+    ['ANGLE (AMD, AMD Radeon RX 6800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', null],
+    ['ANGLE (AMD, AMD Radeon Pro 5500M OpenGL Engine, OpenGL 4.1)', null],
+    ['ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Laptop GPU Direct3D11 vs_5_0 ps_5_0, D3D11)', null],
+    ['ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)', null],
+    ['Apple GPU', null],
+    ['NVIDIA GeForce GTX 980, or similar', null],
+    ['WebKit WebGL', null],
+    ['', null],
+    [null, null],
+    [undefined, null],
+  ];
+  for (const [renderer, cap] of cases) assert.equal(gpuQualityCap(renderer), cap, renderer);
+});
+
+test('the GPU only lowers the hardware tier and never overrides a manual one', () => {
+  const strong = { cores: 8, memoryGB: 8 };
+  for (const [renderer, level] of [
+    ['ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'medium'],
+    ['Google SwiftShader', 'low'],
+    ['Apple GPU', 'high'],
+    ['', 'high'],
+  ]) {
+    const controller = make(strong);
+    controller.applyGpu(renderer);
+    assert.equal(controller.gpu, renderer);
+    assert.equal(controller.level, level);
+  }
+
+  const weak = make({ cores: 4 });
+  weak.applyGpu('ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)');
+  assert.equal(weak.level, 'low');
+
+  const manual = make(strong, 'high');
+  manual.applyGpu('Google SwiftShader');
+  assert.equal(manual.level, 'high');
+  manual.setMode('auto');
+  assert.equal(manual.level, 'low');
+});
+
+test('sustained slow rendering drops only one quality level about 4 s in', () => {
+  const controller = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(controller, 3.5), []);
   assert.equal(controller.level, 'high');
-  assert.deepEqual(runFrames(controller, 1), ['medium']);
+  assert.deepEqual(runFrames(controller, 0.5), ['medium']);
   assert.equal(controller.settings, RENDER_QUALITY.medium);
 });
 
-test('a recovered sampling window clears an isolated period of slow rendering', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  assert.deepEqual(runFrames(controller, 6), []);
-  assert.deepEqual(runFrames(controller, 3, 64), []);
+test('a fast sampling window keeps quality', () => {
+  const controller = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(controller, 1.25), []);
+  assert.deepEqual(runFrames(controller, 30, 64), []);
+  assert.equal(controller.level, 'high');
+});
+
+test('isolated long frames are skipped without restarting the measurement', () => {
+  const controller = make({ cores: 8, memoryGB: 8 });
   assert.deepEqual(runFrames(controller, 3), []);
-  assert.equal(controller.level, 'high');
-  assert.deepEqual(runFrames(controller, 3, 64), []);
-  assert.equal(controller.level, 'high');
-});
+  assert.equal(controller.observeFrame(0.5), null);
+  assert.equal(controller.observeFrame(0.5), null);
+  assert.deepEqual(runFrames(controller, 1), ['medium']);
 
-test('hidden pages and suspension frames discard earlier slow samples', () => {
-  for (const [seconds, visible] of [
-    [1 / 32, false],
-    [1, true],
-    [Number.NaN, true],
-    [Number.POSITIVE_INFINITY, true],
-    [0, true],
-    [-1, true],
-  ]) {
-    const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-    runFrames(controller, 6);
-    assert.equal(controller.observeFrame(seconds, visible), null);
-    assert.deepEqual(runFrames(controller, 6), []);
-    assert.equal(controller.level, 'high');
+  // Periodic hitches neither block a slow machine nor degrade a fast one.
+  for (const [fps, expected] of [[32, ['medium', 'low']], [64, []]]) {
+    const hitched = make({ cores: 8, memoryGB: 8 });
+    const changes = [];
+    for (let second = 0; second < 30; second++) {
+      changes.push(...runFrames(hitched, 1, fps));
+      if (second % 5 === 4) assert.equal(hitched.observeFrame(0.3), null);
+    }
+    assert.deepEqual(changes, expected);
   }
-
-  const hiddenController = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  assert.deepEqual(runFrames(hiddenController, 30, 32, false), []);
-  assert.equal(hiddenController.level, 'high');
-});
-
-test('one or two isolated long frames do not degrade quality', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  runFrames(controller, 6);
-  assert.equal(controller.observeFrame(0.5), null);
-  assert.equal(controller.observeFrame(0.5), null);
-  assert.deepEqual(runFrames(controller, 6), []);
-  assert.equal(controller.level, 'high');
 });
 
 test('persistently rendering below 4 FPS still degrades to low quality', () => {
   for (const seconds of [0.3, 0.5]) {
-    const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
+    const controller = make({ cores: 8, memoryGB: 8 });
     const changes = [];
     for (let frame = 0; frame < 100; frame++) {
       const change = controller.observeFrame(seconds);
@@ -130,28 +179,63 @@ test('persistently rendering below 4 FPS still degrades to low quality', () => {
   }
 });
 
-test('cooldown prevents immediate further degradation and low is the minimum', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  assert.deepEqual(runFrames(controller, 9), ['medium']);
-  assert.deepEqual(runFrames(controller, 11.5), []);
+test('frames right after a tier switch are skipped, then a fresh window decides', () => {
+  const controller = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(controller, 4), ['medium']);
+  // The switch's own hitch (setQuality + resize) and a slow shader-compile frame.
+  assert.equal(controller.observeFrame(0.5), null);
+  assert.equal(controller.observeFrame(0.2), null);
+  assert.deepEqual(runFrames(controller, 10, 64), []);
   assert.equal(controller.level, 'medium');
-  assert.deepEqual(runFrames(controller, 0.5), ['low']);
-  assert.equal(controller.settings, RENDER_QUALITY.low);
-  assert.deepEqual(runFrames(controller, 120), []);
-  assert.equal(controller.level, 'low');
+
+  const slow = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(slow, 4), ['medium']);
+  // Two skipped frames, then grace and one window: the next step comes 4 s later, not sooner.
+  assert.deepEqual(runFrames(slow, 4), []);
+  assert.deepEqual(runFrames(slow, 0.0625), ['low']);
+  assert.equal(slow.settings, RENDER_QUALITY.low);
+  assert.deepEqual(runFrames(slow, 120), []);
+  assert.equal(slow.level, 'low');
 });
 
-test('recovery does not automatically upgrade quality and restart a degradation cycle', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  runFrames(controller, 9);
-  assert.deepEqual(runFrames(controller, 60, 64), []);
+test('pauses hold the sampling window and invalid frames are ignored', () => {
+  for (const seconds of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+    const controller = make({ cores: 8, memoryGB: 8 });
+    runFrames(controller, 3.5);
+    assert.equal(controller.observeFrame(seconds), null);
+    assert.deepEqual(runFrames(controller, 0.5), ['medium']);
+  }
+
+  // A short pause keeps the window and only waits 0.5 s on return.
+  const short = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(short, 3), []);
+  assert.deepEqual(runFrames(short, 1, 32, false), []);
+  assert.deepEqual(runFrames(short, 0.5), []);
+  assert.deepEqual(runFrames(short, 1), ['medium']);
+
+  // A long pause waits out the full grace again.
+  const long = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(long, 3), []);
+  assert.deepEqual(runFrames(long, 30, 32, false), []);
+  assert.deepEqual(runFrames(long, 1.25), []);
+  assert.deepEqual(runFrames(long, 1), ['medium']);
+
+  const hidden = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(hidden, 30, 32, false), []);
+  assert.equal(hidden.level, 'high');
+});
+
+test('recovery within a session does not upgrade quality and restart a degradation cycle', () => {
+  const controller = make({ cores: 8, memoryGB: 8 });
+  runFrames(controller, 4);
+  assert.deepEqual(runFrames(controller, 120, 64), []);
   assert.equal(controller.level, 'medium');
 });
 
 test('manual quality overrides hardware hints and never degrades during slow rendering', () => {
   for (const level of ['high', 'medium', 'low']) {
     for (const hints of [{ cores: 2, memoryGB: 2 }, { cores: 16, memoryGB: 16 }]) {
-      const controller = new AdaptiveQuality(hints, level);
+      const controller = make(hints, level);
       assert.equal(controller.mode, level);
       assert.equal(controller.level, level);
       assert.equal(controller.settings, RENDER_QUALITY[level]);
@@ -162,9 +246,9 @@ test('manual quality overrides hardware hints and never degrades during slow ren
 });
 
 test('switching between manual and auto quality restores hardware selection and fresh sampling', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
+  const controller = make({ cores: 8, memoryGB: 8 });
   assert.equal(controller.mode, 'auto');
-  runFrames(controller, 6);
+  runFrames(controller, 3);
 
   for (const level of ['low', 'medium', 'high']) {
     controller.setMode(level);
@@ -177,25 +261,140 @@ test('switching between manual and auto quality restores hardware selection and 
   controller.setMode('auto');
   assert.equal(controller.mode, 'auto');
   assert.equal(controller.level, 'high');
-  assert.deepEqual(runFrames(controller, 8), []);
-  assert.deepEqual(runFrames(controller, 1), ['medium']);
+  assert.deepEqual(runFrames(controller, 3.5), []);
+  assert.deepEqual(runFrames(controller, 0.5), ['medium']);
 
-  const weakController = new AdaptiveQuality({ cores: 2, memoryGB: 2 }, 'high');
+  const weakController = make({ cores: 2, memoryGB: 2 }, 'high');
   weakController.setMode('auto');
   assert.equal(weakController.level, 'low');
   assert.equal(weakController.settings, RENDER_QUALITY.low);
 });
 
 test('selecting auto again preserves its degraded quality and remaining sampling state', () => {
-  const controller = new AdaptiveQuality({ cores: 8, memoryGB: 8 });
-  assert.deepEqual(runFrames(controller, 9), ['medium']);
+  const controller = make({ cores: 8, memoryGB: 8 });
+  assert.deepEqual(runFrames(controller, 4), ['medium']);
   controller.setMode('auto');
   assert.equal(controller.mode, 'auto');
   assert.equal(controller.level, 'medium');
-  assert.deepEqual(runFrames(controller, 11.5), []);
+  assert.deepEqual(runFrames(controller, 4), []);
 
   controller.setMode('auto');
   assert.equal(controller.level, 'medium');
-  assert.deepEqual(runFrames(controller, 0.5), ['low']);
+  assert.deepEqual(runFrames(controller, 0.0625), ['low']);
   assert.equal(controller.level, 'low');
+});
+
+const UHD = 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+const RTX = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Laptop GPU Direct3D11 vs_5_0 ps_5_0, D3D11)';
+const DAY = 24 * 60 * 60 * 1000;
+
+function memoryStore(initial = {}) {
+  const map = new Map(Object.entries(initial));
+  return {
+    map,
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => map.set(key, String(value)),
+    removeItem: (key) => map.delete(key),
+  };
+}
+
+function saved(store) {
+  const raw = store.map.get(AUTO_QUALITY_KEY);
+  return raw == null ? null : JSON.parse(raw);
+}
+
+test('an automatic drop is remembered per device and the next load starts there', () => {
+  let now = 1_000_000;
+  const store = memoryStore();
+  const first = make({ cores: 8, memoryGB: 8 }, 'auto', { store, now: () => now });
+  first.applyGpu(RTX);
+  assert.equal(first.level, 'high');
+  assert.deepEqual(runFrames(first, 4), ['medium']);
+  assert.deepEqual(saved(store), { level: 'medium', gpu: RTX, at: now });
+
+  now += 2 * DAY;
+  const second = make({ cores: 8, memoryGB: 8 }, 'auto', { store, now: () => now });
+  assert.equal(second.level, 'medium');
+  second.applyGpu(RTX);
+  assert.equal(second.level, 'medium');
+  assert.equal(second.settings, RENDER_QUALITY.medium);
+
+  // The lower of the hardware tier and the remembered one wins.
+  const weak = make({ cores: 4 }, 'auto', { store, now: () => now });
+  assert.equal(weak.level, 'low');
+  assert.equal(AUTO_QUALITY_KEY.startsWith('deepbreath.'), true);
+});
+
+test('a remembered drop expires, follows its GPU, and survives broken storage', () => {
+  const at = 5_000_000;
+  const record = (level, gpu = RTX) => JSON.stringify({ level, gpu, at });
+
+  const expired = memoryStore({ [AUTO_QUALITY_KEY]: record('low') });
+  const fresh = make({ cores: 8, memoryGB: 8 }, 'auto', { store: expired, now: () => at + AUTO_QUALITY_TTL_MS });
+  assert.equal(fresh.level, 'high');
+  assert.equal(saved(expired), null);
+
+  const moved = memoryStore({ [AUTO_QUALITY_KEY]: record('low') });
+  const other = make({ cores: 8, memoryGB: 8 }, 'auto', { store: moved, now: () => at + DAY });
+  assert.equal(other.level, 'low');
+  other.applyGpu('ANGLE (AMD, AMD Radeon RX 6800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)');
+  assert.equal(other.level, 'high');
+  assert.equal(saved(moved), null);
+
+  for (const raw of ['{', '"medium"', JSON.stringify({ level: 'high', gpu: RTX, at }), JSON.stringify({ level: 'low', gpu: RTX })]) {
+    const store = memoryStore({ [AUTO_QUALITY_KEY]: raw });
+    assert.equal(make({ cores: 8, memoryGB: 8 }, 'auto', { store, now: () => at }).level, 'high');
+  }
+
+  const throwing = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('full'); }, removeItem() { throw new Error('blocked'); } };
+  const controller = make({ cores: 8, memoryGB: 8 }, 'auto', { store: throwing });
+  assert.equal(controller.level, 'high');
+  assert.deepEqual(runFrames(controller, 4), ['medium']);
+});
+
+test('a remembered automatic tier never overrides a manual one', () => {
+  const store = memoryStore({ [AUTO_QUALITY_KEY]: JSON.stringify({ level: 'low', gpu: RTX, at: 0 }) });
+  const controller = make({ cores: 8, memoryGB: 8 }, 'high', { store, now: () => DAY });
+  controller.applyGpu(RTX);
+  assert.equal(controller.level, 'high');
+  assert.deepEqual(runFrames(controller, 120), []);
+  controller.setMode('medium');
+  assert.equal(controller.level, 'medium');
+  controller.setMode('auto');
+  assert.equal(controller.level, 'low');
+});
+
+test('one cautious upgrade per session undoes a remembered drop on a smooth machine', () => {
+  let now = DAY;
+  const store = memoryStore({ [AUTO_QUALITY_KEY]: JSON.stringify({ level: 'medium', gpu: RTX, at: 0 }) });
+  const controller = make({ cores: 8, memoryGB: 8 }, 'auto', { store, now: () => now });
+  controller.applyGpu(RTX);
+  assert.equal(controller.level, 'medium');
+
+  // Sub-58 FPS windows never count toward it.
+  assert.deepEqual(runFrames(controller, 120, 50), []);
+  assert.deepEqual(runFrames(controller, 55, 64), []);
+  assert.deepEqual(runFrames(controller, 10, 64), ['high']);
+  assert.equal(saved(store), null);
+
+  // If high is too much after all, it drops back, remembers that, and stays.
+  now += DAY;
+  assert.deepEqual(runFrames(controller, 5), ['medium']);
+  assert.deepEqual(saved(store), { level: 'medium', gpu: RTX, at: now });
+  assert.deepEqual(runFrames(controller, 300, 64), []);
+  assert.equal(controller.level, 'medium');
+
+  // Never above the GPU's cap, and a level still below it stays remembered.
+  const capped = memoryStore({ [AUTO_QUALITY_KEY]: JSON.stringify({ level: 'low', gpu: UHD, at: 0 }) });
+  const integrated = make({ cores: 8, memoryGB: 8 }, 'auto', { store: capped, now: () => DAY });
+  integrated.applyGpu(UHD);
+  assert.equal(integrated.level, 'low');
+  assert.deepEqual(runFrames(integrated, 300, 64), ['medium']);
+  assert.equal(saved(capped), null);
+
+  const deeper = memoryStore({ [AUTO_QUALITY_KEY]: JSON.stringify({ level: 'low', gpu: RTX, at: 0 }) });
+  const stepped = make({ cores: 8, memoryGB: 8 }, 'auto', { store: deeper, now: () => DAY });
+  stepped.applyGpu(RTX);
+  assert.deepEqual(runFrames(stepped, 300, 64), ['medium']);
+  assert.equal(saved(deeper).level, 'medium');
 });
