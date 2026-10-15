@@ -16,17 +16,22 @@
 //          market wallet then comes from MARKET_SECRET_KEY and is never generated or written.
 //
 // What keeps two instances from paying for one fish twice (each step is one atomic Redis command):
-//   begin       SET sold:<asset> NX            one sale record per fish; the loser re-plans from it
+//   begin       SET sold:<asset> NX            one sale record per fish; the loser re-plans from it.
+//               (CAS over a refunded record)   A fish sent back and handed over again replaces its
+//                                              'refunded' record by compare-and-set instead
+//   refunding   the same, for a fish the market sends back instead (market-sale.mjs): one record
 //   payPending  SET paytx:<asset> NX           one payout in flight per fish; the loser gets a 409
 //                                              before it sends anything. Never deleted except by
 //   payDropped  CAS paytx:<asset> sig -> gone  (only the signature it names, only once it is known
 //                                              never to land), so a stale "unpaid" can't pay again
 //   paid/burned CAS sold:<asset> old -> new    compare-and-set on the record's exact JSON
+//   refundPending / refundDropped / refunded   the same CAS: one refund signature on record per
+//                                              fish, so only one instance sends the fish back
 //   serial      one Lua script: HGET the owner+fish key, else INCR the counter and HSET it
-//   unburned    ZSET of unfinished sales, paying or paid but not burned (the sweep's work list):
-//               ZADD at begin (before the SET NX, and again after it) and before the 'paid' CAS, ZREM
-//               after the 'burned' one, so a crash in between leaves at most a stale entry, which the
-//               next listing checks against its record and drops
+//   unburned    ZSET of unfinished sales, paying, paid but not burned, or refunding (the sweep's work
+//               list): ZADD at begin / refunding (before the SET NX, and again after it) and before
+//               the 'paid' CAS, ZREM after the 'burned' or 'refunded' one, so a crash in between leaves
+//               at most a stale entry, which the next listing checks against its record and drops
 //   registry    HSET (owner/fish -> entry): a retried append writes the same mapping again
 //
 // The generic KV (store.kv) is for short-lived shared state such as sessions and throttles: an
@@ -47,7 +52,7 @@ import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } f
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, PAYOUT_WINDOW_MS, SoldLedger, isUnfinished } from './market-rules.mjs';
+import { HttpError, PAYOUT_WINDOW_MS, SoldLedger, isUnfinished, planFor, recordOver } from './market-rules.mjs';
 import { FishRegistry, parseRegistry } from './fish-trust.mjs';
 import { MAX_SERIAL } from './nft-serial.mjs';
 
@@ -330,23 +335,45 @@ export class RedisLedger {
     return merge(parse(rec), parse(pay));
   }
 
-  /** SoldLedger.plan on a fresh read: new | resume | burn | done | conflict. */
-  async plan(assetId, seller) {
-    const r = await this.get(assetId);
-    return SoldLedger.prototype.plan.call({ get: () => r }, assetId, seller);
+  /** SoldLedger.plan on a fresh read: new | resume | burn | done | conflict | refund | refunded. */
+  async plan(assetId, seller, transferTx) {
+    return planFor(await this.get(assetId), seller, transferTx);
   }
 
-  /** true when this call created the record, false when another instance already had (SET NX). */
+  /** true when this call created the record, false when another instance already had (SET NX, or the CAS below). */
   async begin(assetId, { seller, transferTx, pearls }, now = this.now()) {
     // Index first: an entry whose record never got written (or is another seller's) is skipped on read.
     await this.redis.zadd(this.keys.seller(seller), { score: now, member: assetId });
-    // On the sweep's work list from the start, so a sale stuck in 'paying' is found and resumed.
+    return this.#create(assetId, { seller, transferTx, pearls, status: 'paying', at: now }, now);
+  }
+
+  /**
+   * SoldLedger.refunding: true when this call recorded the refund, false when another instance
+   * recorded something first. Not in the seller's index: a refund is no payment, so the daily cap
+   * never needs to read it.
+   */
+  async refunding(assetId, { seller, transferTx, reason, retryAt }, now = this.now()) {
+    return this.#create(assetId, { seller, transferTx, status: 'refunding', reason, retryAt, at: now }, now);
+  }
+
+  /**
+   * Write a fish's first record (SET NX), or replace a refunded one (CAS on its exact JSON: a fish
+   * handed over again after it was sent back, recordOver). false when another instance was first,
+   * or the record there must stay.
+   */
+  async #create(assetId, rec, now) {
+    // On the sweep's work list from the start, so a sale stuck in 'paying' (or a fish stuck on its
+    // way back) is found and resumed.
     const entry = { score: now, member: assetId };
     await this.redis.zadd(this.keys.unburned, entry);
-    const rec = JSON.stringify({ seller, transferTx, pearls, status: 'paying', at: now });
-    if ((await this.redis.set(this.keys.sold(assetId), rec, { nx: true })) === null) return false;
+    const key = this.keys.sold(assetId);
+    if ((await this.redis.set(key, JSON.stringify(rec), { nx: true })) === null) {
+      const cur = await this.redis.get(key);
+      const next = cur === null || cur === undefined ? null : recordOver(JSON.parse(cur), rec);
+      if (!next || !(await redisCas(this.redis, key, String(cur), JSON.stringify(next)))) return false;
+    }
     // Again now that the record exists: a listing between the first ZADD and the SET saw no record
-    // and may have dropped the entry as stale.
+    // (or a refunded one) and may have dropped the entry as stale.
     await this.redis.zadd(this.keys.unburned, entry);
     return true;
   }
@@ -394,6 +421,44 @@ export class RedisLedger {
     await this.redis.zrem(this.keys.unburned, assetId);
   }
 
+  /**
+   * SoldLedger.refundPending: the refund's signature onto the record (CAS) before it is sent. The
+   * CAS lets only one instance's refund on record: another one there already is a 409, send nothing.
+   */
+  async refundPending(assetId, refundTx, refundLastValid) {
+    await this.#update(assetId, (r) => {
+      if (r.status !== 'refunding') throw new HttpError(409, 'This fish is not being returned');
+      if (r.refundTx === refundTx) return null; // our own, written by an earlier try
+      if (r.refundTx !== undefined) throw new HttpError(409, 'This fish is already on its way back, retry in a minute');
+      return { ...r, refundTx, refundLastValid };
+    });
+  }
+
+  /** SoldLedger.refundDropped: forget the refund `refundTx` (only that one) once it is known never to land. */
+  async refundDropped(assetId, refundTx) {
+    await this.#update(assetId, (r) => {
+      if (r.status !== 'refunding' || r.refundTx === undefined || (refundTx !== undefined && r.refundTx !== refundTx)) return null;
+      const next = { ...r };
+      delete next.refundTx;
+      delete next.refundLastValid;
+      return next;
+    });
+  }
+
+  /** SoldLedger.refunded: finished, and off the work list. */
+  async refunded(assetId) {
+    await this.#update(assetId, (r) => {
+      if (r.status !== 'refunding') return null; // already marked by another instance
+      const next = { ...r, status: 'refunded' };
+      delete next.refundLastValid;
+      return next;
+    });
+    await this.redis.zrem(this.keys.unburned, assetId);
+    // Handed over and begun again between the CAS and the ZREM: put its entry back.
+    const rec = parse(await this.redis.get(this.keys.sold(assetId)));
+    if (isUnfinished(rec)) await this.redis.zadd(this.keys.unburned, { score: Number(rec.at) || this.now(), member: assetId });
+  }
+
   /** SoldLedger.skipBurn: a paid fish the sweep must not burn, recorded and taken off the work list. */
   async skipBurn(assetId, reason) {
     await this.#update(assetId, (r) => (r.burnSkipped === String(reason) ? null : { ...r, burnSkipped: String(reason) }));
@@ -401,8 +466,8 @@ export class RedisLedger {
   }
 
   /**
-   * SoldLedger.unburned: up to `limit` unfinished sales (paying, or paid and not burned), oldest
-   * first. Two commands
+   * SoldLedger.unburned: up to `limit` unfinished sales (paying, paid and not burned, or refunding),
+   * oldest first. Two commands
    * (ZRANGE, MGET; ZRANGE alone when there is nothing to do), plus a ZREM when stale entries are
    * dropped. The first call on a database without the index backfills it once (#ensureIndex).
    */
@@ -421,7 +486,8 @@ export class RedisLedger {
 
   /**
    * The unburned index, built once from the records written before it existed: SCAN sold:*, MGET
-   * them, ZADD the unfinished ones (paying, or paid and not set aside), then SET the ready marker (only after a full pass, so a failed
+   * them, ZADD the unfinished ones (isUnfinished; refunds are newer than v2, so a v2 index already
+   * holds every one), then SET the ready marker (only after a full pass, so a failed
    * backfill runs again). Idempotent, so two instances doing it at once is harmless; the sweep
    * lock makes that rare anyway. Later calls on this instance cost nothing, on a new instance one GET.
    */

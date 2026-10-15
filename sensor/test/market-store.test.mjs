@@ -88,7 +88,7 @@ function fakeChain(sends = []) {
  * One serverless instance: its own store, ledger, payout and desk, over the shared fake Redis.
  * `cap`: price with the daily cap as fish-collection.mjs does, and hold the seller lock as server mode does.
  */
-async function instance(redis, chain, { transfer = transferTx(FISH), cap } = {}) {
+async function instance(redis, chain, { transfer = transferTx(FISH), cap, refunds } = {}) {
   const store = createRedisStore({ redis, prefix: 'test:', env: {} });
   const { ledger } = await store.openMarketState({ cluster: 'devnet' });
   const payout = createPayout({ ledger, ...chain.deps });
@@ -110,6 +110,14 @@ async function instance(redis, chain, { transfer = transferTx(FISH), cap } = {})
     burnSold: async (assetId) => {
       await ledger.burned(assetId, `burn-${assetId}`);
     },
+    // A fish over the cap goes back at once; `refunds` (market-refund.test.mjs) puts a chain behind it.
+    refund: async (assetId) => {
+      await ledger.refundPending(assetId, `back-${assetId}`, 0);
+      await ledger.refunded(assetId);
+      return `back-${assetId}`;
+    },
+    resolveRefund: async (assetId) => ((await ledger.get(assetId))?.status === 'refunded' ? 'refunded' : 'unrefunded'),
+    ...(refunds ? refunds(ledger) : {}),
   });
   return { store, ledger, payout, desk };
 }
@@ -128,6 +136,9 @@ function fileInstance(chain) {
     resolvePending: payout.resolvePending,
     pay: payout.pay,
     burnSold: async (assetId) => ledger.burned(assetId, `burn-${assetId}`),
+    // No daily cap here, so no fish is ever sent back.
+    refund: async () => assert.fail('nothing is sent back here'),
+    resolveRefund: async () => assert.fail('nothing is sent back here'),
   });
   return { ledger, payout, desk };
 }
@@ -352,7 +363,7 @@ test('the sweep works from the Redis unburned index: burns paid fish, settles go
   const { ledger: other } = await instance(redis, fakeChain());
   const onChain = { [FISH[0]]: coreAsset(FISH[0]), [FISH[2]]: coreAsset(FISH[2]) }; // FISH[3]: already gone
   const { sweep, burned, fetched } = redisSweep(other, onChain);
-  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, settled: 1, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, refunded: 0, settled: 1, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
   assert.deepEqual(burned, [FISH[0]]);
   assert.deepEqual(fetched, [FISH[0], FISH[3]]);
   assert.equal((await ledger.get(FISH[3])).status, 'burned');
@@ -364,7 +375,7 @@ test('the sweep works from the Redis unburned index: burns paid fish, settles go
   assert.equal(redis.data.get('test:unburned'), undefined, 'the index is empty');
   // Idle: one ZRANGE, nothing on the chain.
   const before = redis.calls.length;
-  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   assert.deepEqual(redis.calls.slice(before), ['zrange']);
   assert.equal(fetched.length, 2);
 });
@@ -493,7 +504,7 @@ function resumingSweep(ledger, desk, { aheadMs = SWEEP_RESUME_AFTER_MS + 1, ...o
   return { sweep, resumed };
 }
 
-const stats = (o) => ({ burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, ...o });
+const stats = (o) => ({ burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, ...o });
 
 test('the sweep finishes a stalled sale whose payout never went out: paid once, by another instance, then burned', async () => {
   const redis = createFakeRedis();

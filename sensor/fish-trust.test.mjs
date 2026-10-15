@@ -241,6 +241,7 @@ test('assertTrustedFish refuses forged fish: no collection, the wrong collection
 function deskWith(assets, { cap } = {}) {
   const ledger = new SoldLedger();
   const payments = [];
+  const returned = [];
   const transfer = {
     message: {
       header: { numRequiredSignatures: 1 },
@@ -268,9 +269,17 @@ function deskWith(assets, { cap } = {}) {
       ledger.paid(id);
     },
     burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+    // A fish over the cap goes back at once (market-refund.test.mjs covers the chain side).
+    refund: async (id) => {
+      returned.push(id);
+      ledger.refundPending(id, `back-${id}`, 100);
+      ledger.refunded(id);
+      return `back-${id}`;
+    },
+    resolveRefund: async (id) => (ledger.get(id)?.status === 'refunded' ? 'refunded' : 'unrefunded'),
   });
   const quote = async ({ assetId, seller }) => ({ pearls: price(assets[assetId], seller) });
-  return { desk, ledger, payments, quote };
+  return { desk, ledger, payments, returned, quote };
 }
 
 test('forged fish are refused and valid collection fish sell, single and batch (quote, sell, sell-batch)', async () => {
@@ -436,15 +445,18 @@ test('the daily PEARL cap: per seller, rolling 24 h, cumulative over a quote bat
   assert.equal(capped.quotes[1].assetId, 'y');
   assert.deepEqual(capped.quotes[2], { assetId: 'z', status: 422, error: 'no' });
 
-  // The desk: a batch of fish worth more than the cap pays up to the cap, the rest stay unpaid (the
-  // client keeps them pending and the sale resumes when the window rolls on).
+  // The desk: a batch of fish worth more than the cap pays up to the cap; the market holds the rest
+  // already, so it sends them back to the seller (they sell again once the window rolls on).
   const fishes = {};
   for (let i = 1; i <= 6; i++) fishes[fishKey(i)] = asset({ attributeList: attributesOf(goodFish) });
   const m = deskWith(fishes, { cap: goodFish.value * 4 });
   const { results } = await m.desk.sellBatch({ seller: SELLER, sales: Object.keys(fishes).map((assetId) => ({ assetId, transferTx: TX })) });
   assert.equal(results.filter((r) => r.pearls).length, 4);
-  assert.deepEqual(results.filter((r) => !r.pearls).map((r) => [r.status, r.code, r.retryAfterMs > 0]), [[429, 'daily-cap', true], [429, 'daily-cap', true]]);
+  assert.deepEqual(results.filter((r) => !r.pearls).map((r) => [r.status, r.code, r.retryAfterMs > 0, r.refunded]), [[429, 'daily-cap', true, true], [429, 'daily-cap', true, true]]);
   assert.equal(m.payments.reduce((s, p) => s + p.pearls, 0), goodFish.value * 4);
+  assert.equal(m.returned.length, 2, 'the two over the cap went back');
+  // Refunds count toward no cap: the window's total is still exactly the four paid.
+  assert.equal(paidInWindow(m.ledger.records, SELLER), goodFish.value * 4);
 });
 
 test('the registry keeps one asset per owner and fish, across a restart', () => {

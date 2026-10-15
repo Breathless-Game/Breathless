@@ -18,6 +18,11 @@
 // desk.sellAsset with the record's seller and transfer), once it is SWEEP_RESUME_AFTER_MS old: the
 // desk asks the chain whether the earlier payout landed before it pays (market-payout.mjs), and
 // burns the fish once paid. Younger ones wait: a request may still be working on them.
+// A fish stuck on its way back to its seller ('refunding': the daily cap refused it after the
+// transfer, and the transfer back failed or timed out) is handed to the desk's resumeRefund, under
+// the same age rule and the same budget as resumed sales: the desk asks the chain whether the fish
+// already went (or went and came back as a new sale) before it sends it again. Such a fish is never
+// burned: only a 'paid' (or already 'burned') record reaches the burn below.
 // A fish the market holds with no sale record (a transfer whose /sell never arrived) is not on the
 // list: the game resumes that sale later and gets paid then. Calls are spaced gapMs apart, at most
 // maxPerRun fish per sweep (of which at most maxResumesPerRun resumed sales), and a 429 (after
@@ -118,10 +123,15 @@ export function burnBlocker(asset, { market, collection }) {
  *                 (pays only if the earlier payout did not land, then burns; sends nothing after
  *                 `deadline`, a time in ms, Infinity without one); throws like a /sell. Without it,
  *                 paying sales are left alone.
- * Returns { burned, resumed, settled, skipped, failed, waiting, left, rateLimited }: resumed = stalled
- * sales finished (paid now or found paid, then burned); settled = already gone, marked burned;
- * skipped = set aside; waiting = paying sales too young to resume; left = sales seen but not tried
- * this time (at least that many remain). With a deadline, also outOfTime: it stopped there.
+ *   resumeRefund(id, record, deadline)  finishes a fish stuck on its way back ('refunding'): the sale
+ *                 desk's resumeRefund (asks the chain, sends it back only if it did not go, nothing
+ *                 after `deadline`); throws when it is still in flight or the send failed. Without
+ *                 it, refunding fish are left alone (never burned).
+ * Returns { burned, resumed, refunded, settled, skipped, failed, waiting, left, rateLimited }: resumed =
+ * stalled sales finished (paid now or found paid, then burned); refunded = stalled refunds finished
+ * (sent back now, or found back); settled = already gone, marked burned; skipped = set aside;
+ * waiting = paying or refunding fish too young to resume; left = sales seen but not tried this time
+ * (at least that many remain). With a deadline, also outOfTime: it stopped there.
  */
 export function createSweep({
   collection,
@@ -130,6 +140,7 @@ export function createSweep({
   loadAsset,
   burnOnce,
   resumeSale = null,
+  resumeRefund = null,
   log = () => {},
   maxPerRun = SWEEP_MAX_PER_RUN,
   maxResumesPerRun = SWEEP_MAX_RESUMES_PER_RUN,
@@ -142,7 +153,7 @@ export function createSweep({
   let running = null;
 
   async function sweepOnce({ deadlineMs = Infinity } = {}) {
-    const out = { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false };
+    const out = { burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false };
     const deadline = now() + deadlineMs;
     if (Number.isFinite(deadlineMs)) out.outOfTime = false;
     const coll = collection();
@@ -152,6 +163,7 @@ export function createSweep({
     const batch = ids.slice(0, maxPerRun);
     let tried = 0;
     let resumes = 0;
+    let gone = 0; // finished between the listing and now: nothing to do, nothing left
     for (const id of batch) {
       if (now() > deadline) {
         out.outOfTime = true;
@@ -159,6 +171,26 @@ export function createSweep({
       }
       try {
         const r = await ledger.get(id);
+        if (r?.status === 'refunding') {
+          // On its way back to its seller: never burned. Too young (a request may still be sending
+          // it) or no resume path: not the sweep's yet.
+          if (!resumeRefund || !(now() - Number(r.at) >= resumeAfterMs)) {
+            out.waiting++;
+            continue;
+          }
+          if (resumes >= maxResumesPerRun) continue; // counted in `left`
+          if (tried) await sleep(gapMs);
+          resumes++;
+          await resumeRefund(id, r, deadline);
+          out.refunded++;
+          log(`[market] sweep: returned fish ${id} to ${r.seller} (the daily cap refused it)`);
+          tried++;
+          continue;
+        }
+        if (r?.status !== 'paying' && r?.status !== 'paid' && r?.status !== 'burned') {
+          gone++; // sent back meanwhile (refunded), or no record: no burn, ever
+          continue;
+        }
         if (r?.status === 'paying') {
           // Too young (a request may still be on it) or no resume path: not the sweep's yet.
           if (!resumeSale || !(now() - Number(r.at) >= resumeAfterMs)) {
@@ -208,11 +240,12 @@ export function createSweep({
       }
       tried++;
     }
-    out.left = ids.length - tried - out.waiting;
+    out.left = ids.length - tried - out.waiting - gone;
     if (tried || out.left) {
       log(
         `[market] sweep: burned ${out.burned} paid fish still in the market wallet` +
           (out.resumed ? `, finished ${out.resumed} stalled sales` : '') +
+          (out.refunded ? `, returned ${out.refunded} fish to their sellers` : '') +
           (out.settled ? `, ${out.settled} already gone` : '') +
           (out.skipped ? `, ${out.skipped} set aside` : '') +
           (out.failed ? `, ${out.failed} failed` : '') +

@@ -9,14 +9,15 @@
 // That is the file store; on a serverless host the same state lives in Redis (market-store.mjs).
 
 import { createGenericFile, generateSigner, percentAmount, publicKey, sol, transactionBuilder } from '@metaplex-foundation/umi';
-import { burn, fetchAsset, fetchCollection } from '@metaplex-foundation/mpl-core';
+import { burn, fetchAsset, fetchCollection, transfer } from '@metaplex-foundation/mpl-core';
 import { addMemo, createIdempotentAssociatedToken, findAssociatedTokenPda, mintTokensTo } from '@metaplex-foundation/mpl-toolbox';
 import { createFungible } from '@metaplex-foundation/mpl-token-metadata';
 import { base58 } from '@metaplex-foundation/umi/serializers';
-import { HttpError, parseQuoteBatchBody, parseQuoteBody, singleFlight, withLock } from './market-rules.mjs';
+import { HttpError, isRefund, parseQuoteBatchBody, parseQuoteBody, singleFlight, withLock } from './market-rules.mjs';
 import { createBurnRetry, createSweep } from './market-burn.mjs';
 import { createFishCollection, pendingIsLive } from './fish-collection.mjs';
 import { createPayout } from './market-payout.mjs';
+import { createRefund } from './market-refund.mjs';
 import { createSaleDesk, poll, quoteMany } from './market-sale.mjs';
 import { createFileStore } from './market-store.mjs';
 import { renderPearlPng } from './pearl-png.mjs';
@@ -275,6 +276,14 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
    * The signature and expiry are persisted before sending; an uncertain send is settled by resolvePending
    * (market-payout.mjs), so a timeout never leads to a second payment.
    */
+  // Sending, confirming and looking up a market-signed transaction: the same for payouts and refunds.
+  const chainTx = {
+    send: ({ tx }) => u.rpc.sendTransaction(tx, { preflightCommitment: 'confirmed' }),
+    confirm: async ({ tx, blockhash }) =>
+      (await u.rpc.confirmTransaction(tx.signatures[0], { strategy: { type: 'blockhash', ...blockhash }, commitment: 'confirmed' })).value.err,
+    getSignatureStatus: async (sig) => (await u.rpc.getSignatureStatuses([base58.serialize(sig)], { searchTransactionHistory: true }))[0],
+    getBlockHeight: () => u.rpc.call('getBlockHeight', [{ commitment: 'finalized' }]),
+  };
   const payout = createPayout({
     ledger,
     async build(assetId, mint, seller, pearls) {
@@ -288,11 +297,27 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
         .buildAndSign(u);
       return { tx, blockhash, sig: sigStr(tx.signatures[0]), lastValid: blockhash.lastValidBlockHeight };
     },
-    send: ({ tx }) => u.rpc.sendTransaction(tx, { preflightCommitment: 'confirmed' }),
-    confirm: async ({ tx, blockhash }) =>
-      (await u.rpc.confirmTransaction(tx.signatures[0], { strategy: { type: 'blockhash', ...blockhash }, commitment: 'confirmed' })).value.err,
-    getSignatureStatus: async (sig) => (await u.rpc.getSignatureStatuses([base58.serialize(sig)], { searchTransactionHistory: true }))[0],
-    getBlockHeight: () => u.rpc.call('getBlockHeight', [{ commitment: 'finalized' }]),
+    ...chainTx,
+  });
+
+  /**
+   * A fish the daily cap refused after the player transferred it goes back (market-refund.mjs): a
+   * Core TransferV1 from the market (authority and fee payer: the market wallet) to the seller,
+   * built like the burn (the asset as just fetched, its collection from the cache). The signature
+   * and expiry are persisted before sending; resolveRefund settles an uncertain send from the chain.
+   */
+  const refunds = createRefund({
+    ledger,
+    market: marketKey,
+    loadAsset,
+    async build(asset, seller) {
+      const blockhash = await freshBlockhash();
+      const tx = await transfer(u, { asset, collection: await collectionOf(asset), newOwner: publicKey(seller) })
+        .setBlockhash(blockhash)
+        .buildAndSign(u);
+      return { tx, blockhash, sig: sigStr(tx.signatures[0]), lastValid: blockhash.lastValidBlockHeight };
+    },
+    ...chainTx,
   });
 
   /**
@@ -305,9 +330,11 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
   function burnOnce(assetId, known) {
     return singleFlight(burnFlights, assetId, async () => {
       const asset = known ?? (await loadAsset(assetId)); // throws on an RPC error: "not found" must really mean gone
+      // A fish on its way back to its seller (or sent back) is never burned, whoever asks.
+      const rec = await ledger.get(assetId);
+      if (isRefund(rec)) throw new Error(`${assetId} is being returned to its seller, not burned`);
       if (!asset) {
-        const r = await ledger.get(assetId);
-        if (r) await ledger.burned(assetId, r.burnTx ?? '');
+        if (rec) await ledger.burned(assetId, rec.burnTx ?? '');
         return '';
       }
       if (asset.owner.toString() !== marketKey) throw new Error(`the market does not own ${assetId}`);
@@ -354,6 +381,8 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     resolvePending: payout.resolvePending,
     pay: payout.pay,
     burnSold,
+    refund: refunds.refund,
+    resolveRefund: refunds.resolveRefund,
     log,
     batchDeadlineMs,
   });
@@ -361,7 +390,8 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
   // The sweep works from the ledger's list of unfinished sales: one getAccount per paid fish, no
   // getProgramAccounts. A sale stuck in 'paying' goes back through the desk's own sellAsset, under
   // the same per-fish lock as the players' requests (one desk per process), with the record's own
-  // seller and transfer: it re-checks the earlier payout on chain before paying, then burns.
+  // seller and transfer: it re-checks the earlier payout on chain before paying, then burns. A fish
+  // stuck on its way back goes through the desk's resumeRefund the same way (chain first, then send).
   const sweep = createSweep({
     loadAsset,
     collection: () => state.fishCollection ?? null,
@@ -369,6 +399,7 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
     ledger,
     burnOnce,
     resumeSale: (assetId, r, deadline) => desk.sellAsset({ assetId, seller: r.seller, transferTx: r.transferTx }, undefined, deadline),
+    resumeRefund: (assetId, _r, deadline) => desk.resumeRefund(assetId, deadline),
     log,
   });
 

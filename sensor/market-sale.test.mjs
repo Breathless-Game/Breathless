@@ -50,11 +50,15 @@ const attrs = (rarity, value) => [
   { key: 'value', value: String(value) },
 ];
 
-/** A fake market: the chain (transactions, asset owners), the ledger and every payment made. */
+/** No fish in these desks is ever sent back (market-refund.test.mjs covers that). */
+const noRefund = { refund: async () => assert.fail('nothing is sent back here'), resolveRefund: async () => assert.fail('nothing is sent back here') };
+
+/** A fake market: the chain (transactions, asset owners), the ledger and every payment made. A refund moves the fish back at once. */
 function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0, priceFish = plainPrice } = {}) {
   const ledger = new SoldLedger();
   const payments = [];
   const burns = [];
+  const refunds = [];
   let fetches = 0;
   let paySeq = 0;
   const desk = createSaleDesk({
@@ -78,8 +82,16 @@ function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0, priceFish =
       burns.push(id);
       ledger.burned(id, `burn-${id}`);
     },
+    refund: async (id) => {
+      refunds.push(id);
+      ledger.refundPending(id, `back-${id}`, 100);
+      owners[id] = ledger.get(id).seller;
+      ledger.refunded(id);
+      return `back-${id}`;
+    },
+    resolveRefund: async (id) => (owners[id] === MARKET ? 'unrefunded' : (ledger.refunded(id), 'refunded')),
   });
-  return { desk, ledger, payments, burns, fetches: () => fetches };
+  return { desk, ledger, payments, burns, refunds, fetches: () => fetches };
 }
 
 const batch = (sales, seller = SELLER) => ({ seller, sales: sales.map(([assetId, transferTx = TX]) => ({ assetId, transferTx })) });
@@ -248,6 +260,7 @@ test('a payment that fails for one fish leaves the others paid, and a retry pays
       ledger.paid(id);
     },
     burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+    ...noRefund,
   });
   const first = await desk.sellBatch(batch([[A], [B]]));
   assert.equal(first.results[0].pearls, 1);
@@ -300,8 +313,10 @@ test('a daily-cap refusal keeps its code and retryAfterMs per fish in /sell-batc
   });
   const { results } = await m.desk.sellBatch(batch([[A], [B]]));
   assert.equal(results[0].pearls, 1);
-  assert.deepEqual(results[1], { assetId: B, status: 429, error: 'Daily PEARL limit reached', code: 'daily-cap', retryAfterMs: 3_600_000 });
+  // The market held B already, so it went back to the seller (market-refund.test.mjs has the rest).
+  assert.deepEqual(results[1], { assetId: B, status: 429, error: 'Daily PEARL limit reached', code: 'daily-cap', retryAfterMs: 3_600_000, refunded: true, refundTx: `back-${B}` });
   assert.deepEqual(paidTo(m.payments), { [A]: 1 });
+  assert.deepEqual(m.refunds, [B]);
   // Other refusals keep their shape: no extra fields.
   const { quotes } = await quoteMany({ seller: SELLER, assetIds: [A, B, C] }, async ({ assetId }) => {
     if (assetId === A) throw capped();
@@ -373,6 +388,7 @@ function pollingSetup({ txs = {}, owners = {}, lagPolls = 0 } = {}) {
       ledger.paid(id);
     },
     burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+    ...noRefund,
   });
   const total = () => [...rpcCalls.values()].reduce((a, b) => a + b, 0);
   return { desk, payments, rpcCalls, total };
@@ -461,6 +477,7 @@ function deadlineSetup({ onFetch = () => {}, onConfirm = () => {} } = {}) {
       burns.push(id);
       ledger.burned(id, `burn-${id}`);
     },
+    ...noRefund,
     batchDeadlineMs: 1000,
     now: () => clock.t,
   });
@@ -519,12 +536,12 @@ test('deadline: a sweep resuming a stalled sale near its deadline sends no payou
   });
   // The resume starts in time, but the sweep's deadline passes before its payout would go out.
   m.hooks.mint = (c) => (c.t += 1500);
-  assert.deepEqual(await sweep.run({ deadlineMs: 1000 }), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 1, rateLimited: false, outOfTime: true });
+  assert.deepEqual(await sweep.run({ deadlineMs: 1000 }), { burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 1, rateLimited: false, outOfTime: true });
   assert.deepEqual(m.sent, [], 'no payout sent');
   assert.equal(m.ledger.get(A).status, 'paying');
   // The next sweep has the time: paid once, burned.
   m.hooks.mint = () => {};
-  assert.deepEqual(await sweep.run({ deadlineMs: 1000 }), { burned: 0, resumed: 1, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, outOfTime: false });
+  assert.deepEqual(await sweep.run({ deadlineMs: 1000 }), { burned: 0, resumed: 1, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, outOfTime: false });
   assert.deepEqual(m.sent, [A]);
   assert.deepEqual(m.burns, [A]);
 });
