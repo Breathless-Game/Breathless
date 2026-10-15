@@ -10,6 +10,7 @@ const transpile = (source) =>
 const dataUrl = (js) => `data:text/javascript;base64,${Buffer.from(js).toString('base64')}`;
 
 const storageUrl = dataUrl(transpile(await readFile(new URL('../src/wallet-storage.ts', import.meta.url), 'utf8')));
+const promptUrl = dataUrl(transpile(await readFile(new URL('../src/wallet-prompt.ts', import.meta.url), 'utf8')));
 const stubs = {
   './polyfills': '',
   '@metaplex-foundation/umi': 'export const publicKey = (s) => s, createSignerFromKeypair = () => ({}), transactionBuilder = () => ({});',
@@ -21,7 +22,7 @@ const stubs = {
   './blockhash-expiry': 'export const expiryOf = () => 0;',
 };
 let walletJs = transpile(await readFile(new URL('../src/wallet.ts', import.meta.url), 'utf8'));
-walletJs = walletJs.replace('import.meta.env.VITE_SOLANA_RPC', 'undefined').replace(`'./wallet-storage'`, `'${storageUrl}'`);
+walletJs = walletJs.replace('import.meta.env.VITE_SOLANA_RPC', 'undefined').replace(`'./wallet-storage'`, `'${storageUrl}'`).replace(`'./wallet-prompt'`, `'${promptUrl}'`);
 for (const [name, js] of Object.entries(stubs)) walletJs = walletJs.replace(`'${name}'`, `'${dataUrl(js)}'`);
 
 let loads = 0;

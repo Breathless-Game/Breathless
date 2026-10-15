@@ -5,6 +5,7 @@ import { findWallet, waitForWallet, type OwnerWallet } from './owner-wallets';
 import { markBalanceStale, readBalances } from './balance-api';
 import { assertLanded } from './payment-safety';
 import { expiryOf } from './blockhash-expiry';
+import { trackPrompts } from './wallet-prompt';
 import {
   SESSION_NAME,
   addressOfSecret,
@@ -242,7 +243,8 @@ export function ownerSigner(umi: Umi): Signer {
   if (!current) throw new Error('Connect a wallet first');
   // The session key too: the desktop Browser wallet signs with it again when the message changed
   // (a fresher blockhash, or a compute budget: relay-signer.ts).
-  return current.signer(umi, key, secret ? [sessionSigner(umi)] : []);
+  // Counted as an open prompt while it waits (wallet-prompt.ts): the wallet may take the game's window.
+  return trackPrompts(current.signer(umi, key, secret ? [sessionSigner(umi)] : []));
 }
 
 /**
