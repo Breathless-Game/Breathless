@@ -864,6 +864,7 @@ export class World {
     if (!this.scenery) return;
     const env = this.sceneryEnv;
     env.weather = this.weather.state;
+    env.lighting = this.lighting;
     // `state` is a fresh copy, so silencing the storm here touches nothing else.
     if (this.quietWeatherLightning) env.weather.storm = 0;
     env.lightingEffects = this.lightingEffects;
