@@ -875,6 +875,18 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
 
   // Two fishing cabins and a pier on an islet off to the left.
   put(jitter(new THREE.IcosahedronGeometry(8, 0), rng, 1), '#4f5a60', -34, -0.4, -47, { sy: 0.2 });
+  // A level rock shelf supports both full footprints; the tapered sides meet the islet below the water.
+  const cabinGround = 1.1, cabinShoreZ = -43.35;
+  const cabinShelf = new THREE.CylinderGeometry(9.2, 10.5, 3, 8);
+  cabinShelf.scale(1, 1, 0.68);
+  const shelfVertices = cabinShelf.attributes.position;
+  // Keep the front cliff behind the pier instead of burying its lower deck in rock.
+  for (let i = 0; i < shelfVertices.count; i++) {
+    const edge = cabinShoreZ + 47 + (shelfVertices.getY(i) > 0 ? 0 : 0.2);
+    shelfVertices.setZ(i, Math.min(shelfVertices.getZ(i), edge));
+  }
+  cabinShelf.computeVertexNormals();
+  put(cabinShelf, '#4f5a60', -33.4, cabinGround - 1.5, -47);
   const [roof, trim, wood] = ['#2b3138', '#f1eee6', '#7a5a3c'];
   const windows = lampMat();
   // Where each cabin's window and chimney top ended up, for the night lights and the smoke.
@@ -883,7 +895,7 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
   const pools: number[] = [];
   /** A fishing cabin with its gable to the camera: stone footing, plank walls with white corner boards, snow on the roof. */
   const cabin = (x: number, z: number, w: number, h: number, d: number, color: string) => {
-    const floor = 1.5;
+    const floor = cabinGround + 0.4;
     const front = z + d / 2;
     const eaves = floor + h;
     const rise = h * 0.62;
@@ -926,7 +938,8 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     const dx = x - w * 0.25;
     put(new THREE.BoxGeometry(1.1, 1.85, 0.08), trim, dx, floor + 0.92, front + 0.04);
     put(new THREE.BoxGeometry(0.8, 1.62, 0.1), '#4a3626', dx, floor + 0.83, front + 0.07);
-    put(new THREE.BoxGeometry(1.3, 0.2, 0.55), '#5d646a', dx, floor - 0.1, front + 0.3);
+    const stepHeight = floor - cabinGround;
+    put(new THREE.BoxGeometry(1.3, stepHeight, 0.55), '#5d646a', dx, cabinGround + stepHeight / 2, front + 0.3);
 
     // A framed window with a cross of glazing bars; the pane is the part that lights up.
     const [wx, wy] = [x + w * 0.24, floor + h * 0.56];
@@ -936,10 +949,11 @@ function buildFjord(map: MapDef, detail: SceneryDetail): Scenery {
     put(new THREE.BoxGeometry(1, 0.07, 0.06), trim, wx, wy, front + 0.11);
     panes.push([wx, wy, front + 0.05]);
     // Light from the window falls on the ground in front of it: a wedge, widest and faintest at its far edge.
-    const [near, far, reach] = [0.55, 1.5, 2.9];
+    const [near, far, reach] = [0.55, 1.5, Math.min(2.9, cabinShoreZ - front - 0.025)];
+    const poolY = cabinGround + 0.025;
     pools.push(
-      wx - near, floor + 0.06, front + 0.12, wx + near, floor + 0.06, front + 0.12, wx + far, floor - 0.3, front + reach,
-      wx - near, floor + 0.06, front + 0.12, wx + far, floor - 0.3, front + reach, wx - far, floor - 0.3, front + reach,
+      wx - near, poolY, front + 0.12, wx + near, poolY, front + 0.12, wx + far, poolY, front + reach,
+      wx - near, poolY, front + 0.12, wx + far, poolY, front + reach, wx - far, poolY, front + reach,
     );
 
     // The chimney stands through the right-hand slope, toward the back.
