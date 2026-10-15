@@ -59,7 +59,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Difficulty | Casual | Normal | Hard |
 | Zones above the seabed | 0–58 m, Shallows + Kelp Forest | 0–98 m, Shallows + Sunken Forest + Deep Basin | 0–60 m, Shallows + Coral Reef + The Abyss |
 | Seabed | About 60 m, continuous rocky floor | About 100 m, continuous lake floor | 62 m shelf, then the bottomless trench |
-| Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, two fishing cabins and a pier, ice floes; lit windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
+| Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, a Nordic village and a pier, ice floes; faint independently changing windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
 | Weather | Mostly fair, a short storm | Mostly fair, a short storm | Stormy: a third of the time in a storm, with twice the swell and rogue waves that capsize the boat |
@@ -687,6 +687,8 @@ The game picks the starting quality from the CPU logical core count and the devi
 | Low plants per tall kelp | 1.5 (Heaven Lake 2) | same | same |
 | Water surface segments | 44 × 8 | 88 × 16 | 132 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
+| Fjord homes (including the two pier cabins) | 6 | 10 | 14 |
+| Fjord hearth smoke instances (maximum) | 10 | 26 | 50 |
 | Water triangles | 704 | 2816 | 6336 |
 | Sun / moon reflection | Integrated facet shading | Same lighting response | Same lighting response |
 | Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
@@ -706,6 +708,8 @@ Near the surface, a shared ripple mesh marks the diver's contact with the water 
 
 - `npm --prefix game test`: tests for the quality levels, pixel budget, sustained stutter, recovery from the background, and the drop cooldown.
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
+
+The Fjord village keeps the existing low-poly gables, muted red/ochre timber and pale trim. Homes and broad stone terraces share the static scenery batch; a single instanced draw handles the faint windows, with no real lights, bloom or window halos. Each household follows a deterministic slow schedule and fades in through dusk; Lighting effects off leaves the windows dark. Small translucent chimney trails peak at sunset and subside overnight, staying below the mountain skyline. Quality changes keep surviving homes in the same places and rebuild only the scenery at the existing decoration update rates. The aurora sits behind every mountain range and fades in after dusk, so it cannot paint across the peaks.
 
 ### Natural daylight and water reflections
 
@@ -785,7 +789,7 @@ Esc → Settings → Weather offers Natural weather, Clear, Cloudy, Rain and Sto
 
 Cloud cover affects the sky, sun / moon intensity, underwater rays, fog and water reflections. Wind changes wave strength, boat rocking and rain slant; storms increase rainfall. Rain animates on the GPU and adds at most one draw call. Clear / cloudy weather and underwater views do not draw rain. Low, medium and high use at most 160 / 420 / 800 raindrops. The atmospheric sky uses one draw and a seamless 256 × 256 noise texture generated once; low / medium / high use 2 / 3 / 4 cloud texture samples, and low omits the high cloud veil and stars. No sky texture is redrawn or uploaded each frame. Weather changes reuse the material and rain buffers.
 
-Pause and background states freeze automatic weather and rain animation; manual weather previews still blend in pause settings. Weather remains active when Lighting effects is off, while sun / moon lighting, rays and water reflections stay off. Weather does not change fish populations, breathing rules or the night rarity condition. Ambient light and the headlamp keep nighttime and rainy underwater scenes readable. The Open Ocean scenery's lightning follows storm intensity and the Lighting effects switch. In rain, the Fjord's peaks, Heaven Lake's pillars and crater rim, and the ocean's sea stacks lose their facets and snow and become flat silhouettes in the haze color, darker the nearer the ridge stands. Chimney and incense smoke leans with the wind. Weather audio is not included.
+Pause and background states freeze automatic weather and rain animation; manual weather previews still blend in pause settings. Weather remains active when Lighting effects is off, while sun / moon lighting, rays and water reflections stay off. Weather does not change fish populations, breathing rules or the night rarity condition. Ambient light and the headlamp keep nighttime and rainy underwater scenes readable. The Open Ocean scenery's lightning follows storm intensity and the Lighting effects switch. The Fjord's mountain haze stays strongest at the feet and on the distant ranges; even in rain it preserves the original rock facets and snow rather than flattening them into one fog colour. Heaven Lake's pillars and crater rim and the ocean's sea stacks still become layered silhouettes in rain. Chimney and incense smoke leans with the wind. Weather audio is not included.
 
 - `npm --prefix game test` covers weather continuity, frame-rate independence, pauses, preset changes and returning to natural weather.
 - Inspect `world.weather.state` in the console. `world.setWeather('storm')` previews a storm temporarily; use the settings menu to save the choice.
