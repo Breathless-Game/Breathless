@@ -1911,6 +1911,14 @@ breath.onChange((s) => {
   } else if (breath.liveWanted) camWrap.style.visibility = 'hidden';
 });
 let paused = false;
+// The dive is paused for the player's wallet (syncWalletHold): that pause is the hold's to lift.
+let heldForWallet = false;
+/** Leaving the dive (aboard, to the title) ends a wallet hold and lifts the pause it set, no other. */
+function dropWalletHold() {
+  if (!heldForWallet) return;
+  heldForWallet = false;
+  paused = false;
+}
 let trialSkinActive=false;
 const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
 const endSkinTrial=()=>{if(!trialSkinActive)return;trialSkinActive=false;diver.setSkin(0);skinPicker.resetChoice();applyEquipmentVisuals();};
@@ -2003,6 +2011,9 @@ function climbAboard() {
   endSkinTrial();
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
+  // Esc works under a wallet hold: the boat isn't held, and Esc on the table must not come back to a
+  // frozen dive (syncWalletHold holds it again if the wallet is still asking).
+  dropWalletHold();
   phase = 'menu';
   // The boat is a safe zone: clear live colliders before the workbench opens.
   noSharks();
@@ -2185,6 +2196,7 @@ function goToMenu() {
   diver.vel.set(0, 0, 0);
   resetSonar();
   resetWorldBounds();
+  dropWalletHold(); // a prompt still open holds the next dive afresh
   paused = false;
   phase = 'menu';
   pauseMenu.close();
@@ -2472,7 +2484,8 @@ const workbench = new Workbench({
 });
 
 fieldGuide = new FieldGuide({
-  canOpen: () => phase !== 'calibrating' && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
+  // Not over a wallet hold: closing the guide would bring back a pause nobody owns any more.
+  canOpen: () => phase !== 'calibrating' && !heldForWallet && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
   toggled(open) {
     if (open) {
       guideWasPaused = paused;
@@ -2755,7 +2768,7 @@ showTitle(true);
 // desktop app opens the system browser over the game): then hold the dive and carry on where it was
 // when the tab shows again and the wallet has answered, instead of going aboard to the title's fish
 // (wallet-prompt.ts). Back early (the desktop app's waiting screen is still up): still held.
-let heldForWallet = false;
+// heldForWallet is declared beside `paused`.
 document.addEventListener('visibilitychange', () => {
   resetDayClock = true;
   if (!document.hidden) return;
@@ -2782,7 +2795,8 @@ function syncWalletHold() {
   }
   if (!shouldResume({ held: heldForWallet, hidden: document.hidden, promptOpen })) return;
   heldForWallet = false;
-  // Left the dive another way meanwhile (log out → goToMenu already unpaused): any pause now is not ours.
+  // Leaving the dive drops the hold (dropWalletHold), so this is only a backstop: off the dive, any
+  // pause now is not ours.
   if (phase !== 'play') return;
   paused = false;
   keys.clear();

@@ -144,3 +144,100 @@ test('account reports: keep the owner, wait out an open prompt, or drop on a rea
   assert.equal(v('A', [], false), 'disconnected');
   assert.equal(v('A', ['B'], false), 'switched');
 });
+
+/** A clock the test moves by hand, in place of setTimeout for the prompt cap. */
+function fakeTimers() {
+  let now = 0;
+  const pending = new Map();
+  let next = 1;
+  return {
+    pending,
+    setTimeout(fn, ms) {
+      const id = next++;
+      pending.set(id, { at: now + ms, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      pending.delete(id);
+    },
+    advance(ms) {
+      now += ms;
+      for (const [id, t] of [...pending]) {
+        if (t.at > now) continue;
+        pending.delete(id);
+        t.fn();
+      }
+    },
+  };
+}
+
+/** One prompt counted under `timers`, answered when the test says. */
+function openPrompt(timers) {
+  const d = deferred();
+  const done = P.duringWalletPrompt(() => d.promise, timers);
+  return { ...d, done };
+}
+
+test('a prompt that never answers stops holding the game after the cap', async () => {
+  // Phantom can hang with its popup gone: without a cap every later dive was held and the deferred
+  // account check never ran.
+  assert.equal(P.PROMPT_HOLD_MS, 3 * 60_000);
+  const timers = fakeTimers();
+  const hung = openPrompt(timers);
+  let settled = false;
+  const waiting = P.promptsSettled().then(() => (settled = true));
+  timers.advance(P.PROMPT_HOLD_MS - 1);
+  await new Promise(setImmediate);
+  assert.equal(P.walletPromptOpen(), true, 'still within the cap');
+  assert.equal(settled, false);
+  timers.advance(1);
+  assert.equal(P.walletPromptOpen(), false, 'released at the cap');
+  await waiting;
+  assert.equal(settled, true, 'the deferred account check may run');
+
+  // The prompt itself is not answered for the player: it settles (or fails) only when the wallet does.
+  let outcome = 'pending';
+  hung.done.then((v) => (outcome = v));
+  await new Promise(setImmediate);
+  assert.equal(outcome, 'pending');
+  hung.resolve('late');
+  assert.equal(await hung.done, 'late');
+  assert.equal(P.walletPromptOpen(), false);
+});
+
+test('a late answer after the cap does not release a newer prompt', async () => {
+  const timers = fakeTimers();
+  const old = openPrompt(timers);
+  timers.advance(P.PROMPT_HOLD_MS);
+  assert.equal(P.walletPromptOpen(), false);
+  const fresh = openPrompt(timers);
+  assert.equal(P.walletPromptOpen(), true);
+  old.reject(new Error('gave up'));
+  await assert.rejects(old.done, /gave up/);
+  assert.equal(P.walletPromptOpen(), true, 'the old prompt was already let go: the new one still counts');
+  let settled = false;
+  const waiting = P.promptsSettled().then(() => (settled = true));
+  await new Promise(setImmediate);
+  assert.equal(settled, false);
+  fresh.resolve('ok');
+  await fresh.done;
+  assert.equal(P.walletPromptOpen(), false);
+  await waiting;
+  // A prompt after all that is counted from zero again (no underflow).
+  const again = openPrompt(timers);
+  assert.equal(P.walletPromptOpen(), true);
+  again.resolve('ok');
+  await again.done;
+  assert.equal(P.walletPromptOpen(), false);
+});
+
+test('a prompt answered in time leaves no cap timer behind', async () => {
+  const timers = fakeTimers();
+  const sale = openPrompt(timers);
+  assert.equal(timers.pending.size, 1);
+  sale.resolve('signed');
+  await sale.done;
+  assert.equal(timers.pending.size, 0);
+  timers.advance(P.PROMPT_HOLD_MS);
+  assert.equal(P.walletPromptOpen(), false);
+});
