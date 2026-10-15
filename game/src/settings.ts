@@ -3,25 +3,28 @@
 
 import type { QualityMode } from './render-quality';
 import type { WeatherMode } from './weather';
+import type { HeadlampBrightness } from './lamp-lighting';
 
 export type Quality = QualityMode;
 
 export interface Settings {
   quality: Quality;
   lightingEffects: boolean;
+  headlampBrightness: HeadlampBrightness;
   weather: WeatherMode;
   showCamera: boolean;
   showHelp: boolean;
 }
 
 const KEY = 'deepbreath.settings';
-const DEFAULTS: Settings = { quality: 'auto', lightingEffects: true, weather: 'auto', showCamera: true, showHelp: true };
+const DEFAULTS: Settings = { quality: 'auto', lightingEffects: true, headlampBrightness: 'normal', weather: 'auto', showCamera: true, showHelp: true };
 
 export function loadSettings(): Settings {
   try {
     const settings: Settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
     if (!['auto', 'high', 'medium', 'low'].includes(settings.quality)) settings.quality = 'auto';
     if (typeof settings.lightingEffects !== 'boolean') settings.lightingEffects = DEFAULTS.lightingEffects;
+    if (!['normal', 'bright', 'extra'].includes(settings.headlampBrightness)) settings.headlampBrightness = DEFAULTS.headlampBrightness;
     if (!['auto', 'clear', 'cloudy', 'rain', 'storm'].includes(settings.weather)) settings.weather = 'auto';
     // Older saves have a `sharks` choice ('ask' | 'on' | 'off'). Sharks are no longer optional
     // (they always hunt the Open Ocean), so the field is dropped and the next save leaves it out.

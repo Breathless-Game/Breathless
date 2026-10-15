@@ -11,6 +11,7 @@ import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, disposeFishMesh, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { PreviewFrameCache, previewSize, ViewVisibility } from './scene-budget';
 import { Hud } from './hud';
+import { SurfaceGuide } from './surface-guide';
 import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
 import { LazyReport as Report } from './lazy-panels';
@@ -160,6 +161,7 @@ let guideWasPaused = false;
 let tutorialDescended = false;
 let fieldGuide: FieldGuide | null = null;
 const hud = new Hud();
+const surfaceGuide = new SurfaceGuide();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
 // dive (see update()); menus show none and cost nothing.
@@ -2191,6 +2193,8 @@ function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
   diver.setQuality(renderQuality.settings);
   world.setLightingEffects(s.lightingEffects);
+  diver.setLampEnvironment(world.dayCycle.state.nightMix, s.lightingEffects);
+  diver.setLampBrightness(s.headlampBrightness);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   sonar.setDetail(renderQuality.settings.detail);
@@ -2921,6 +2925,7 @@ function update(dt: number, time: number) {
   hud.placeBreath(overDiversHead());
   hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
+  surfaceGuide.update(-diver.pos.y, net.length, currentStats().netCapacity, playing && outOfAir, playing && (outOfAir || !stormSea.capsized));
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
   if (phase === 'calibrating') updateCalibration();

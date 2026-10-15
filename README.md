@@ -659,6 +659,12 @@ To reset, run `localStorage.clear()` in the browser console.
 
 ## 11. Debugging tips
 
+### Underwater visibility
+
+The starter headlamp now reaches 24 m at 96 cd, with stronger focus/diffuser upgrades and a wider, soft nearby fill. It begins lighting shallow water after submerging and reaches full daytime output at 36 m. Deep-water ambient light has a small lift so nearby rocks and fish remain legible while distant water stays dark.
+
+Settings offers **Headlamp brightness** (Normal / Bright / Extra bright), both on the settings table and in Esc → Settings. This saved display preference changes light output, keeping the purchased range and beam shape. A small **↑ Surface to bank** cue appears below 3 m when the net reaches 80% capacity; out of air changes it to **↑ Surface now**. It shows the ascent distance and clears near the surface or outside a dive.
+
 - The dev server **does not type-check**. Before opening a PR, run `npm --prefix game run build` (it runs `tsc --noEmit` first).
 - These globals are available in the console: `breath`, `diver`, `fishes`, `keys`, `debugStep(seconds)`.
 - When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.

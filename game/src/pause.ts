@@ -54,6 +54,7 @@ export class PauseMenu {
   private input = $<HTMLSelectElement>('set-input');
   private timeOfDay = $<HTMLSelectElement>('set-time');
   private lighting = $<HTMLInputElement>('set-lighting');
+  private headlampBrightness = $<HTMLSelectElement>('set-headlamp-brightness');
   private weather = $<HTMLSelectElement>('set-weather');
   private quality = $<HTMLSelectElement>('set-quality');
   private camera = $<HTMLInputElement>('set-camera');
@@ -65,7 +66,7 @@ export class PauseMenu {
     private hooks: PauseHooks,
   ) {
     // Themed dropdowns in place of the native popups; the selects below keep working as before.
-    for (const select of [this.input, this.timeOfDay, this.weather, this.quality, this.language]) enhanceSelect(select);
+    for (const select of [this.input, this.timeOfDay, this.weather, this.quality, this.language, this.headlampBrightness]) enhanceSelect(select);
     $('pause-resume').addEventListener('click', () => this.requestResume());
     $('pause-settings').addEventListener('click', () => this.showSettings());
     $('pause-menu').addEventListener('click', () => this.requestQuit());
@@ -76,6 +77,7 @@ export class PauseMenu {
     this.input.addEventListener('change', () => hooks.setBreathMode(this.input.value as BreathMode));
     this.timeOfDay.addEventListener('change', () => hooks.setTimeOfDay(this.timeOfDay.value as TimeOfDay));
     this.lighting.addEventListener('change', () => this.change({ lightingEffects: this.lighting.checked }));
+    this.headlampBrightness.addEventListener('change', () => this.change({ headlampBrightness: this.headlampBrightness.value as Settings['headlampBrightness'] }));
     this.weather.addEventListener('change', () => this.change({ weather: this.weather.value as WeatherMode }));
     this.quality.addEventListener('change', () => this.change({ quality: this.quality.value as Quality }));
     this.camera.addEventListener('change', () => this.change({ showCamera: this.camera.checked }));
@@ -169,6 +171,7 @@ export class PauseMenu {
     );
     this.timeOfDay.value = this.hooks.timeOfDay();
     this.lighting.checked = this.settings.lightingEffects;
+    this.headlampBrightness.value = this.settings.headlampBrightness;
     this.weather.value = this.settings.weather;
     this.quality.value = this.settings.quality;
     this.camera.checked = this.settings.showCamera;

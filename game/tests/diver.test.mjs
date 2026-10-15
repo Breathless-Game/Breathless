@@ -673,13 +673,13 @@ test('same-tier specialisation changes replace hardware and optics only once', (
   assert.notEqual(wide, focused);
   assert.equal(wide.userData.lampPath, 'wideLamp');
   assert.equal(freed, geometries.size + materials.size);
-  assert.equal(diver.headlamp.distance, 32);
+  assert.equal(diver.headlamp.distance, 40);
   assert.equal(diver.headlamp.angle, 1.25);
   diver.setLampLevel(3, 'wideLamp');
   assert.equal(diver.group.getObjectByName('diver-headlamp-hardware').children[0], wide);
   diver.setLampLevel(1, 'wideLamp');
   assert.equal(diver.group.getObjectByName('diver-headlamp-hardware').children[0].userData.lampPath, 'focus');
-  assert.equal(diver.headlamp.distance, 18);
+  assert.equal(diver.headlamp.distance, 24);
 });
 
 test('lamp upgrades improve actual lighting and unequipped lamps emit no light', () => {
@@ -699,6 +699,44 @@ test('lamp upgrades improve actual lighting and unequipped lamps emit no light',
   assert.equal(diver.group.getObjectByName('diver-lamp-fill').intensity, 0);
   const anchor = diver.group.getObjectByName('diver-headlamp-origin');
   assert.ok(anchor.children.every(child => !child.isMesh));
+});
+
+test('brightness preferences update the actual lamps immediately and respect lighting and loadout switches', () => {
+  const { diver } = createDiver(RENDER_QUALITY.low, -50);
+  diver.update(1 / 60, 0, 50);
+  const base = diver.headlamp.intensity;
+  const range = diver.headlamp.distance;
+  assert.equal(base, 96, 'a new diver uses the advertised starter optics before any upgrade is selected');
+  assert.equal(range, 24);
+  const fill = diver.group.getObjectByName('diver-lamp-fill');
+  assert.ok(fill.distance >= 6, 'the starter fill reaches nearby seabed instead of only the mask');
+  diver.setLampBrightness('extra');
+  assert.ok(Math.abs(diver.headlamp.intensity - base * 1.7) < 1e-8, 'settings apply without a simulation tick');
+  assert.equal(diver.headlamp.distance, range);
+  diver.setLampEnvironment(1, false);
+  diver.setLampBrightness('bright');
+  assert.equal(diver.headlamp.intensity, 0);
+  assert.equal(fill.intensity, 0);
+  diver.setLampEnvironment(1, true);
+  diver.setWorn({ fins: true, tank: false, lamp: false, net: true });
+  diver.setLampBrightness('extra');
+  assert.equal(diver.headlamp.intensity, 0);
+  assert.equal(fill.intensity, 0);
+});
+
+test('nearby reflected light stays on visible rock faces when swimming in either direction', () => {
+  const { diver } = createDiver(RENDER_QUALITY.low, -55);
+  const fill = diver.group.getObjectByName('diver-lamp-fill');
+  const origin = diver.group.getObjectByName('diver-headlamp-origin');
+  for (const direction of [-1, 1]) {
+    diver.vel.set(direction * 3, -1, 0);
+    simulate(diver, 0.5);
+    const anchorWorld = origin.getWorldPosition(new THREE.Vector3());
+    const fillWorld = fill.getWorldPosition(new THREE.Vector3());
+    assert.ok(Math.abs(fillWorld.z - anchorWorld.z - 2.4) < 1e-8);
+    assert.ok(Math.abs(fillWorld.y - anchorWorld.y - 0.3) < 1e-8);
+    assert.ok(fill.distance >= 8);
+  }
 });
 
 test('headlamp replacement frees each owned resource once and leaves the selected skin intact', () => {
