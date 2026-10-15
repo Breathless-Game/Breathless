@@ -678,6 +678,7 @@ export class Fish {
   band: Band;
   facing = 1;
   phase: number;
+  readonly visualRadius: number;
   private rng: Rng;
 
   constructor(spec: FishSpec, band: Band, x: number, y: number, worldHalfWidth: number) {
@@ -685,6 +686,8 @@ export class Fish {
     this.profile = speciesProfile(spec);
     this.band = band;
     this.mesh = buildFishMesh(spec);
+    const visualBounds = new THREE.Box3().setFromObject(this.mesh.group).getBoundingSphere(new THREE.Sphere());
+    this.visualRadius = visualBounds.radius * 1.25 + visualBounds.center.length() + 0.2;
     this.rng = new Rng(spec.seed ^ 0xabcdef);
     this.pos = new THREE.Vector3(x, y, this.rng.range(-4, 2));
     this.phase = this.rng.range(0, Math.PI * 2);
@@ -719,7 +722,7 @@ export class Fish {
     );
   }
 
-  update(dt: number, time: number, diverPos: THREE.Vector3) {
+  update(dt: number, time: number, diverPos: THREE.Vector3, animate = true) {
     const r = RARITY[this.spec.rarity];
     const toDiver = this.toDiver.copy(this.pos).sub(diverPos);
     toDiver.z = 0;
@@ -767,6 +770,13 @@ export class Fish {
     g.rotation.z += (pitch - g.rotation.z) * (1 - Math.exp(-dt * 5));
     const bank = THREE.MathUtils.clamp(-yawDelta * 0.22, -0.24, 0.24);
     g.rotation.x += (bank - g.rotation.x) * (1 - Math.exp(-dt * 4));
+    if (animate) this.updateVisual(time, true);
+  }
+
+  /** Behaviour always runs; vertex deformation and drawing only run for visible fish. */
+  updateVisual(time: number, visible: boolean): void {
+    this.mesh.group.visible = visible;
+    if (!visible) return;
     if (this.mesh.animate) this.mesh.animate(time + this.phase, this.vel.length());
     else this.mesh.tail.rotation.y = Math.sin(time * 6 + this.phase) * 0.3;
     if (this.spec.rarity === 'mythic') {

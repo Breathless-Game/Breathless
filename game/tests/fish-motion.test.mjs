@@ -166,3 +166,40 @@ test('disposing a fish frees each geometry and material once, including eye rims
     assert.ok([...counts.values()].every(count => count === 1));
   }
 });
+
+test('hidden fish keep identical behaviour without deforming or uploading their surfaces', () => {
+  const visible = new Fish(specimen('Grey Perch'), { top: 5, bottom: 55 }, 0, -25, 140);
+  const hidden = new Fish(specimen('Grey Perch'), { top: 5, bottom: 55 }, 0, -25, 140);
+  const buffers = meshes(hidden.mesh).map(mesh => [mesh.geometry.attributes.position, mesh.geometry.attributes.position.version]);
+  hidden.updateVisual(0, false);
+  const diver = new THREE.Vector3(1, -25, 0);
+  for (let frame = 0; frame < 120; frame++) {
+    visible.update(1 / 60, frame / 60, diver);
+    hidden.update(1 / 60, frame / 60, diver, false);
+    assert.deepEqual(hidden.pos, visible.pos);
+    assert.deepEqual(hidden.vel, visible.vel);
+    assert.deepEqual(hidden.target, visible.target);
+  }
+  assert.ok(buffers.every(([attribute, version]) => attribute.version === version));
+  assert.ok(Number.isFinite(hidden.visualRadius) && hidden.visualRadius > 0);
+  hidden.updateVisual(2, true);
+  assert.equal(hidden.mesh.group.visible, true);
+  assert.ok(buffers.some(([attribute, version]) => attribute.version > version));
+  assert.ok(positions(hidden.mesh).every(Number.isFinite));
+  disposeFishMesh(visible.mesh); disposeFishMesh(hidden.mesh);
+});
+
+test('flat-shaded fish reuse normals while smooth materials retain normal rebuilding', () => {
+  const fish = buildFishMesh(specimen('Grey Perch'));
+  const normals = meshes(fish).map(mesh => [mesh.geometry.attributes.normal, mesh.geometry.attributes.normal.version]);
+  const rest = positions(fish);
+  fish.animate(0, 1); fish.animate(0.1, 1);
+  assert.ok(maxDelta(rest, positions(fish)) > 0);
+  assert.ok(normals.every(([attribute, version]) => attribute.version === version), 'flat normals are derived in the fragment shader');
+  assert.ok(meshes(fish).every(mesh => mesh.geometry.attributes.position.usage === THREE.DynamicDrawUsage));
+  const normal = fish.body.geometry.attributes.normal;
+  fish.material.flatShading = false;
+  fish.animate(0.2, 1);
+  assert.ok(normal.version > 0, 'smooth shading still gets deformed normals');
+  disposeFishMesh(fish);
+});
