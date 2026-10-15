@@ -11,11 +11,11 @@
 //     (game/src/features.ts breathModeList: keyboard only), so nothing is lost.
 //
 // Per instance, not per deployment (each instance has its own memory): the rate limiters in
-// market.mjs, nft-serial.mjs and nft-meta.mjs, the fish mint/migration quotas, the rpc-guard
-// concurrency limit and 429 backoff, and the balance / owned-fish caches. Vercel runs a handful
-// of instances under load, so each limit is that many times looser than in one `npm start`
-// process. What must hold across instances (one payout per fish, gapless fish numbers, one PEARL
-// mint) is in Redis.
+// market.mjs, nft-serial.mjs and nft-meta.mjs, the rpc-guard concurrency limit and 429 backoff,
+// and the balance / owned-fish caches. Vercel runs a handful of instances under load, so each
+// limit is that many times looser than in one `npm start` process. What must hold across
+// instances (one payout per fish, gapless fish numbers, one PEARL mint, the per-wallet fish
+// mint/migration quotas that bound lifetime_value) is in Redis.
 
 import { timingSafeEqual } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -120,7 +120,9 @@ export function createVercelHandler({ env = process.env, redis, log = console.lo
     (marketP ??= (async () => {
       const store = await getStore();
       const { createMarket: make, rpcEndpoint } = createMarket ? { createMarket, rpcEndpoint: () => env.SOLANA_RPC } : await import('./market.mjs');
-      return make({ rpc: rpcEndpoint(), dir, clientIp: vercelClientIp, log, store, background: false, batchDeadlineMs: BATCH_DEADLINE_MS });
+      // The mint quotas in the store's KV, so every instance takes from one count (fish-trust.mjs KvQuota).
+      const fishOptions = store.kind === 'file' ? {} : { quotaKv: store.kv };
+      return make({ rpc: rpcEndpoint(), dir, clientIp: vercelClientIp, log, store, fishOptions, background: false, batchDeadlineMs: BATCH_DEADLINE_MS });
     })().catch((e) => {
       marketP = null;
       throw e;

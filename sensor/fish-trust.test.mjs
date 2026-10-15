@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GENERATORS, GENERATOR_V1, GENERATOR_V2, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
+import { publicKey } from '@metaplex-foundation/umi';
+import { createFishCollection } from './fish-collection.mjs';
 import {
   FishRegistry,
+  KvQuota,
   Quota,
   assertTrustedFish,
   capQuotes,
@@ -22,12 +25,15 @@ import {
   HttpError,
   MIGRATE_BATCH,
   MINTS_PER_HOUR,
+  MINT_WINDOW_MS,
   MPL_CORE_PROGRAM,
   PAYOUT_WINDOW_MS,
   SoldLedger,
   maxPearls,
 } from './market-rules.mjs';
 import { createSaleDesk, quoteMany } from './market-sale.mjs';
+import { RedisRegistry, createMemoryKv, createRedisKv } from './market-store.mjs';
+import { createFakeRedis } from './test/fake-redis.mjs';
 
 // The market's trust gate: forged fish (no collection, the wrong one, tampered attributes, extra
 // plugins) never get a price, single or batch; collection fish the generator agrees with sell; the
@@ -410,6 +416,143 @@ test('the mint quota counts per owner per hour and says when it opens again', ()
   assert.deepEqual(e.extra, { code: 'mint-limit', retryAfterMs: 50_000 });
   assert.match(e.message, /at most 3 per wallet per hour/);
   assert.ok(MINTS_PER_HOUR >= 120, 'normal play never mints anywhere near this');
+});
+
+// On Vercel every instance (and every cold start) built its own in-memory Quota, so the bound on
+// forged top-value mints (checkFish) was per instance. KvQuota keeps the count in the store's KV.
+
+/** Two "instances" sharing one fake Redis (as Vercel's share Upstash), on one clock. */
+function sharedKv(prefix = 'live:') {
+  const t = { now: 1_000_000 };
+  const redis = createFakeRedis({ now: () => t.now });
+  return { t, redis, kv: () => createRedisKv(redis, prefix) };
+}
+
+for (const [name, makeKv] of [
+  ['Redis KV', () => sharedKv().kv()],
+  ['memory KV', () => createMemoryKv()],
+]) {
+  test(`KvQuota (${name}) answers exactly as Quota: per owner, all or nothing, retryAfterMs, a new window`, async () => {
+    const q = new KvQuota({ kv: makeKv(), name: 'mint', limit: 3, windowMs: 60_000 });
+    const t = 1_000_000;
+    assert.ok((await q.take('a', 1, t)).ok && (await q.take('a', 2, t + 1)).ok);
+    const no = await q.take('a', 1, t + 10_000);
+    assert.equal(no.ok, false);
+    assert.equal(no.retryAfterMs, 50_000);
+    assert.equal((await q.take('a', 1, t + 59_500)).retryAfterMs, 1000, 'never less than a second, as Quota');
+    assert.ok((await q.take('b', 1, t + 10_000)).ok, 'another owner has its own quota');
+    assert.ok((await q.take('a', 1, t + 60_000)).ok, 'a new window');
+    assert.ok((await q.take('a', 2, t + 60_001)).ok, 'the refused takes charged nothing');
+    assert.equal((await q.take('a', 1, t + 60_002)).ok, false);
+  });
+}
+
+test('KvQuota: two instances sharing one Redis take from one count (a Quota each would not)', async () => {
+  const { t, kv } = sharedKv();
+  const a = new KvQuota({ kv: kv(), name: 'mint', limit: 3, windowMs: 60_000 });
+  const b = new KvQuota({ kv: kv(), name: 'mint', limit: 3, windowMs: 60_000 });
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => (i % 2 ? a : b).take('owner', 1, t.now)));
+  assert.equal(results.filter((r) => r.ok).length, 3, 'ten concurrent takes over two instances: exactly the limit passes');
+  t.now += 10_000;
+  assert.deepEqual(await b.take('owner', 1, t.now), { ok: false, retryAfterMs: 50_000 });
+  // The in-memory Quota, one per instance, is the bug this replaces: each instance its own full limit.
+  const [m1, m2] = [new Quota({ limit: 3, windowMs: 60_000 }), new Quota({ limit: 3, windowMs: 60_000 })];
+  for (let i = 0; i < 3; i++) assert.ok(m1.take('owner', 1, t.now).ok);
+  assert.ok(m2.take('owner', 1, t.now).ok, 'per instance');
+});
+
+test('KvQuota: every record has a TTL of what is left of its window, and an expired one starts afresh', async () => {
+  const { t, redis, kv } = sharedKv();
+  const q = new KvQuota({ kv: kv(), name: 'mint', limit: 2, windowMs: 60_000 });
+  const start = t.now;
+  assert.ok((await q.take('owner', 1, t.now)).ok);
+  const key = 'live:kv:quota:mint:owner';
+  assert.equal(redis.data.get(key).expiresAt, start + 60_000);
+  t.now += 30_000;
+  assert.ok((await q.take('owner', 1, t.now)).ok);
+  assert.equal(redis.data.get(key).expiresAt, start + 60_000, 'a later take keeps the window\'s end, never extends it');
+  assert.equal((await q.take('owner', 1, t.now)).retryAfterMs, 30_000);
+  // n > limit: refused, but the window opens (as Quota), with a TTL too.
+  const big = new KvQuota({ kv: kv(), name: 'migrate', limit: 2, windowMs: 60_000 });
+  assert.deepEqual(await big.take('owner', 5, t.now), { ok: false, retryAfterMs: 60_000 });
+  assert.equal(redis.data.get('live:kv:quota:migrate:owner').expiresAt, t.now + 60_000);
+  for (const [k, e] of redis.data) assert.ok(Number.isFinite(e.expiresAt), `${k} has a TTL`);
+  t.now = start + 60_000; // Redis drops the record exactly at the window's end
+  assert.equal(await kv().get('quota:mint:owner'), null);
+  assert.ok((await q.take('owner', 2, t.now)).ok, 'a new window, the full limit');
+});
+
+test('KvQuota fails closed: a store error refuses the take instead of skipping the limit', async () => {
+  const broken = { get: async () => Promise.reject(new Error('fetch failed')), cas: async () => true };
+  const q = new KvQuota({ kv: broken, name: 'mint', limit: 3, windowMs: 60_000 });
+  await assert.rejects(q.take('owner'), /fetch failed/);
+});
+
+/** Bytes of a bare Core CollectionV1 account (no plugins), enough for fetchCollection. */
+function collectionAccount(address) {
+  const str = (s) => {
+    const b = Buffer.from(s);
+    const n = Buffer.alloc(4);
+    n.writeUInt32LE(b.length);
+    return [n, b];
+  };
+  const data = Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 1), ...str('Breathless Fish'), ...str(''), Buffer.alloc(8)]);
+  return { exists: true, publicKey: address, owner: publicKey(MPL_CORE_PROGRAM), lamports: { basisPoints: 1n }, data: new Uint8Array(data), executable: false };
+}
+
+const PAST_QUOTA = new Error('past the quota (the test stops before building the transaction)');
+
+/** A fish collection as one instance builds it; the blockhash fetch (after the quota) throws PAST_QUOTA. */
+function mintingInstance({ quotaKv, registry = new FishRegistry(), t, mintsPerHour = 3 }) {
+  const u = {
+    identity: { publicKey: { toString: () => MARKET } },
+    rpc: {
+      getAccount: async (address) => collectionAccount(address),
+      getLatestBlockhash: async () => {
+        throw PAST_QUOTA;
+      },
+    },
+  };
+  return createFishCollection({
+    u,
+    state: { fishCollection: publicKey(new Uint8Array(32).fill(9)).toString() },
+    save: async () => {},
+    registry,
+    ledger: { records: {} },
+    balanceSol: async () => 1,
+    log: () => {},
+    limits: { mintsPerHour },
+    quotaKv,
+    now: () => t.now,
+  });
+}
+
+const mintRefused = (retryAfterMs) => (e) => e instanceof HttpError && e.status === 429 && e.extra?.code === 'mint-limit' && e.extra.retryAfterMs === retryAfterMs;
+
+test('cosign-mint on Vercel: two instances sharing Redis share the wallet\'s mint quota, charged before signing', async () => {
+  const { t, redis, kv } = sharedKv();
+  const registry = () => new RedisRegistry(redis, 'live:');
+  const a = mintingInstance({ quotaKv: kv(), registry: registry(), t });
+  const b = mintingInstance({ quotaKv: kv(), registry: registry(), t });
+  const start = t.now;
+  for (const fc of [a, b, a]) await assert.rejects(fc.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA);
+  t.now += 10_000;
+  await assert.rejects(b.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000), 'the other instance sees the same count');
+  await assert.rejects(a.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000));
+  const c = mintingInstance({ quotaKv: kv(), registry: registry(), t }); // a cold start
+  await assert.rejects(c.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000), 'a cold start does not reset it');
+  t.now = start + MINT_WINDOW_MS;
+  await assert.rejects(b.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA, 'a new window');
+});
+
+test('cosign-mint on one process (file store): the in-memory quota, unchanged', async () => {
+  const t = { now: 1_000_000 };
+  const fc = mintingInstance({ t });
+  for (let i = 0; i < 3; i++) await assert.rejects(fc.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA);
+  t.now += 10_000;
+  await assert.rejects(fc.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000));
+  t.now += MINT_WINDOW_MS;
+  await assert.rejects(fc.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA, 'a new window');
 });
 
 test('the daily PEARL cap: per seller, rolling 24 h, cumulative over a quote batch, atomic in the sale desk', async () => {

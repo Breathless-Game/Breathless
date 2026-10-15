@@ -118,7 +118,8 @@ function valueRange(rarity, a, b) {
  * The same holds for player_state's lifetime banked value (record_catch rides in every co-signed
  * mint): a client picks its seeds, so it can mint only top-value fish and inflate lifetime_value,
  * opening maps and ships sooner. An accepted hackathon limitation, bounded by the per-wallet mint
- * quota (MINTS_PER_HOUR, 240 an hour); there is no backfill and no separate value cap.
+ * quota (MINTS_PER_HOUR, 240 an hour; one count across all instances on a serverless host, KvQuota);
+ * there is no backfill and no separate value cap.
  * Returns { ok: true, fish, version } (fish = that version's fish for this seed and rarity) or { ok: false, reason }.
  */
 export function checkFish(facts, { legacy = false, tolerance = SPAWN_TOLERANCE_M } = {}) {
@@ -399,6 +400,57 @@ export class Quota {
     if (w.used + n > this.limit) return { ok: false, retryAfterMs: Math.max(1000, w.start + this.windowMs - now) };
     w.used += n;
     return { ok: true };
+  }
+}
+
+/** Compare-and-set tries before a KvQuota take gives up (other instances took from the same key each time). */
+const QUOTA_CAS_TRIES = 8;
+
+/** A KvQuota record ({ start, used }) or null when there is none or it is unreadable. */
+function parseWindow(raw) {
+  if (raw === null) return null;
+  try {
+    const w = JSON.parse(raw);
+    return Number.isFinite(w?.start) && Number.isInteger(w?.used) ? w : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Quota with its windows in the store's KV (market-store.mjs), for a serverless host: every
+ * instance takes from one count per key, where a Quota per instance would let each cold start and
+ * each concurrent instance mint its own full quota. Same answers as Quota, async. One JSON record
+ * { start, used } per key under kv key quota:<name>:<key>, written only by compare-and-set with a
+ * TTL of what is left of its window, so a record never lacks a TTL or outlives its window; a lost
+ * race reads again. A KV error propagates and the take is refused (fail closed, like the link
+ * relay's limits; the co-sign needs the store's registry anyway).
+ */
+export class KvQuota {
+  constructor({ kv, name, limit, windowMs }) {
+    this.kv = kv;
+    this.name = name;
+    this.limit = limit;
+    this.windowMs = windowMs;
+  }
+
+  /** Take `n` (all or nothing): { ok: true } or { ok: false, retryAfterMs }. */
+  async take(key, n = 1, now = Date.now()) {
+    const k = `quota:${this.name}:${key}`;
+    for (let i = 0; i < QUOTA_CAS_TRIES; i++) {
+      const raw = await this.kv.get(k);
+      let w = parseWindow(raw);
+      const fresh = !w || now - w.start >= this.windowMs;
+      if (fresh) w = { start: now, used: 0 };
+      const left = Math.max(1, w.start + this.windowMs - now); // > 0: a TTL of 0 would mean none
+      if (w.used + n > this.limit) {
+        // Quota opens the window even when it then refuses (n > limit); so does this.
+        if (fresh && !(await this.kv.cas(k, raw, JSON.stringify(w), { ttlMs: left }))) continue;
+        return { ok: false, retryAfterMs: Math.max(1000, w.start + this.windowMs - now) };
+      }
+      if (await this.kv.cas(k, raw, JSON.stringify({ start: w.start, used: w.used + n }), { ttlMs: left })) return { ok: true };
+    }
+    throw new HttpError(503, 'The mint quota is busy, retry in a few seconds');
   }
 }
 
