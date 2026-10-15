@@ -17,8 +17,8 @@ const fish = await moduleUrl('fish', { three: import.meta.resolve('three'), './r
 const wallet = `data:text/javascript;base64,${Buffer.from('export const storageKey = key => key;').toString('base64')}`;
 const { MAPS, mapDepth, mapZones } = await import(await moduleUrl('maps', { './fish': fish, './wallet': wallet, './i18n': i18n }));
 
-test('finite maps reach 60 m and 100 m while the ocean retains its 62 m shelf and trench', () => {
-  for (const [id, depth, trench] of [['fjord', 60, false], ['tianchi', 100, false], ['ocean', 62, true]]) {
+test('finite maps reach 120 m and 200 m while the ocean opens a trench below its 300 m shelf', () => {
+  for (const [id, depth, trench] of [['fjord', 120, false], ['tianchi', 200, false], ['ocean', 300, true]]) {
     const map = MAPS[id], zones = mapZones(map);
     assert.equal(mapDepth(map), depth);
     assert.equal(map.hasTrench, trench);

@@ -12,7 +12,7 @@ const { terrainFloorY, insideTrench, TRENCH_SWIM_HALF_WIDTH } = await import(
 );
 
 test('finite maps have a floor everywhere, including under the boat and below the nominal depth', () => {
-  for (const depth of [60, 100]) for (let x = -200; x <= 200; x += 5) {
+  for (const depth of [120, 200]) for (let x = -200; x <= 200; x += 5) {
     const sandY = -depth + Math.sin(x * 0.08) * 2;
     assert.equal(terrainFloorY(false, x, sandY), sandY);
     assert.equal(insideTrench(false, x, -1000, sandY), false);
@@ -23,12 +23,12 @@ test('finite maps have a floor everywhere, including under the boat and below th
 
 test('the ocean keeps its open lane and only confines a diver already below the shelf', () => {
   for (const x of [-TRENCH_SWIM_HALF_WIDTH, 0, TRENCH_SWIM_HALF_WIDTH]) {
-    assert.equal(terrainFloorY(true, x, -62), -Infinity);
-    assert.equal(insideTrench(true, x, -1000, -62), true);
-    assert.equal(insideTrench(true, x, -30, -62), false);
+    assert.equal(terrainFloorY(true, x, -300), -Infinity);
+    assert.equal(insideTrench(true, x, -1000, -300), true);
+    assert.equal(insideTrench(true, x, -30, -300), false);
   }
   for (const x of [-100, -TRENCH_SWIM_HALF_WIDTH - 0.01, TRENCH_SWIM_HALF_WIDTH + 0.01, 100]) {
-    assert.equal(terrainFloorY(true, x, -62), -62);
-    assert.equal(insideTrench(true, x, -1000, -62), false, 'cannot snap a shelf diver sideways into the trench');
+    assert.equal(terrainFloorY(true, x, -300), -300);
+    assert.equal(insideTrench(true, x, -1000, -300), false, 'cannot snap a shelf diver sideways into the trench');
   }
 });

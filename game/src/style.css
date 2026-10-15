@@ -246,6 +246,14 @@ body {
   padding-right: 4px;
 }
 
+/* Long names stay inside short shallow bands on deep finite maps. */
+.zone-label {
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .zone.reef {
   color: #ff9fb5;
 }

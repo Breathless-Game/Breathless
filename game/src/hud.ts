@@ -99,9 +99,11 @@ export class Hud {
   private buildDepthTicks() {
     this.depthGauge.querySelectorAll('.tick').forEach(el => el.remove());
     const frag = document.createDocumentFragment();
+    const step = this.depthRange > 150 ? 25 : this.depthRange > 100 ? 20 : 10;
+    const shelfTick = this.lastZones?.[1];
     const ticks = Number.isFinite(this.depthRange)
-      ? Array.from({ length: Math.floor(this.depthRange / 10) + 1 }, (_, i) => i * 10)
-      : DEPTH_TICKS;
+      ? Array.from({ length: Math.floor(this.depthRange / step) + 1 }, (_, i) => i * step)
+      : shelfTick ? [...new Set([...DEPTH_TICKS, shelfTick])].sort((a, b) => a - b) : DEPTH_TICKS;
     for (const m of ticks) {
       const el = document.createElement('div');
       el.className = 'tick';
@@ -141,7 +143,11 @@ export class Hud {
       const top = this.depthPosition(b.top);
       const el = document.createElement('div');
       el.className = `zone ${b.cls}`.trim();
-      el.textContent = b.label;
+      const label = document.createElement('span');
+      label.className = 'zone-label';
+      label.textContent = b.label;
+      el.title = b.label;
+      el.appendChild(label);
       el.style.setProperty('--top', `${(top * 100).toFixed(2)}%`);
       el.style.setProperty('--h', `${((this.depthPosition(b.bottom) - top) * 100).toFixed(2)}%`);
       frag.appendChild(el);

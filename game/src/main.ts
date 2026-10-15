@@ -8,7 +8,7 @@ import { showTouchNotice } from './touch-only';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
-import { type Band, disposeFishMesh, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
+import { type Band, disposeFishMesh, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish } from './fish';
 import { Hud } from './hud';
 import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
@@ -24,6 +24,7 @@ import { syncBoatPrices, syncUpgradePrices, UPGRADES, type UpgradeId } from './u
 import { loadSettings, type Settings } from './settings';
 import { HALF_WIDTH, MAX_HALF_WIDTH, TRENCH_HALF_WIDTH, World } from './world';
 import { insideTrench } from './terrain-depth';
+import { buildShelfFishBands, shelfFishWindow, type ShelfFishBand } from './fish-population';
 import {
   advanceWorldBounds,
   cameraTargetXToBounds,
@@ -96,8 +97,6 @@ const DRAG = 2.4;
 const SURFACE_DEPTH = 0.9; // shallower than this counts as "at the surface"
 const EMERGENCY_LIFT = 18;
 const RELEASE_DEBOUNCE_MS = 500; // breathing must last this long underwater to count
-// Keep encounter density stable as the playable width doubles.
-const FISH_PER_ZONE = [32, 32, 24];
 const TRENCH_X = TRENCH_HALF_WIDTH - 1.2; // how far left/right the diver can go inside it
 // The trench is too deep to stock up front: a school of fish follows the
 // diver down, each one rolled for the depth it's spawned at.
@@ -330,20 +329,34 @@ function tendTrench(diverDepth: number) {
   }
 }
 
-/**
- * Stock each open zone across the whole width. Only the ocean adds a following
- * school below its shelf; finite maps have no fish beyond their seabed.
- */
+// Only depth slices near the diver own live shelf fish. Keep band identity stable
+// until eviction, so a delayed catch replacement cannot revive an unloaded slice.
+let shelfStock: ShelfFishBand[] = [];
+const liveShelfBands = new Map<string, Band>();
+
+function tendShelf(diverDepth: number) {
+  const { load, keep } = shelfFishWindow(shelfStock, diverDepth);
+  for (const [key, band] of liveShelfBands) {
+    if (keep.has(key)) continue;
+    for (const fish of [...fishes]) if (fish.band === band) removeFish(fish);
+    liveShelfBands.delete(key);
+  }
+  for (const { key, band, count } of load) {
+    if (liveShelfBands.has(key)) continue;
+    const liveBand = { ...band };
+    liveShelfBands.set(key, liveBand);
+    for (let k = 0; k < count; k++) spawnFish(liveBand);
+  }
+}
+
+/** Stock the visible shelf; only the ocean adds a following school below its floor. */
 function populate() {
   for (const f of [...fishes]) removeFish(f);
-  fishes.length = 0;
+  liveShelfBands.clear();
+  shelfStock = buildShelfFishBands(mapZones(world.map));
   fishCoverageLeft = worldBounds.left;
   fishCoverageRight = worldBounds.right;
-  mapZones(world.map).forEach((zone, i) => {
-    const original = ZONES[i];
-    const count = Math.ceil(FISH_PER_ZONE[i] * (zone.bottom - zone.top) / (original.bottom - original.top));
-    for (let k = 0; k < count; k++) spawnFish(zone);
-  });
+  tendShelf(0);
   if (world.map.hasTrench) for (let k = 0; k < TRENCH_FISH; k++) spawnTrenchFish(0);
 }
 
@@ -352,13 +365,13 @@ function extendFishCoverage() {
   if (worldBounds.right - fishCoverageRight >= FISH_EDGE_BAND) {
     const start = fishCoverageRight;
     const end = worldBounds.right;
-    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    for (const band of liveShelfBands.values()) spawnFish(band, start, end);
     fishCoverageRight = end;
   }
   if (fishCoverageLeft - worldBounds.left >= FISH_EDGE_BAND) {
     const start = worldBounds.left;
     const end = fishCoverageLeft;
-    for (const zone of mapZones(world.map)) spawnFish(zone, start, end);
+    for (const band of liveShelfBands.values()) spawnFish(band, start, end);
     fishCoverageLeft = start;
   }
 }
@@ -1626,7 +1639,9 @@ function tryCatch() {
     const band = best.band;
     const map = world.map;
     // Skip the respawn if the player has moved to another map in the meantime.
-    setTimeout(() => world.map === map && spawnFish(band), 4000);
+    setTimeout(() => {
+      if (world.map === map && [...liveShelfBands.values()].includes(band)) spawnFish(band);
+    }, 4000);
   }
 }
 
@@ -2837,6 +2852,7 @@ function update(dt: number, time: number) {
     sonarGuiding = true;
     hud.message(t('Sonar guidance online · follow the pulses', '声纳引导已开启 · 跟着脉冲走'), 2200);
   }
+  tendShelf(-diver.pos.y);
   tendTrench(-diver.pos.y);
   const scattering = time >= scatterFrom && time < scatterUntil;
   if (scattering && scatterFresh) {
