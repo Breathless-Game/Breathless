@@ -11,6 +11,24 @@
 let open = 0;
 let settled: (() => void)[] = [];
 
+/**
+ * How long one prompt may hold the game (a dive frozen, an account check deferred). A wallet can
+ * hang without ever answering (Phantom's popup gone, the promise left pending): past this the prompt
+ * stops counting, so the dive carries on and the deferred check runs. The prompt itself still
+ * settles (or fails) only when the wallet answers.
+ */
+export const PROMPT_HOLD_MS = 3 * 60_000;
+
+/** The timer behind the cap; tests pass their own clock. */
+export interface PromptTimers {
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+const realTimers: PromptTimers = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 /** True while an owner signature request is waiting on the player. */
 export function walletPromptOpen(): boolean {
   return open > 0;
@@ -22,18 +40,30 @@ export function promptsSettled(): Promise<void> {
   return new Promise((resolve) => settled.push(resolve));
 }
 
-/** Run `ask` (one owner signature request) counted as an open wallet prompt until it settles. */
-export async function duringWalletPrompt<T>(ask: () => Promise<T>): Promise<T> {
+/**
+ * Run `ask` (one owner signature request) counted as an open wallet prompt until it settles, or
+ * until PROMPT_HOLD_MS, whichever comes first.
+ */
+export async function duringWalletPrompt<T>(ask: () => Promise<T>, timers: PromptTimers = realTimers): Promise<T> {
   open++;
-  try {
-    return await ask();
-  } finally {
+  // Each prompt lets go of its count once: a late answer after the cap must not release a newer prompt.
+  let counted = true;
+  const release = () => {
+    if (!counted) return;
+    counted = false;
     open--;
     if (open === 0) {
       const waiting = settled;
       settled = [];
       for (const resolve of waiting) resolve();
     }
+  };
+  const cap = timers.setTimeout(release, PROMPT_HOLD_MS);
+  try {
+    return await ask();
+  } finally {
+    timers.clearTimeout(cap);
+    release();
   }
 }
 

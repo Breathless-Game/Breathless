@@ -573,6 +573,11 @@ test('the daily PEARL cap: per seller, rolling 24 h, cumulative over a quote bat
 
   const capped = capQuotes(records, SELLER, { quotes: [{ assetId: 'x', pearls: 3000 }, { assetId: 'y', pearls: 3000 }, { assetId: 'z', status: 422, error: 'no' }, { assetId: 'w', pearls: 2000 }] }, { now });
   assert.deepEqual(capped.quotes.map((q) => q.pearls ?? q.status), [3000, 429, 422, 2000]);
+  // The refused quote carries the cap's code and wait, as a single /quote's 429 body does.
+  assert.equal(capped.quotes[1].code, 'daily-cap');
+  assert.equal(capped.quotes[1].retryAfterMs, 3_600_000);
+  assert.equal(capped.quotes[1].assetId, 'y');
+  assert.deepEqual(capped.quotes[2], { assetId: 'z', status: 422, error: 'no' });
 
   // The desk: a batch of fish worth more than the cap pays up to the cap, the rest stay unpaid (the
   // client keeps them pending and the sale resumes when the window rolls on).
@@ -581,7 +586,7 @@ test('the daily PEARL cap: per seller, rolling 24 h, cumulative over a quote bat
   const m = deskWith(fishes, { cap: goodFish.value * 4 });
   const { results } = await m.desk.sellBatch({ seller: SELLER, sales: Object.keys(fishes).map((assetId) => ({ assetId, transferTx: TX })) });
   assert.equal(results.filter((r) => r.pearls).length, 4);
-  assert.deepEqual(results.filter((r) => !r.pearls).map((r) => r.status), [429, 429]);
+  assert.deepEqual(results.filter((r) => !r.pearls).map((r) => [r.status, r.code, r.retryAfterMs > 0]), [[429, 'daily-cap', true], [429, 'daily-cap', true]]);
   assert.equal(m.payments.reduce((s, p) => s + p.pearls, 0), goodFish.value * 4);
 });
 

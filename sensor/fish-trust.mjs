@@ -516,7 +516,7 @@ export function capQuotes(records, seller, { quotes }, opts = {}) {
         pending += q.pearls;
         return q;
       } catch (e) {
-        return { assetId: q.assetId, status: e.status, error: e.message };
+        return { ...e.extra, assetId: q.assetId, status: e.status, error: e.message }; // { code: 'daily-cap', retryAfterMs }
       }
     }),
   };

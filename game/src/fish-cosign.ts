@@ -181,20 +181,81 @@ function recordCatchProblem(keys: string[], ix: MessageLike['instructions'][numb
 }
 
 /**
+ * mpl-core's updateV2 discriminator (a single u8). @metaplex-foundation/mpl-core 1.10.0's update()
+ * builds updateV2 (dist/src/instructions/update.js; generated/instructions/updateV2.js: discriminator 30).
+ */
+export const CORE_UPDATE_V2_DISCRIMINATOR = 30;
+/** BaseUpdateAuthority's variants (mpl-core 1.10.0 generated/types/baseUpdateAuthority.js): None, Address, Collection. */
+const UA_ADDRESS = 1;
+const UA_COLLECTION = 2;
+
+/**
+ * The only Core calls a migration may carry (sensor/fish-collection.mjs cosignMigrate): for each
+ * fish, in order, two updateV2s. First the session key, its update authority, hands it to the
+ * market; then the market, now its authority and the collection's, moves it into the collection.
+ * The session key pays both. Account order from mpl-core 1.10.0 updateV2.js: asset, collection,
+ * payer, authority, newCollection, systemProgram, logWrapper; the unset ones (no current
+ * collection, no new one in the hand-over, no log wrapper) are Core's own id. Data: discriminator,
+ * newName None, newUri None, newUpdateAuthority Some(Address(market) | Collection(collection)).
+ */
+export interface ExpectedMigrate {
+  /** The fish this transaction moves, as the market lists them; each must be one of `requested`. */
+  assetIds: string[];
+  /** The fish we sent in this /cosign-migrate request. */
+  requested: string[];
+  /** Our session key. */
+  session: string;
+  market: string;
+  collection: string;
+  /** The market's and the collection's 32 bytes, as the new update authority carries them. */
+  marketBytes: Uint8Array;
+  collectionBytes: Uint8Array;
+}
+
+const sameBytes = (a: Uint8Array, at: number, b: Uint8Array) => b.every((x, i) => a[at + i] === x);
+
+/** Why the `n`th Core call of a migration is not exactly the update we expect there, or null. */
+function coreMigrateProblem(keys: string[], ix: MessageLike['instructions'][number], want: ExpectedMigrate, n: number): string | null {
+  const data = ix.data;
+  if (!data || data[0] !== CORE_UPDATE_V2_DISCRIMINATOR) return 'its Core call is not a fish update';
+  const asset = want.assetIds[n >> 1];
+  const handOver = n % 2 === 0;
+  const accounts = (ix.accountIndexes ?? []).map((i) => keys[i]);
+  if (accounts[0] !== asset) return 'it updates another asset than the fish it moves';
+  if (data[1] !== 0 || data[2] !== 0) return 'its update renames the fish or changes its URI';
+  const to = handOver ? want.marketBytes : want.collectionBytes;
+  const newAuthority = data.length === 5 + to.length && data[3] === 1 && data[4] === (handOver ? UA_ADDRESS : UA_COLLECTION) && sameBytes(data, 5, to);
+  if (handOver && !newAuthority) return 'its update hands the fish to someone other than the market';
+  if (!handOver && (!newAuthority || accounts[4] !== want.collection)) return 'it moves the fish outside the Breathless collection';
+  const expected = handOver
+    ? [asset, CORE_PROGRAM, want.session, want.session, CORE_PROGRAM, SYSTEM_PROGRAM, CORE_PROGRAM]
+    : [asset, CORE_PROGRAM, want.session, want.market, want.collection, SYSTEM_PROGRAM, CORE_PROGRAM];
+  if (accounts.length !== expected.length || accounts.some((a, i) => a !== expected[i])) return 'its update has unexpected accounts';
+  return null;
+}
+
+/**
  * Sign only what we asked for: the fee payer is our session key, the signers are exactly the
  * expected ones, and every instruction is a Core call. For a mint (`create` and `recordCatch`
  * given) that is exactly one Core create, exactly the expected one, plus exactly one player_state
- * record_catch, exactly the expected one. Anything else from player_state or any other program
- * is refused. Returns why not, or null.
+ * record_catch, exactly the expected one. For a migration (`migrate`) it is exactly the two
+ * updates per fish listed, each listed fish one we asked to move. Anything else from player_state
+ * or any other program, or a Core call with neither to check it against, is refused. Returns why
+ * not, or null.
  */
 export function cosignedTxProblem(
   m: MessageLike,
-  expect: { payer: string; signers: string[]; program?: string; create?: ExpectedCreate; recordCatch?: ExpectedRecordCatch },
+  expect: { payer: string; signers: string[]; program?: string; create?: ExpectedCreate; recordCatch?: ExpectedRecordCatch; migrate?: ExpectedMigrate },
 ): string | null {
   const keys = m.accounts.map(String);
   if (keys[0] !== expect.payer) return 'its fee payer is not the game wallet';
   const signers = keys.slice(0, m.header.numRequiredSignatures);
   if (signers.length !== expect.signers.length || !expect.signers.every((s) => signers.includes(s))) return 'it asks for unexpected signatures';
+  const mig = expect.migrate;
+  if (mig) {
+    if (!mig.assetIds.length) return 'it moves no fish';
+    if (new Set(mig.assetIds).size !== mig.assetIds.length || !mig.assetIds.every((id) => mig.requested.includes(id))) return 'it moves a fish we did not ask to move';
+  }
   const program = expect.program ?? CORE_PROGRAM;
   const rc = expect.recordCatch;
   let catches = 0;
@@ -202,8 +263,9 @@ export function cosignedTxProblem(
   for (const ix of m.instructions) {
     const p = keys[ix.programIndex];
     if (p === program) {
+      if (mig && core >= 2 * mig.assetIds.length) return 'it makes more Core calls than the fish it moves';
       if (++core > 1 && expect.create) return 'it makes more than one Core call';
-      const problem = expect.create ? coreCreateProblem(keys, ix, expect.create) : null;
+      const problem = expect.create ? coreCreateProblem(keys, ix, expect.create) : mig ? coreMigrateProblem(keys, ix, mig, core - 1) : null;
       if (problem) return problem;
       continue;
     }
@@ -214,6 +276,8 @@ export function cosignedTxProblem(
   }
   if (!core) return 'it makes no Core call';
   if (rc && catches !== 1) return NO_RECORD_CATCH;
+  if (mig && core !== 2 * mig.assetIds.length) return 'it does not move exactly the fish we asked for';
+  if (!expect.create && !mig) return 'it is neither our mint nor our migration';
   return null;
 }
 
@@ -282,6 +346,28 @@ export function mintExpectation(
     value: a.fish.value,
   };
   return { payer: a.payer, signers: [a.payer, a.asset, a.market], create, recordCatch };
+}
+
+/**
+ * Everything one of the market's migration transactions may contain, from what we asked for: the
+ * fish it lists must be among `requested` (the ids we sent), and the new authorities are the
+ * market and the collection we already know. Pure given publicKeyBytes (umi's), so tests feed the
+ * server's update() calls through it.
+ */
+export function migrateExpectation(
+  publicKeyBytes: (key: string) => Uint8Array,
+  a: { session: string; market: string; collection: string; requested: string[]; assetIds: string[] },
+) {
+  const migrate: ExpectedMigrate = {
+    assetIds: a.assetIds,
+    requested: a.requested,
+    session: a.session,
+    market: a.market,
+    collection: a.collection,
+    marketBytes: publicKeyBytes(a.market),
+    collectionBytes: publicKeyBytes(a.collection),
+  };
+  return { payer: a.session, signers: [a.session, a.market], migrate };
 }
 
 /** The error for a transaction we won't sign; a protocol mismatch asks the player to reload. */
@@ -356,7 +442,7 @@ export async function makeSellable(
     for (const id of assetIds) out.set(id, { state: 'error', reason: 'The market is still creating its fish collection, try again shortly' });
     return out;
   }
-  const [{ fetchAsset }, { publicKey }] = await Promise.all([import('@metaplex-foundation/mpl-core'), import('@metaplex-foundation/umi')]);
+  const [{ fetchAsset }, { publicKey, publicKeyBytes }] = await Promise.all([import('@metaplex-foundation/mpl-core'), import('@metaplex-foundation/umi')]);
   const ctx = { owner, session: session.publicKey.toString(), collection: info.fishCollection };
   const toMove: string[] = [];
   await Promise.all(
@@ -389,7 +475,8 @@ export async function makeSellable(
       res.txs.map(async (t) => {
         try {
           const tx = u.transactions.deserialize(fromBase64(t.tx));
-          const problem = cosignedTxProblem(tx.message, { payer: ctx.session, signers: [ctx.session, String(info.market)] });
+          const expect = migrateExpectation(publicKeyBytes, { session: ctx.session, market: String(info.market), collection: ctx.collection, requested: ids, assetIds: t.assetIds });
+          const problem = cosignedTxProblem(tx.message, expect);
           if (problem) throw new Error(await unexpectedTx('transaction', problem));
           const sig = await u.rpc.sendTransaction(await session.signTransaction(tx), { preflightCommitment: 'confirmed' });
           const done = await u.rpc.confirmTransaction(sig, {

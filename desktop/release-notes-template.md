@@ -39,7 +39,7 @@
 | macOS (Intel) | `Breathless-…-mac-x64.dmg` |
 | Linux | `Breathless-…-linux-x86_64.AppImage` or `Breathless-…-linux-amd64.deb` |
 
-The app opens https://breathless.gotclass.xyz, so it needs the internet and stays up to date without a new download. On dual-GPU laptops it asks for the discrete GPU. Wallet login inside the desktop app isn't done yet; use a browser if you need your wallet.
+The app opens https://breathless.gotclass.xyz, so it needs the internet and stays up to date without a new download. On dual-GPU laptops it asks for the discrete GPU. To log in, the app opens your browser so your wallet extension can approve; then you're back in the app.
 
 **What's new**
 

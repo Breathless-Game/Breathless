@@ -32,12 +32,14 @@ export async function poll(fn, ok, tries = 6, gapMs = 1000) {
 /**
  * One fish's failure in a batch. The RPC refusing us (429, timeout) is a 503 the game retries: its
  * transfer stays pending on the client and the ledger decides, fish by fish, what is left to do.
+ * An HttpError's extra (e.g. { code: 'daily-cap', retryAfterMs }) goes along, as in a /sell body.
  */
 const errorOf = (assetId, e) => {
   if (!(e instanceof HttpError) && isTransientRpcError(e)) {
     return { assetId, status: 503, error: 'The Solana RPC is busy, try selling this fish again in a minute' };
   }
-  return { assetId, status: e instanceof HttpError ? e.status : 500, error: String(e?.message ?? e).split('\n')[0].slice(0, 200) };
+  const extra = e instanceof HttpError ? e.extra : undefined;
+  return { ...extra, assetId, status: e instanceof HttpError ? e.status : 500, error: String(e?.message ?? e).split('\n')[0].slice(0, 200) };
 };
 
 /**

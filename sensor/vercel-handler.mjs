@@ -161,10 +161,11 @@ export function createVercelHandler({ env = process.env, redis, log = console.lo
     }
   }
 
-  async function cron(req, res) {
+  /** The cron's sweep (its request began at `started`): what a cold start took comes off its deadline. */
+  async function cron(req, res, started) {
     if (!cronAuthorized(req, env.CRON_SECRET)) return sendJson(res, 401, { error: 'Unauthorized' });
     const [market, store] = await Promise.all([getMarket(), getStore()]);
-    const result = await sweepLocked(market, store);
+    const result = await sweepLocked(market, store, SWEEP_DEADLINE_MS - (now() - started));
     sendJson(res, 200, result ? { swept: true, ...result } : { swept: false, reason: 'another sweep is running, or the sweep failed (see the log)' });
   }
 
@@ -173,7 +174,7 @@ export function createVercelHandler({ env = process.env, redis, log = console.lo
     req.url = originalUrl(req.url);
     const pathname = req.url.split('?')[0];
     try {
-      if (pathname === CRON_PATH) return void (await cron(req, res));
+      if (pathname === CRON_PATH) return void (await cron(req, res, started));
       if (pathname === '/api/nft/serial') {
         let serials;
         try {
