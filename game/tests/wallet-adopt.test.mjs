@@ -88,3 +88,103 @@ test('a silent reconnect that never settles gives up, so later logins are not st
     mock.timers.reset();
   }
 });
+
+// ---- Account reports while a wallet prompt is open (wallet-prompt.ts) ------------------------
+
+/** A wallet whose account reports and current accounts the test drives, and whose prompts stay open until answered. */
+function promptingWallet(name, address) {
+  const w = {
+    ...fakeWallet(name, address),
+    now: [address],
+    emit: null,
+    prompts: [],
+    watch(cb) {
+      w.emit = cb;
+      return () => (w.emit = null);
+    },
+    accounts: () => w.now,
+    signer: () => ({
+      publicKey: address,
+      signMessage: async (m) => m,
+      signTransaction: () => new Promise((resolve, reject) => w.prompts.push({ resolve, reject })),
+      signAllTransactions: async (txs) => txs,
+    }),
+  };
+  return w;
+}
+const umi = { eddsa: { createKeypairFromSecretKey: () => ({}) } };
+const settle = async () => {
+  for (let i = 0; i < 10; i++) await new Promise(setImmediate);
+};
+const Storage = await import(storageUrl);
+
+test('a passing disconnect reported while a sale waits in the wallet neither logs out nor reloads', async () => {
+  const phantom = promptingWallet('Phantom', 'OwnerA');
+  const W = await freshWallet({ Phantom: phantom });
+  await W.connectWallet('Phantom');
+  const seen = [];
+  W.onWalletChange((s) => seen.push(s.owner));
+
+  const sale = W.ownerSigner(umi).signTransaction('sell');
+  phantom.emit([]); // the wallet churns while its popup is up
+  await settle();
+  assert.equal(W.walletState().owner, 'OwnerA', 'kept while the prompt is open');
+  assert.deepEqual(seen, []); // no change: main.ts does not reload
+
+  // The sale is approved and the wallet still has the owner: nothing happens.
+  phantom.prompts[0].resolve('signed');
+  assert.equal(await sale, 'signed');
+  await settle();
+  assert.equal(W.walletState().owner, 'OwnerA');
+  assert.deepEqual(seen, []);
+  assert.notEqual(Storage.restoreTarget(localStorage), null, 'not marked logged out');
+});
+
+test('a real disconnect during a sale is handled once the prompt settles', async () => {
+  const phantom = promptingWallet('Phantom', 'OwnerA');
+  const W = await freshWallet({ Phantom: phantom });
+  await W.connectWallet('Phantom');
+  const seen = [];
+  W.onWalletChange((s) => seen.push(s.owner));
+
+  const sale = W.ownerSigner(umi).signTransaction('sell');
+  phantom.now = [];
+  phantom.emit([]);
+  await settle();
+  assert.equal(W.walletState().owner, 'OwnerA');
+  phantom.prompts[0].reject(new Error('Wallet disconnected'));
+  await assert.rejects(sale);
+  await settle();
+  assert.equal(W.walletState().owner, null);
+  assert.deepEqual(seen, [null]); // main.ts reloads now, as before
+  assert.equal(Storage.restoreTarget(localStorage), null, 'logged out: page loads do not reconnect');
+});
+
+test('switching to another account during a sale drops the owner after the prompt settles', async () => {
+  const phantom = promptingWallet('Phantom', 'OwnerA');
+  const W = await freshWallet({ Phantom: phantom });
+  await W.connectWallet('Phantom');
+  const sale = W.ownerSigner(umi).signTransaction('sell');
+  phantom.now = ['OwnerB'];
+  phantom.emit(['OwnerB']);
+  await settle();
+  assert.equal(W.walletState().owner, 'OwnerA');
+  phantom.prompts[0].reject(new Error('switched accounts'));
+  await assert.rejects(sale);
+  await settle();
+  assert.equal(W.walletState().owner, null);
+  assert.notEqual(Storage.restoreTarget(localStorage), null, 'a switch is not a logout');
+});
+
+test('with no prompt open an account report is handled at once, as before', async () => {
+  const phantom = promptingWallet('Phantom', 'OwnerA');
+  const W = await freshWallet({ Phantom: phantom });
+  await W.connectWallet('Phantom');
+  phantom.emit(['OwnerA']);
+  await settle();
+  assert.equal(W.walletState().owner, 'OwnerA');
+  phantom.emit([]);
+  await settle();
+  assert.equal(W.walletState().owner, null);
+  assert.equal(Storage.restoreTarget(localStorage), null);
+});

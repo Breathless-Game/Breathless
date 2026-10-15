@@ -5,7 +5,7 @@ import { findWallet, waitForWallet, type OwnerWallet } from './owner-wallets';
 import { markBalanceStale, readBalances } from './balance-api';
 import { assertLanded } from './payment-safety';
 import { expiryOf } from './blockhash-expiry';
-import { trackPrompts } from './wallet-prompt';
+import { accountsVerdict, promptsSettled, trackPrompts, walletPromptOpen } from './wallet-prompt';
 import {
   SESSION_NAME,
   addressOfSecret,
@@ -155,15 +155,46 @@ function drop() {
  * old owner is dropped first (so a save still in flight can't land in the new
  * owner's storage), main.ts reloads, and that page load silently reconnects
  * whichever account the wallet now has for this site, or shows the gate.
+ * While an owner prompt is open (a sale) neither happens yet: recheckAfterPrompt.
  */
 async function accountsChanged(w: OwnerWallet, addresses: string[]) {
-  if (!owner || w !== current || addresses.includes(owner)) return;
-  if (!addresses.length) {
+  if (w !== current) return;
+  const verdict = accountsVerdict({ owner, addresses, promptOpen: walletPromptOpen() });
+  if (verdict === 'keep') return;
+  if (verdict === 'defer') {
+    recheckAfterPrompt(w, addresses);
+    return;
+  }
+  if (verdict === 'disconnected') {
     try {
       markLoggedOut(localStorage);
     } catch {}
   }
   drop();
+}
+
+/** The last account report seen while a prompt was open, and whether a recheck is already waiting. */
+let reportedDuringPrompt: string[] = [];
+let recheckArmed = false;
+
+/**
+ * An account report arrived while the owner's wallet was showing a prompt (a sale, a purchase):
+ * wallets can report a passing disconnect while they sign. Nothing is dropped and the page does not
+ * reload under the prompt; once every prompt settled, ask the wallet which accounts it has now (the
+ * last report if it can't say) and handle that as an ordinary change.
+ */
+function recheckAfterPrompt(w: OwnerWallet, addresses: string[]) {
+  reportedDuringPrompt = addresses;
+  if (recheckArmed) return;
+  recheckArmed = true;
+  void promptsSettled().then(() => {
+    recheckArmed = false;
+    let now = reportedDuringPrompt;
+    try {
+      now = w.accounts?.() ?? now;
+    } catch {}
+    return serial(async () => accountsChanged(w, now));
+  });
 }
 
 /** Connect the wallet called `name` (it shows its own prompt the first time). */

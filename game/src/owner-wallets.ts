@@ -26,6 +26,8 @@ export interface OwnerWallet {
   disconnect(): Promise<void>;
   /** The wallet's accounts for this site changed: their addresses, [] once it disconnected the site. Returns the unsubscribe. */
   watch(cb: (addresses: string[]) => void): () => void;
+  /** The wallet's accounts for this site right now (as watch reports them), when it can say. */
+  accounts?(): string[];
   /**
    * Signs as `address`: every signature is a prompt in this wallet. `local`: signers this device
    * holds (the session key), which the desktop Browser wallet signs with again when it swaps the
@@ -81,6 +83,7 @@ function standardWallet(w: Wallet): OwnerWallet {
       // Only account changes matter here; a change to chains or features comes without `accounts`.
       return events.on('change', ({ accounts }) => accounts && cb(solanaAddresses(accounts)));
     },
+    accounts: () => solanaAddresses(w.accounts),
     signer(umi, address) {
       const sign = async (txs: Transaction[]) =>
         (await signBytes(address, txs.map((tx) => umi.transactions.serialize(tx)))).map((b) => umi.transactions.deserialize(b));
@@ -169,6 +172,7 @@ function legacyPhantom(p: PhantomProvider): OwnerWallet {
         off?.('disconnect', gone);
       };
     },
+    accounts: () => (p.publicKey ? [keyString(p.publicKey)] : []),
     signer(_umi, address) {
       const adapters = () => import('@metaplex-foundation/umi-web3js-adapters');
       const sameAccount = () => {

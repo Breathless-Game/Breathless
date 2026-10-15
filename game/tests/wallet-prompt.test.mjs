@@ -105,3 +105,42 @@ test('a held dive resumes only when the tab shows and the wallet has answered', 
   await sale;
   assert.equal(resume(), true);
 });
+
+test('a dive freezes while a wallet prompt is open, even on a visible tab (no shark bite meanwhile)', () => {
+  assert.equal(P.shouldHold({ playing: true, paused: false, held: false, promptOpen: true }), true);
+  assert.equal(P.shouldHold({ playing: true, paused: false, held: false, promptOpen: false }), false);
+  assert.equal(P.shouldHold({ playing: true, paused: false, held: true, promptOpen: true }), false, 'already held');
+  assert.equal(P.shouldHold({ playing: true, paused: true, held: false, promptOpen: true }), false, 'another pause has it');
+  assert.equal(P.shouldHold({ playing: false, paused: false, held: false, promptOpen: true }), false, 'not in a dive');
+});
+
+test('promptsSettled waits for every open prompt, and resolves at once when none is', async () => {
+  await P.promptsSettled();
+  const { asks, signer } = fakeSigner();
+  const tracked = P.trackPrompts(signer);
+  const a = tracked.signTransaction('a');
+  const b = tracked.signMessage(new Uint8Array());
+  let done = false;
+  const settled = P.promptsSettled().then(() => (done = true));
+  asks[0].resolve('A');
+  await a;
+  await new Promise(setImmediate);
+  assert.equal(done, false, 'one prompt still open');
+  asks[1].reject(new Error('declined'));
+  await assert.rejects(b);
+  await settled;
+  assert.equal(done, true);
+});
+
+test('account reports: keep the owner, wait out an open prompt, or drop on a real switch or disconnect', () => {
+  const v = (owner, addresses, promptOpen) => P.accountsVerdict({ owner, addresses, promptOpen });
+  assert.equal(v('A', ['A'], false), 'keep');
+  assert.equal(v('A', ['B', 'A'], true), 'keep');
+  assert.equal(v(null, [], false), 'keep', 'nobody logged in');
+  // While the wallet shows a prompt (a sale), nothing is dropped and the page does not reload.
+  assert.equal(v('A', [], true), 'defer');
+  assert.equal(v('A', ['B'], true), 'defer');
+  // Asked again after the prompt (or no prompt at all): the existing behaviour.
+  assert.equal(v('A', [], false), 'disconnected');
+  assert.equal(v('A', ['B'], false), 'switched');
+});
