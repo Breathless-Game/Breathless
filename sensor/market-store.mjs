@@ -26,7 +26,9 @@
 //                                              never to land), so a stale "unpaid" can't pay again
 //   paid/burned CAS sold:<asset> old -> new    compare-and-set on the record's exact JSON
 //   refundPending / refundDropped / refunded   the same CAS: one refund signature on record per
-//                                              fish, so only one instance sends the fish back
+//                                              fish, so only one instance sends the fish back; each
+//                                              names the round (transferTx) it acts for, so a late
+//                                              step never closes or claims the fish's next refund
 //   serial      one Lua script: HGET the owner+fish key, else INCR the counter and HSET it
 //   unburned    ZSET of unfinished sales, paying, paid but not burned, or refunding (the sweep's work
 //               list): ZADD at begin / refunding (before the SET NX, and again after it) and before
@@ -425,9 +427,9 @@ export class RedisLedger {
    * SoldLedger.refundPending: the refund's signature onto the record (CAS) before it is sent. The
    * CAS lets only one instance's refund on record: another one there already is a 409, send nothing.
    */
-  async refundPending(assetId, refundTx, refundLastValid) {
+  async refundPending(assetId, transferTx, refundTx, refundLastValid) {
     await this.#update(assetId, (r) => {
-      if (r.status !== 'refunding') throw new HttpError(409, 'This fish is not being returned');
+      if (r.status !== 'refunding' || r.transferTx !== transferTx) throw new HttpError(409, 'This fish is not being returned');
       if (r.refundTx === refundTx) return null; // our own, written by an earlier try
       if (r.refundTx !== undefined) throw new HttpError(409, 'This fish is already on its way back, retry in a minute');
       return { ...r, refundTx, refundLastValid };
@@ -445,18 +447,25 @@ export class RedisLedger {
     });
   }
 
-  /** SoldLedger.refunded: finished, and off the work list. */
-  async refunded(assetId) {
-    await this.#update(assetId, (r) => {
-      if (r.status !== 'refunding') return null; // already marked by another instance
+  /**
+   * SoldLedger.refunded: the round of `transferTx` finished, and off the work list. true when it is
+   * (now, or already); false when the record is another round's, which keeps its work-list entry.
+   */
+  async refunded(assetId, transferTx) {
+    let already = false;
+    const wrote = await this.#update(assetId, (r) => {
+      already = r.transferTx === transferTx && r.status === 'refunded'; // marked by another instance
+      if (r.transferTx !== transferTx || r.status !== 'refunding') return null;
       const next = { ...r, status: 'refunded' };
       delete next.refundLastValid;
       return next;
     });
+    if (!wrote) return already; // nothing changed here: the work list is not ours to touch
     await this.redis.zrem(this.keys.unburned, assetId);
     // Handed over and begun again between the CAS and the ZREM: put its entry back.
     const rec = parse(await this.redis.get(this.keys.sold(assetId)));
     if (isUnfinished(rec)) await this.redis.zadd(this.keys.unburned, { score: Number(rec.at) || this.now(), member: assetId });
+    return true;
   }
 
   /** SoldLedger.skipBurn: a paid fish the sweep must not burn, recorded and taken off the work list. */
@@ -557,15 +566,15 @@ export class RedisLedger {
     return { get: (id) => map.get(id) ?? null };
   }
 
-  /** Read, change, compare-and-set; again if another instance wrote in between. `fn` -> next or null (no change). */
+  /** Read, change, compare-and-set; again if another instance wrote in between. `fn` -> next or null (no change). true when it wrote. */
   async #update(assetId, fn) {
     const key = this.keys.sold(assetId);
     for (let i = 0; i < CAS_TRIES; i++) {
       const [cur, pay] = await this.redis.mget(key, this.keys.payTx(assetId));
       if (cur === null || cur === undefined) throw new Error(`Asset ${assetId} is not in the ledger`);
       const next = fn(JSON.parse(cur), parse(pay));
-      if (!next) return;
-      if (await redisCas(this.redis, key, String(cur), JSON.stringify(next))) return;
+      if (!next) return false;
+      if (await redisCas(this.redis, key, String(cur), JSON.stringify(next))) return true;
     }
     throw new HttpError(503, 'The sale ledger is busy, retry in a few seconds');
   }

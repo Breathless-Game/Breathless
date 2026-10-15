@@ -111,9 +111,9 @@ async function instance(redis, chain, { transfer = transferTx(FISH), cap, refund
       await ledger.burned(assetId, `burn-${assetId}`);
     },
     // A fish over the cap goes back at once; `refunds` (market-refund.test.mjs) puts a chain behind it.
-    refund: async (assetId) => {
-      await ledger.refundPending(assetId, `back-${assetId}`, 0);
-      await ledger.refunded(assetId);
+    refund: async (assetId, transferTx) => {
+      await ledger.refundPending(assetId, transferTx, `back-${assetId}`, 0);
+      await ledger.refunded(assetId, transferTx);
       return `back-${assetId}`;
     },
     resolveRefund: async (assetId) => ((await ledger.get(assetId))?.status === 'refunded' ? 'refunded' : 'unrefunded'),

@@ -82,14 +82,14 @@ function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0, priceFish =
       burns.push(id);
       ledger.burned(id, `burn-${id}`);
     },
-    refund: async (id) => {
+    refund: async (id, transferTx) => {
       refunds.push(id);
-      ledger.refundPending(id, `back-${id}`, 100);
+      ledger.refundPending(id, transferTx, `back-${id}`, 100);
       owners[id] = ledger.get(id).seller;
-      ledger.refunded(id);
+      ledger.refunded(id, transferTx);
       return `back-${id}`;
     },
-    resolveRefund: async (id) => (owners[id] === MARKET ? 'unrefunded' : (ledger.refunded(id), 'refunded')),
+    resolveRefund: async (id) => (owners[id] === MARKET ? 'unrefunded' : (ledger.refunded(id, ledger.get(id).transferTx), 'refunded')),
   });
   return { desk, ledger, payments, burns, refunds, fetches: () => fetches };
 }
@@ -314,7 +314,10 @@ test('a daily-cap refusal keeps its code and retryAfterMs per fish in /sell-batc
   const { results } = await m.desk.sellBatch(batch([[A], [B]]));
   assert.equal(results[0].pearls, 1);
   // The market held B already, so it went back to the seller (market-refund.test.mjs has the rest).
-  assert.deepEqual(results[1], { assetId: B, status: 429, error: 'Daily PEARL limit reached', code: 'daily-cap', retryAfterMs: 3_600_000, refunded: true, refundTx: `back-${B}` });
+  // Its wait is counted from the answer, a few ms after the price check that gave it.
+  const { retryAfterMs, ...back } = results[1];
+  assert.ok(retryAfterMs > 3_600_000 - 1000 && retryAfterMs <= 3_600_000, `retryAfterMs ${retryAfterMs}`);
+  assert.deepEqual(back, { assetId: B, status: 429, error: 'Daily PEARL limit reached', code: 'daily-cap', refunded: true, refundTx: `back-${B}` });
   assert.deepEqual(paidTo(m.payments), { [A]: 1 });
   assert.deepEqual(m.refunds, [B]);
   // Other refusals keep their shape: no extra fields.

@@ -58,8 +58,9 @@ const errorOf = (assetId, e) => {
  *   resolvePending(assetId)  -> 'paid' | 'unpaid' | 'in-flight'
  *   pay(assetId, mint, seller, pearls)  sends and confirms one PEARL mint; updates the ledger
  *   burnSold(assetId)  best effort; updates the ledger
- *   refund(assetId)    sends a 'refunding' fish back to its seller and confirms it; updates the
- *                      ledger; throws when it did not land (market-refund.mjs)
+ *   refund(assetId, transferTx)  sends the 'refunding' fish of that transfer's round back to its
+ *                      seller and confirms it; updates the ledger; throws when it did not land, or
+ *                      the record is another round's (409) (market-refund.mjs)
  *   resolveRefund(assetId) -> 'refunded' | 'unrefunded' | 'in-flight'  (asks the chain, market-refund.mjs)
  *   priceFish(asset, seller) -> PEARL for a fetched asset, or throws HttpError (fish-trust.mjs; synchronous)
  *   withSellerLock(seller, fn) optional: runs fn(held) holding the seller's lock across instances
@@ -101,15 +102,17 @@ export function createSaleDesk({
    * gave it, its wait counted from now, and `refunded`: true (with the transfer back, refundTx) once
    * the record says the fish is back, else 'pending' (the sweep finishes it).
    */
-  const returned = (r) => {
+  const returned = (r, transferTx) => {
     const back = r?.status === 'refunded';
     return new HttpError(429, r?.reason || 'Daily PEARL limit reached', {
       code: 'daily-cap',
       retryAfterMs: Math.max(1000, Number(r?.retryAt) - now() || 0),
       refunded: back ? true : 'pending',
-      ...(back && r.refundTx ? { refundTx: r.refundTx } : {}),
+      // Only this transfer's own transfer back (an older transfer's answer comes from a later round's record).
+      ...(back && r.refundTx && r.transferTx === transferTx ? { refundTx: r.refundTx } : {}),
     });
   };
+  const handedOverAgain = () => new HttpError(409, 'This fish was handed over again while it was being returned, try again in a minute');
 
   /**
    * A fish on its way back, or sent back (plan 'refund' / 'refunded'). The transfer that was refused
@@ -134,7 +137,7 @@ export function createSaleDesk({
         const state = recorded ? 'unrefunded' : await resolveRefund(assetId);
         if (state === 'unrefunded' && now() > deadline) log(`[market] out of time, returning ${assetId} to ${r.seller} is left to the sweep`);
         else if (state === 'unrefunded') {
-          const sig = await refund(assetId);
+          const sig = await refund(assetId, transferTx);
           log(`[market] daily cap reached: returned ${assetId} to ${r.seller}${sig ? ` (${sig})` : ''}`);
         }
       } catch (e) {
@@ -143,8 +146,11 @@ export function createSaleDesk({
         log(`[market] returning ${assetId} to ${r.seller} did not finish, left to the sweep: ${short(e)}`);
       }
       r = await ledger.get(assetId);
+      // Handed over again meanwhile (another instance): the record answers for another transfer, and
+      // must never say "refunded" for this one. A retry gets this round's answer once that one is done.
+      if (r?.transferTx !== transferTx) throw handedOverAgain();
     }
-    throw returned(r);
+    throw returned(r, transferTx);
   }
 
   /**
@@ -249,7 +255,7 @@ export function createSaleDesk({
       if (state === 'refunded') return (await ledger.get(assetId))?.refundTx ?? '';
       if (state === 'in-flight') throw new HttpError(409, 'The transfer returning this fish is still confirming');
       if (now() > deadline) throw outOfTime();
-      const sig = await refund(assetId);
+      const sig = await refund(assetId, r.transferTx); // that round only: 409 if the fish was handed over again since
       log(`[market] returned ${assetId} to ${r.seller}${sig ? ` (${sig})` : ''}`);
       return sig;
     });

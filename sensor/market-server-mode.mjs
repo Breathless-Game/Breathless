@@ -102,6 +102,22 @@ const short = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
  * host) runs no timers and no start-up work: no airdrop, no sweep on start or every 10 minutes, no
  * in-memory burn retries; the host calls sweep() itself. `batchDeadlineMs`: see createSaleDesk.
  */
+/**
+ * `fetch()`'s asset (mpl-core's fetchAsset), or null only when the asset account definitely does not
+ * exist (umi's AccountNotFoundError for an AssetV1; fetchAsset throws one for a missing collection
+ * too, which is no news about the fish). Every other failure throws, transient or not ("node is
+ * behind", an internal error, an account that does not deserialize): a refund reads null as "the
+ * fish left the market" and marks it returned, so that must be what the chain said.
+ */
+export async function assetOrNull(fetch) {
+  try {
+    return await fetch();
+  } catch (e) {
+    if (e?.name === 'AccountNotFoundError' && /\[AssetV1\]/.test(String(e.message))) return null;
+    throw e;
+  }
+}
+
 export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, store, background = true, batchDeadlineMs }) {
   const marketKey = u.identity.publicKey.toString();
   store ??= createFileStore({ dir });
@@ -309,7 +325,8 @@ export async function createServerMode({ u, rpc, dir, log, fishOptions = {}, sto
   const refunds = createRefund({
     ledger,
     market: marketKey,
-    loadAsset,
+    // Stricter than loadAsset (whose null a burn treats as "gone already", harmlessly): only a missing account is null.
+    loadAsset: (assetId) => assetOrNull(() => fetchAsset(u, publicKey(assetId))),
     async build(asset, seller) {
       const blockhash = await freshBlockhash();
       const tx = await transfer(u, { asset, collection: await collectionOf(asset), newOwner: publicKey(seller) })

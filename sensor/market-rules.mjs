@@ -342,10 +342,13 @@ export class SoldLedger {
     return true;
   }
 
-  /** Persist the refund's signature BEFORE sending it. Another refund already on record (or none due): 409, send nothing. */
-  refundPending(assetId, refundTx, refundLastValid) {
+  /**
+   * Persist the refund's signature BEFORE sending it. Another refund already on record, or none due
+   * for `transferTx` (the fish was handed over again meanwhile: another round): 409, send nothing.
+   */
+  refundPending(assetId, transferTx, refundTx, refundLastValid) {
     const r = this.records[assetId];
-    if (r?.status !== 'refunding') throw new HttpError(409, 'This fish is not being returned');
+    if (r?.status !== 'refunding' || r.transferTx !== transferTx) throw new HttpError(409, 'This fish is not being returned');
     if (r.refundTx !== undefined && r.refundTx !== refundTx) throw new HttpError(409, 'This fish is already on its way back, retry in a minute');
     Object.assign(r, { refundTx, refundLastValid });
     this.persist();
@@ -360,13 +363,20 @@ export class SoldLedger {
     this.persist();
   }
 
-  /** The fish is back with the seller (or anyway no longer the market's): finished, off the work list. */
-  refunded(assetId) {
+  /**
+   * The fish sent back for `transferTx` is back with the seller (or anyway no longer the market's):
+   * that round is finished, off the work list. true when it is (now, or already); false when the
+   * record is another round's (the fish was handed over again meanwhile), which stays as it is.
+   */
+  refunded(assetId, transferTx) {
     const r = this.records[assetId];
-    if (r?.status !== 'refunding') return;
+    if (r?.transferTx !== transferTx) return false;
+    if (r.status === 'refunded') return true;
+    if (r.status !== 'refunding') return false;
     r.status = 'refunded';
     delete r.refundLastValid;
     this.persist();
+    return true;
   }
 
   /**

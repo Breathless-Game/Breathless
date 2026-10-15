@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AccountNotFoundError, publicKey as umiKey } from '@metaplex-foundation/umi';
 import { checkPayoutCap, paidInWindow } from './fish-trust.mjs';
 import { SWEEP_RESUME_AFTER_MS, createSweep } from './market-burn.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createRefund } from './market-refund.mjs';
 import { HttpError, MPL_CORE_PROGRAM, SoldLedger, appraise } from './market-rules.mjs';
 import { createSaleDesk } from './market-sale.mjs';
-import { createSellerLock } from './market-server-mode.mjs';
+import { assetOrNull, createSellerLock } from './market-server-mode.mjs';
 import { createRedisStore } from './market-store.mjs';
 import { createFakeRedis } from './test/fake-redis.mjs';
 
@@ -93,11 +94,19 @@ function world({ values = {}, cap = 15, refundSends = [] } = {}) {
     const refunds = createRefund({
       ledger,
       market: MARKET,
-      loadAsset: async (id) => {
-        await tick();
-        return w.asset(id);
+      // As market-server-mode.mjs loads it for a refund: umi's fetch, null only for an account that is not there.
+      loadAsset: (id) =>
+        assetOrNull(async () => {
+          await tick();
+          if (w.rpcError) throw w.rpcError;
+          const a = w.asset(id);
+          if (!a) throw Object.assign(new Error(`The account of type [AssetV1] was not found at the provided address [${id}].`), { name: 'AccountNotFoundError' });
+          return a;
+        }),
+      build: async (asset, seller) => {
+        await w.onBuild?.(asset, seller);
+        return { sig: `back${++w.seq}`, lastValid: w.height + 150, assetId: asset.publicKey, seller };
       },
-      build: async (asset, seller) => ({ sig: `back${++w.seq}`, lastValid: w.height + 150, assetId: asset.publicKey, seller }),
       send: async (b) => {
         w.backs.push(b.assetId);
         const how = refundSends.shift() ?? 'ok';
@@ -111,6 +120,7 @@ function world({ values = {}, cap = 15, refundSends = [] } = {}) {
       },
       confirm: async (b) => {
         await tick();
+        await w.onConfirm?.(b);
         if (!w.landed.has(b.sig)) throw new Error('block height exceeded');
         return w.landed.get(b.sig).error;
       },
@@ -453,12 +463,12 @@ test('Redis: the refund record\'s steps, one refund signature on record, and the
   assert.deepEqual(await redis.zrange('test:seller:' + SELLER, 0, -1), [], 'a refund is not in the seller\'s index');
   assert.equal(await a.begin(F1, { seller: SELLER, transferTx: 'T2', pearls: 10 }), false, 'no sale over a refund under way');
   assert.deepEqual(await a.unburned(), [F1]);
-  await a.refundPending(F1, 'back1', 50);
-  await a.refundPending(F1, 'back1', 50); // its own again: fine
-  await assert.rejects(b.refundPending(F1, 'back2', 60), (e) => e.status === 409);
+  await a.refundPending(F1, 'T1', 'back1', 50);
+  await a.refundPending(F1, 'T1', 'back1', 50); // its own again: fine
+  await assert.rejects(b.refundPending(F1, 'T1', 'back2', 60), (e) => e.status === 409);
   await b.refundDropped(F1, 'back2'); // not the one on record: kept
   assert.equal((await a.get(F1)).refundTx, 'back1');
-  await b.refunded(F1);
+  assert.equal(await b.refunded(F1, 'T1'), true);
   assert.deepEqual(await a.get(F1), { ...rec, status: 'refunded', at: 100, refundTx: 'back1' });
   assert.deepEqual(await a.unburned(), []);
   assert.equal(await a.plan(F1, SELLER, 'T1'), 'refunded');
@@ -481,9 +491,9 @@ test('the file ledger: the same steps, and a refunded fish replaced only by a ne
   assert.equal(l.plan(F1, OTHER, 'T1'), 'conflict');
   assert.equal(l.plan(F1, OTHER, 'T2'), 'refund', 'another transfer waits for the refund');
   assert.deepEqual(l.unburned(), [F1]);
-  l.refundPending(F1, 'back1', 50);
-  assert.throws(() => l.refundPending(F1, 'back2', 60), (e) => e.status === 409);
-  l.refunded(F1);
+  l.refundPending(F1, 'T1', 'back1', 50);
+  assert.throws(() => l.refundPending(F1, 'T1', 'back2', 60), (e) => e.status === 409);
+  assert.equal(l.refunded(F1, 'T1'), true);
   assert.deepEqual(l.unburned(), []);
   assert.throws(() => l.begin(F1, { seller: SELLER, transferTx: 'T1', pearls: 1 }), /already in the ledger/, 'the transfer sent back never sells');
   l.begin(F1, { seller: SELLER, transferTx: 'T2', pearls: 1 }, 200);
@@ -509,7 +519,7 @@ test('the sweep never burns a fish on its way back: refunding is resumed (or wai
   const ledger = Object.assign(Object.create(l), {
     unburned: (n) => {
       const ids = listing(n);
-      l.refunded('Raced');
+      l.refunded('Raced', 'tx');
       return ids;
     },
   });
@@ -535,11 +545,176 @@ test('the sweep never burns a fish on its way back: refunding is resumed (or wai
   assert.deepEqual(
     await make(async (id) => {
       resumed.push(id);
-      l.refunded(id);
+      l.refunded(id, 'tx');
     }).run(),
     stats({ refunded: 1 }),
   );
   assert.deepEqual(resumed, ['Back']);
   assert.deepEqual(burned, ['Paid']);
   assert.deepEqual(l.unburned(), []);
+});
+
+// ---- One refund round never acts on the next. A round is the refund of one transfer (transferTx):
+// the fish handed over again under another transfer is a new round, which a late or stalled step of
+// the earlier one (another instance) must neither close nor claim.
+
+const gate = () => {
+  let open;
+  const p = new Promise((r) => (open = r));
+  return { p, open };
+};
+const LEDGERS = {
+  file: async () => new SoldLedger(),
+  redis: async () => (await createRedisStore({ redis: createFakeRedis(), prefix: 'test:', env: {} }).openMarketState({ cluster: 'devnet' })).ledger,
+};
+
+test('a late "refunded" from the first round never closes the second: the fish handed over again still goes back (Redis, two instances)', async () => {
+  const w = world();
+  const k = KINDS.redis(w);
+  const [a, b] = [await k.make(), await k.make()];
+  await soldOne(w, a);
+  const slowConfirm = gate();
+  const bBuilding = gate();
+  const bGo = gate();
+  let confirms = 0;
+  let builds = 0;
+  w.onConfirm = async () => {
+    if (++confirms === 1) await slowConfirm.p;
+  };
+  w.onBuild = async () => {
+    if (++builds === 2) {
+      bBuilding.open();
+      await bGo.p;
+    }
+  };
+  const t1 = w.handOver([F1]);
+  const pA = a.sell(F1, t1).catch((e) => e);
+  while (w.owners.get(F1) !== SELLER) await tick(); // A's transfer back landed; A still waits on its confirmation
+  const t2 = w.handOver([F1]); // handed over again from another device, still over the cap
+  const pB = b.sell(F1, t2).catch((e) => e);
+  await bBuilding.p; // B found the first refund landed, recorded the second, and is building its transfer back
+  assert.deepEqual([(await b.ledger.get(F1)).status, (await b.ledger.get(F1)).transferTx], ['refunding', t2]);
+  slowConfirm.open();
+  const eA = await pA; // A's confirmation returns now: its "refunded" is for the first round only
+  assert.equal(eA.status, 409, eA.message);
+  assert.equal(eA.extra?.refunded, undefined, 'A does not answer for the second round');
+  assert.equal((await a.ledger.get(F1)).status, 'refunding', 'the second round is still open');
+  bGo.open();
+  const extra = await capAnswer(Promise.reject(await pB), true);
+  assert.equal(w.owners.get(F1), SELLER, 'the fish handed over again went back too');
+  const rec = await a.ledger.get(F1);
+  assert.deepEqual([rec.status, rec.transferTx, rec.refundTx, rec.refundedTransfers], ['refunded', t2, extra.refundTx, [t1]]);
+  assert.equal(w.sentBack(F1), 2);
+  assert.equal(w.paidFor(F1), 0);
+  assert.deepEqual(await (await k.make()).sweep.run(), stats({}), 'nothing left over');
+  await capAnswer(a.sell(F1, t1), true); // the first transfer's retry: it went back
+});
+
+test('a stalled first round cannot claim the next one: the fish is never sent to the wallet it left (Redis, three instances)', async () => {
+  const w = world();
+  const k = KINDS.redis(w);
+  const [a, b, c] = [await k.make(), await k.make(), await k.make()];
+  await soldOne(w, a);
+  const aBuilding = gate();
+  const aGo = gate();
+  const cBuilding = gate();
+  const cGo = gate();
+  let builds = 0;
+  w.onBuild = async () => {
+    const n = ++builds;
+    if (n === 1) aBuilding.open(), await aGo.p;
+    if (n === 3) cBuilding.open(), await cGo.p;
+  };
+  const t1 = w.handOver([F1]);
+  const pA = a.sell(F1, t1).catch((e) => e);
+  await aBuilding.p; // A recorded the refund, read its seller, and stalls before putting its signature on record
+  await capAnswer(b.sell(F1, t1), true); // the player's retry on another instance sends it back first
+  assert.equal(w.owners.get(F1), SELLER);
+  // The seller passes the fish on, and its new owner hands it over, over the cap too.
+  w.owners.set(F1, OTHER);
+  w.cap = 5;
+  const t3 = w.handOver([F1], OTHER);
+  const pC = c.sell(F1, t3, OTHER).catch((e) => e);
+  await cBuilding.p;
+  assert.deepEqual([(await c.ledger.get(F1)).seller, (await c.ledger.get(F1)).transferTx], [OTHER, t3]);
+  aGo.open();
+  const eA = await pA;
+  assert.equal(eA.status, 409, eA.message);
+  assert.equal(w.owners.get(F1), MARKET, 'A sent nothing: not to the wallet the fish left');
+  assert.equal(w.sentBack(F1), 1);
+  cGo.open();
+  await capAnswer(Promise.reject(await pC), true);
+  assert.equal(w.owners.get(F1), OTHER, 'back with the wallet that handed it over');
+  assert.equal(w.sentBack(F1), 2);
+  assert.equal(w.paidFor(F1), 0);
+});
+
+for (const [kind, open] of Object.entries(LEDGERS)) {
+  test(`the ledger's refund steps are scoped to their transfer (${kind} ledger)`, async () => {
+    const l = await open();
+    const rec = (transferTx) => ({ seller: SELLER, transferTx, reason: 'cap', retryAt: 0 });
+    assert.equal(await l.refunding(F1, rec('T1'), 1), true);
+    await l.refundPending(F1, 'T1', 'back1', 50);
+    assert.equal(await l.refunded(F1, 'T1'), true);
+    assert.equal(await l.refunded(F1, 'T1'), true, 'again (another instance): already so');
+    assert.equal(await l.refunding(F1, rec('T2'), 2), true, 'handed over again, refused again');
+    assert.equal(await l.refunded(F1, 'T1'), false, 'a late step of the first round');
+    await assert.rejects(async () => l.refundPending(F1, 'T1', 'back9', 50), (e) => e.status === 409);
+    const open2 = await l.get(F1);
+    assert.deepEqual([open2.status, open2.transferTx, open2.refundTx], ['refunding', 'T2', undefined], 'the second round untouched');
+    assert.deepEqual(await l.unburned(), [F1], "still on the sweep's list");
+    await l.refundPending(F1, 'T2', 'back2', 60);
+    assert.equal(await l.refunded(F1, 'T2'), true);
+    assert.deepEqual(await l.unburned(), []);
+    assert.equal((await l.get(F1)).refundTx, 'back2');
+  });
+}
+
+each('an RPC error other than "no such account" never reads as the fish gone: nothing marked refunded, sent once it clears', async (kind) => {
+  const w = world();
+  const k = KINDS[kind](w);
+  const m = await k.make();
+  await soldOne(w, m);
+  const t1 = w.handOver([F1]);
+  for (const err of [
+    Object.assign(new Error('failed to get info about account: Node is behind by 120 slots'), { code: -32005 }),
+    Object.assign(new Error('Internal error'), { code: -32603 }),
+    new Error('Failed to deserialize the account'),
+  ]) {
+    w.rpcError = err;
+    await capAnswer(m.sell(F1, t1), 'pending');
+    assert.equal((await m.ledger.get(F1)).status, 'refunding', err.message);
+    assert.deepEqual(await (await k.make()).sweep.run(), stats({ failed: 1 }), err.message);
+    assert.equal((await m.ledger.get(F1)).status, 'refunding', err.message);
+  }
+  assert.equal(w.sentBack(F1), 0);
+  assert.equal(w.owners.get(F1), MARKET);
+  w.rpcError = null;
+  assert.deepEqual(await (await k.make()).sweep.run(), stats({ refunded: 1 }));
+  assert.equal(w.owners.get(F1), SELLER);
+  assert.equal(w.sentBack(F1), 1);
+  await capAnswer(m.sell(F1, t1), true);
+});
+
+test('assetOrNull: null only for a fish account that does not exist', async () => {
+  const at = umiKey('11111111111111111111111111111111');
+  assert.equal(
+    await assetOrNull(async () => {
+      throw new AccountNotFoundError(at, 'AssetV1'); // as mpl-core's fetchAsset throws it
+    }),
+    null,
+  );
+  for (const e of [
+    Object.assign(new Error('Node is behind'), { code: -32005 }),
+    new Error('Failed to deserialize'),
+    new Error('429 Too Many Requests'),
+    new AccountNotFoundError(at, 'CollectionV1'), // the collection, not the fish
+  ]) {
+    await assert.rejects(
+      assetOrNull(async () => {
+        throw e;
+      }),
+      (x) => x === e,
+    );
+  }
 });

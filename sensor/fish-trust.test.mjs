@@ -276,10 +276,10 @@ function deskWith(assets, { cap } = {}) {
     },
     burnSold: async (id) => ledger.burned(id, `burn-${id}`),
     // A fish over the cap goes back at once (market-refund.test.mjs covers the chain side).
-    refund: async (id) => {
+    refund: async (id, transferTx) => {
       returned.push(id);
-      ledger.refundPending(id, `back-${id}`, 100);
-      ledger.refunded(id);
+      ledger.refundPending(id, transferTx, `back-${id}`, 100);
+      ledger.refunded(id, transferTx);
       return `back-${id}`;
     },
     resolveRefund: async (id) => (ledger.get(id)?.status === 'refunded' ? 'refunded' : 'unrefunded'),
