@@ -168,7 +168,14 @@ test('a market that cannot start answers 503 and is tried again on the next requ
 });
 
 test('the cron sweeps only with the secret', async () => {
-  const { handler, market } = setup();
+  const t = { now: 1_000_000 };
+  const market = fakeMarket();
+  const coldStart = market.createMarket;
+  market.createMarket = async (options) => {
+    t.now += 40_000; // the market's cold start, inside the cron request
+    return coldStart(options);
+  };
+  const { handler } = setup({ market, t });
   await serve(handler, async (base) => {
     assert.equal((await fetch(base + CRON_PATH)).status, 401);
     assert.equal((await fetch(base + CRON_PATH, { headers: { authorization: 'Bearer wrong' } })).status, 401);
@@ -177,7 +184,7 @@ test('the cron sweeps only with the secret', async () => {
     assert.deepEqual(await ok.json(), { swept: true, burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   });
   assert.equal(market.sweeps, 1);
-  assert.deepEqual(market.sweepOptions, [{ deadlineMs: SWEEP_DEADLINE_MS }], 'time-boxed below maxDuration');
+  assert.deepEqual(market.sweepOptions, [{ deadlineMs: SWEEP_DEADLINE_MS - 40_000 }], 'time-boxed below maxDuration, counted from the request');
   const { handler: unset } = setup({ env: { CRON_SECRET: '' } });
   await serve(unset, async (base) => {
     assert.equal((await fetch(base + CRON_PATH, { headers: { authorization: 'Bearer ' } })).status, 401);

@@ -50,6 +50,10 @@ export interface SellOutcome {
   error?: string;
   /** The player declined the wallet prompt: nothing was sent. */
   rejected?: boolean;
+  /** The market's reason code when it gave one, e.g. 'daily-cap' (the daily PEARL limit). */
+  code?: string;
+  /** How long until the market takes this fish again, when it says (the daily cap does). */
+  retryAfterMs?: number;
 }
 export interface SellResult {
   pearls: number;
@@ -94,6 +98,25 @@ export class InsufficientPearlsError extends Error {
   }
 }
 
+/**
+ * A market answer that was not OK, from its JSON: e.g. 429 { code: 'daily-cap', retryAfterMs } when
+ * paying a fish would take the seller over the daily PEARL limit (sensor/fish-trust.mjs).
+ */
+export class MarketError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'MarketError';
+  }
+}
+/** One fish refused inside a /quote-batch or /sell-batch answer: the error a /quote or /sell of it alone throws. */
+export const refusalOf = (r: MarketRefusal) => new MarketError(r.error, r.status ?? 500, r.code, r.retryAfterMs);
+type MarketRefusal = { error: string; status?: number; code?: string; retryAfterMs?: number };
+
 const API = '/api/market';
 /**
  * assetId -> a sale already signed or sent, so a retry after a timeout or reload resumes instead of
@@ -136,9 +159,9 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
     throw offline();
   }
   // No JSON at all (a proxy error page, or a static server answering with index.html) means no market.
-  const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  const json = (await res.json().catch(() => null)) as (T & Partial<MarketRefusal>) | null;
   if (!json || typeof json !== 'object') throw offline();
-  if (!res.ok) throw new Error(json.error ?? `PEARL market error ${res.status}`);
+  if (!res.ok) throw new MarketError(json.error ?? `PEARL market error ${res.status}`, res.status, json.code, json.retryAfterMs);
   return json;
 }
 
@@ -261,10 +284,12 @@ const rejectedByUser = (e: unknown) => {
   const err = e as { code?: unknown; message?: unknown } | null;
   return err?.code === 4001 || (typeof err?.message === 'string' && /user rejected|rejected the request|cancel/i.test(err.message));
 };
-const failure = (assetId: string, e: unknown): SellOutcome => ({
+export const failure = (assetId: string, e: unknown): SellOutcome => ({
   assetId,
   error: messageOf(e).slice(0, 200),
   ...(rejectedByUser(e) ? { rejected: true } : {}),
+  ...(e instanceof MarketError && e.code !== undefined ? { code: e.code } : {}),
+  ...(e instanceof MarketError && e.retryAfterMs !== undefined ? { retryAfterMs: e.retryAfterMs } : {}),
 });
 const chunks = <T>(list: T[], size: number) =>
   Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, i * size + size));
@@ -400,20 +425,20 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
   let fresh = assetIds.filter((id) => !handedOver.has(id));
   if (fresh.length) {
     onProgress?.({ step: 'verify', fish: assetIds.length });
-    const refused = new Map<string, string>();
+    const refused = new Map<string, unknown>();
     if (info.batch) {
       for (const ids of chunks(fresh, MARKET_BATCH)) {
-        const { quotes } = await api<{ quotes: { assetId: string; pearls?: number; error?: string }[] }>('/quote-batch', {
+        const { quotes } = await api<{ quotes: ({ assetId: string; pearls?: number } & Partial<MarketRefusal>)[] }>('/quote-batch', {
           seller: owner,
           assetIds: ids,
         });
-        for (const q of quotes) if (q.error) refused.set(q.assetId, q.error);
+        for (const q of quotes) if (q.error) refused.set(q.assetId, refusalOf({ ...q, error: q.error }));
       }
     } else {
       // An older market: one quote per fish.
-      for (const id of fresh) await api('/quote', { assetId: id, seller: owner }).catch((e) => refused.set(id, messageOf(e)));
+      for (const id of fresh) await api('/quote', { assetId: id, seller: owner }).catch((e) => refused.set(id, e));
     }
-    for (const [id, why] of refused) fail(id, new Error(why));
+    for (const [id, why] of refused) fail(id, why);
     fresh = fresh.filter((id) => !refused.has(id));
   }
 
@@ -522,11 +547,11 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
       // Fish resumed from older transfers can name many transactions: the market takes 2 per request.
       for (const batch of sellBatches(sales, MARKET_BATCH, MARKET_BATCH_TXS)) {
         try {
-          const { results } = await api<{ results: (SellResult & { assetId: string; error?: string })[] }>('/sell-batch', {
+          const { results } = await api<{ results: (SellResult & { assetId: string } & Partial<MarketRefusal>)[] }>('/sell-batch', {
             seller: owner,
             sales: batch,
           });
-          for (const { assetId, error, pearls, tx, extra } of results) settle(assetId, error ? new Error(error) : { pearls, tx, extra });
+          for (const r of results) settle(r.assetId, r.error ? refusalOf({ ...r, error: r.error }) : { pearls: r.pearls, tx: r.tx, extra: r.extra });
         } catch (e) {
           for (const s of batch) settle(s.assetId, asError(e));
         }
