@@ -124,3 +124,38 @@ test('sunset smoke stays close to the hearths and never rises across the mountai
   assert.ok(curtains.every(o => !o.visible), 'sunset does not bring full-strength aurora');
   disposeTree(scenery.group);
 });
+
+test('cabin shelf supports the old footprints and village steps follow local ground', () => {
+  const scenery = buildScenery({ id: 'fjord', waves: 0.5 }, 3);
+  scenery.group.updateMatrixWorld(true);
+  const ray = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
+  for (const [x, z, w, d] of [[-37, -46, 5, 4], [-28.5, -49, 3.6, 3]]) {
+    const points = [-1, 1].flatMap(sx => [-1, 1].map(sz => [x + sx * w / 2, z + sz * d / 2]));
+    points.push([x - w * 0.25, z + d / 2 + 0.3]);
+    for (const [px, pz] of points) {
+      ray.set(new THREE.Vector3(px, 1.25, pz), down);
+      assert.ok(ray.intersectObject(scenery.group, true).some(hit => Math.abs(hit.point.y - 1.1) < 0.001), 'footprints and steps stand on the connected shelf');
+    }
+  }
+  const windows = scenery.group.getObjectByName('fjord-village-windows');
+  const matrix = new THREE.Matrix4(), position = new THREE.Vector3(), vertices = [];
+  scenery.group.traverse(o => {
+    if (o.isMesh && !o.isInstancedMesh && o.material.vertexColors) vertices.push(o.geometry.attributes.position);
+  });
+  for (const [i, home] of villageHomes(3).entries()) {
+    windows.getMatrixAt(i + 2, matrix);
+    position.setFromMatrixPosition(matrix);
+    const floor = position.y - home.h * 0.56;
+    const stepX = home.x - home.w * 0.25 - 0.65;
+    const stepZ = home.z + home.d / 2 + 0.575;
+    for (const y of [floor, floor - 0.4]) {
+      assert.ok(vertices.some(attr => {
+        for (let j = 0; j < attr.count; j++) {
+          if (Math.abs(attr.getX(j) - stepX) < 0.001 && Math.abs(attr.getY(j) - y) < 0.001 && Math.abs(attr.getZ(j) - stepZ) < 0.001) return true;
+        }
+        return false;
+      }), 'each step spans its local ground-to-floor height');
+    }
+  }
+  disposeTree(scenery.group);
+});
