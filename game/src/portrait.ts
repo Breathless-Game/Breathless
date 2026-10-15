@@ -3,6 +3,7 @@ import { buildFishMesh, FishSpec, RARITY } from './fish';
 import { formatSerial, isSerial, type Numbered } from './nft-uri';
 import { t } from './i18n';
 import { CARD_FISH, CARD_FOV, CARD_LIGHTS, cardSpec, disposeFish, poseCardFish } from './fish-card-geometry';
+import { LruCache } from './lru-cache';
 
 // One small offscreen renderer that draws a fish on demand. The 512px card is
 // the NFT image: it is a pure function of the fish seed, so anyone can
@@ -10,7 +11,7 @@ import { CARD_FISH, CARD_FOV, CARD_LIGHTS, cardSpec, disposeFish, poseCardFish }
 // come from fish-card-geometry.ts, which the server's NFT image uses too.
 
 let renderer: THREE.WebGLRenderer | null = null;
-const iconCache = new Map<string, string>();
+const iconCache = new LruCache<string, string>(64, 8 * 1024 * 1024, url => url.length * 2);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(CARD_FOV, 1, 0.1, 100);
 scene.add(new THREE.HemisphereLight(CARD_LIGHTS.hemi.sky, CARD_LIGHTS.hemi.ground, CARD_LIGHTS.hemi.intensity));
