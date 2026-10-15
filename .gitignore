@@ -10,6 +10,7 @@ contracts/target/deploy/*-keypair.json
 # node
 node_modules/
 dist/
+game/.vite/
 
 # Vercel CLI project link (deploy/VERCEL.md)
 .vercel/
