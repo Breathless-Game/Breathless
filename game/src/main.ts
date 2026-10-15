@@ -210,8 +210,12 @@ const fishes: Fish[] = [];
 let fishCoverageLeft = worldBounds.left;
 let fishCoverageRight = worldBounds.right;
 const FISH_EDGE_BAND = 8;
+// Fish stocked into a newly opened edge strip. They go when the bounds shrink back,
+// or each dive that reaches the edge would add another strip for good.
+const edgeFish = new Set<Fish>();
 
 function resetWorldBounds() {
+  for (const f of [...edgeFish]) removeFish(f);
   worldBounds.left = -worldBounds.baseHalfWidth;
   worldBounds.right = worldBounds.baseHalfWidth;
   fishCoverageLeft = worldBounds.left;
@@ -246,6 +250,7 @@ function removeFish(fish: Fish) {
   fishes.splice(fishes.indexOf(fish), 1);
   scene.remove(fish.mesh.group);
   trenchFish.delete(fish);
+  edgeFish.delete(fish);
   // Each fish owns its geometry and materials: free them with the mesh.
   disposeFishMesh(fish.mesh);
 }
@@ -254,6 +259,7 @@ function spawnFish(band: Band, minX = worldBounds.left, maxX = worldBounds.right
   const depth = THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5);
   const fish = addFish(band, depth, worldBounds.maxHalfWidth, minX, maxX);
   fish.setWorldBounds(worldBounds.left, worldBounds.right);
+  return fish;
 }
 
 // Trench fish live in a window around the diver's depth. New ones appear
@@ -372,13 +378,13 @@ function extendFishCoverage() {
   if (worldBounds.right - fishCoverageRight >= FISH_EDGE_BAND) {
     const start = fishCoverageRight;
     const end = worldBounds.right;
-    for (const band of liveShelfBands.values()) spawnFish(band, start, end);
+    for (const band of liveShelfBands.values()) edgeFish.add(spawnFish(band, start, end));
     fishCoverageRight = end;
   }
   if (fishCoverageLeft - worldBounds.left >= FISH_EDGE_BAND) {
     const start = worldBounds.left;
     const end = fishCoverageLeft;
-    for (const band of liveShelfBands.values()) spawnFish(band, start, end);
+    for (const band of liveShelfBands.values()) edgeFish.add(spawnFish(band, start, end));
     fishCoverageLeft = start;
   }
 }
@@ -3128,7 +3134,9 @@ let time = 0;
 function frame() {
   syncWalletHold();
   const elapsed = clock.getDelta();
-  if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+  // Only the dive is measured: the title, workbench and aquarium run their own renderers,
+  // and a slow frame there would drop (and remember) the dive's tier.
+  if (renderQuality.observeFrame(elapsed, phase === 'play' && !paused && !document.hidden)) {
     diver.setQuality(renderQuality.settings);
     world.setQuality(renderQuality.settings);
     sonar.setDetail(renderQuality.settings.detail);
