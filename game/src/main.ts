@@ -210,8 +210,12 @@ const fishes: Fish[] = [];
 let fishCoverageLeft = worldBounds.left;
 let fishCoverageRight = worldBounds.right;
 const FISH_EDGE_BAND = 8;
+// Fish stocked into a newly opened edge strip. They go when the bounds shrink back,
+// or each dive that reaches the edge would add another strip for good.
+const edgeFish = new Set<Fish>();
 
 function resetWorldBounds() {
+  for (const f of [...edgeFish]) removeFish(f);
   worldBounds.left = -worldBounds.baseHalfWidth;
   worldBounds.right = worldBounds.baseHalfWidth;
   fishCoverageLeft = worldBounds.left;
@@ -246,6 +250,7 @@ function removeFish(fish: Fish) {
   fishes.splice(fishes.indexOf(fish), 1);
   scene.remove(fish.mesh.group);
   trenchFish.delete(fish);
+  edgeFish.delete(fish);
   // Each fish owns its geometry and materials: free them with the mesh.
   disposeFishMesh(fish.mesh);
 }
@@ -254,6 +259,7 @@ function spawnFish(band: Band, minX = worldBounds.left, maxX = worldBounds.right
   const depth = THREE.MathUtils.randFloat(band.top + 1.5, band.bottom - 0.5);
   const fish = addFish(band, depth, worldBounds.maxHalfWidth, minX, maxX);
   fish.setWorldBounds(worldBounds.left, worldBounds.right);
+  return fish;
 }
 
 // Trench fish live in a window around the diver's depth. New ones appear
@@ -372,13 +378,13 @@ function extendFishCoverage() {
   if (worldBounds.right - fishCoverageRight >= FISH_EDGE_BAND) {
     const start = fishCoverageRight;
     const end = worldBounds.right;
-    for (const band of liveShelfBands.values()) spawnFish(band, start, end);
+    for (const band of liveShelfBands.values()) edgeFish.add(spawnFish(band, start, end));
     fishCoverageRight = end;
   }
   if (fishCoverageLeft - worldBounds.left >= FISH_EDGE_BAND) {
     const start = worldBounds.left;
     const end = fishCoverageLeft;
-    for (const band of liveShelfBands.values()) spawnFish(band, start, end);
+    for (const band of liveShelfBands.values()) edgeFish.add(spawnFish(band, start, end));
     fishCoverageLeft = start;
   }
 }
@@ -1905,6 +1911,14 @@ breath.onChange((s) => {
   } else if (breath.liveWanted) camWrap.style.visibility = 'hidden';
 });
 let paused = false;
+// The dive is paused for the player's wallet (syncWalletHold): that pause is the hold's to lift.
+let heldForWallet = false;
+/** Leaving the dive (aboard, to the title) ends a wallet hold and lifts the pause it set, no other. */
+function dropWalletHold() {
+  if (!heldForWallet) return;
+  heldForWallet = false;
+  paused = false;
+}
 let trialSkinActive=false;
 const skinPicker=new SkinPicker(index=>{trialSkinActive=!skinUnlocked(index);diver.setSkin(index);applyEquipmentVisuals();},open=>{paused=open;keys.clear();},()=>world.map.id);
 const endSkinTrial=()=>{if(!trialSkinActive)return;trialSkinActive=false;diver.setSkin(0);skinPicker.resetChoice();applyEquipmentVisuals();};
@@ -1997,6 +2011,9 @@ function climbAboard() {
   endSkinTrial();
   if (aboard) return;
   aboard = { pos: diver.pos.clone(), vel: diver.vel.clone() };
+  // Esc works under a wallet hold: the boat isn't held, and Esc on the table must not come back to a
+  // frozen dive (syncWalletHold holds it again if the wallet is still asking).
+  dropWalletHold();
   phase = 'menu';
   // The boat is a safe zone: clear live colliders before the workbench opens.
   noSharks();
@@ -2179,6 +2196,7 @@ function goToMenu() {
   diver.vel.set(0, 0, 0);
   resetSonar();
   resetWorldBounds();
+  dropWalletHold(); // a prompt still open holds the next dive afresh
   paused = false;
   phase = 'menu';
   pauseMenu.close();
@@ -2466,7 +2484,8 @@ const workbench = new Workbench({
 });
 
 fieldGuide = new FieldGuide({
-  canOpen: () => phase !== 'calibrating' && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
+  // Not over a wallet hold: closing the guide would bring back a pause nobody owns any more.
+  canOpen: () => phase !== 'calibrating' && !heldForWallet && !pauseMenu.open && !shipyard.open && !settingsDesk.visible && !loginGate.visible && !aquarium.open && !vault.open && !gear.open && !report.open,
   toggled(open) {
     if (open) {
       guideWasPaused = paused;
@@ -2749,7 +2768,7 @@ showTitle(true);
 // desktop app opens the system browser over the game): then hold the dive and carry on where it was
 // when the tab shows again and the wallet has answered, instead of going aboard to the title's fish
 // (wallet-prompt.ts). Back early (the desktop app's waiting screen is still up): still held.
-let heldForWallet = false;
+// heldForWallet is declared beside `paused`.
 document.addEventListener('visibilitychange', () => {
   resetDayClock = true;
   if (!document.hidden) return;
@@ -2776,7 +2795,8 @@ function syncWalletHold() {
   }
   if (!shouldResume({ held: heldForWallet, hidden: document.hidden, promptOpen })) return;
   heldForWallet = false;
-  // Left the dive another way meanwhile (log out → goToMenu already unpaused): any pause now is not ours.
+  // Leaving the dive drops the hold (dropWalletHold), so this is only a backstop: off the dive, any
+  // pause now is not ours.
   if (phase !== 'play') return;
   paused = false;
   keys.clear();
@@ -3128,7 +3148,9 @@ let time = 0;
 function frame() {
   syncWalletHold();
   const elapsed = clock.getDelta();
-  if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
+  // Only the dive is measured: the title, workbench and aquarium run their own renderers,
+  // and a slow frame there would drop (and remember) the dive's tier.
+  if (renderQuality.observeFrame(elapsed, phase === 'play' && !paused && !document.hidden)) {
     diver.setQuality(renderQuality.settings);
     world.setQuality(renderQuality.settings);
     sonar.setDetail(renderQuality.settings.detail);

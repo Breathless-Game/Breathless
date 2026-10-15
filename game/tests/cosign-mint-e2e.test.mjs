@@ -31,9 +31,9 @@ async function transpile(rel, replace = {}) {
   return dataUrl(outputText);
 }
 
-const { createNoopSigner, generateSigner, publicKey, signerIdentity } = await import('@metaplex-foundation/umi');
+const { createNoopSigner, generateSigner, publicKey, publicKeyBytes, signerIdentity, transactionBuilder } = await import('@metaplex-foundation/umi');
 const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-const { mplCore } = await import('@metaplex-foundation/mpl-core');
+const { mplCore, update, updateAuthority } = await import('@metaplex-foundation/mpl-core');
 const { buildMintTx } = await import(new URL('fish-collection.mjs', SENSOR).href);
 const ps = await import(await transpile('player-state.ts', { '@metaplex-foundation/umi': import.meta.resolve('@metaplex-foundation/umi') }));
 const cosign = await import(await transpile('fish-cosign.ts'));
@@ -99,4 +99,53 @@ test("the game refuses the market's real mint when it is not for this player, co
   assert.match(cosign.cosignedTxProblem(serverTx({ mintOwner: other }), expectation()), /another owner/);
   assert.match(cosign.cosignedTxProblem(serverTx(), expectation({ fish: { id: fish.id, value: fish.value + 1 } })), /another fish or value/);
   assert.match(cosign.cosignedTxProblem(serverTx(), expectation({ fish: { id: '00c0ffef', value: fish.value } })), /another fish/);
+});
+
+// The migration (POST /cosign-migrate). Its builder lives inside cosignMigrate, behind RPC reads, so
+// this replays its two update() calls per fish with exactly its arguments (sensor/fish-collection.mjs
+// cosignMigrate, "Pack the fish..."): a gear NFT, a create, or another collection must not get through.
+const fishA = keyOf(client);
+const fishB = keyOf(client);
+const gear = keyOf(client);
+
+function serverMigrateTx(ids, { extra = [], newAuthority = server.identity.publicKey, collection = collectionKey } = {}) {
+  const sessionPayer = createNoopSigner(publicKey(session));
+  let b = transactionBuilder().setFeePayer(sessionPayer).setBlockhash(blockhash).useLegacyVersion();
+  for (const id of ids) {
+    const asset = { publicKey: publicKey(id), owner: publicKey(owner) };
+    b = b
+      .add(update(server, { asset, newUpdateAuthority: updateAuthority('Address', [newAuthority]), authority: sessionPayer, payer: sessionPayer }))
+      .add(
+        update(server, {
+          asset,
+          newCollection: publicKey(collection),
+          newUpdateAuthority: updateAuthority('Collection', [publicKey(collection)]),
+          authority: server.identity,
+          payer: sessionPayer,
+        }),
+      );
+  }
+  for (const ix of extra) b = b.add(ix);
+  return client.transactions.deserialize(server.transactions.serialize(b.build(server))).message;
+}
+
+/** What the game expects for one of the market's transactions, derived as makeSellable derives it. */
+const migrateExpect = (assetIds, requested = [fishA, fishB]) =>
+  cosign.migrateExpectation(publicKeyBytes, { session, market: market.publicKey.toString(), collection: collectionKey, requested, assetIds });
+
+test('the game signs the migration the market really builds: per fish, hand-over to the market then into the collection', () => {
+  assert.equal(cosign.cosignedTxProblem(serverMigrateTx([fishA, fishB]), migrateExpect([fishA, fishB])), null);
+  assert.equal(cosign.cosignedTxProblem(serverMigrateTx([fishB]), migrateExpect([fishB])), null);
+});
+
+test('the game refuses a migration that touches anything but the fish it asked to move', () => {
+  const sessionPayer = createNoopSigner(publicKey(session));
+  const gearAsset = { publicKey: publicKey(gear), owner: publicKey(owner) };
+  // The Boat / Dive Kit NFT: the session key is its update authority too.
+  const gearUpdate = update(server, { asset: gearAsset, name: 'x', uri: 'https://evil', authority: sessionPayer, payer: sessionPayer });
+  assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA, fishB], { extra: [gearUpdate] }), migrateExpect([fishA, fishB])), /more Core calls/);
+  assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA, gear]), migrateExpect([fishA, gear])), /a fish we did not ask to move/, 'the market lists the gear NFT');
+  assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA, gear]), migrateExpect([fishA, fishB])), /another asset/, 'the gear NFT in place of a fish');
+  assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA], { newAuthority: publicKey(gear) }), migrateExpect([fishA])), /someone other than the market/);
+  assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA], { collection: gear }), migrateExpect([fishA])), /outside the Breathless collection/);
 });
