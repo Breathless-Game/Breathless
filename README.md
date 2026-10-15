@@ -57,8 +57,8 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | | Fjord 峡湾 (Norway / Iceland) | Heaven Lake 天池 (Zhangjiajie / Changbai) | Open Ocean 汪洋 |
 | --- | --- | --- | --- |
 | Difficulty | Casual | Normal | Hard |
-| Zones above the seabed | 0–58 m, Shallows + Kelp Forest | 0–98 m, Shallows + Sunken Forest + Deep Basin | 0–60 m, Shallows + Coral Reef + The Abyss |
-| Seabed | About 60 m, continuous rocky floor | About 100 m, continuous lake floor | 62 m shelf, then the bottomless trench |
+| Zones above the seabed | 0–136 m, Shallows + Kelp Forest | 0–267 m, Shallows + Sunken Forest + Deep Basin | 0–298 m, Shallows + Coral Reef + The Abyss |
+| Seabed | About 138 m, continuous rocky floor | About 269 m, continuous lake floor | 300 m shelf, then the bottomless trench |
 | Above the water | Three staggered ranges of snow peaks with pine groves on the near slopes, a pine shore, a Nordic village and a pier, ice floes; faint independently changing windows at night and, on most nights, curtains of aurora that the water mirrors | Stone pillars, a crater rim, a lakeside pavilion, drifting mist (thicker at night), a lantern at night | A storm front with sheet lightning, sea stacks, a lighthouse whose lamp turns at night |
 | Underwater | Cold teal water, gray gravel and rock, kelp, no coral | Jade-green water, sunken logs and rock shelves, sparse weeds | The original reef: coral, kelp, sand |
 | Waves | Half the ocean's height | Calmest | Full |
@@ -66,7 +66,7 @@ All three maps are in the game. You choose one on the start card before a dive: 
 | Sharks | None | None | One or two by day, two to four at night; hunt by your heart rate; rarer fish |
 | Unlock | Open from the start | Total banked fish value 150 | Total banked fish value 1000 |
 
-- **The trench**: only the Open Ocean has a bottomless trench under the boat. Fjord and Heaven Lake have continuous floors across the full width, with local height variation around 60 m and 100 m. The diver, fish, camera and sonar respect the drawn floor.
+- **The trench**: only the Open Ocean has a bottomless trench under the boat. Fjord and Heaven Lake have continuous floors across the full width, with local height variation around 138 m and 269 m. The diver, fish, camera and sonar respect the drawn floor.
 - **Depth zones**: Fjord opens Shallows and Kelp Forest; Heaven Lake opens Shallows, Sunken Forest and Deep Basin. Drop rates depend on absolute depth. Only the Open Ocean spawns a following trench school and shows an infinite Trench band; finite maps use a depth gauge scaled to their seabed.
 - **Unlocking** (the thresholds exist, but the on-chain check from `player_state` v2 is coming next; all maps are still open today): a map opens by the lifetime catch value of every fish ever banked (see "Catch value" in section 7). Selling fish never lowers it, so a map never re-locks and progress never stalls. Unlocking Heaven Lake opens a deeper finite floor; Open Ocean adds the bottomless trench. When a dive banks enough to open a new map, a message says so.
 - **Demo switch**: under the map cards there is a checkbox "Unlock all maps (demo)" that opens every map at once. It exists for demos and testing.
@@ -498,7 +498,7 @@ Pictures and per-species numbers for all 17 fish species and the fishing rod are
 
 ### Depth zones and drop rates (`RARITY_BY_DEPTH` in `depth-odds.ts`)
 
-Fjord has a finite seabed around 60 m; Heaven Lake's is around 100 m. Only the Open Ocean continues forever below its 62 m shelf. Each finite map's last named zone extends to 2 m above its nominal floor: Kelp Forest is 18–58 m and Deep Basin is 38–98 m. Fish counts grow with the depth span, keeping the expanded water stocked. Drop rates and catch value still depend on absolute depth: 30 m in Fjord's Kelp Forest rolls exactly like 30 m on the Open Ocean's reef.
+Fjord has a finite seabed around 138 m; Heaven Lake's is around 269 m. Only the Open Ocean continues forever below its 300 m shelf. Each map's last named zone extends to 2 m above its nominal floor: Kelp Forest is 18–136 m and Deep Basin is 38–267 m. Shelf fish load in fixed depth slices around the diver, with a wider retention range to avoid visible pop-in while descending or returning. This keeps encounters stocked without generating fish for the entire water column. Drop rates and catch value still depend on absolute depth: 30 m in Fjord's Kelp Forest rolls exactly like 30 m on the Open Ocean's reef.
 
 Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Epic only appears below 15 m, legendary below 30 m, mythic below 50 m. The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
 
