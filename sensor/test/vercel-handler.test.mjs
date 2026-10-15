@@ -151,6 +151,7 @@ test('the market is built once per instance, with no timers, the batch deadline 
   assert.equal(market.options.background, false);
   assert.equal(market.options.batchDeadlineMs, 180_000);
   assert.equal(market.options.store.kind, 'redis');
+  assert.equal(market.options.fishOptions.quotaKv, market.options.store.kv, 'the mint quotas count in Redis, one count for every instance');
 });
 
 test('a market that cannot start answers 503 and is tried again on the next request', async () => {

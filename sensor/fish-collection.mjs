@@ -32,6 +32,7 @@ import {
   MPL_CORE_PROGRAM,
 } from './market-rules.mjs';
 import {
+  KvQuota,
   Quota,
   assertTrustedFish,
   capQuotes,
@@ -112,8 +113,9 @@ export function pendingIsLive(at, waitMs, now = Date.now()) {
  * persisted state object), registry (the store's FishRegistry; default: the file in `dir`),
  * setupStep(name, fn) (runs the collection's creation once across instances), pendingWaitMs (see
  * pendingIsLive; 0, one process: a pending collection that hasn't landed is replaced), ledger (SoldLedger,
- * for the payout cap), balanceSol(maxAgeMs), log.
- * opts: legacyGraceSlots, limits ({ mintsPerHour, migrationsPerHour, dailyPearls }) for tests.
+ * for the payout cap), balanceSol(maxAgeMs), log, quotaKv (a shared store's KV: the mint and
+ * migration quotas count there, across instances; default: in this process's memory).
+ * opts: legacyGraceSlots, limits ({ mintsPerHour, migrationsPerHour, dailyPearls }), now, for tests.
  */
 export function createFishCollection({
   u,
@@ -129,13 +131,17 @@ export function createFishCollection({
   legacyGraceSlots = LEGACY_GRACE_SLOTS,
   limits = {},
   playerStateProgram = playerStateProgramId(),
+  quotaKv,
+  now = Date.now,
 }) {
   const market = u.identity.publicKey.toString();
   const mintsPerHour = limits.mintsPerHour ?? MINTS_PER_HOUR;
   const migrationsPerHour = limits.migrationsPerHour ?? MIGRATIONS_PER_HOUR;
   const capOpts = limits.dailyPearls ? { cap: limits.dailyPearls } : {};
-  const mintQuota = new Quota({ limit: mintsPerHour, windowMs: MINT_WINDOW_MS });
-  const migrateQuota = new Quota({ limit: migrationsPerHour, windowMs: MINT_WINDOW_MS });
+  // One process: in memory. Several instances (quotaKv, the Redis store's KV): one count for all of them.
+  const quota = (name, limit) => (quotaKv ? new KvQuota({ kv: quotaKv, name, limit, windowMs: MINT_WINDOW_MS }) : new Quota({ limit, windowMs: MINT_WINDOW_MS }));
+  const mintQuota = quota('mint', mintsPerHour);
+  const migrateQuota = quota('migrate', migrationsPerHour);
 
   log(`[market] fish collection ${state.fishCollection ?? '(not created yet)'}`);
 
@@ -281,8 +287,8 @@ export function createFishCollection({
     const m = parseCosignMint(body, { market });
     const collection = await readyCollection();
     if ((await claim(m.owner, m.fishId, m.asset)) === 'free') {
-      const q = mintQuota.take(m.owner);
-      if (!q.ok) throw mintLimitError('Mint', mintsPerHour, q.retryAfterMs);
+      const q = await mintQuota.take(m.owner, 1, now());
+      if (!q.ok) throw mintLimitError('Mint', mintsPerHour, q.retryAfterMs, now());
     }
     const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
     const tx = buildMintTx(u, { m, collection, blockhash, programId: playerStateProgram });
@@ -320,8 +326,8 @@ export function createFishCollection({
     if (ok.length) {
       const priors = await Promise.all(ok.map((f) => registry.get(owner, f.fishId)));
       const fresh = ok.filter((f, i) => priors[i]?.asset !== f.assetId).length;
-      const q = migrateQuota.take(owner, fresh);
-      if (!q.ok) throw mintLimitError('Migration', migrationsPerHour, q.retryAfterMs);
+      const q = await migrateQuota.take(owner, fresh, now());
+      if (!q.ok) throw mintLimitError('Migration', migrationsPerHour, q.retryAfterMs, now());
     }
 
     // Pack the fish into as few transactions as fit; each fish is two Core updates.
