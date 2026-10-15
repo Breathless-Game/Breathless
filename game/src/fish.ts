@@ -341,6 +341,20 @@ class FaceBuilder {
   }
 }
 
+/** A closed, thin fin membrane with faceted rays, rather than two coincident triangles. */
+function finWeb(faces: FaceBuilder, outline: THREE.Vector3[], color: THREE.Color, thickness: THREE.Vector3) {
+  for (let i = 1; i < outline.length - 1; i++) {
+    const tint = color.clone().multiplyScalar(i % 2 ? 1 : 0.82);
+    faces.tri(outline[0].clone().add(thickness), outline[i].clone().add(thickness), outline[i + 1].clone().add(thickness), tint);
+    faces.tri(outline[0].clone().sub(thickness), outline[i + 1].clone().sub(thickness), outline[i].clone().sub(thickness), tint);
+  }
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i], b = outline[(i + 1) % outline.length];
+    faces.tri(a.clone().add(thickness), a.clone().sub(thickness), b.clone().add(thickness), color);
+    faces.tri(b.clone().add(thickness), a.clone().sub(thickness), b.clone().sub(thickness), color);
+  }
+}
+
 export interface FishMesh {
   animate?: (time: number, speed: number) => void;
   group: THREE.Group;
@@ -351,6 +365,19 @@ export interface FishMesh {
   size: { len: number; height: number; width: number };
   /** Extra yaw while swimming, for a model built leading with −x (an octopus jets mantle-first, arms trailing). Static renders ignore it. */
   swimYaw?: number;
+}
+
+/** A fish owns its surfaces; shared eyes and batched skins are released once each. */
+export function disposeFishMesh(fish: FishMesh): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>([fish.material]);
+  fish.group.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return;
+    geometries.add(object.geometry);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
+  });
+  geometries.forEach(geometry => geometry.dispose());
+  materials.forEach(material => material.dispose());
 }
 
 /** How finely the body is built. The game's fish are hexagonal, 6 rings long; more gives a smoother flank (e.g. to carve a name into). */
@@ -375,13 +402,13 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
   const fin = hsl(spec.hue + 15, spec.sat * 0.65, spec.light * 0.75);
 
   // Body: rings (hexagonal at the default detail) from tail root (t=0) to nose (t=1).
-  const RINGS = detail.rings;
-  const SIDES = detail.sides;
+  const RINGS = THREE.MathUtils.clamp(Math.floor(detail.rings) || LOW_POLY.rings, 3, 32);
+  const SIDES = THREE.MathUtils.clamp(Math.floor(detail.sides) || LOW_POLY.sides, 6, 32);
   const rings: THREE.Vector3[][] = [];
   for (let i = 0; i <= RINGS; i++) {
     const t = i / RINGS;
     const x = -L / 2 + t * L;
-    const baseProfile = Math.sin(Math.PI * Math.pow(t, 0.75)) * 0.92 + 0.08;
+    const baseProfile = Math.sin(Math.PI * Math.pow(t, 0.78)) * 0.88 + 0.12;
     const tailTaper = THREE.MathUtils.lerp(profile.tailTaper, 1, Math.min(1, t / 0.35));
     const headVolume = t < 0.58 ? 1 : THREE.MathUtils.lerp(1, profile.headVolume, (t - 0.58) / 0.42);
     const ring: THREE.Vector3[] = [];
@@ -435,61 +462,74 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
     fb.tri(rings[RINGS][j], rings[RINGS][(j + 1) % SIDES], nose, body);
     fb.tri(rings[0][(j + 1) % SIDES], rings[0][j], root, back);
   }
-  // Fins on their own mesh, so the body is just the body (e.g. to carve a name into).
+  // Sample the actual polygonal flank so eyes and fin roots sit on the skin.
+  const section = (x: number) => {
+    const station = THREE.MathUtils.clamp((x / L + 0.5) * RINGS, 0, RINGS);
+    const index = Math.min(RINGS - 1, Math.floor(station));
+    return rings[index].map((point, i) => point.clone().lerp(rings[index + 1][i], station - index));
+  };
+  const flank = (x: number, y: number) => {
+    const cross = section(x); let width = 0;
+    for (let i = 0; i < cross.length; i++) {
+      const a = cross[i], b = cross[(i + 1) % cross.length];
+      if (Math.abs(b.y - a.y) < 1e-8 || y < Math.min(a.y, b.y) || y > Math.max(a.y, b.y)) continue;
+      width = Math.max(width, THREE.MathUtils.lerp(a.z, b.z, (y - a.y) / (b.y - a.y)));
+    }
+    return width;
+  };
+  const roof = (x: number) => Math.max(...section(x).map(point => point.y));
+  const v = (x: number, y: number, z = 0) => new THREE.Vector3(x, y, z);
   const finFaces = new FaceBuilder();
-  // Dorsal fin.
-  const dorsalBase = rings[Math.round(RINGS / 2)][0].y;
-  const d1 = new THREE.Vector3(-L * 0.15, dorsalBase - 0.02, 0);
-  const d2 = new THREE.Vector3(L * 0.2, dorsalBase - 0.02, 0);
-  const d3 = new THREE.Vector3(-L * 0.12, dorsalBase + shape.dorsal * profile.dorsal, 0);
-  finFaces.tri(d1, d2, d3, profile.pattern === 'stripes' ? accent : fin);
-  finFaces.tri(d2, d1, d3, profile.pattern === 'stripes' ? accent : fin);
-  // Pectoral fins.
-  for (const side of [1, -1]) {
-    const p1 = new THREE.Vector3(L * 0.15, -shape.height * 0.1, side * shape.width * 0.45);
-    const p2 = new THREE.Vector3(L * 0.0, -shape.height * 0.25, side * (shape.width * 0.45 + 0.22 * profile.pectoral));
-    const p3 = new THREE.Vector3(-L * 0.05, -shape.height * 0.05, side * shape.width * 0.45);
-    finFaces.tri(p1, p2, p3, fin);
-    finFaces.tri(p2, p1, p3, fin);
+  const dorsalHeight = shape.dorsal * profile.dorsal;
+  const dorsal = [-0.32, -0.2, -0.08, 0.08, 0.22].map((x, i) =>
+    v(L * x, roof(L * x) - 0.008 + [0, 0.65, 1, 0.6, 0][i] * dorsalHeight));
+  finWeb(finFaces, dorsal, profile.pattern === 'stripes' ? accent : fin, v(0, 0, 0.007));
+  // Anal fin balances the dorsal silhouette; paired pectorals have a swept trailing edge.
+  finWeb(finFaces, [v(-L * 0.25, -roof(-L * 0.25)), v(L * 0.08, -roof(L * 0.08)),
+    v(-L * 0.12, -roof(-L * 0.12) - dorsalHeight * 0.42)], fin, v(0, 0, 0.006));
+  for (const side of [-1, 1]) {
+    const width = flank(L * 0.12, -shape.height * 0.1);
+    finWeb(finFaces, [v(L * 0.18, -shape.height * 0.08, side * flank(L * 0.18, -shape.height * 0.08)),
+      v(L * 0.02, -shape.height * 0.18, side * flank(L * 0.02, -shape.height * 0.18)),
+      v(-L * 0.14, -shape.height * 0.24, side * (width + 0.2 * profile.pectoral)),
+      v(-L * 0.03, -shape.height * 0.32, side * (width + 0.26 * profile.pectoral))], fin, v(0, 0.005, 0));
   }
-
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    flatShading: true,
-    roughness: 1,
-    metalness: 0,
-    emissive: hsl(spec.hue, 1, 0.5),
-    emissiveIntensity: 0,
-    side: THREE.DoubleSide,
-  });
-  const bodyMesh = new THREE.Mesh(fb.build(), material);
-  const fins = new THREE.Mesh(finFaces.build(), material);
-
-  // Tail on its own pivot so it can wag.
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true,
+    roughness: 0.92, metalness: 0, emissive: hsl(spec.hue, 1, 0.5), emissiveIntensity: 0, side: THREE.DoubleSide });
+  const bodyMesh = new THREE.Mesh(fb.build(), material); bodyMesh.name = 'fish-body';
+  const fins = new THREE.Mesh(finFaces.build(), material); fins.name = 'fish-fins';
   const tb = new FaceBuilder();
   const tl = shape.tail * profile.tailSpread;
-  const t0 = new THREE.Vector3(0, 0, 0);
-  const tUp = new THREE.Vector3(-tl, tl * (0.7 + profile.tailSpread * 0.08), 0);
-  const tMid = new THREE.Vector3(-tl * 0.6, 0, 0);
-  const tDown = new THREE.Vector3(-tl, -tl * (0.7 + profile.tailSpread * 0.08), 0);
   const tailColor = profile.pattern === 'stripes' || profile.pattern === 'mask' ? accent : fin;
-  tb.tri(t0, tMid, tUp, tailColor);
-  tb.tri(t0, tUp, tMid, tailColor);
-  tb.tri(t0, tDown, tMid, tailColor);
-  tb.tri(t0, tMid, tDown, tailColor);
-  const tail = new THREE.Mesh(tb.build(), material);
+  finWeb(tb, [v(0, 0), v(-tl * 0.68, tl * 0.25), v(-tl, tl * 0.78),
+    v(-tl * 0.56, 0), v(-tl, -tl * 0.78), v(-tl * 0.68, -tl * 0.25)], tailColor, v(0, 0, 0.008));
+  const tail = new THREE.Mesh(tb.build(), material); tail.name = 'fish-tail';
   tail.position.x = -L / 2 + 0.02;
-
-  // Eyes.
-  const eyeGeo = new THREE.IcosahedronGeometry(Math.max(0.05, shape.height * 0.09), 0);
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0b0b12, flatShading: true, roughness: 0.85 });
-  const group = new THREE.Group();
-  for (const side of [1, -1]) {
-    const eye = new THREE.Mesh(eyeGeo, eyeMat);
-    eye.position.set(L * 0.33, shape.height * 0.1, side * shape.width * 0.33);
-    group.add(eye);
+  const group = new THREE.Group(); group.name = spec.species;
+  group.userData.swimPhase = ((Math.imul(spec.seed >>> 0, 0x9e3779b1) >>> 0) / 0x100000000) * Math.PI * 2;
+  const eyeRadius = THREE.MathUtils.clamp(shape.height * 0.075, 0.032, 0.085);
+  const eyeGeo = new THREE.IcosahedronGeometry(eyeRadius, 1);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: '#10141b', flatShading: true, roughness: 0.55 });
+  const irisGeo = new THREE.RingGeometry(eyeRadius * 0.65, eyeRadius * 1.12, 8);
+  const irisMat = new THREE.MeshStandardMaterial({ color: belly, flatShading: true, roughness: 0.85, side: THREE.DoubleSide });
+  const gills = new FaceBuilder();
+  for (const side of [-1, 1]) {
+    const x = L * 0.29, y = shape.height * 0.11, width = flank(x, y);
+    const eye = new THREE.Mesh(eyeGeo, eyeMat); eye.name = 'fish-eye';
+    eye.scale.set(1, 0.95, 0.45); eye.position.set(x, y, side * (width + eyeRadius * 0.2));
+    const iris = new THREE.Mesh(irisGeo, irisMat); iris.name = 'fish-eye-rim';
+    iris.position.set(x, y, side * (width + eyeRadius * 0.45));
+    group.add(eye, iris);
+    for (let i = 0; i < 3; i++) {
+      const y0 = shape.height * (0.19 - i * 0.14), y1 = y0 - shape.height * 0.14;
+      const x0 = L * (0.17 - i * 0.02), x1 = x0 - L * 0.025;
+      const a = v(x0, y0, side * (flank(x0, y0) + 0.006));
+      const b = v(x1, y1, side * (flank(x1, y1) + 0.006));
+      gills.tri(side > 0 ? a : b, side > 0 ? b : a, v(b.x + 0.012, b.y, b.z), body);
+    }
   }
-  group.add(bodyMesh, fins, tail);
+  const gillMesh = new THREE.Mesh(gills.build(), eyeMat); gillMesh.name = 'fish-gills';
+  group.add(bodyMesh, fins, tail, gillMesh);
   addSpeciesSilhouette(group, profile, shape, material, accent);
   group.scale.setScalar(spec.scale * 0.9 * 0.92);
   return { group, tail, material, animate: swimmingAnimation(group, tail, 'fish'), body: bodyMesh, size: { len: L, height: shape.height, width: shape.width * profile.bodyWidth } };
@@ -717,20 +757,18 @@ export class Fish {
     const bob = Math.sin(time * (1.25 + speed * 0.12) + this.phase) * Math.min(0.11, 0.035 + speed * 0.008);
     g.position.set(this.pos.x, this.pos.y + bob, this.pos.z);
     const lead = this.mesh.swimYaw ?? 0;
-    const targetYaw = (this.facing > 0 ? 0 : Math.PI) + lead;
+    const horizontal = Math.hypot(this.vel.x, this.vel.z);
+    const targetYaw = (horizontal > 0.05 ? Math.atan2(-this.vel.z, this.vel.x) : this.facing > 0 ? 0 : Math.PI) + lead;
     const yawDelta = THREE.MathUtils.euclideanModulo(targetYaw - g.rotation.y + Math.PI, Math.PI * 2) - Math.PI;
-    g.rotation.y += yawDelta * Math.min(1, dt * 6);
-    // Rotation around z is a pitch in this side-on model. It should not flip
-    // when the fish turns around, otherwise upward swims point downward; but it
-    // does flip for a model that leads with its −x end.
-    g.rotation.z = THREE.MathUtils.clamp(this.vel.y * 0.12, -0.5, 0.5) * Math.cos(lead)
-      + Math.sin(time * 1.8 + this.phase) * 0.035;
-    g.rotation.x = THREE.MathUtils.clamp(-this.vel.z * 0.1, -0.24, 0.24);
-    const wag = (6 + this.vel.length() * 2.5) * (0.85 + this.profile.swimSpeed * 0.15);
-    const wagAmount = THREE.MathUtils.clamp(0.3 + this.vel.length() * 0.045, 0.3, 0.66);
-    this.mesh.tail.rotation.y = Math.sin(time * wag + this.phase) * wagAmount;
-    this.mesh.tail.rotation.z = Math.sin(time * wag * 0.53 + this.phase + 0.8) * 0.08;
-    this.mesh.animate?.(time + this.phase, this.vel.length());
+    const turn = 1 - Math.exp(-dt * 6);
+    g.rotation.order = 'YXZ';
+    g.rotation.y += yawDelta * turn;
+    const pitch = THREE.MathUtils.clamp(Math.atan2(this.vel.y, Math.max(0.05, horizontal)), -0.5, 0.5) * Math.cos(lead);
+    g.rotation.z += (pitch - g.rotation.z) * (1 - Math.exp(-dt * 5));
+    const bank = THREE.MathUtils.clamp(-yawDelta * 0.22, -0.24, 0.24);
+    g.rotation.x += (bank - g.rotation.x) * (1 - Math.exp(-dt * 4));
+    if (this.mesh.animate) this.mesh.animate(time + this.phase, this.vel.length());
+    else this.mesh.tail.rotation.y = Math.sin(time * 6 + this.phase) * 0.3;
     if (this.spec.rarity === 'mythic') {
       this.mesh.material.emissive.setHSL((time * 0.15 + this.phase) % 1, 1, 0.5);
     }

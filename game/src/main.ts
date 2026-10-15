@@ -8,7 +8,7 @@ import { showTouchNotice } from './touch-only';
 import { Diver } from './diver';
 import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
-import { type Band, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
+import { type Band, disposeFishMesh, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish, ZONES } from './fish';
 import { Hud } from './hud';
 import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
@@ -53,7 +53,6 @@ import { ROGUE, RogueWaves, canRight, capsizeLoss } from './storm';
 import { StormFx } from './storm-fx';
 import { PulseEstimate, RestingPulse, SHARK, SharkPack, sharkIntensity, type SharkEvent } from './shark';
 import { SharkFx } from './shark-fx';
-import { disposeTree } from './lowpoly';
 import { DeepSonar } from './deep-sonar';
 import { loadSonarConfig, saveSonarConfig } from './sonar-config';
 import { SynthesisPanel } from './synthesis-panel';
@@ -242,7 +241,7 @@ function removeFish(fish: Fish) {
   scene.remove(fish.mesh.group);
   trenchFish.delete(fish);
   // Each fish owns its geometry and materials: free them with the mesh.
-  disposeTree(fish.mesh.group);
+  disposeFishMesh(fish.mesh);
 }
 
 function spawnFish(band: Band, minX = worldBounds.left, maxX = worldBounds.right) {

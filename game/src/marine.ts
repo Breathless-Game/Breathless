@@ -26,7 +26,7 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
     : kind === 'turtle' && !golden && !high ? 0.27 : spec.hue / 360;
   const mythicHue = kind === 'squid' ? 0.97 : kind === 'turtle' ? 0.48 : 0.65;
   const color = new THREE.Color().setHSL(high ? mythicHue : hue, golden || high ? 0.52 : 0.32, high ? 0.24 : 0.4);
-  const material = new THREE.MeshStandardMaterial({
+  let material = new THREE.MeshStandardMaterial({
     color, flatShading: true, roughness: 1, metalness: 0,
     emissive: color, emissiveIntensity: 0, side: THREE.DoubleSide,
   });
@@ -412,6 +412,8 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
   {
     // All bodies use baked, seeded pigmentation; luminous organs are kept separate.
     group.updateMatrixWorld(true);
+    const pigmented = new Map<THREE.MeshStandardMaterial, THREE.MeshStandardMaterial>();
+    const replaced = new Set<THREE.BufferGeometry>();
     group.traverse(object=>{
       if(!(object instanceof THREE.Mesh) || !(object.material instanceof THREE.MeshStandardMaterial))return;
       if(object.material===luminous || object.material===dark)return;
@@ -450,16 +452,32 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
         for(let j=0;j<3;j++)colors.push(c.r,c.g,c.b);
       }
       geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
-      const mat=object.material.clone();mat.color.setRGB(1,1,1);mat.vertexColors=true;
-      mat.metalness=0;mat.roughness=1;mat.emissiveIntensity=0;
+      let mat=pigmented.get(object.material);
+      if(!mat){
+        mat=object.material.clone();mat.color.setRGB(1,1,1);mat.vertexColors=true;
+        mat.metalness=0;mat.roughness=1;mat.emissiveIntensity=0;
+        pigmented.set(object.material,mat);
+      }
+      replaced.add(object.geometry);
       object.geometry=geometry;object.material=mat;
     });
+    replaced.forEach(geometry=>geometry.dispose());
+    const liveMaterials=new Set<THREE.Material>();
+    group.traverse(object=>{if(object instanceof THREE.Mesh)liveMaterials.add(object.material as THREE.Material);});
+    const skin=pigmented.get(material) ?? material;
+    for(const source of pigmented.keys())if(!liveMaterials.has(source))source.dispose();
+    material=skin;
   }
+  const primary=group.children.find(object=>object instanceof THREE.Mesh);
+  if(primary)primary.userData.bodySurface=true;
+  batchMarineMeshes(group);
+  group.userData.swimPhase=((Math.imul(spec.seed>>>0,0x9e3779b1)>>>0)/0x100000000)*Math.PI*2;
   group.scale.setScalar(spec.scale*0.9*(kind==='turtle'?1:0.97)*(kind==='octopus'?0.95:1)*(kind==='turtle'?1.04*(high?0.62:0.45):kind==='eel'?0.75:1));
   group.name=spec.species;
   let animate: FishMesh['animate'];
+  const turtleClock=swimClock(group.userData.swimPhase);
   if(kind==='turtle')animate=(time,speed)=>{
-    const cycle=time*(2.1+Math.min(speed,3)*0.6);
+    const cycle=turtleClock(time,2.1+Math.min(Math.max(0,speed),3)*0.6);
     for(const f of flippers){
       const phase=cycle+(f.front?0:Math.PI*0.65);
       f.pivot.rotation.x=f.side*Math.sin(phase)*(f.front?0.85:0.4);
@@ -469,7 +487,7 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
     tail.rotation.y=Math.sin(cycle)*0.1;tail.rotation.z=0;
   };
   if(kind!=='turtle')animate=swimmingAnimation(group,tail,kind);
-  const body=group.children.find(o=>o instanceof THREE.Mesh) as THREE.Mesh;
+  const body=group.children.find(o=>o instanceof THREE.Mesh && o.userData.bodySurface) as THREE.Mesh;
   // Cephalopods are built arms-forward (+x) but jet mantle- or shell-first, arms trailing.
   const swimYaw=kind==='octopus'||kind==='squid'||kind==='nautilus'?Math.PI:0;
   return {group,tail,material,animate,body,size:{len:3,height:1,width:1},swimYaw};
@@ -496,11 +514,13 @@ export function swimmingAnimation(group:THREE.Group,tail:THREE.Object3D,kind:str
   }});
   const length=Math.max(.1,bounds.max.x-bounds.min.x);
   const spineX=new Float32Array(65),spineZ=new Float32Array(65),spineAngle=new Float32Array(65);
-  let previous:number|undefined,cycle=0,lastFrame=-Infinity;
+  const clock=swimClock(group.userData.swimPhase ?? 0);
+  let lastFrame=-Infinity;
   return (time,speed)=>{
-    const dt=previous===undefined?0:Math.max(0,Math.min(.1,time-previous));previous=time;
-    const activity=Math.min(1,speed/2.5);
-    cycle+=dt*((kind==='jelly'?1.8:kind==='ray'?2.3:kind==='eel'?3.5:4)+activity*3);
+    if(!Number.isFinite(time))return;
+    const activity=Number.isFinite(speed)?THREE.MathUtils.clamp(speed/2.5,0,1):0;
+    const cycle=clock(time,(kind==='jelly'?1.8:kind==='ray'?2.3:kind==='eel'?3.5:kind==='tuna'?5:4)+activity*3);
+    if(time<lastFrame)lastFrame=-Infinity;
     tail.rotation.set(0,0,0);
     if(time-lastFrame<1/30)return;lastFrame=time;
     if(kind==='eel'){
@@ -553,7 +573,8 @@ export function swimmingAnimation(group:THREE.Group,tail:THREE.Object3D,kind:str
           if(kind==='squid'&&x<.3)point.z*=1+Math.sin(cycle)*.06;
         }else{
           const wave=Math.sin(cycle-aft*4.4);
-          point.z+=wave*aft*aft*length*(.065+activity*.035);
+          const envelope=THREE.MathUtils.smoothstep(aft,.18,1);
+          point.z+=wave*envelope*envelope*length*(kind==='tuna'?.045+activity*.025:.065+activity*.035);
           point.y+=Math.sin(cycle*.5-aft*3)*aft*.035;
         }
         point.applyMatrix4(inverse);p.setXYZ(i,point.x,point.y,point.z);
@@ -561,4 +582,50 @@ export function swimmingAnimation(group:THREE.Group,tail:THREE.Object3D,kind:str
       p.needsUpdate=true;mesh.geometry.computeVertexNormals();
     }
   };
+}
+
+/** Speed changes alter frequency, not the accumulated stroke phase. */
+function swimClock(initial: number) {
+  let previous: number | undefined, cycle = Number.isFinite(initial) ? initial : 0;
+  return (time: number, frequency: number) => {
+    if (!Number.isFinite(time)) return cycle;
+    const dt = previous === undefined ? 0 : THREE.MathUtils.clamp(time - previous, 0, 0.1);
+    previous = time;
+    cycle = (cycle + dt * (Number.isFinite(frequency) ? frequency : 2.1)) % (Math.PI * 4);
+    return cycle;
+  };
+}
+
+/** Merge by material inside each rig pivot, preserving all seeded vertex pigmentation. */
+function batchMarineMeshes(parent: THREE.Group) {
+  for (const child of [...parent.children]) if (child instanceof THREE.Group) batchMarineMeshes(child);
+  const batches = new Map<THREE.Material, THREE.Mesh[]>();
+  for (const child of parent.children) if (child instanceof THREE.Mesh) {
+    const material = child.material as THREE.Material;
+    const batch = batches.get(material) ?? [];
+    batch.push(child); batches.set(material, batch);
+  }
+  const disposed = new Set<THREE.BufferGeometry>();
+  for (const [material, meshes] of batches) {
+    if (meshes.length < 2) continue;
+    const parts = meshes.map(mesh => {
+      mesh.updateMatrix();
+      const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+      geometry.applyMatrix4(mesh.matrix);
+      disposed.add(mesh.geometry); parent.remove(mesh);
+      return geometry;
+    });
+    const geometry = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', ...((material as THREE.MeshStandardMaterial).vertexColors ? ['color'] : [])]) {
+      const count = parts.reduce((sum, part) => sum + part.getAttribute(name).array.length, 0);
+      const array = new Float32Array(count); let offset = 0;
+      for (const part of parts) { const data = part.getAttribute(name).array; array.set(data, offset); offset += data.length; }
+      geometry.setAttribute(name, new THREE.BufferAttribute(array, 3));
+    }
+    const mesh = new THREE.Mesh(geometry, material); mesh.name = 'marine-batched-surface';
+    mesh.userData.bodySurface=meshes.some(part=>part.userData.bodySurface);
+    parent.add(mesh);
+    parts.forEach(part => part.dispose());
+  }
+  disposed.forEach(geometry => geometry.dispose());
 }

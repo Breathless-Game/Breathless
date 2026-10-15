@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildFishMesh, RARITY, type FishMesh } from './fish';
+import { buildFishMesh, disposeFishMesh, RARITY, type FishMesh } from './fish';
 import type { BankedFish } from './market';
 import { Rng } from './rng';
 import { TableScene, type TableHooks } from './table-scene';
@@ -510,8 +510,9 @@ export class TankTable extends TableScene {
     }
     s.holder.position.copy(s.pos);
     s.holder.position.y += Math.sin(this.time * 1.6 + s.phase) * 0.03;
-    s.holder.rotation.set(0, s.heading, clamp(s.vel.y * 1.2, -0.35, 0.35));
-    s.mesh.tail.rotation.y = Math.sin(this.time * (6 + flat * 8) + s.phase) * 0.35;
+    s.holder.rotation.set(0, s.heading, clamp(Math.atan2(s.vel.y, Math.max(0.03, flat)), -0.35, 0.35), 'YXZ');
+    if (s.mesh.animate) s.mesh.animate(this.time + s.phase, s.vel.length());
+    else s.mesh.tail.rotation.y = Math.sin(this.time * (6 + flat * 8) + s.phase) * 0.35;
     s.grow = clamp(s.grow + (s.leaving ? -dt * 2.5 : dt * 1.8), 0, 1);
     s.pulse = Math.max(0, s.pulse - dt * 1.8);
     // Grown by feeding (its length, on the same log scale as at spawn), and swelling just after.
@@ -532,10 +533,7 @@ export class TankTable extends TableScene {
 
   private dispose(s: Swimmer) {
     this.tank.remove(s.holder);
-    s.holder.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.geometry.dispose();
-    });
-    s.mesh.material.dispose();
+    disposeFishMesh(s.mesh);
   }
 
   private updateDrop(dt: number) {

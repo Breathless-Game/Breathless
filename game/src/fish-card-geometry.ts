@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildFishMesh, type Archetype, type FishMesh, type FishSpec, type Rarity } from './fish';
+import { buildFishMesh, disposeFishMesh, type Archetype, type FishMesh, type FishSpec, type Rarity } from './fish';
 
 // The fish on the NFT card, shared by the game (portrait.ts fishCard, drawn with WebGL) and the
 // server (sensor/fish-png.mjs, a software rasteriser in Node). One mesh builder, one pose, one
@@ -8,7 +8,7 @@ import { buildFishMesh, type Archetype, type FishMesh, type FishSpec, type Rarit
 // fails when that bundle is out of date. Nothing here touches the DOM.
 
 /** Bump when the card art changes on purpose: the NFT image URL carries it, so caches let go. */
-export const CARD_RENDER_VERSION = 2;
+export const CARD_RENDER_VERSION = 3;
 
 /** Where the fish's square render sits on the 512px card (portrait.ts drawImage). */
 export const CARD_FISH = { x: 46, y: 40, size: 420 } as const;
@@ -82,10 +82,7 @@ export function poseCardFish(fish: FishMesh, camera: THREE.PerspectiveCamera): v
 }
 
 export function disposeFish(fish: FishMesh): void {
-  fish.group.traverse((o) => {
-    if (o instanceof THREE.Mesh) o.geometry.dispose();
-  });
-  fish.material.dispose();
+  disposeFishMesh(fish);
 }
 
 /** One visible triangle: screen points (0..1, y down) with NDC depth, and its lit colour in linear RGB. */
