@@ -2996,13 +2996,25 @@ function swimPhysics(dt: number, s: BreathState) {
 
 const HEAD_TAG_Y = 1.3; // the breath tag floats this far above the diver's middle
 const headTag = new THREE.Vector3();
+// The canvas is fixed full-viewport, so its rect only moves when the viewport does.
+// Reading it every frame forced a layout per frame.
+let canvasRect: DOMRect | null = null;
+const dropCanvasRect = () => { canvasRect = null; };
+window.addEventListener('resize', dropCanvasRect);
+window.visualViewport?.addEventListener('resize', dropCanvasRect);
+function sceneCanvasRect(): DOMRect {
+  if (canvasRect) return canvasRect;
+  const r = renderer.domElement.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0) canvasRect = r;
+  return r;
+}
 
 /** Where the breath tag goes: just above the diver's head on screen, or null if that's off screen. */
 function overDiversHead(): { x: number; y: number } | null {
   camera.updateMatrixWorld();
   headTag.copy(diver.pos).setY(diver.pos.y + HEAD_TAG_Y).project(camera);
   if (headTag.z > 1 || Math.abs(headTag.x) > 1.1 || Math.abs(headTag.y) > 1.1) return null;
-  const r = renderer.domElement.getBoundingClientRect();
+  const r = sceneCanvasRect();
   return { x: r.left + ((headTag.x + 1) / 2) * r.width, y: r.top + ((1 - headTag.y) / 2) * r.height };
 }
 

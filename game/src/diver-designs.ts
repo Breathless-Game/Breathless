@@ -336,7 +336,10 @@ export class DiverConcept {
       for(let v=0;v<attr.count;v++){
         deform(point.fromArray(flex.rest,v*3));attr.setXYZ(v,point.x,point.y,point.z);
       }
-      attr.needsUpdate=true;flex.geometry.computeVertexNormals();
+      // Arm, blade and snorkel are flat-shaded: their face normals come from
+      // view-position derivatives in the fragment shader, so per-frame CPU normals
+      // were never read. The hips are smooth-shaded and still rebuild theirs.
+      attr.needsUpdate=true;
       flex.cuff.position.copy(deform(flex.cuffRest.clone()));
       flex.hand.position.copy(deform(flex.handRest.clone()));
       const turn=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),bend);
@@ -370,7 +373,7 @@ export class DiverConcept {
         const x=blade.rest[vertex*3];const u=Math.max(0,(-x-0.19)/blade.length);
         attr.setY(vertex,blade.rest[vertex*3+1]+Math.sin(phase-1.6-u*0.65)*0.18*u*u);
       }
-      attr.needsUpdate=true;blade.geometry.computeVertexNormals();
+      attr.needsUpdate=true; // flat-shaded: no normals to rebuild (see arms)
     });
     this.updateHips();
     this.group.position.y=Math.sin(kickPhase*2-1.1)*0.035;
@@ -395,7 +398,7 @@ export class DiverConcept {
       const top=THREE.MathUtils.smoothstep(y,0.1,0.57)*seated;
       attr.setXYZ(i,x-top*0.18,y-top*0.32,z+top*0.025);
     }
-    attr.needsUpdate=true;this.snorkel.geometry.computeVertexNormals();
+    attr.needsUpdate=true; // flat-shaded: no normals to rebuild (see arms)
     this.snorkel.geometry.computeBoundingSphere();
   }
   private updateHips() {
