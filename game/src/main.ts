@@ -49,6 +49,7 @@ import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { browserLocks, claimTab, showTabNotice, takeOverTab } from './tab-lock';
+import { onTabHidden, walletPromptOpen } from './wallet-prompt';
 import { LoginGate, mountWalletRow } from './login';
 import { LazyWorldEvents as WorldEvents } from './lazy-panels';
 import type { EventContext } from './events';
@@ -2744,9 +2745,26 @@ function backFromStartCard() {
 showTitle(true);
 
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
+// Except when the player's own wallet took the window (selling from the Collection mid-dive: the
+// desktop app opens the system browser over the game): then hold the dive and carry on where it was
+// when the tab shows again, instead of going aboard to the title's fish (wallet-prompt.ts).
+let heldForWallet = false;
 document.addEventListener('visibilitychange', () => {
   resetDayClock = true;
-  if (document.hidden) pause();
+  if (document.hidden) {
+    const action = onTabHidden({ playing: phase === 'play', paused, promptOpen: walletPromptOpen() });
+    if (action === 'board') pause();
+    else if (action === 'hold') {
+      paused = true;
+      heldForWallet = true;
+      keys.clear();
+    }
+  } else if (heldForWallet) {
+    heldForWallet = false;
+    paused = false;
+    keys.clear();
+    breathSince = null; // time spent in the wallet doesn't count as breathing underwater
+  }
 });
 
 // ---- Main loop ----------------------------------------------------------
