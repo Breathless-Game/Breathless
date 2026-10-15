@@ -504,6 +504,7 @@ export function swimmingAnimation(group:THREE.Group,tail:THREE.Object3D,kind:str
   group.traverse(o=>{if(o instanceof THREE.Mesh){
     const bind=rootInverse.clone().multiply(o.matrixWorld),inverse=bind.clone().invert();
     const p=o.geometry.getAttribute('position'),rest=new Float32Array(p.count*3);
+    p.setUsage(THREE.DynamicDrawUsage);
     for(let i=0;i<p.count;i++){
       point.fromBufferAttribute(p,i).applyMatrix4(bind);bounds.expandByPoint(point);
       rest.set([point.x,point.y,point.z],i*3);
@@ -579,7 +580,13 @@ export function swimmingAnimation(group:THREE.Group,tail:THREE.Object3D,kind:str
         }
         point.applyMatrix4(inverse);p.setXYZ(i,point.x,point.y,point.z);
       }
-      p.needsUpdate=true;mesh.geometry.computeVertexNormals();
+      p.needsUpdate=true;
+      // Flat-shaded materials derive face normals from view-position derivatives
+      // in the fragment shader. Rebuilding/uploading CPU normals cannot change them.
+      const needsNormals=Array.isArray(mesh.material)
+        ? mesh.material.some(material=>!(material as THREE.MeshStandardMaterial).flatShading)
+        : !(mesh.material as THREE.MeshStandardMaterial).flatShading;
+      if(needsNormals) mesh.geometry.computeVertexNormals();
     }
   };
 }

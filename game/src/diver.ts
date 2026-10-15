@@ -3,7 +3,7 @@ import { DiverConcept } from './diver-designs';
 import { Splash } from './fx';
 import { buildFishingNetMesh, buildMountedNetHead } from './gear';
 import { buildHeadlamp, disposeMeshes } from './headlamp-model';
-import { lampActivation, lampProfile, type LampProfile, type LampPath } from './lamp-lighting';
+import { lampActivation, lampBrightnessScale, lampProfile, type HeadlampBrightness, type LampProfile, type LampPath } from './lamp-lighting';
 import { lampPath } from './lamp-upgrades';
 import { buildWornFins, buildWornTank, disposeWornFins, type WornFins } from './dive-gear-model';
 import type { RenderQuality } from './render-quality';
@@ -90,11 +90,13 @@ export class Diver {
   private lampEmitters: THREE.MeshStandardMaterial[] = [];
   /** Nearby light reflected from the water keeps the diver's suit readable. */
   private lampFill: THREE.PointLight;
+  private lampFillWorld = new THREE.Vector3();
   private lampOptics: LampProfile = lampProfile(1);
   private lampLevel = 1;
   private lampSpecialisation: LampPath = 'focus';
   private lampNight = 0;
   private lampEffects = true;
+  private lampBrightness = 1;
   private breathPoint: THREE.Object3D;
   private breathOrigin = new THREE.Vector3();
   private bubbleOffset = new THREE.Vector3();
@@ -106,7 +108,7 @@ export class Diver {
   private netLevel = 1;
   private rodReachScale = 1;
   private reelRecovery = 1;
-  private lampMaxIntensity = 48;
+  private lampMaxIntensity = this.lampOptics.intensity;
   private kickPhase = 0;
   private armPhase = 1.2;
   private bubbles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number; size: number; phase: number; lift: number }[] = [];
@@ -213,7 +215,7 @@ export class Diver {
     scene.add(this.splash.mesh);
     // A spotlight gives the diver a readable forward beam at depth. Its
     // target shares the visible head frame, so every head pose carries the beam.
-    this.headlamp = new THREE.SpotLight('#fff1c4', 0, 22, 0.65, 0.55, 1.6);
+    this.headlamp = new THREE.SpotLight('#fff1c4', 0, this.lampOptics.distance, this.lampOptics.angle, this.lampOptics.penumbra, this.lampOptics.decay);
     this.headlamp.position.set(0, 0, 0);
     this.headlamp.target.position.set(3.1, 0, 0);
     this.lampAnchor.add(this.headlamp, this.headlamp.target);
@@ -566,11 +568,12 @@ export class Diver {
 
   /** Apply branch-adjusted beam values while retaining the visible lamp tier. */
   setLampStats(distance: number, intensity: number, angle: number, scatter = this.lampOptics.scatter, decay = this.lampOptics.decay, penumbra = this.lampOptics.penumbra, extinction = this.lampOptics.extinction) {
+    const base = lampProfile(1);
     this.lampOptics = {
-      distance: THREE.MathUtils.clamp(Number.isFinite(distance) ? distance : 18, 1, 100),
-      intensity: Math.max(1, Number.isFinite(intensity) ? intensity : 48),
-      angle: THREE.MathUtils.clamp(Number.isFinite(angle) ? angle : 0.65, 0.2, 1.5),
-      scatter: THREE.MathUtils.clamp(Number.isFinite(scatter) ? scatter : 0.12, 0, 1),
+      distance: THREE.MathUtils.clamp(Number.isFinite(distance) ? distance : base.distance, 1, 100),
+      intensity: Math.max(1, Number.isFinite(intensity) ? intensity : base.intensity),
+      angle: THREE.MathUtils.clamp(Number.isFinite(angle) ? angle : base.angle, 0.2, 1.5),
+      scatter: THREE.MathUtils.clamp(Number.isFinite(scatter) ? scatter : base.scatter, 0, 1),
       decay: THREE.MathUtils.clamp(Number.isFinite(decay) ? decay : 2, 0, 4),
       penumbra: THREE.MathUtils.clamp(Number.isFinite(penumbra) ? penumbra : 0.55, 0, 1),
       extinction: Math.max(0, Number.isFinite(extinction) ? extinction : 0.03),
@@ -588,12 +591,25 @@ export class Diver {
     this.lampEffects = effectsEnabled;
   }
 
+  /** Changes output immediately, including while the player is adjusting paused settings. */
+  setLampBrightness(mode: HeadlampBrightness) {
+    this.lampBrightness = lampBrightnessScale(mode);
+    this.updateLamp(-this.pos.y);
+  }
+
   /** Only real lights illuminate surfaces; no geometry represents the beam. */
   private updateLamp(depth: number) {
     const activation = this.lampEffects && this.lampGroup.visible ? lampActivation(depth, this.lampNight) : 0;
-    this.headlamp.intensity = this.lampMaxIntensity * activation;
-    this.lampFill.intensity = activation * this.lampMaxIntensity * this.lampOptics.scatter * 0.06;
-    this.lampFill.distance = 2 + this.lampOptics.angle * 2;
+    const output = this.lampMaxIntensity * activation * this.lampBrightness;
+    this.headlamp.intensity = output;
+    this.lampFill.intensity = output * this.lampOptics.scatter * 0.22;
+    this.lampFill.distance = 6 + this.lampOptics.angle * 3;
+    // Reflected light reaches the visible sides of nearby rocks, even when the diver turns left.
+    this.lampAnchor.getWorldPosition(this.lampFillWorld);
+    this.lampFillWorld.y += 0.3;
+    this.lampFillWorld.z += 2.4;
+    this.lampAnchor.worldToLocal(this.lampFillWorld);
+    this.lampFill.position.copy(this.lampFillWorld);
 
     for (const material of this.lampEmitters) {
       material.emissiveIntensity = activation > 0 ? 0.35 + activation * 1.7 : 0;

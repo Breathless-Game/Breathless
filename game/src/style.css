@@ -216,6 +216,20 @@ body {
 }
 
 /* ---- depth gauge ---- */
+#surface-guide {
+  position: absolute;
+  top: 124px;
+  right: 20px;
+  max-width: min(220px, 45vw);
+  padding: 8px 12px;
+  color: #bdf4e4;
+  border-color: rgba(111, 220, 188, 0.35);
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+#surface-guide.urgent { color: #ffd4b7; border-color: rgba(255, 151, 106, 0.5); }
+
 #depth {
   position: absolute;
   right: 26px;

@@ -21,6 +21,7 @@ import { Shelf, layoutSeabed, plantHeight, type RockSlot, type SeabedLayout } fr
 import { rockGeometry, paintRock } from './rock-surface';
 import { TRENCH_HALF_WIDTH, terrainFloorY } from './terrain-depth';
 import { underwaterHazeRange } from './underwater-haze';
+import { underwaterAmbientLift } from './dive-visibility';
 import { SurfaceTextures } from './surface-textures';
 export { TRENCH_HALF_WIDTH } from './terrain-depth';
 
@@ -815,7 +816,7 @@ export class World {
     this.hemi.color.copy(this.skyColor).lerp(this.horizonColor, 0.3);
     // Sky pixels are dark at night; use their hue without losing all fill light.
     this.hemi.color.lerp(this.sun.color, 0.2 + 0.6 * lighting.nightMix);
-    this.hemi.intensity = lighting.ambientIntensity * light;
+    this.hemi.intensity = lighting.ambientIntensity * (light + underwaterAmbientLift(depth));
     this.sun.position.set(...lighting.direction).multiplyScalar(80);
     this.sun.intensity = lighting.sunIntensity * light * light;
     // Surface fixtures use the same weather/day state as the global lights,

@@ -35,6 +35,7 @@
         <div id="depth-marker"><span id="depth-label">0 m</span></div>
       </section>
 
+      <div id="surface-guide" class="panel hidden"></div>
       <div id="emergency" class="hidden">
         <div class="label" data-zh="没气了 · 快上浮！">OUT OF AIR · SURFACE!</div>
         <div class="bar"><div id="emergency-fill"></div></div>
@@ -363,6 +364,14 @@
             </select>
           </label>
           <label class="setting"><span data-zh="光影特效">Lighting effects</span><input type="checkbox" id="set-lighting" /></label>
+          <label class="setting">
+            <span data-zh="头灯亮度">Headlamp brightness</span>
+            <select id="set-headlamp-brightness">
+              <option value="normal" data-zh="标准">Normal</option>
+              <option value="bright" data-zh="明亮">Bright</option>
+              <option value="extra" data-zh="更亮">Extra bright</option>
+            </select>
+          </label>
           <label class="setting">
             <span data-zh="天气">Weather</span>
             <select id="set-weather">

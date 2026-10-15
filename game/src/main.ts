@@ -9,7 +9,9 @@ import { Diver } from './diver';
 import { SkinPicker } from './skins';
 import { skinUnlocked,visitSkinMap } from './skin-access';
 import { type Band, disposeFishMesh, Fish, FishSpec, RARITY_ORDER, fishValue, recordedDepth, rollFish } from './fish';
+import { PreviewFrameCache, previewSize, ViewVisibility } from './scene-budget';
 import { Hud } from './hud';
+import { SurfaceGuide } from './surface-guide';
 import { LazyVault as Vault } from './lazy-panels';
 import { HealthLog } from './health';
 import { LazyReport as Report } from './lazy-panels';
@@ -158,6 +160,7 @@ let guideWasPaused = false;
 let tutorialDescended = false;
 let fieldGuide: FieldGuide | null = null;
 const hud = new Hud();
+const surfaceGuide = new SurfaceGuide();
 
 // Random world events (avalanches, whales, a leviathan...). They play only during a
 // dive (see update()); menus show none and cost nothing.
@@ -2205,6 +2208,8 @@ function applySettings(s: Settings) {
   renderQuality.setMode(s.quality);
   diver.setQuality(renderQuality.settings);
   world.setLightingEffects(s.lightingEffects);
+  diver.setLampEnvironment(world.dayCycle.state.nightMix, s.lightingEffects);
+  diver.setLampBrightness(s.headlampBrightness);
   world.setWeather(s.weather);
   world.setQuality(renderQuality.settings);
   sonar.setDetail(renderQuality.settings.detail);
@@ -2864,7 +2869,7 @@ function update(dt: number, time: number) {
     if (!trenchFish.has(f)) f.setWorldBounds(worldBounds.left, worldBounds.right);
     const near = scattering && Math.abs(f.pos.x - scatterAt.x) < 16 && Math.abs(f.pos.y - scatterAt.y) < 12;
     // A threat just behind each nearby fish, on the diver's side: it darts away.
-    f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos);
+    f.update(dt, time, near ? scatterThreat.copy(f.pos).sub(scatterAt).setZ(0).setLength(0.6).negate().add(f.pos) : diver.pos, false);
     const fishFloor = world.floorY(f.pos.x, f.pos.z) + 0.8;
     if (f.pos.y < fishFloor) {
       f.pos.y = fishFloor;
@@ -2936,6 +2941,7 @@ function update(dt: number, time: number) {
   hud.placeBreath(overDiversHead());
   hud.setHotbar(QUICK_SLOTS, activeTool, (slot) => activeLoadout == null || activeLoadout.includes(slot));
   hud.setDepth(-diver.pos.y);
+  surfaceGuide.update(-diver.pos.y, net.length, currentStats().netCapacity, playing && outOfAir, playing && (outOfAir || !stormSea.capsized));
   // outOfAir stays set through the 2 s blackout; blackout() already hid the bar.
   hud.setEmergency(outOfAir && phase === 'play' ? emergency : null);
   if (phase === 'calibrating') updateCalibration();
@@ -3016,33 +3022,57 @@ function snapToDiveCamera() {
   camera.lookAt(camera.position.x, camera.position.y - 1.6, 0);
 }
 
-// The workbench's live place preview: while it is on, every frame also renders the
-// scene from where the dive starts and copies it here. Diving grows this canvas to
-// the full screen over the live scene, which is then in exactly that view.
+// The workbench's live place preview reuses one budgeted canvas from the dive's
+// starting camera. Diving grows that canvas over the live scene in the same view.
 const previewCanvas = document.createElement('canvas');
 const previewCamera = new THREE.PerspectiveCamera();
+const previewFrames = new PreviewFrameCache();
+const fishVisibility = new ViewVisibility();
+const previewViewport = new THREE.Vector4();
 let previewOn = false;
 
 /** Switches the world to that place and starts the live preview of it (null: stops it). */
 function mapPreview(id: MapId | null): HTMLCanvasElement | null {
   previewOn = id != null;
+  previewFrames.invalidate();
   if (!id) return null;
   selectMap(id, true);
+  updateFishVisuals();
   renderPreview(); // a first frame right away, so it never shows empty
   return previewCanvas;
 }
 
-function renderPreview() {
+function posePreviewCamera() {
   previewCamera.copy(camera); // same lens and aspect
   cameraTarget(previewCamera.position, 0);
   previewCamera.lookAt(previewCamera.position.x, previewCamera.position.y - 1.6, 0);
-  renderer.render(scene, previewCamera);
-  if (previewCanvas.width !== canvas.width || previewCanvas.height !== canvas.height) {
-    previewCanvas.width = canvas.width;
-    previewCanvas.height = canvas.height;
+}
+
+function updateFishVisuals() {
+  if (previewOn) posePreviewCamera();
+  fishVisibility.update(camera, previewOn ? previewCamera : undefined);
+  for (const fish of fishes) fish.updateVisual(time, fishVisibility.intersects(fish.pos, fish.visualRadius));
+}
+
+function renderPreview() {
+  const detail = renderQuality.settings.detail;
+  if (!previewFrames.needsFrame(performance.now(), canvas.width, canvas.height, detail)) return;
+  posePreviewCamera();
+  const [width, height] = previewSize(canvas.width, canvas.height, detail);
+  renderer.getViewport(previewViewport);
+  const ratio = renderer.getPixelRatio();
+  try {
+    renderer.setViewport(0, 0, width / ratio, height / ratio);
+    renderer.render(scene, previewCamera);
+    if (previewCanvas.width !== width || previewCanvas.height !== height) {
+      previewCanvas.width = width;
+      previewCanvas.height = height;
+    }
+    // Copy only the viewport just rendered, while its drawing buffer is valid.
+    previewCanvas.getContext('2d')!.drawImage(canvas, 0, canvas.height - height, width, height, 0, 0, width, height);
+  } finally {
+    renderer.setViewport(previewViewport);
   }
-  // Copied in the same task as the render, so the drawing buffer is still there.
-  previewCanvas.getContext('2d')!.drawImage(canvas, 0, 0);
 }
 
 let time = 0;
@@ -3069,6 +3099,7 @@ function frame() {
   // The corner 手册 / 新手引导 buttons: on the title the rope's GUIDE and TUTORIAL fish stand in for them.
   // Outside update() so a pause does not leave them stale; showLauncher only touches the DOM on a change.
   fieldGuide?.showLauncher(!titleScreen.visible);
+  updateFishVisuals();
   if (previewOn) renderPreview(); // before the main view, which is what the canvas then shows
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -3116,6 +3147,7 @@ Object.assign(window, {
       world.advanceTime(1 / 30);
       update(1 / 30, time);
     }
+    updateFishVisuals();
     renderer.render(scene, camera);
   },
 });

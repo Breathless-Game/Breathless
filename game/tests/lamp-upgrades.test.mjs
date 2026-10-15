@@ -41,6 +41,6 @@ test('starter optics are shared while wide tiers exchange range for greater cove
     assert.ok(focus[index].optics.distance > wide[index].optics.distance);
     assert.ok(wide[index].coverage > focus[index].coverage);
   }
-  assert.match(lampEffect(3, 'wideLamp', false), /32 m.*74 cd.*143°/);
-  assert.match(lampEffect(3, 'focus', true), /48 m.*102 cd.*49°/);
+  assert.match(lampEffect(3, 'wideLamp', false), /40 m.*175 cd.*143°/);
+  assert.match(lampEffect(3, 'focus', true), /54 m.*220 cd.*49°/);
 });

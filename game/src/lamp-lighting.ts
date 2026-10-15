@@ -1,5 +1,11 @@
 /** Optical settings for the spotlight and nearby reflected illumination. */
 export type LampPath = 'focus' | 'wideLamp';
+export type HeadlampBrightness = 'normal' | 'bright' | 'extra';
+
+/** A display preference; it never changes purchased optics or beam reach. */
+export function lampBrightnessScale(mode: HeadlampBrightness): number {
+  return mode === 'extra' ? 1.7 : mode === 'bright' ? 1.35 : 1;
+}
 
 export interface LampProfile {
   /** Beam cutoff in metres from the lens. */
@@ -19,20 +25,20 @@ export interface LampProfile {
 }
 
 const BASE: LampProfile = Object.freeze({
-  distance: 18, intensity: 48, angle: 0.65, decay: 2,
-  penumbra: 0.55, scatter: 0.12, extinction: 0.03,
+  distance: 24, intensity: 96, angle: 0.72, decay: 2,
+  penumbra: 0.65, scatter: 0.18, extinction: 0.03,
 });
 
 const FOCUS: readonly LampProfile[] = Object.freeze([
   BASE,
-  Object.freeze({ distance: 33, intensity: 74, angle: 0.52, decay: 2, penumbra: 0.3, scatter: 0.09, extinction: 0.018 }),
-  Object.freeze({ distance: 48, intensity: 102, angle: 0.43, decay: 2, penumbra: 0.24, scatter: 0.075, extinction: 0.014 }),
+  Object.freeze({ distance: 38, intensity: 160, angle: 0.52, decay: 2, penumbra: 0.3, scatter: 0.13, extinction: 0.018 }),
+  Object.freeze({ distance: 54, intensity: 220, angle: 0.43, decay: 2, penumbra: 0.24, scatter: 0.11, extinction: 0.014 }),
 ]);
 
 const WIDE: readonly LampProfile[] = Object.freeze([
   BASE,
-  Object.freeze({ distance: 24, intensity: 60, angle: 1.03, decay: 2, penumbra: 0.8, scatter: 0.2, extinction: 0.045 }),
-  Object.freeze({ distance: 32, intensity: 74, angle: 1.25, decay: 2, penumbra: 0.9, scatter: 0.24, extinction: 0.05 }),
+  Object.freeze({ distance: 30, intensity: 130, angle: 1.03, decay: 2, penumbra: 0.8, scatter: 0.25, extinction: 0.045 }),
+  Object.freeze({ distance: 40, intensity: 175, angle: 1.25, decay: 2, penumbra: 0.9, scatter: 0.3, extinction: 0.05 }),
 ]);
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -66,13 +72,13 @@ export function lampDistanceAttenuation(distance: number, profile: LampProfile):
 
 /**
  * Lamp output from depth in metres and night strength (0 day, 1 night).
- * The lens fades in below the surface; darkness grows smoothly from 10–48 m.
- * At night a submerged lamp starts at 72% output, before the deep-water boost.
+ * The lens fades in below the surface and remains useful in shallow water.
+ * Output grows smoothly from 28% to full between 5–36 m; nights start at 86%.
  */
 export function lampActivation(depth: number, night = 0): number {
   const metres = Number.isFinite(depth) ? Math.max(0, depth) : 0;
   const nightStrength = Number.isFinite(night) ? clamp01(night) : 0;
   const submerged = smoothstep(0.3, 2, metres);
-  const darkness = smoothstep(10, 48, metres);
-  return submerged * Math.max(darkness, nightStrength * 0.72);
+  const darkness = 0.28 + 0.72 * smoothstep(5, 36, metres);
+  return submerged * Math.max(darkness, nightStrength * 0.86);
 }

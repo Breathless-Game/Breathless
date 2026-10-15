@@ -659,6 +659,12 @@ To reset, run `localStorage.clear()` in the browser console.
 
 ## 11. Debugging tips
 
+### Underwater visibility
+
+The starter headlamp now reaches 24 m at 96 cd, with stronger focus/diffuser upgrades and a wider, soft nearby fill. It begins lighting shallow water after submerging and reaches full daytime output at 36 m. Deep-water ambient light has a small lift so nearby rocks and fish remain legible while distant water stays dark.
+
+Settings offers **Headlamp brightness** (Normal / Bright / Extra bright), both on the settings table and in Esc → Settings. This saved display preference changes light output, keeping the purchased range and beam shape. A small **↑ Surface to bank** cue appears below 3 m when the net reaches 80% capacity; out of air changes it to **↑ Surface now**. It shows the ascent distance and clears near the surface or outside a dive.
+
 - The dev server **does not type-check**. Before opening a PR, run `npm --prefix game run build` (it runs `tsc --noEmit` first).
 - These globals are available in the console: `breath`, `diver`, `fishes`, `keys`, `debugStep(seconds)`.
 - When the tab is in the background, `requestAnimationFrame` drops to about 2 fps. `debugStep(2)` simulates 2 seconds directly.
@@ -710,6 +716,10 @@ Near the surface, a shared ripple mesh marks the diver's contact with the water 
 - In the console, look at `renderQuality.level` and `renderQuality.settings` to confirm the current level and budget.
 
 The Fjord village keeps the existing low-poly gables, muted red/ochre timber and pale trim. Homes and broad stone terraces share the static scenery batch; a single instanced draw handles the faint windows, with no real lights, bloom or window halos. Each household follows a deterministic slow schedule and fades in through dusk; Lighting effects off leaves the windows dark. Small translucent chimney trails peak at sunset and subside overnight, staying below the mountain skyline. Quality changes keep surviving homes in the same places and rebuild only the scenery at the existing decoration update rates. The aurora sits behind every mountain range and fades in after dusk, so it cannot paint across the peaks.
+
+Fish behaviour and visual work run separately. Every fish keeps its movement, flee response and catch position, while conservative bounds skip drawing and vertex deformation outside the main camera and any open map-preview camera. Visible fish retain the same geometry and swimming rig. Flat-shaded surfaces use the fragment shader's face normals without rebuilding CPU normals; smooth materials still rebuild theirs. Animated position buffers use dynamic uploads.
+
+The chart reuses one preview canvas rather than rendering and copying a full-screen scene every frame. Low / medium / high refresh it at most 10 / 15 / 20 times per second, with widths capped at 480 / 640 / 960 pixels and height at 720 pixels, preserving aspect ratio. Opening another place, resizing or changing quality invalidates that frame. Fish-icon caching uses a least-recently-used limit of 64 entries and 8 MiB of estimated string storage; context loss clears it. It retains image data, not live fish models or map scenes.
 
 ### Natural daylight and water reflections
 

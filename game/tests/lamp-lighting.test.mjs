@@ -7,12 +7,13 @@ const source = await readFile(new URL('../src/lamp-lighting.ts', import.meta.url
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
-const { lampProfile, lampDistanceAttenuation, lampActivation } = await import(
+const { lampProfile, lampDistanceAttenuation, lampActivation, lampBrightnessScale } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 
 test('focus lamps carry a stronger direct beam while diffusers spread more local light', () => {
-  assert.equal(lampProfile(1).distance, 18);
+  assert.equal(lampProfile(1).distance, 24);
+  assert.equal(lampProfile(1).intensity, 96);
   assert.deepEqual(lampProfile(1, 'focus'), lampProfile(1, 'wideLamp'));
   for (const level of [2, 3]) {
     const focus = lampProfile(level, 'focus');
@@ -87,10 +88,11 @@ test('the lamp fades under the surface and activates sooner at night', () => {
     for (const value of samples) assert.ok(Number.isFinite(value) && value >= 0 && value <= 1);
     for (let i = 1; i < samples.length; i++) assert.ok(samples[i] >= samples[i - 1]);
   }
-  assert.equal(lampActivation(2, 0), 0);
-  assert.ok(lampActivation(2, 1) > 0.7);
+  assert.equal(lampActivation(2, 0), 0.28, 'the starter lights nearby terrain before a deep dive');
+  assert.ok(lampActivation(2, 1) > 0.8);
+  assert.equal(lampActivation(36, 0), 1);
   assert.ok(lampActivation(1, 1) > 0 && lampActivation(1, 1) < lampActivation(2, 1));
-  for (const edge of [0.3, 2, 10, 48]) {
+  for (const edge of [0.3, 2, 5, 36]) {
     for (const night of [0, 1]) {
       assert.ok(Math.abs(lampActivation(edge + 1e-5, night) - lampActivation(edge - 1e-5, night)) < 1e-5);
     }
@@ -99,6 +101,15 @@ test('the lamp fades under the surface and activates sooner at night', () => {
 
 test('environmental activation clamps invalid depth and night strengths', () => {
   for (const depth of [NaN, Infinity, -Infinity]) assert.equal(lampActivation(depth, 1), 0);
-  for (const night of [NaN, Infinity, -Infinity, -1]) assert.equal(lampActivation(2, night), 0);
+  for (const night of [NaN, Infinity, -Infinity, -1]) assert.equal(lampActivation(2, night), lampActivation(2, 0));
   assert.equal(lampActivation(2, 5), lampActivation(2, 1));
+});
+
+test('brightness preferences are bounded and do not mutate purchased optics', () => {
+  const profile = { ...lampProfile(1) };
+  assert.equal(lampBrightnessScale('normal'), 1);
+  assert.equal(lampBrightnessScale('bright'), 1.35);
+  assert.equal(lampBrightnessScale('extra'), 1.7);
+  assert.equal(lampBrightnessScale('unknown'), 1);
+  assert.deepEqual(lampProfile(1), profile);
 });

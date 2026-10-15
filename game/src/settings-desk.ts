@@ -277,6 +277,16 @@ export class SettingsDesk {
       [
         {
           kind: 'select',
+          title: ['HEADLAMP BRIGHTNESS', '头灯亮度'],
+          options: [['normal', 'Normal', '标准'], ['bright', 'Bright', '明亮'], ['extra', 'Extra', '更亮']],
+          get: () => s().headlampBrightness,
+          set: (v) => h.change({ headlampBrightness: v as Settings['headlampBrightness'] }),
+        },
+        0, -2.31, 3.1, 0.65,
+      ],
+      [
+        {
+          kind: 'select',
           title: ['TIME OF DAY', '时间'],
           options: [['cycle', 'Cycle', '昼夜'], ['morning', 'Morning', '清晨'], ['afternoon', 'Afternoon', '午后'], ['night', 'Night', '夜晚']],
           get: () => h.timeOfDay(),
