@@ -49,7 +49,7 @@ import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { browserLocks, claimTab, showTabNotice, takeOverTab } from './tab-lock';
-import { onTabHidden, shouldResume, walletPromptOpen } from './wallet-prompt';
+import { onTabHidden, shouldHold, shouldResume, walletPromptOpen } from './wallet-prompt';
 import { LoginGate, mountWalletRow } from './login';
 import { LazyWorldEvents as WorldEvents } from './lazy-panels';
 import type { EventContext } from './events';
@@ -2761,10 +2761,23 @@ document.addEventListener('visibilitychange', () => {
     keys.clear();
   }
 });
-/** The held dive carries on once the tab shows and the wallet has answered (frame() checks each frame). */
-function releaseWalletHold() {
-  if (!shouldResume({ held: heldForWallet, hidden: document.hidden, promptOpen: walletPromptOpen() })) return;
+/**
+ * Checked every frame. A wallet prompt opening mid-dive (a sale from the Collection: Phantom's popup
+ * over a visible tab) freezes the dive too, so nothing (a shark bite) ends it meanwhile. The held
+ * dive carries on once the tab shows and the wallet has answered.
+ */
+function syncWalletHold() {
+  const promptOpen = walletPromptOpen();
+  if (shouldHold({ playing: phase === 'play', paused, held: heldForWallet, promptOpen })) {
+    paused = true;
+    heldForWallet = true;
+    keys.clear();
+    return;
+  }
+  if (!shouldResume({ held: heldForWallet, hidden: document.hidden, promptOpen })) return;
   heldForWallet = false;
+  // Left the dive another way meanwhile (log out → goToMenu already unpaused): any pause now is not ours.
+  if (phase !== 'play') return;
   paused = false;
   keys.clear();
   breathSince = null; // time spent in the wallet doesn't count as breathing underwater
@@ -3113,7 +3126,7 @@ function renderPreview() {
 
 let time = 0;
 function frame() {
-  releaseWalletHold();
+  syncWalletHold();
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
     diver.setQuality(renderQuality.settings);
