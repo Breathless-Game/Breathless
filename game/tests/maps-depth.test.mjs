@@ -17,8 +17,8 @@ const fish = await moduleUrl('fish', { three: import.meta.resolve('three'), './r
 const wallet = `data:text/javascript;base64,${Buffer.from('export const storageKey = key => key;').toString('base64')}`;
 const { MAPS, mapDepth, mapZones } = await import(await moduleUrl('maps', { './fish': fish, './wallet': wallet, './i18n': i18n }));
 
-test('finite maps reach 120 m and 200 m while the ocean opens a trench below its 300 m shelf', () => {
-  for (const [id, depth, trench] of [['fjord', 120, false], ['tianchi', 200, false], ['ocean', 300, true]]) {
+test('finite maps reach 138 m and 269 m while the ocean opens a trench below its 300 m shelf', () => {
+  for (const [id, depth, trench] of [['fjord', 138, false], ['tianchi', 269, false], ['ocean', 300, true]]) {
     const map = MAPS[id], zones = mapZones(map);
     assert.equal(mapDepth(map), depth);
     assert.equal(map.hasTrench, trench);
@@ -35,11 +35,11 @@ test('finite maps reach 120 m and 200 m while the ocean opens a trench below its
 test('floor depth and the last named zone can expand without adding zones or mutating shared rarity bands', async () => {
   const { ZONES } = await import(fish);
   const before = structuredClone(ZONES);
-  const map = { ...MAPS.tianchi, seabedDepth: 140 };
+  const map = { ...MAPS.tianchi, seabedDepth: 400 };
   const zones = mapZones(map);
   assert.equal(zones.length, 3);
   assert.equal(zones[2].top, 38);
-  assert.equal(zones[2].bottom, 138);
-  assert.equal(mapDepth(map), 140);
+  assert.equal(zones[2].bottom, 398);
+  assert.equal(mapDepth(map), 400);
   assert.deepEqual(ZONES, before, 'absolute-depth rarity and ocean reference bands are preserved');
 });

@@ -13,7 +13,7 @@ const zonesFor = (bottom, twoZones = false) => twoZones
   : [{ top: 0, bottom: 18 }, { top: 18, bottom: 38 }, { top: 38, bottom: bottom - 2 }];
 
 test('every depth down to each expanded floor is covered without gaps or changes to the input zones', () => {
-  for (const [depth, twoZones] of [[120, true], [200, false], [300, false]]) {
+  for (const [depth, twoZones] of [[138, true], [269, false], [300, false]]) {
     const zones = zonesFor(depth, twoZones), before = structuredClone(zones), stock = buildShelfFishBands(zones);
     assert.deepEqual(zones, before);
     assert.equal(stock[0].band.top, 0);
@@ -36,7 +36,7 @@ test('a short final slice is joined to its neighbour rather than creating an inv
 });
 
 test('descent and ascent keep the visible water stocked with a bounded population', () => {
-  for (const floor of [120, 200, 300, 2000]) {
+  for (const floor of [138, 269, 300, 2000]) {
     const stock = buildShelfFishBands(zonesFor(floor)), live = new Map();
     const traverse = depth => {
       const { load, keep } = shelfFishWindow(stock, depth);

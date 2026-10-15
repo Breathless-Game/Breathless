@@ -20,7 +20,7 @@ const { Shelf, layoutSeabed, plantHeight } = await import(await sourceUrl('../sr
 const BOUNDS = { trench: 14, outer: 290, zMin: -115, zMax: 65 };
 const REACH = 200;
 const SCALE = (REACH * 2) / 140;
-const MAPS = { fjord: [0xf10d5ea, 120, 55], tianchi: [0x71a2c41, 200, 26], ocean: [20261010, 300, 55] };
+const MAPS = { fjord: [0xf10d5ea, 138, 55], tianchi: [0x71a2c41, 269, 26], ocean: [20261010, 300, 55] };
 
 function build(id) {
   const [seed, depth, perSpan] = MAPS[id];
@@ -118,8 +118,8 @@ test('finite seabeds meet at the centre with no crack and agree with sampled flo
 });
 
 test('kelp stops short of the surface and low plants stay low', () => {
-  // Cover legacy shallows as well as the expanded 120 / 200 / 300 m seabeds.
-  for (const depth of [20, 40, 60, 120, 200, 300]) {
+  // Cover legacy shallows as well as the expanded 138 / 269 / 300 m seabeds.
+  for (const depth of [20, 40, 60, 138, 269, 300]) {
     for (const vigor of [0, 0.3, 1]) {
       const giant = plantHeight('giant', vigor, depth);
       assert.ok(giant >= 6 && giant <= depth - 5 && giant <= 48);

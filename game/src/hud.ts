@@ -99,11 +99,12 @@ export class Hud {
   private buildDepthTicks() {
     this.depthGauge.querySelectorAll('.tick').forEach(el => el.remove());
     const frag = document.createDocumentFragment();
-    const step = this.depthRange > 150 ? 25 : this.depthRange > 100 ? 20 : 10;
+    const step = this.depthRange > 250 ? 50 : this.depthRange > 150 ? 25 : this.depthRange > 100 ? 20 : 10;
     const shelfTick = this.lastZones?.[1];
-    const ticks = Number.isFinite(this.depthRange)
-      ? Array.from({ length: Math.floor(this.depthRange / step) + 1 }, (_, i) => i * step)
-      : shelfTick ? [...new Set([...DEPTH_TICKS, shelfTick])].sort((a, b) => a - b) : DEPTH_TICKS;
+    const regularTicks = Number.isFinite(this.depthRange)
+      ? Array.from({ length: Math.floor((shelfTick ?? this.depthRange) / step) + 1 }, (_, i) => i * step)
+      : DEPTH_TICKS;
+    const ticks = shelfTick ? [...new Set([...regularTicks, shelfTick])].sort((a, b) => a - b) : regularTicks;
     for (const m of ticks) {
       const el = document.createElement('div');
       el.className = 'tick';
