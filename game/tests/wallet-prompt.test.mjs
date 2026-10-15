@@ -88,3 +88,20 @@ test('the hidden-tab decision follows the prompt as it opens and closes', async 
   await sale;
   assert.equal(dive(), 'board');
 });
+
+test('a held dive resumes only when the tab shows and the wallet has answered', async () => {
+  // Back in the game before approving (reading the desktop app's code): still held.
+  assert.equal(P.shouldResume({ held: true, hidden: false, promptOpen: true }), false);
+  assert.equal(P.shouldResume({ held: true, hidden: true, promptOpen: false }), false);
+  assert.equal(P.shouldResume({ held: true, hidden: false, promptOpen: false }), true);
+  // Nothing held here: other pauses are not this one's to lift.
+  assert.equal(P.shouldResume({ held: false, hidden: false, promptOpen: false }), false);
+
+  const { asks, signer } = fakeSigner();
+  const sale = P.trackPrompts(signer).signTransaction('sell');
+  const resume = () => P.shouldResume({ held: true, hidden: false, promptOpen: P.walletPromptOpen() });
+  assert.equal(resume(), false, 'visible again, but the sale still waits in the wallet');
+  asks[0].resolve('signed');
+  await sale;
+  assert.equal(resume(), true);
+});

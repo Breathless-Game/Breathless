@@ -1,7 +1,7 @@
 // Whether the player's own wallet is asking them something right now (an owner signature: a sale,
-// a purchase, a burn, a top-up). While it is, the game is expected to lose its window: Phantom's
-// popup in fullscreen, or the desktop app's Browser wallet, which opens the system browser over the
-// game (desktop-wallet.ts). On macOS a fully covered window reads as a hidden tab, and a hidden tab
+// a purchase, a burn, a top-up). While it is, the game may lose its window: the desktop app's
+// Browser wallet opens the system browser over the game (desktop-wallet.ts), and per Electron's
+// page-visibility docs a fully covered window on macOS reads as a hidden page. A hidden tab
 // mid-dive used to send the diver aboard to the workbench (main.ts pause), so a sale from the
 // Collection mid-dive left the player at the title's fish instead of where they were.
 // No imports, so tests/wallet-prompt.test.mjs can load it on its own.
@@ -44,11 +44,20 @@ export function trackPrompts<Tx, Key>(signer: PromptingSigner<Tx, Key>): Prompti
 /**
  * What the tab going hidden does to the game. board: mid-dive, nobody watching, so go aboard to
  * the workbench as Esc does. hold: mid-dive, but the player's wallet took the window: freeze the
- * dive where it is and carry on when the tab shows again. none: not in a running dive.
+ * dive where it is (shouldResume says when it carries on). none: not in a running dive.
  */
 export type HiddenAction = 'board' | 'hold' | 'none';
 
 export function onTabHidden(s: { playing: boolean; paused: boolean; promptOpen: boolean }): HiddenAction {
   if (!s.playing || s.paused) return 'none';
   return s.promptOpen ? 'hold' : 'board';
+}
+
+/**
+ * A dive held for the wallet carries on only once the tab shows again and no prompt is open: the
+ * player may come back to read the desktop app's code before approving, and the dive must not run
+ * on under its waiting screen.
+ */
+export function shouldResume(s: { held: boolean; hidden: boolean; promptOpen: boolean }): boolean {
+  return s.held && !s.hidden && !s.promptOpen;
 }

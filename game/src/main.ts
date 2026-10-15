@@ -49,7 +49,7 @@ import { ChainFishSync } from './chain-fish-sync';
 import { bumpPearlEpoch, nudgePearlBalance, pearlBalance, readGuard, setPearlBalance, setPearlsUnavailable } from './pearl-balance';
 import { disconnectWallet, onWalletChange, restoreWallet, storageKey, walletState } from './wallet';
 import { browserLocks, claimTab, showTabNotice, takeOverTab } from './tab-lock';
-import { onTabHidden, walletPromptOpen } from './wallet-prompt';
+import { onTabHidden, shouldResume, walletPromptOpen } from './wallet-prompt';
 import { LoginGate, mountWalletRow } from './login';
 import { LazyWorldEvents as WorldEvents } from './lazy-panels';
 import type { EventContext } from './events';
@@ -2747,25 +2747,28 @@ showTitle(true);
 // A hidden tab throttles the game loop to ~2 fps; don't let the dive run on unattended.
 // Except when the player's own wallet took the window (selling from the Collection mid-dive: the
 // desktop app opens the system browser over the game): then hold the dive and carry on where it was
-// when the tab shows again, instead of going aboard to the title's fish (wallet-prompt.ts).
+// when the tab shows again and the wallet has answered, instead of going aboard to the title's fish
+// (wallet-prompt.ts). Back early (the desktop app's waiting screen is still up): still held.
 let heldForWallet = false;
 document.addEventListener('visibilitychange', () => {
   resetDayClock = true;
-  if (document.hidden) {
-    const action = onTabHidden({ playing: phase === 'play', paused, promptOpen: walletPromptOpen() });
-    if (action === 'board') pause();
-    else if (action === 'hold') {
-      paused = true;
-      heldForWallet = true;
-      keys.clear();
-    }
-  } else if (heldForWallet) {
-    heldForWallet = false;
-    paused = false;
+  if (!document.hidden) return;
+  const action = onTabHidden({ playing: phase === 'play', paused, promptOpen: walletPromptOpen() });
+  if (action === 'board') pause();
+  else if (action === 'hold') {
+    paused = true;
+    heldForWallet = true;
     keys.clear();
-    breathSince = null; // time spent in the wallet doesn't count as breathing underwater
   }
 });
+/** The held dive carries on once the tab shows and the wallet has answered (frame() checks each frame). */
+function releaseWalletHold() {
+  if (!shouldResume({ held: heldForWallet, hidden: document.hidden, promptOpen: walletPromptOpen() })) return;
+  heldForWallet = false;
+  paused = false;
+  keys.clear();
+  breathSince = null; // time spent in the wallet doesn't count as breathing underwater
+}
 
 // ---- Main loop ----------------------------------------------------------
 const clock = new THREE.Clock();
@@ -3110,6 +3113,7 @@ function renderPreview() {
 
 let time = 0;
 function frame() {
+  releaseWalletHold();
   const elapsed = clock.getDelta();
   if (renderQuality.observeFrame(elapsed, !document.hidden && !paused)) {
     diver.setQuality(renderQuality.settings);
