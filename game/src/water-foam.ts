@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 /** Calm lakes stay quiet; ocean whitecaps grow with the actual swell amplitude. */
 export function whitecapStrength(waves: number, wind: number): number {
-  return THREE.MathUtils.clamp((waves * (1 + wind * 0.75) - 0.35) / 1.4, 0, 1);
+  return THREE.MathUtils.clamp((waves * (1 + wind * 0.75) - 0.75) / 1.35, 0, 1);
 }
 
 /** Foam spreads while its opacity rises and then dissolves, rather than shrinking into a dot. */

@@ -688,7 +688,7 @@ The game picks the starting quality from the CPU logical core count and the devi
 | Water surface segments | 44 × 8 | 88 × 16 | 132 × 24 |
 | Decoration animation update cap | 20 Hz | 30 Hz | 60 Hz |
 | Water triangles | 704 | 2816 | 6336 |
-| Sun / moon glitter | Same road, a little wider to read on the coarse facets | Same road | Same road, widest glints |
+| Sun / moon reflection | Integrated facet shading | Same lighting response | Same lighting response |
 | Sun / moon glow | Core + 2 halo layers | + soft shoulder | + broad aureole |
 | Cloud texture samples per sky pixel | 2 | 3 | 4 |
 | Sky details | Cloud deck | + high cloud veil / stars | + cloud edge detail |
@@ -715,7 +715,7 @@ Esc → Settings → Time of day offers Natural cycle, Morning, Afternoon and Ni
 
 Esc → Settings → Lighting effects turns sun / moon lighting, scene color grading, light rays and water reflections on or off. It defaults to on and the choice is saved. Turning it off keeps the clock, sky and fog colors, basic ambient visibility and the diver's headlamp. Changing quality or time of day keeps the chosen switch state.
 
-The sea keeps a low-poly silhouette: slightly irregular triangles have separate blue-green facet colors and flat normals. Sun and moon reflections are a road of glitter under the visible source, made of angular wedges and trapezoids. A facet lights up when its slope would mirror the light into the camera, and sea-surface slopes are spread like a Gaussian (Cox and Munk) that widens with wind. So the road is solid in the middle and breaks into scattered glints at its edges, brightens toward the horizon where water mirrors more, takes the color of the sun or moon, and widens in a storm. Each glint is a bright core inside a dimmer band of the same shape, added to the facet's own shading. Facets leaning toward the camera in front of a low light glow faintly green. Every quality level draws the same road. Waves run in the vertex shader, eliminating per-frame water vertex uploads and CPU normal rebuilding. Shared corners remain watertight. The existing water draw handles the reflections without a reflection camera or extra scene render; boats and fish do not have live mirror reflections.
+The sea keeps its original low-poly triangles, blue-green facet colours and flat normals. Sun, moon and sky reflections shade those same animated faces directly, with restrained colour mixing that retains the water's own tone. There are no inset reflection wedges, halos, independent twinkle masks or reflection-driven changes in opacity. Reflective facet centres follow the same wave-height function as the surface vertices. Wind broadens the reflection consistently across quality levels; moonlight and cloud cover reduce its energy. Calm lakes and gentle Fjord swells keep broad whitecap patches out of the foreground, while rougher waves retain crest foam and boat wakes. Waves and reflections share the existing water draw, without extra geometry, a reflection camera or another scene render; boats and fish do not have live mirror reflections.
 
 Large luminous sun and moon discs use warm gold and cool silver-blue layered halos. Low keeps the core and primary halos; higher settings add softer transitions. Clouds attenuate their light before compositing so a thick storm can hide the bright core. No fullscreen bloom pass or render target is allocated. Their compressed elevation keeps the enlarged discs within the side-on camera at noon.
 

@@ -13,12 +13,14 @@ async function moduleUrl(file, imports = {}) {
   return `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`;
 }
 const foam = await moduleUrl('water-foam'), storm = await moduleUrl('storm');
+const reflections = await moduleUrl('water-reflections');
 const rng = await moduleUrl('rng'), odds = await moduleUrl('depth-odds'), marine = await moduleUrl('marine'), i18n = await moduleUrl('i18n');
 const fish = await moduleUrl('fish', { './rng': rng, './depth-odds': odds, './marine': marine, './i18n': i18n });
 const fx = await moduleUrl('fx');
 const lowpoly = await moduleUrl('lowpoly', { 'three/examples/jsm/utils/BufferGeometryUtils.js': import.meta.resolve('three/examples/jsm/utils/BufferGeometryUtils.js') });
 const { StormFx } = await import(await moduleUrl('storm-fx', { './fish': fish, './fx': fx, './lowpoly': lowpoly, './storm': storm, './water-foam': foam }));
-const { WaterSurfaceMaterial } = await import(await moduleUrl('water', { './storm': storm, './water-foam': foam }));
+const { WaterSurfaceMaterial } = await import(await moduleUrl('water', { './storm': storm, './water-foam': foam, './water-reflections': reflections }));
+const { reflectionStrength } = await import(reflections);
 const { whitecapStrength, foamEnvelope, foamGeometry } = await import(foam);
 const { DayCycle } = await import(await moduleUrl('daylight'));
 const { RENDER_QUALITY } = await import(await moduleUrl('render-quality'));
@@ -37,6 +39,7 @@ function live(mesh) {
 
 test('whitecaps stay sparse on calm lakes and strengthen smoothly with wind and swell', () => {
   assert.equal(whitecapStrength(0.3, 0.15), 0);
+  assert.equal(whitecapStrength(0.5, 0.15), 0, 'gentle fjord swell does not paint broad white patches');
   assert.ok(whitecapStrength(0.5, 0.15) < whitecapStrength(1, 0.15));
   let previous = 0;
   for (let wind = 0; wind <= 1; wind += 0.01) {
@@ -142,4 +145,43 @@ test('surface foam uses the displacement coordinates and follows wave strength, 
   assert.equal(shader.uniforms.uWaterAbove.value, 0, 'surface foam fades out from below');
   assert.match(shader.vertexShader, /vWaterSurface = transformed/);
   assert.match(shader.fragmentShader, /sin\(vWaterSurface.x \* 0.15/);
+});
+
+test('reflection energy dims for moonlight and cloud instead of retaining a bright night floor', () => {
+  const day = reflectionStrength(2.2, 0, 0);
+  assert.ok(reflectionStrength(0.35, 1, 0) < day * 0.2);
+  assert.ok(reflectionStrength(2.2, 0, 1) < day * 0.005);
+  let last = day;
+  for (let cloud = 0; cloud <= 1; cloud += 0.01) {
+    const value = reflectionStrength(2.2, 0, cloud);
+    assert.ok(value >= 0 && value <= last);
+    last = value;
+  }
+});
+
+test('quality changes preserve reflection energy, transparency and the disabled-lighting state', () => {
+  const material = new WaterSurfaceMaterial();
+  const shader = { vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader, uniforms: {} };
+  material.onBeforeCompile(shader, {});
+  const light = new DayCycle(180, 12).state;
+  material.setEffectsEnabled(false);
+  const energies = [];
+  for (const quality of Object.values(RENDER_QUALITY)) {
+    material.update(3, light, 3, quality, { wind: 0.3, cloud: 0.2 }, 0.5);
+    energies.push(shader.uniforms.uWaterLightStrength.value);
+    assert.equal(shader.uniforms.uWaterEffects.value, 0);
+    assert.equal(material.opacity, 0.78);
+  }
+  assert.ok(energies.every(e => e === energies[0]));
+});
+
+test('reflection shares wave displacement and shades whole facets without inset masks or alpha overlays', () => {
+  const material = new WaterSurfaceMaterial();
+  const shader = { vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader, uniforms: {} };
+  material.onBeforeCompile(shader, {});
+  assert.match(shader.vertexShader, /transformed.y \+= waterHeight\(position.xz\)/);
+  assert.match(shader.vertexShader, /waterHeight\(aWaterFacet.xy\)/);
+  const reflection = shader.fragmentShader.split('vec3 waterView =')[1].split('// White water belongs')[0];
+  assert.match(reflection, /outgoingLight = mix/);
+  assert.doesNotMatch(reflection, /diffuseColor.a|bandWidth|bandDistance|facetPulse|polygon|vWaterPatch/);
 });
