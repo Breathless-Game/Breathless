@@ -51,14 +51,14 @@ const attrs = (rarity, value) => [
 ];
 
 /** A fake market: the chain (transactions, asset owners), the ledger and every payment made. */
-function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0 } = {}) {
+function setup({ txs = {}, owners = {}, values = {}, payDelayMs = 0, priceFish = plainPrice } = {}) {
   const ledger = new SoldLedger();
   const payments = [];
   const burns = [];
   let fetches = 0;
   let paySeq = 0;
   const desk = createSaleDesk({
-    priceFish: plainPrice,
+    priceFish,
     ledger,
     market: MARKET,
     ensureMint: async () => 'PearlMint',
@@ -282,6 +282,34 @@ test('quoteMany answers per fish and keeps the order', async () => {
   const { quotes } = await quoteMany({ seller: SELLER, assetIds: [A, B, C] }, quote);
   assert.deepEqual(quotes, [
     { assetId: A, pearls: 1 },
+    { assetId: B, status: 410, error: 'gone' },
+    { assetId: C, pearls: 3 },
+  ]);
+});
+
+test('a daily-cap refusal keeps its code and retryAfterMs per fish in /sell-batch and /quote-batch, as /sell does', async () => {
+  const capped = () => new HttpError(429, 'Daily PEARL limit reached', { code: 'daily-cap', retryAfterMs: 3_600_000, assetId: 'not-this-one' });
+  const m = setup({
+    txs: { [TX]: transferTx({ moves: [{ asset: A }, { asset: B }] }) },
+    owners: { [A]: MARKET, [B]: MARKET },
+    priceFish: (asset) => {
+      if (asset.attributes.attributeList.find((x) => x.key === 'value').value === '2') throw capped();
+      return plainPrice(asset);
+    },
+    values: { [A]: 1, [B]: 2 },
+  });
+  const { results } = await m.desk.sellBatch(batch([[A], [B]]));
+  assert.equal(results[0].pearls, 1);
+  assert.deepEqual(results[1], { assetId: B, status: 429, error: 'Daily PEARL limit reached', code: 'daily-cap', retryAfterMs: 3_600_000 });
+  assert.deepEqual(paidTo(m.payments), { [A]: 1 });
+  // Other refusals keep their shape: no extra fields.
+  const { quotes } = await quoteMany({ seller: SELLER, assetIds: [A, B, C] }, async ({ assetId }) => {
+    if (assetId === A) throw capped();
+    if (assetId === B) throw new HttpError(410, 'gone');
+    return { pearls: 3 };
+  });
+  assert.deepEqual(quotes, [
+    { assetId: A, status: 429, error: 'Daily PEARL limit reached', code: 'daily-cap', retryAfterMs: 3_600_000 },
     { assetId: B, status: 410, error: 'gone' },
     { assetId: C, pearls: 3 },
   ]);
