@@ -316,11 +316,10 @@ function lampHead(group: THREE.Group, x: number, radius: number, depth: number, 
   const diode = material('#aa9d7d', { roughness: 0.83, emissive: '#000000', emissiveIntensity: 0 });
   mesh(group, new THREE.BoxGeometry(0.026, 0.026, 0.009), diode, [x, 0.015, z + depth * 0.18], 'unlit-led-chip');
   ring(group, radius * 0.91, 0.012, colors.rubber, [x, 0.015, front - 0.006], 'z', 8).name = 'flush-lens-seal';
-  const glazing = new THREE.MeshPhysicalMaterial({ color: '#d3d8d3', flatShading: true, roughness: 0.29, metalness: 0, transparent: true, opacity: 0.22, transmission: 0.15, thickness: 0.008, emissive: '#000000', emissiveIntensity: 0, depthWrite: false });
+  const glazing = new THREE.MeshPhysicalMaterial({ color: '#d3d8d3', flatShading: true, roughness: 0.29, metalness: 0, transparent: true, opacity: 0.22, emissive: '#000000', emissiveIntensity: 0, depthWrite: false });
   if (diffuser) {
     glazing.roughness = 0.72;
     glazing.opacity = 0.58;
-    glazing.transmission = 0;
     // The etched ribs are physical lens parts; they produce no glow or beam mesh.
     for (const offset of [-0.4, 0, 0.4]) {
       mesh(group, new THREE.BoxGeometry(radius * 0.025, radius * 1.4, 0.003), colors.glass, [x + offset * radius, 0.015, front - 0.007], 'diffuser-lens-rib');
