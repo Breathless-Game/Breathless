@@ -38,7 +38,7 @@ test('mint route: co-signed with a collection, wait while it is being created, t
 test('a co-signed transaction is signed only if it is what we asked for', () => {
   const ok = { accounts: [SESSION, ASSET, MARKET, OWNER, cosign.CORE_PROGRAM], header: { numRequiredSignatures: 3 }, instructions: [{ programIndex: 4 }] };
   const expect = { payer: SESSION, signers: [SESSION, ASSET, MARKET] };
-  assert.equal(cosign.cosignedTxProblem(ok, expect), null);
+  assert.match(cosign.cosignedTxProblem(ok, expect), /neither our mint nor our migration/, 'nothing to check its Core call against');
   assert.match(cosign.cosignedTxProblem({ ...ok, accounts: [MARKET, ASSET, SESSION, OWNER, cosign.CORE_PROGRAM] }, expect), /fee payer/);
   assert.match(cosign.cosignedTxProblem({ ...ok, header: { numRequiredSignatures: 4 } }, expect), /unexpected signatures/);
   assert.match(cosign.cosignedTxProblem({ ...ok, instructions: [{ programIndex: 4 }, { programIndex: 3 }] }, expect), /other than Metaplex Core/);
@@ -128,10 +128,76 @@ test('a co-signed mint carries exactly one Core call: the create of our asset, f
   assert.match(p([create(undefined, new Uint8Array([0]))]), /not a create/, 'createV1');
   assert.match(p([create(undefined, new Uint8Array([3]))]), /not a create/, 'transferV1');
   assert.match(p([create(undefined, new Uint8Array([]))]), /not a create/);
-  // The migrate flow is unchanged: several Core calls, nothing about a create.
-  const migrate = { payer: SESSION, signers: [SESSION, MARKET] };
-  const update = { programIndex: 3, accountIndexes: [2, 0, 1], data: new Uint8Array([15]) };
-  assert.equal(cosign.cosignedTxProblem({ accounts: [SESSION, MARKET, ASSET, cosign.CORE_PROGRAM], header: { numRequiredSignatures: 2 }, instructions: [update, update] }, migrate), null);
+});
+
+// A migration as sensor/fish-collection.mjs cosignMigrate builds it: per fish, two Core updateV2s,
+// the session key handing its update authority to the market, then the market moving it into the collection.
+const FISH2 = 'Fish2111111111111111111111111111111111111111';
+const GEAR = 'Gear111111111111111111111111111111111111111';
+const MARKET_BYTES = new Uint8Array(32).fill(0x4d);
+const COLLECTION_BYTES = new Uint8Array(32).fill(0xc0);
+//                0        1       2      3      4                    5           6      7
+const MKEYS = [SESSION, MARKET, ASSET, FISH2, cosign.CORE_PROGRAM, COLLECTION, SYSTEM, GEAR];
+// mpl-core 1.10.0 updateV2: asset, collection (unset: not in one yet), payer, authority, newCollection, system, logWrapper (unset).
+const HAND_ACCOUNTS = (a) => [a, 4, 0, 0, 4, 6, 4];
+const MOVE_ACCOUNTS = (a) => [a, 4, 0, 1, 5, 6, 4];
+const updateData = (kind, to, { name = false } = {}) =>
+  new Uint8Array([cosign.CORE_UPDATE_V2_DISCRIMINATOR, ...(name ? [1, 1, 0, 0, 0, 0x78] : [0]), 0, 1, kind, ...to]);
+const hand = (a, accountIndexes = HAND_ACCOUNTS(a), data = updateData(1, MARKET_BYTES)) => ({ programIndex: 4, accountIndexes, data });
+const move = (a, accountIndexes = MOVE_ACCOUNTS(a), data = updateData(2, COLLECTION_BYTES)) => ({ programIndex: 4, accountIndexes, data });
+const migrateMsg = (instructions) => ({ accounts: MKEYS, header: { numRequiredSignatures: 2 }, instructions });
+const migrateExpect = (assetIds = [ASSET, FISH2], requested = [ASSET, FISH2]) =>
+  cosign.migrateExpectation((k) => ({ [MARKET]: MARKET_BYTES, [COLLECTION]: COLLECTION_BYTES })[k], { session: SESSION, market: MARKET, collection: COLLECTION, requested, assetIds });
+
+test('a migration moves exactly the fish we asked for: hand-over to the market, then into the Breathless collection', () => {
+  const p = (instructions, expect = migrateExpect()) => cosign.cosignedTxProblem(migrateMsg(instructions), expect);
+  const both = [hand(2), move(2), hand(3), move(3)];
+  assert.equal(p(both), null);
+  assert.equal(p([hand(2), move(2)], migrateExpect([ASSET])), null, 'one fish of the request per transaction');
+  // Anything besides the requested fish's two updates.
+  assert.match(p([...both, { programIndex: 4, accountIndexes: [7, 4, 0, 0, 4, 6, 4], data: new Uint8Array([15, 0, 0]) }]), /more Core calls/, 'an updateV1 on a gear NFT');
+  assert.match(p([...both, hand(7), move(7)]), /more Core calls/, 'a gear NFT tacked on');
+  assert.match(p([hand(7), move(7), hand(3), move(3)]), /another asset/, 'a gear NFT in place of a fish');
+  assert.match(p([hand(2), move(2)]), /exactly the fish we asked/, 'a fish left out');
+  assert.match(p([move(2), hand(2), hand(3), move(3)]), /hands the fish to someone other than the market/, 'out of order');
+  assert.match(p([...both, { ...CORE_IX, programIndex: 4 }]), /more Core calls/, 'a Core create paid by the session key');
+  assert.match(p([{ programIndex: 4, accountIndexes: CREATE_ACCOUNTS, data: new Uint8Array([cosign.CORE_CREATE_V2_DISCRIMINATOR, 0]) }, move(2), hand(3), move(3)]), /not a fish update/, 'a create in place of the hand-over');
+  assert.match(p([hand(2, undefined, new Uint8Array([15, 0, 0, 1, 1, ...MARKET_BYTES])), move(2), hand(3), move(3)]), /not a fish update/, 'updateV1');
+  assert.match(p([...both, { programIndex: 6, accountIndexes: [0, 1], data: new Uint8Array([2, 0, 0, 0]) }]), /other than Metaplex Core/, 'a SOL transfer');
+  // The server's answer names the fish too: only ones we sent count.
+  assert.match(p([hand(7), move(7)], migrateExpect([GEAR], [ASSET, FISH2])), /a fish we did not ask to move/, 'the server lists a gear NFT');
+  assert.match(p(both, migrateExpect([ASSET, ASSET])), /a fish we did not ask to move/, 'one fish listed twice');
+  assert.match(p([], migrateExpect([])), /moves no fish/);
+  // Wrong new authority or collection.
+  const other = new Uint8Array(32).fill(0x07);
+  assert.match(p([hand(2, undefined, updateData(1, other)), move(2), hand(3), move(3)]), /someone other than the market/, 'another new authority');
+  assert.match(p([hand(2, undefined, updateData(2, COLLECTION_BYTES)), move(2), hand(3), move(3)]), /someone other than the market/, 'straight into a collection');
+  assert.match(p([hand(2), move(2, undefined, updateData(2, other)), hand(3), move(3)]), /outside the Breathless collection/, 'another collection');
+  assert.match(p([hand(2), move(2, undefined, updateData(1, MARKET_BYTES)), hand(3), move(3)]), /outside the Breathless collection/, 'left on the market as an address');
+  assert.match(p([hand(2), move(2, [2, 4, 0, 1, 7, 6, 4]), hand(3), move(3)]), /outside the Breathless collection/, 'newCollection is a gear collection');
+  assert.match(p([hand(2), move(2, undefined, new Uint8Array([cosign.CORE_UPDATE_V2_DISCRIMINATOR, 0, 0, 0])), hand(3), move(3)]), /outside the Breathless collection/, 'no new authority');
+  assert.match(p([hand(2, undefined, updateData(1, MARKET_BYTES, { name: true })), move(2), hand(3), move(3)]), /renames the fish or changes its URI/);
+  // Wrong accounts.
+  assert.match(p([hand(2, [2, 4, 0, 1, 4, 6, 4]), move(2), hand(3), move(3)]), /unexpected accounts/, 'the hand-over signed by the market');
+  assert.match(p([hand(2, [2, 4, 1, 0, 4, 6, 4]), move(2), hand(3), move(3)]), /unexpected accounts/, 'the market pays');
+  assert.match(p([hand(2), move(2, [2, 4, 0, 0, 5, 6, 4]), hand(3), move(3)]), /unexpected accounts/, 'the move signed by the session key');
+  assert.match(p([hand(2), move(2, [2, 5, 0, 1, 5, 6, 4]), hand(3), move(3)]), /unexpected accounts/, 'a current collection');
+  assert.match(p([hand(2, [...HAND_ACCOUNTS(2), 7]), move(2), hand(3), move(3)]), /unexpected accounts/, 'a remaining account');
+  assert.match(p([hand(2), move(3), hand(3), move(3)]), /another asset/, 'the move of another fish');
+  // A mint expectation is not loosened by any of this: the update is not a create.
+  assert.match(cosign.cosignedTxProblem(mintMsg([{ ...hand(1), programIndex: 7 }, CATCH_IX]), MINT_EXPECT), /not a create/);
+});
+
+test('mpl-core update() still builds updateV2 with the layout the game checks', async () => {
+  const js = await readFile(new URL('../node_modules/@metaplex-foundation/mpl-core/dist/src/generated/instructions/updateV2.js', import.meta.url), 'utf8');
+  assert.match(js, /discriminator: 30\b/);
+  const order = [...js.matchAll(/(\w+): \{\s*index: (\d+),/g)].map((m) => [Number(m[2]), m[1]]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+  assert.deepEqual(order, ['asset', 'collection', 'payer', 'authority', 'newCollection', 'systemProgram', 'logWrapper']);
+  assert.match(js, /\['newName', .*\],\s*\['newUri', .*\],\s*\['newUpdateAuthority', .*getBaseUpdateAuthoritySerializer/);
+  const update = await readFile(new URL('../node_modules/@metaplex-foundation/mpl-core/dist/src/instructions/update.js', import.meta.url), 'utf8');
+  assert.match(update, /generated_1\.updateV2\)\(context/);
+  const ua = await readFile(new URL('../node_modules/@metaplex-foundation/mpl-core/dist/src/generated/types/baseUpdateAuthority.js', import.meta.url), 'utf8');
+  assert.match(ua, /\['None',[\s\S]*'Address',[\s\S]*'Collection',/);
 });
 
 test('mpl-core create() still builds createV2 with the account order the game checks', async () => {
