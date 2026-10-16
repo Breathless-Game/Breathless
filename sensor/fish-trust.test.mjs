@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
+import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, legacyLook, lookOf, rarityAt, rollFish, withLegacyLook } from './fish-gen.mjs';
 import { publicKey } from '@metaplex-foundation/umi';
 import { createFishCollection } from './fish-collection.mjs';
 import {
@@ -342,13 +342,33 @@ test('cosign-mint accepts the game\'s own request and writes exactly the validat
 });
 
 test('cosign-mint accepts a fish banked before the 35-species roster, with its old name, look and size', () => {
-  const m = parseCosignMint(mintBody(oldFish), { market: MARKET });
+  // Banked long before random colours: its bank entry (and so its URI) has the main stream's colours.
+  const m = parseCosignMint(mintBody(withLegacyLook(oldFish)), { market: MARKET });
   assert.deepEqual(m.attributeList, attributesOf(oldFish));
+  assert.ok(parseCosignMint(mintBody(oldFish), { market: MARKET }), 'and with its random colours');
   // Its v2 twin (same seed and rarity, today's species) is a different fish: its URI does not fit.
   const twin = GENERATOR_V2.fishOf(oldFish.seed, 'legendary');
   const mixed = mintBody(oldFish, { fishOver: { species: twin.species } });
   assert.throws(() => parseCosignMint(mixed, { market: MARKET }), (e) => e.status === 422);
   assert.throws(() => parseCosignMint(mintBody({ ...oldFish, name: twin.name }), { market: MARKET }), (e) => e.status === 422 && /NFT name/.test(e.message));
+});
+
+test('cosign-mint accepts the fish\'s random look or its legacy look, and no other', () => {
+  const ok = (f) => parseCosignMint(mintBody(goodFish, { over: { uri: mintBody(f).uri } }), { market: MARKET });
+  const legacy = withLegacyLook(goodFish);
+  assert.notEqual(fishLook(legacy), fishLook(goodFish), 'the two looks differ for this seed');
+  assert.ok(ok(goodFish), 'random colours (a fish caught on this build)');
+  assert.ok(ok(legacy), 'legacy colours (banked before random colours, or an older tab)');
+  assert.deepEqual(legacy, { ...goodFish, ...legacyLook(goodFish.seed, goodFish.rarity) });
+  // Any other look, even one mixing the two, is refused.
+  const refused = (f) => assert.throws(() => ok(f), (e) => e instanceof HttpError && e.status === 422 && /lookPath/.test(e.message), fishLook(f));
+  refused({ ...goodFish, hue: (goodFish.hue + 40) % 360 });
+  refused({ ...goodFish, hue: legacy.hue });
+  refused({ ...legacy, stripes: legacy.stripes ? 0 : 3 });
+  refused({ ...goodFish, archetype: goodFish.archetype === 'disc' ? 'slim' : 'disc' });
+  // Another seed's colours are not this fish's.
+  refused({ ...goodFish, ...lookOf(goodFish.seed + 1, goodFish.rarity) });
+  refused({ ...goodFish, ...lookOf(goodFish.seed, goodFish.rarity, 1) });
 });
 
 test('cosign-mint rejects inconsistent params', () => {

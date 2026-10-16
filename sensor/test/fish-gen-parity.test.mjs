@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { GENERATORS, GENERATOR_V1, RARITY_BY_DEPTH, fishLook, rarityOdds, recordedDepth, rollFish } from '../fish-gen.mjs';
+import { GENERATORS, GENERATOR_V1, LOOK_SALT, RARITY_BY_DEPTH, fishLook, legacyLook, lookOf, mix32, rarityOdds, recordedDepth, rollFish, withLegacyLook } from '../fish-gen.mjs';
 
 // The market re-derives every fish it co-signs or buys with fish-gen.mjs, a port of the game's
 // generator. This runs the game's own TypeScript (fish.ts and every module it imports, plus
@@ -80,6 +80,45 @@ test('fish-gen.mjs grows exactly the game\'s fish (rollFish, odds, recorded dept
   assert.equal(GENERATORS[0].rollFish, rollFish);
 });
 
+test('fish-gen.mjs draws exactly the game\'s colours (lookOf, legacyLook, mix32)', { skip: !existsSync(TS) && 'game/node_modules not installed' }, async () => {
+  const { fish } = await loadGameGenerator();
+  assert.equal(fish.LOOK_SALT, LOOK_SALT);
+  const rarities = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
+  // LOOK_SALT is the seed whose look state is 0 (fmix32(0) = 0): the edge Rng would otherwise fold.
+  const seeds = [0, 1, 0xffffffff, LOOK_SALT, 0x9e3779b9];
+  for (let i = 0; i < 3000; i++) seeds.push(Math.imul(i + 7, 2654435761) >>> 0);
+  for (const seed of seeds) {
+    const r = rarities[seed % 6];
+    for (const variant of [0, 1, 7]) {
+      assert.equal(mix32(seed, LOOK_SALT, variant), fish.mix32(seed, LOOK_SALT, variant), `mix32 ${seed}/${variant}`);
+      assert.deepEqual(lookOf(seed, r, variant), fish.lookOf(seed, r, variant), `lookOf ${seed} ${r} v${variant}`);
+    }
+    assert.deepEqual(legacyLook(seed, r), fish.legacyLook(seed, r), `legacyLook ${seed} ${r}`);
+  }
+  assert.equal(mix32(LOOK_SALT, LOOK_SALT), 0);
+  // The seed whose look state is 0 does not share the stream of the state new Rng(0) falls back to
+  // (0x9e3779b9): find that state's seed by inverting mix32 (variant 0), then compare.
+  const inv = (a) => {
+    let x = a; // Newton's iteration for the inverse of an odd number mod 2^32
+    for (let i = 0; i < 5; i++) x = Math.imul(x, 2 - Math.imul(a, x));
+    return x >>> 0;
+  };
+  const unfmix = (h) => {
+    h ^= h >>> 16;
+    h = Math.imul(h, inv(0xc2b2ae35));
+    h ^= (h >>> 13) ^ (h >>> 26);
+    h = Math.imul(h, inv(0x85ebca6b));
+    h ^= h >>> 16;
+    return h >>> 0;
+  };
+  const fallbackSeed = (unfmix(unfmix(0x9e3779b9)) ^ LOOK_SALT) >>> 0;
+  assert.equal(mix32(fallbackSeed, LOOK_SALT), 0x9e3779b9);
+  for (const r of rarities) {
+    assert.notDeepEqual(lookOf(LOOK_SALT, r), lookOf(fallbackSeed, r), r);
+    assert.deepEqual(fish.lookOf(fallbackSeed, r), lookOf(fallbackSeed, r));
+  }
+});
+
 // The first rarity-by-depth table (depth-odds.ts before PR #102, a84c64d). Fish rolled with it are
 // on-chain; this pins the port's copy so it is never "updated" by mistake.
 const V1_TABLE = [
@@ -98,8 +137,9 @@ const TITLE_LEGACY = new URL('src/title-fish-legacy.ts', GAME);
 test('fish-gen.mjs v1 grows exactly the fish the game minted before the 35-species roster', { skip: (!existsSync(TS) || !existsSync(TITLE_LEGACY)) && 'game/node_modules or title-fish-legacy.ts missing' }, async () => {
   assert.deepEqual(GENERATOR_V1.RARITY_BY_DEPTH, V1_TABLE);
   // title-fish-legacy.ts keeps the pre-#102 fish.ts (17-species roster) for the title screen. Its
-  // default odds are today's table, so the v1 odds are passed in: roster, look, size and value must
-  // match field for field.
+  // default odds are today's table, so the v1 odds are passed in: roster, size and value must match
+  // field for field, and its colours (drawn from the main stream, as every fish had before random
+  // colours) are legacyLook's; the port's own colours come from the look stream.
   const { 'title-fish-legacy': legacy, 'nft-uri': uri } = await loadGameModules(['title-fish-legacy', 'nft-uri']);
   let n = 0;
   for (let i = 0; i < 3000; i++) {
@@ -107,14 +147,16 @@ test('fish-gen.mjs v1 grows exactly the fish the game minted before the 35-speci
     for (const depth of i % 10 === 0 ? DEPTHS : [DEPTHS[i % DEPTHS.length], (i * 0.37) % 400]) {
       const odds = GENERATOR_V1.rarityOdds(depth);
       const want = legacy.rollFish(seed, depth, odds);
-      assert.deepEqual(GENERATOR_V1.rollFish(seed, depth), want, `v1 seed ${seed} at ${depth} m`);
+      const got = GENERATOR_V1.rollFish(seed, depth);
+      assert.deepEqual(withLegacyLook(got), want, `v1 seed ${seed} at ${depth} m`);
+      assert.deepEqual(got, { ...want, ...lookOf(seed, want.rarity) }, `v1 seed ${seed} at ${depth} m: random colours`);
       assert.equal(fishLook(want), uri.fishLook(want));
       n++;
     }
   }
   for (const r of ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic']) {
-    for (const seed of [7, 12345, 0xdeadbeef]) assert.deepEqual(GENERATOR_V1.fishOf(seed, r), legacy.rollFish(seed, 0, [[r, 1]]));
+    for (const seed of [7, 12345, 0xdeadbeef]) assert.deepEqual(withLegacyLook(GENERATOR_V1.fishOf(seed, r)), legacy.rollFish(seed, 0, [[r, 1]]));
   }
-  for (const z of GENERATOR_V1.legacyZones) assert.deepEqual(GENERATOR_V1.rollFish(99, 20, z.odds), legacy.rollFish(99, 20, z.odds));
+  for (const z of GENERATOR_V1.legacyZones) assert.deepEqual(withLegacyLook(GENERATOR_V1.rollFish(99, 20, z.odds)), legacy.rollFish(99, 20, z.odds));
   assert.ok(n > 6000);
 });
