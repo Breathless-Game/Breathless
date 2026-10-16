@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createPrivateKey, createPublicKey, sign as ed25519Sign, verify as ed25519Verify } from 'node:crypto';
+import { createPrivateKey, createPublicKey, sign as ed25519Sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
@@ -641,13 +641,13 @@ test('the signed request strings and signatures match the vector the game is pin
   assert.throws(() => assertSignedByPayer(VECTOR.mint.message, VECTOR.payer, undefined), /no signature/);
 });
 
-test('a small-order payer key is refused: its "signature" (R = identity, S = 0) verifies for any message', () => {
+test('a small-order payer key is refused: its "signature" (R = identity, S = 0) would verify for any message', () => {
   const payer = '4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM'; // the identity point, 01 00..00
   const sig = `AQ${'A'.repeat(84)}==`;
   assert.equal(Buffer.from(publicKeyBytes(payer)).toString('hex'), `01${'00'.repeat(31)}`);
-  // What node:crypto alone says: true, for any message. The blocklist is what stops it.
-  const x = Buffer.from(publicKeyBytes(payer)).toString('base64url');
-  assert.ok(ed25519Verify(null, Buffer.from('anything at all'), { key: { kty: 'OKP', crv: 'Ed25519', x }, format: 'jwk' }, Buffer.from(sig, 'base64')));
+  // node:crypto's own verdict on this pair depends on the OpenSSL build (Node 26 on macOS accepts it
+  // for any message, CI's Node 24 refuses it), so it is not asserted: the blocklist is why our
+  // answer is the same everywhere.
   assert.throws(() => assertSignedByPayer(VECTOR.mint.message, payer, sig), badSignature);
   assert.throws(() => assertSignedByPayer('anything at all', payer, sig), badSignature);
   // The whole torsion subgroup (all 8 points of small order), and the encodings with the sign bit
