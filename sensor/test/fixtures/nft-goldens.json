@@ -1,0 +1,391 @@
+{
+  "cardRenderVersion": 3,
+  "fish": {
+    "/api/nft/meta/v1/c61cd89c/uncommon/8-3-38-0.52/slim-130-45-50-310-3/Coral%20Reef/Lively%20Striped%20Wrasse.json": {
+      "note": "v1 (pre-numbering), generic body, slim, 3 stripes, uncommon. Repo fixture (nft-meta/vercel-handler tests), not confirmed on chain",
+      "asset": null,
+      "image": {
+        "width": 512,
+        "height": 512,
+        "depth": 8,
+        "colorType": 2,
+        "sha256": "fe6b225cf13241f77b8b73756478e619518bdf606415b9fdbfbdfa62128fa471"
+      },
+      "metadata": {
+        "name": "Lively Striped Wrasse",
+        "symbol": "DIVE",
+        "description": "An uncommon Striped Wrasse caught 8 m down on a single held breath in Breathless. The art is a pure function of seed c61cd89c.",
+        "image": "https://breathless.gotclass.xyz/api/nft/img/v1/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png?r=3",
+        "external_url": "https://breathless.gotclass.xyz",
+        "attributes": [
+          {
+            "trait_type": "Rarity",
+            "value": "Uncommon"
+          },
+          {
+            "trait_type": "Species",
+            "value": "Striped Wrasse"
+          },
+          {
+            "trait_type": "Zone",
+            "value": "Coral Reef"
+          },
+          {
+            "trait_type": "Depth (m)",
+            "value": "8"
+          },
+          {
+            "trait_type": "Length (cm)",
+            "value": "38"
+          },
+          {
+            "trait_type": "Weight (kg)",
+            "value": "0.52"
+          },
+          {
+            "trait_type": "Catch value",
+            "value": "3"
+          },
+          {
+            "trait_type": "Seed",
+            "value": "c61cd89c"
+          }
+        ],
+        "properties": {
+          "category": "image",
+          "files": [
+            {
+              "uri": "https://breathless.gotclass.xyz/api/nft/img/v1/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png?r=3",
+              "type": "image/png"
+            }
+          ]
+        }
+      }
+    },
+    "/api/nft/meta/v2/26/43d2622c/epic/126-134-83-17.92/bulky-292-82-56-121-0/The%20Trench/Venomous%20Hammerhead%20Shark.json": {
+      "note": "Venomous Hammerhead Shark #0026: marine hammerhead, no stripes, epic",
+      "asset": "Ssdxi63TqUAqACmRarRbquieZJeRVZwQ9TvooqNuDTt",
+      "image": {
+        "width": 512,
+        "height": 512,
+        "depth": 8,
+        "colorType": 2,
+        "sha256": "72758e066ddba70cc9e35c42fc2d3205b796648f2b9584fdcf171eb4c1b76614"
+      },
+      "metadata": {
+        "name": "Venomous Hammerhead Shark #0026",
+        "symbol": "DIVE",
+        "description": "An epic Hammerhead Shark caught 126 m down on a single held breath in Breathless. Fish #0026. The art is a pure function of seed 43d2622c.",
+        "image": "https://breathless.gotclass.xyz/api/nft/img/v2/26/43d2622c/epic/bulky-292-82-56-121-0/Hammerhead%20Shark.png?r=3",
+        "external_url": "https://breathless.gotclass.xyz",
+        "attributes": [
+          {
+            "trait_type": "Rarity",
+            "value": "Epic"
+          },
+          {
+            "trait_type": "Species",
+            "value": "Hammerhead Shark"
+          },
+          {
+            "trait_type": "Zone",
+            "value": "The Trench"
+          },
+          {
+            "trait_type": "Depth (m)",
+            "value": "126"
+          },
+          {
+            "trait_type": "Length (cm)",
+            "value": "83"
+          },
+          {
+            "trait_type": "Weight (kg)",
+            "value": "17.92"
+          },
+          {
+            "trait_type": "Catch value",
+            "value": "134"
+          },
+          {
+            "trait_type": "Seed",
+            "value": "43d2622c"
+          },
+          {
+            "trait_type": "Number",
+            "value": "#0026"
+          }
+        ],
+        "properties": {
+          "category": "image",
+          "files": [
+            {
+              "uri": "https://breathless.gotclass.xyz/api/nft/img/v2/26/43d2622c/epic/bulky-292-82-56-121-0/Hammerhead%20Shark.png?r=3",
+              "type": "image/png"
+            }
+          ]
+        }
+      }
+    },
+    "/api/nft/meta/v2/98/34ab86a5/mythic/119-3072-125-30.83/long-323-92-63-156-5/Kelp%20Forest/Prismatic%20Abyssal%20Giant%20Octopus.json": {
+      "note": "Prismatic Abyssal Giant Octopus #0098: marine octopus, 5 stripes, mythic",
+      "asset": "5zFpMCDLB2hZD8g551WLZTRJMKZsteJ9YodfXhX23mTE",
+      "image": {
+        "width": 512,
+        "height": 512,
+        "depth": 8,
+        "colorType": 2,
+        "sha256": "b2caa5bf764422bb45d673fa385108bad866088e6473976734fe5ed82b28e944"
+      },
+      "metadata": {
+        "name": "Prismatic Abyssal Giant Octopus #0098",
+        "symbol": "DIVE",
+        "description": "A mythic Abyssal Giant Octopus caught 119 m down on a single held breath in Breathless. Fish #0098. The art is a pure function of seed 34ab86a5.",
+        "image": "https://breathless.gotclass.xyz/api/nft/img/v2/98/34ab86a5/mythic/long-323-92-63-156-5/Abyssal%20Giant%20Octopus.png?r=3",
+        "external_url": "https://breathless.gotclass.xyz",
+        "attributes": [
+          {
+            "trait_type": "Rarity",
+            "value": "Mythic"
+          },
+          {
+            "trait_type": "Species",
+            "value": "Abyssal Giant Octopus"
+          },
+          {
+            "trait_type": "Zone",
+            "value": "Kelp Forest"
+          },
+          {
+            "trait_type": "Depth (m)",
+            "value": "119"
+          },
+          {
+            "trait_type": "Length (cm)",
+            "value": "125"
+          },
+          {
+            "trait_type": "Weight (kg)",
+            "value": "30.83"
+          },
+          {
+            "trait_type": "Catch value",
+            "value": "3072"
+          },
+          {
+            "trait_type": "Seed",
+            "value": "34ab86a5"
+          },
+          {
+            "trait_type": "Number",
+            "value": "#0098"
+          }
+        ],
+        "properties": {
+          "category": "image",
+          "files": [
+            {
+              "uri": "https://breathless.gotclass.xyz/api/nft/img/v2/98/34ab86a5/mythic/long-323-92-63-156-5/Abyssal%20Giant%20Octopus.png?r=3",
+              "type": "image/png"
+            }
+          ]
+        }
+      }
+    },
+    "/api/nft/meta/v2/44/e3450866/legendary/346-900-45-2.9/disc-32-88-54-209-4/The%20Trench/Crowned%20Golden%20Sea%20Turtle.json": {
+      "note": "Crowned Golden Sea Turtle #0044: marine turtle, 4 stripes, legendary",
+      "asset": "9tdSpNUS2vuSGMUjetxXNuKyGNu5x64etwXm3PgfmCM2",
+      "image": {
+        "width": 512,
+        "height": 512,
+        "depth": 8,
+        "colorType": 2,
+        "sha256": "4abb31de8469e296bc7ac32afed490bdad08e2b731c9be65b2b962aa78984d79"
+      },
+      "metadata": {
+        "name": "Crowned Golden Sea Turtle #0044",
+        "symbol": "DIVE",
+        "description": "A legendary Golden Sea Turtle caught 346 m down on a single held breath in Breathless. Fish #0044. The art is a pure function of seed e3450866.",
+        "image": "https://breathless.gotclass.xyz/api/nft/img/v2/44/e3450866/legendary/disc-32-88-54-209-4/Golden%20Sea%20Turtle.png?r=3",
+        "external_url": "https://breathless.gotclass.xyz",
+        "attributes": [
+          {
+            "trait_type": "Rarity",
+            "value": "Legendary"
+          },
+          {
+            "trait_type": "Species",
+            "value": "Golden Sea Turtle"
+          },
+          {
+            "trait_type": "Zone",
+            "value": "The Trench"
+          },
+          {
+            "trait_type": "Depth (m)",
+            "value": "346"
+          },
+          {
+            "trait_type": "Length (cm)",
+            "value": "45"
+          },
+          {
+            "trait_type": "Weight (kg)",
+            "value": "2.9"
+          },
+          {
+            "trait_type": "Catch value",
+            "value": "900"
+          },
+          {
+            "trait_type": "Seed",
+            "value": "e3450866"
+          },
+          {
+            "trait_type": "Number",
+            "value": "#0044"
+          }
+        ],
+        "properties": {
+          "category": "image",
+          "files": [
+            {
+              "uri": "https://breathless.gotclass.xyz/api/nft/img/v2/44/e3450866/legendary/disc-32-88-54-209-4/Golden%20Sea%20Turtle.png?r=3",
+              "type": "image/png"
+            }
+          ]
+        }
+      }
+    },
+    "/api/nft/meta/v2/43/84f9c1e0/epic/358-210-102-12.32/long-277-67-51-77-4/The%20Trench/Phantom%20Moon%20Jellyfish.json": {
+      "note": "Phantom Moon Jellyfish #0043: marine jellyfish, 4 stripes, epic",
+      "asset": "BFq6QB33b3tk8gRTU6BgQsT5kp1GR6JMFBP43nLdAqNt",
+      "image": {
+        "width": 512,
+        "height": 512,
+        "depth": 8,
+        "colorType": 2,
+        "sha256": "758ff233717f5d327c17ac1c3fd22b170532ca82e4d25b126e40cb5cb12ca326"
+      },
+      "metadata": {
+        "name": "Phantom Moon Jellyfish #0043",
+        "symbol": "DIVE",
+        "description": "An epic Moon Jellyfish caught 358 m down on a single held breath in Breathless. Fish #0043. The art is a pure function of seed 84f9c1e0.",
+        "image": "https://breathless.gotclass.xyz/api/nft/img/v2/43/84f9c1e0/epic/long-277-67-51-77-4/Moon%20Jellyfish.png?r=3",
+        "external_url": "https://breathless.gotclass.xyz",
+        "attributes": [
+          {
+            "trait_type": "Rarity",
+            "value": "Epic"
+          },
+          {
+            "trait_type": "Species",
+            "value": "Moon Jellyfish"
+          },
+          {
+            "trait_type": "Zone",
+            "value": "The Trench"
+          },
+          {
+            "trait_type": "Depth (m)",
+            "value": "358"
+          },
+          {
+            "trait_type": "Length (cm)",
+            "value": "102"
+          },
+          {
+            "trait_type": "Weight (kg)",
+            "value": "12.32"
+          },
+          {
+            "trait_type": "Catch value",
+            "value": "210"
+          },
+          {
+            "trait_type": "Seed",
+            "value": "84f9c1e0"
+          },
+          {
+            "trait_type": "Number",
+            "value": "#0043"
+          }
+        ],
+        "properties": {
+          "category": "image",
+          "files": [
+            {
+              "uri": "https://breathless.gotclass.xyz/api/nft/img/v2/43/84f9c1e0/epic/long-277-67-51-77-4/Moon%20Jellyfish.png?r=3",
+              "type": "image/png"
+            }
+          ]
+        }
+      }
+    },
+    "/api/nft/meta/v2/20/c1eba7e5/epic/114-121-44-3.31/disc-292-75-53-126-0/The%20Trench/Storm%20Ember%20Triggerfish.json": {
+      "note": "Storm Ember Triggerfish #0020: v2 generic body, disc, no stripes, epic",
+      "asset": "CzHK3xTJZPqr5TzHPANcMhmcnXLAGhMF4o5DMRChkWdg",
+      "image": {
+        "width": 512,
+        "height": 512,
+        "depth": 8,
+        "colorType": 2,
+        "sha256": "0b7f14c389ee8de547a59e74a2705e1490e6869121609cebb50629a5cd83e3a2"
+      },
+      "metadata": {
+        "name": "Storm Ember Triggerfish #0020",
+        "symbol": "DIVE",
+        "description": "An epic Ember Triggerfish caught 114 m down on a single held breath in Breathless. Fish #0020. The art is a pure function of seed c1eba7e5.",
+        "image": "https://breathless.gotclass.xyz/api/nft/img/v2/20/c1eba7e5/epic/disc-292-75-53-126-0/Ember%20Triggerfish.png?r=3",
+        "external_url": "https://breathless.gotclass.xyz",
+        "attributes": [
+          {
+            "trait_type": "Rarity",
+            "value": "Epic"
+          },
+          {
+            "trait_type": "Species",
+            "value": "Ember Triggerfish"
+          },
+          {
+            "trait_type": "Zone",
+            "value": "The Trench"
+          },
+          {
+            "trait_type": "Depth (m)",
+            "value": "114"
+          },
+          {
+            "trait_type": "Length (cm)",
+            "value": "44"
+          },
+          {
+            "trait_type": "Weight (kg)",
+            "value": "3.31"
+          },
+          {
+            "trait_type": "Catch value",
+            "value": "121"
+          },
+          {
+            "trait_type": "Seed",
+            "value": "c1eba7e5"
+          },
+          {
+            "trait_type": "Number",
+            "value": "#0020"
+          }
+        ],
+        "properties": {
+          "category": "image",
+          "files": [
+            {
+              "uri": "https://breathless.gotclass.xyz/api/nft/img/v2/20/c1eba7e5/epic/disc-292-75-53-126-0/Ember%20Triggerfish.png?r=3",
+              "type": "image/png"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
