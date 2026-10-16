@@ -106,7 +106,23 @@ test('answers every /api/nft path itself, and nothing else', async () => {
   });
 });
 
-const META2 = '/api/nft/meta/v2/42/c61cd89c/uncommon/8-3-38-0.52/slim-130-45-50-310-3/Coral%20Reef/Lively%20Striped%20Wrasse.json';
+test('a species named after an Object.prototype key draws the unknown-species fish, never a 500', async () => {
+  await withServer({ publicOrigin: '' }, async (base) => {
+    const img = (species, look = 'perch-1-1-1-1-1') => fetch(`${base}/api/nft/img/v1/0000abcd/common/${look}/${species}.png`);
+    for (const look of ['perch-1-1-1-1-1', 'perch-1-1-1-1-1-0123456789abcdef']) {
+      const unknown = await img('Nofish', look);
+      assert.equal(unknown.status, 200);
+      const expected = Buffer.from(await unknown.arrayBuffer());
+      for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf', '__defineGetter__']) {
+        const res = await img(key, look);
+        assert.equal(res.status, 200, `${key} ${look}`);
+        assert.ok(Buffer.from(await res.arrayBuffer()).equals(expected), `${key} ${look}: the generic fallback`);
+      }
+    }
+  });
+});
+
+const META2 ='/api/nft/meta/v2/42/c61cd89c/uncommon/8-3-38-0.52/slim-130-45-50-310-3/Coral%20Reef/Lively%20Striped%20Wrasse.json';
 const IMG2 = '/api/nft/img/v2/42/c61cd89c/uncommon/slim-130-45-50-310-3/Striped%20Wrasse.png';
 
 test('v2 paths carry the fish number; v1 still parses without one', () => {

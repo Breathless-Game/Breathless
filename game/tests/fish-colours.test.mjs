@@ -79,7 +79,7 @@ test('colours keep the rarity readable: sat and light stay in the rarity band, t
     for (let i = 0; i < 2000; i++) {
       const seed = seedAt(i);
       const f = F.rollFish(seed, 0, [[rarity, 1]]);
-      assert.deepEqual({ hue: f.hue, sat: f.sat, light: f.light, accentHue: f.accentHue, stripes: f.stripes }, F.lookOf(seed, rarity));
+      assert.deepEqual({ hue: f.hue, sat: f.sat, light: f.light, accentHue: f.accentHue, stripes: f.stripes, gene: f.gene }, F.lookOf(seed, rarity));
       assert.ok(f.hue >= 0 && f.hue < 360);
       assert.ok(f.sat >= pal.sat[0] && f.sat <= pal.sat[1], `${rarity} sat ${f.sat}`);
       assert.ok(f.light >= pal.light[0] && f.light <= pal.light[1], `${rarity} light ${f.light}`);
@@ -174,14 +174,15 @@ test('the field guide keeps each species\' standard look (asset-library.ts speci
   const found = {};
   for (let seed = 1; seed <= 4000; seed++) {
     const rolled = F.rollFish(seed, sampleDepth);
-    const spec = { ...rolled, ...F.legacyLook(seed, rolled.rarity) };
+    const spec = { ...F.withoutGene(rolled), ...F.legacyLook(seed, rolled.rarity) };
+    assert.equal('gene' in spec, false, 'the field guide draws the standard shape');
     if (found[spec.species]) continue;
     if (F.speciesProfile(spec).pattern === 'stripes' && spec.stripes === 0) continue;
     found[spec.species] = { seed, rarity: spec.rarity, look: U.fishLook(spec), hue: spec.hue, sat: spec.sat, light: spec.light, accentHue: spec.accentHue, stripes: spec.stripes };
   }
   assert.deepEqual(found, pinned.specimens);
   const src = readFileSync(new URL('../src/asset-library.ts', import.meta.url), 'utf8');
-  assert.match(src, /const rolled = rollFish\(seed, SAMPLE_DEPTH\);\s+const spec: FishSpec = \{ \.\.\.rolled, \.\.\.legacyLook\(seed, rolled\.rarity\) \};/);
+  assert.match(src, /const rolled = rollFish\(seed, SAMPLE_DEPTH\);\s+const spec: FishSpec = \{ \.\.\.withoutGene\(rolled\), \.\.\.legacyLook\(seed, rolled\.rarity\) \};/);
 });
 
 test('the title screen\'s fish come from the frozen legacy generator', () => {

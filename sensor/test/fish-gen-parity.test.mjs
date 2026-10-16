@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { GENERATORS, GENERATOR_V1, LOOK_SALT, RARITY_BY_DEPTH, fishLook, legacyLook, lookOf, mix32, rarityOdds, recordedDepth, rollFish, withLegacyLook } from '../fish-gen.mjs';
+import { GENERATORS, GENERATOR_V1, LOOK_SALT, RARITY_BY_DEPTH, fishLook, isGene, legacyLook, lookOf, mix32, rarityOdds, recordedDepth, rollFish, withLegacyLook, withoutGene } from '../fish-gen.mjs';
 
 // The market re-derives every fish it co-signs or buys with fish-gen.mjs, a port of the game's
 // generator. This runs the game's own TypeScript (fish.ts and every module it imports, plus
@@ -63,7 +63,11 @@ test('fish-gen.mjs grows exactly the game\'s fish (rollFish, odds, recorded dept
       const want = game.fish.rollFish(seed, depth);
       const got = rollFish(seed, depth);
       assert.deepEqual(got, want, `seed ${seed} at ${depth} m`);
+      assert.match(got.gene, /^[0-9a-f]{16}$/, 'every new fish has a shape gene');
       assert.equal(fishLook(got), game.uri.fishLook(want));
+      assert.equal(fishLook(got).split('-').length, 7);
+      // The look without a gene (fish banked before random shapes) is written the same on both sides.
+      assert.equal(fishLook(withoutGene(got)), game.uri.fishLook(game.fish.withoutGene(want)));
       n++;
     }
   }
@@ -91,7 +95,9 @@ test('fish-gen.mjs draws exactly the game\'s colours (lookOf, legacyLook, mix32)
     const r = rarities[seed % 6];
     for (const variant of [0, 1, 7]) {
       assert.equal(mix32(seed, LOOK_SALT, variant), fish.mix32(seed, LOOK_SALT, variant), `mix32 ${seed}/${variant}`);
-      assert.deepEqual(lookOf(seed, r, variant), fish.lookOf(seed, r, variant), `lookOf ${seed} ${r} v${variant}`);
+      const look = lookOf(seed, r, variant);
+      assert.deepEqual(look, fish.lookOf(seed, r, variant), `lookOf ${seed} ${r} v${variant}`);
+      assert.ok(isGene(look.gene) && fish.isGene(look.gene), `gene ${look.gene}`);
     }
     assert.deepEqual(legacyLook(seed, r), fish.legacyLook(seed, r), `legacyLook ${seed} ${r}`);
   }

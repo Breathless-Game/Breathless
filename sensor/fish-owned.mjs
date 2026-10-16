@@ -12,7 +12,7 @@
 //      version   the generator version that grows this fish (fish-gen.mjs GENERATORS)
 //      facts     the on-chain Attributes: { id, rarity, species, depth, value? }
 //      spec      the fish as the game rolled it: that version's fishOf(seed, rarity), with the
-//                recorded depth and catch value, and the colours its metadata URI records (colours())
+//                recorded depth and catch value, and the look (colours, shape gene) its metadata URI records (colours())
 //
 // Anything else the wallet holds is left out: Boat / Dive Kit gear (no fish seed), NFTs from other
 // collections, and fish whose attributes the generator cannot produce.
@@ -20,7 +20,7 @@
 import { HttpError, singleFlight } from './market-rules.mjs';
 import { assertTrustedFish, checkFish, pluginProblem, readFacts } from './fish-trust.mjs';
 import { isPubkey } from './market-balance.mjs';
-import { fishLook, withLegacyLook } from './fish-gen.mjs';
+import { isGene, lookPaths, withLegacyLook, withoutGene } from './fish-gen.mjs';
 import { parseMetaPath } from './nft-meta.mjs';
 
 export const OWNED_FISH_TTL_MS = 8_000;
@@ -34,10 +34,13 @@ export function parseOwnedQuery(params) {
 }
 
 /**
- * The fish's colours as its NFT records them. The metadata URI's look is the record: a fish caught
- * since random colours carries its look-stream colours (fishOf's), one banked before them the main
- * stream's (legacyLook). Anything else (an Irys URI from before our metadata host, a URI whose look
- * is neither) gets the legacy colours, which is how every such fish was drawn until now.
+ * The fish's look as its NFT records them: colours, and a shape gene when it has one. The metadata
+ * URI's look is the record (fish-gen.mjs lookPaths): a fish caught since random shapes carries its
+ * look-stream colours and gene (fishOf's); one banked between random colours and random shapes,
+ * those colours and no gene; one banked before random colours, the main stream's (legacyLook).
+ * Anything else (an Irys URI from before our metadata host, a URI whose look is none of these) gets
+ * the legacy colours, which is how every such fish was drawn until now. No `gene` key unless the
+ * URI has the fish's gene (game/src/chain-fish.ts coloursFromUri agrees).
  */
 export function colours(uri, fish) {
   const legacy = withLegacyLook(fish);
@@ -47,8 +50,12 @@ export function colours(uri, fish) {
   } catch {
     meta = null;
   }
-  const from = meta?.lookPath === fishLook(fish) ? fish : legacy;
-  return { hue: from.hue, sat: from.sat, light: from.light, accentHue: from.accentHue, stripes: from.stripes };
+  const [shapedPath, plainPath] = lookPaths(fish);
+  const shaped = isGene(fish.gene) && meta?.lookPath === shapedPath;
+  const from = shaped || meta?.lookPath === plainPath ? fish : legacy;
+  const out = { hue: from.hue, sat: from.sat, light: from.light, accentHue: from.accentHue, stripes: from.stripes };
+  if (shaped) out.gene = fish.gene;
+  return out;
 }
 
 /**
@@ -77,7 +84,7 @@ export function classifyOwned(asset, { collection }) {
   }
   const check = checkFish(facts, { legacy: true });
   if (!check.ok) return { skip: 'generator' };
-  const spec = { ...check.fish, ...colours(asset.uri, check.fish), depthM: facts.depth };
+  const spec = { ...withoutGene(check.fish), ...colours(asset.uri, check.fish), depthM: facts.depth };
   if (facts.value === undefined) delete spec.value;
   else spec.value = facts.value;
   return {

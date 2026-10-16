@@ -196,8 +196,9 @@ export const cardSpecFor = ({ id, rarity, species, look }) => cardSpec({ id, rar
 
 /**
  * 512x512 PNG card for a fish. `id` is the fish id (its seed in hex: the shards and the fish's
- * grain), `look` is { archetype, hue, sat, light, accentHue, stripes } as in FishSpec (sat and light
- * 0..1); `serial`, when set, is the fish's number, drawn small in the bottom-right corner.
+ * grain), `look` is { archetype, hue, sat, light, accentHue, stripes, gene? } as in FishSpec (sat and
+ * light 0..1; no gene: the species' standard shape); `serial`, when set, is the fish's number, drawn
+ * small in the bottom-right corner.
  */
 export function renderFishPng({ id, rarity, species, look, serial }, size = 512) {
   const spec = cardSpecFor({ id, rarity, species, look });

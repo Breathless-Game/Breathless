@@ -7,7 +7,9 @@
 //
 //   serial = the fish's number (nft-serial.mjs), 1-9 digits; the JSON name is "<name> #0042"
 //   stats  = <depthM>-<value>-<lengthCm>-<weightKg>
-//   look   = <archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>
+//   look   = <archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>[-<gene>]
+//   gene   = the fish's shape gene (game/src/fish.ts geneOf), exactly 16 lowercase hex digits. Fish
+//            minted before random shapes have six fields: no gene, the species' standard shape.
 //   zone, name, species: encodeURIComponent'd
 //
 // v1 is the same without <serial>: fish minted before numbering. Those URIs are on chain, so v1
@@ -30,6 +32,8 @@ const PNG_CACHE = 256;
 const RENDERS_PER_MINUTE = 40;
 
 const int = (s, max) => (/^\d{1,7}$/.test(s) && Number(s) <= max ? Number(s) : null);
+/** A shape gene: canonical only (16 lowercase hex digits), returned as the same string. */
+const gene = (s) => (/^[0-9a-f]{16}$/.test(s) ? s : null);
 const num = (s, max) => (/^\d{1,7}(\.\d{1,3})?$/.test(s) && Number(s) <= max ? Number(s) : null);
 
 function text(s) {
@@ -42,12 +46,19 @@ function text(s) {
   }
 }
 
+/** The look segment: six fields, or seven with a gene (then, and only then, a `gene` key). */
 function parseLook(s) {
   const p = s.split('-');
-  if (p.length !== 6 || !(p[0] in ARCHETYPES)) return null;
+  if ((p.length !== 6 && p.length !== 7) || !Object.hasOwn(ARCHETYPES, p[0])) return null;
   const [hue, sat, light, accentHue, stripes] = [int(p[1], 360), int(p[2], 100), int(p[3], 100), int(p[4], 360), int(p[5], 9)];
   if ([hue, sat, light, accentHue, stripes].includes(null)) return null;
-  return { archetype: p[0], hue, sat: sat / 100, light: light / 100, accentHue, stripes };
+  const look = { archetype: p[0], hue, sat: sat / 100, light: light / 100, accentHue, stripes };
+  if (p.length === 7) {
+    const g = gene(p[6]);
+    if (g === null) return null;
+    look.gene = g;
+  }
+  return look;
 }
 
 const parseId = (s) => (/^[0-9a-f]{1,16}$/.test(s) ? s : null);

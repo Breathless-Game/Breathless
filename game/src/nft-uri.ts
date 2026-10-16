@@ -7,7 +7,8 @@ import type { FishSpec } from './fish';
 //
 //   /api/nft/meta/v2/<serial>/<id>/<rarity>/<depth>-<value>-<lengthCm>-<weightKg>/<look>/<zone>/<name>.json
 //   /api/nft/img/v2/<serial>/<id>/<rarity>/<look>/<species>.png
-//   look = <archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>
+//   look = <archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>[-<gene>]
+//   gene = the shape gene (fish.ts geneOf), 16 lowercase hex digits; absent for a fish without one
 //
 // <serial> is the fish's number from POST /api/nft/serial (sensor/nft-serial.mjs). A fish without
 // one gets the older v1 paths (no <serial> segment), which the server still resolves.
@@ -78,7 +79,7 @@ export interface NftFacts {
   zone: string;
 }
 
-type LookFields = Pick<FishSpec, 'archetype' | 'hue' | 'sat' | 'light' | 'accentHue' | 'stripes'>;
+type LookFields = Pick<FishSpec, 'archetype' | 'hue' | 'sat' | 'light' | 'accentHue' | 'stripes' | 'gene'>;
 
 const deg = (x: number) => Math.round(((x % 360) + 360) % 360) % 360;
 const pct = (x: number) => Math.round(Math.min(1, Math.max(0, x)) * 100);
@@ -86,24 +87,33 @@ const nat = (x: number, max: number) => Math.min(max, Math.max(0, Math.round(Num
 const clip = (s: string) => s.trim().slice(0, 64).trim();
 const text = (s: string) => encodeURIComponent(clip(s));
 
-/** The fish's colours and shape, enough for the server to redraw its mesh. */
+/** fish.ts isGene, inlined: this module has no runtime imports (the tests load it on its own). */
+const isGene = (g: unknown): g is string => typeof g === 'string' && /^[0-9a-f]{16}$/.test(g);
+
+/** The fish's colours and shape, enough for the server to redraw its mesh: six fields, seven with a gene. */
 export function fishLook(spec: LookFields): string {
-  return [spec.archetype, deg(spec.hue), pct(spec.sat), pct(spec.light), deg(spec.accentHue), nat(spec.stripes, 9)].join('-');
+  const fields: (string | number)[] = [spec.archetype, deg(spec.hue), pct(spec.sat), pct(spec.light), deg(spec.accentHue), nat(spec.stripes, 9)];
+  if (isGene(spec.gene)) fields.push(spec.gene);
+  return fields.join('-');
 }
 
 const ARCHETYPES: readonly string[] = ['slim', 'perch', 'disc', 'long', 'bulky'];
 const lookInt = (s: string | undefined, max: number) => (s !== undefined && /^\d{1,7}$/.test(s) && Number(s) <= max ? Number(s) : null);
 
 /**
- * The look segment back into fields (sensor/nft-meta.mjs parseLook): sat and light as 0..1. Null
- * unless it is exactly what fishLook writes (six parts, a known archetype, whole numbers in range).
+ * The look segment back into fields (sensor/nft-meta.mjs parseLook): sat and light as 0..1, and the
+ * gene when there is a seventh field (no `gene` key otherwise). Null unless it is exactly what
+ * fishLook writes (six or seven parts, a known archetype, whole numbers in range, a canonical gene).
  */
 export function parseLook(s: string): LookFields | null {
   const p = String(s ?? '').split('-');
-  if (p.length !== 6 || !ARCHETYPES.includes(p[0])) return null;
+  if ((p.length !== 6 && p.length !== 7) || !ARCHETYPES.includes(p[0])) return null;
   const [hue, sat, light, accentHue, stripes] = [lookInt(p[1], 360), lookInt(p[2], 100), lookInt(p[3], 100), lookInt(p[4], 360), lookInt(p[5], 9)];
   if (hue === null || sat === null || light === null || accentHue === null || stripes === null) return null;
-  return { archetype: p[0] as FishSpec['archetype'], hue, sat: sat / 100, light: light / 100, accentHue, stripes };
+  if (p.length === 7 && !isGene(p[6])) return null;
+  const look: LookFields = { archetype: p[0] as FishSpec['archetype'], hue, sat: sat / 100, light: light / 100, accentHue, stripes };
+  if (p.length === 7) look.gene = p[6];
+  return look;
 }
 
 /** "v2/<serial>/" for a numbered fish, else "v1/". */

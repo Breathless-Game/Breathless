@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GENERATOR_V1, fishLook, fishOf, legacyLook, recordedDepth, rollFish, withLegacyLook } from './fish-gen.mjs';
+import { GENERATOR_V1, fishLook, fishOf, legacyLook, lookOf, recordedDepth, rollFish, withLegacyLook, withoutGene } from './fish-gen.mjs';
 import {
   DAS_PAGE,
   classifyOwned,
@@ -76,13 +76,24 @@ test('a collection fish comes back as the game rolled it, with its recorded dept
 test('the colours come from the NFT URI: random for a new fish, legacy for an old one or a URI that is neither', () => {
   const fish = caught(0x00c0ffee);
   const old = withLegacyLook(fish);
+  const plain = withoutGene(fish);
   assert.notEqual(fishLook(old), fishLook(fish));
-  // Minted since random colours: its URI carries the look stream's colours.
+  // Minted since random shapes: its URI carries the look stream's colours and its shape gene.
+  assert.match(fish.gene, /^[0-9a-f]{16}$/);
   assert.deepEqual(classifyOwned(fishAsset(fish), { collection: COLLECTION }).spec, fish);
+  // Banked between random colours and random shapes: those colours, no gene (six-field URI).
+  const between = classifyOwned(fishAsset(plain), { collection: COLLECTION }).spec;
+  assert.deepEqual(between, plain);
+  assert.equal('gene' in between, false);
   // Banked (and minted) before them: the main stream's colours, exactly as the aquarium drew it.
   const e = classifyOwned(fishAsset(old), { collection: COLLECTION });
   assert.deepEqual(e.spec, old);
-  assert.deepEqual(e.spec, { ...fish, ...legacyLook(fish.seed, fish.rarity) });
+  assert.deepEqual(e.spec, { ...plain, ...legacyLook(fish.seed, fish.rarity) });
+  // Another seed's gene on this fish's colours, or a gene on the legacy colours: neither, so legacy.
+  for (const gene of [lookOf(fish.seed + 1, fish.rarity).gene]) {
+    assert.deepEqual(classifyOwned(fishAsset({ ...fish, gene }), { collection: COLLECTION }).spec, old);
+  }
+  assert.deepEqual(classifyOwned(fishAsset({ ...old, gene: fish.gene }), { collection: COLLECTION }).spec, old);
   // Irys, garbage, or a look that is neither: legacy, as before.
   for (const uri of ['https://arweave.net/abc123', 'not a url', '', `https://breathless.gotclass.xyz/api/nft/meta/v2/42/${fish.id}/x.json`, metaUri({ ...fish, hue: fish.hue + 50 })]) {
     assert.deepEqual(classifyOwned(fishAsset(fish, { uri }), { collection: COLLECTION }).spec, old, uri);

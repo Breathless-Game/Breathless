@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildFishMesh, disposeFishMesh, type Archetype, type FishMesh, type FishSpec, type Rarity } from './fish';
+import { buildFishMesh, disposeFishMesh, isGene, type Archetype, type FishMesh, type FishSpec, type Rarity } from './fish';
 
 // The fish on the NFT card, shared by the game (portrait.ts fishCard, drawn with WebGL) and the
 // server (sensor/fish-png.mjs, a software rasteriser in Node). One mesh builder, one pose, one
@@ -35,6 +35,8 @@ export interface CardFacts {
   light: number;
   accentHue: number;
   stripes: number;
+  /** The shape gene, when the look has one (seven fields); otherwise the species' standard shape. */
+  gene?: string;
 }
 
 // The URL's rounding (nft-uri.ts fishLook), so the game and the server feed identical numbers.
@@ -44,10 +46,11 @@ const nat = (x: number, max: number) => Math.min(max, Math.max(0, Math.round(Num
 
 /**
  * The spec the card's fish is built from. Size (scale) does not show: the camera frames the fish's
- * bounds. The seed comes from the id, as the shards and the marine creatures' grain use it.
+ * bounds. The seed comes from the id, as the shards and the marine creatures' grain use it. The gene
+ * is exact (the URL carries all its digits); no `gene` key without one.
  */
 export function cardSpec(f: CardFacts): FishSpec {
-  return {
+  const spec: FishSpec = {
     id: f.id,
     seed: Number.parseInt(f.id.slice(-8), 16) >>> 0,
     rarity: f.rarity,
@@ -64,6 +67,8 @@ export function cardSpec(f: CardFacts): FishSpec {
     stripes: nat(f.stripes, 9),
     scale: 1,
   };
+  if (isGene(f.gene)) spec.gene = f.gene;
+  return spec;
 }
 
 /** Pose a fish as on the card and aim the camera at it (portrait.ts drawFish). */

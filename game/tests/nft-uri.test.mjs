@@ -55,17 +55,28 @@ test('parseLook reads back what fishLook writes, as the server does', () => {
   for (let i = 0; i < 600; i++) {
     const seed = Math.imul(i + 1, 2654435761) >>> 0;
     const f = gen.fishOf(seed, ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'][i % 6]);
-    for (const spec of [f, gen.withLegacyLook(f)]) {
+    // The three looks a fish can carry: colours and gene (seven fields), colours alone, legacy colours.
+    for (const spec of [f, gen.withoutGene(f), gen.withLegacyLook(f)]) {
       const look = fishLook(spec);
+      assert.equal(look.split('-').length, spec.gene ? 7 : 6, look);
       const parsed = parseLook(look);
       assert.ok(parsed, look);
+      assert.equal(parsed.gene, spec.gene, 'the gene, exactly');
+      assert.equal('gene' in parsed, !!spec.gene, 'no gene key for six fields');
       assert.equal(fishLook(parsed), look, 'round trip');
       // The server's parser (sensor/nft-meta.mjs) reads the same fields.
       assert.deepEqual(parsed, parseImagePath(`/api/nft/img/v1/${f.id}/${f.rarity}/${look}/X.png`).look);
     }
   }
   assert.deepEqual(parseLook('slim-130-45-50-310-3'), { archetype: 'slim', hue: 130, sat: 0.45, light: 0.5, accentHue: 310, stripes: 3 });
-  for (const bad of ['', 'slim-130-45-50-310', 'eel-130-45-50-310-3', 'slim-361-45-50-310-3', 'slim-130-101-50-310-3', 'slim-130-45-50-310-10', 'slim-1.5-45-50-310-3', 'slim--1-45-50-310-3', 'slim-130-45-50-310-3-7']) {
+  assert.deepEqual(parseLook('slim-130-45-50-310-3-00ff10a0b7c3e9d4'), { archetype: 'slim', hue: 130, sat: 0.45, light: 0.5, accentHue: 310, stripes: 3, gene: '00ff10a0b7c3e9d4' });
+  assert.equal(fishLook({ ...fish, gene: '00ff10a0b7c3e9d4' }).split('-').pop(), '00ff10a0b7c3e9d4');
+  assert.equal(fishLook({ ...fish, gene: 'NOT A GENE' }), fishLook(fish), 'a malformed gene is left out, as the mesh ignores it');
+  const g = '-00ff10a0b7c3e9d4';
+  for (const bad of ['', 'slim-130-45-50-310', 'eel-130-45-50-310-3', 'slim-361-45-50-310-3', 'slim-130-101-50-310-3', 'slim-130-45-50-310-10', 'slim-1.5-45-50-310-3', 'slim--1-45-50-310-3', 'slim-130-45-50-310-3-7',
+    // Malformed genes: uppercase, one digit short or long, not hex, empty, signed, and an eighth field.
+    'slim-130-45-50-310-3-00FF10A0B7C3E9D4', 'slim-130-45-50-310-3-00ff10a0b7c3e9d', 'slim-130-45-50-310-3-00ff10a0b7c3e9d4a', 'slim-130-45-50-310-3-00ff10a0b7c3e9dg',
+    'slim-130-45-50-310-3-', 'slim-130-45-50-310-3-+0ff10a0b7c3e9d4', `slim-130-45-50-310-3${g}${g}`, `slim-130-45-50-310-3${g}-0`, `eel-130-45-50-310-3${g}`, `slim-361-45-50-310-3${g}`, `constructor-130-45-50-310-3${g}`]) {
     assert.equal(parseLook(bad), null, bad);
     assert.equal(parseImagePath(`/api/nft/img/v1/0000beef/rare/${bad}/X.png`), null, `server agrees: ${bad}`);
   }
