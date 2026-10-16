@@ -14,7 +14,7 @@
 // market.mjs, nft-serial.mjs and nft-meta.mjs, the rpc-guard concurrency limit and 429 backoff,
 // and the balance / owned-fish caches. Vercel runs a handful of instances under load, so each
 // limit is that many times looser than in one `npm start` process. What must hold across
-// instances (one payout per fish, gapless fish numbers, one PEARL mint, the per-wallet fish
+// instances (one payout per fish, gapless fish numbers, one PEARL mint, the per-game-wallet fish
 // mint/migration quotas that bound lifetime_value) is in Redis.
 
 import { timingSafeEqual } from 'node:crypto';

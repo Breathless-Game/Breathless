@@ -1,17 +1,24 @@
 import assert from 'node:assert/strict';
+import { createPrivateKey, createPublicKey, sign as ed25519Sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
-import { publicKey } from '@metaplex-foundation/umi';
+import { publicKey, publicKeyBytes } from '@metaplex-foundation/umi';
 import { createFishCollection } from './fish-collection.mjs';
 import {
+  BAD_SIGNATURE_CODE,
   FishRegistry,
   KvQuota,
   Quota,
+  assertSignedByPayer,
   assertTrustedFish,
   capQuotes,
   checkFish,
   checkPayoutCap,
+  cosignMigrateMessage,
+  cosignMintMessage,
   isLegacyEra,
+  isSmallOrderKey,
   migrationProblem,
   mintLimitError,
   paidInWindow,
@@ -24,6 +31,7 @@ import {
   DAILY_PEARL_CAP,
   HttpError,
   MIGRATE_BATCH,
+  MIGRATIONS_PER_HOUR,
   MINTS_PER_HOUR,
   MINT_WINDOW_MS,
   MPL_CORE_PROGRAM,
@@ -34,6 +42,8 @@ import {
 import { createSaleDesk, quoteMany } from './market-sale.mjs';
 import { RedisRegistry, createMemoryKv, createRedisKv } from './market-store.mjs';
 import { createFakeRedis } from './test/fake-redis.mjs';
+import * as core from '@metaplex-foundation/mpl-core';
+import { string } from '@metaplex-foundation/umi/serializers';
 
 // The market's trust gate: forged fish (no collection, the wrong one, tampered attributes, extra
 // plugins) never get a price, single or batch; collection fish the generator agrees with sell; the
@@ -413,19 +423,19 @@ test('cosign-migrate body: bounded, de-duplicated, never paid by the market', ()
 
 // ---- Limits ---------------------------------------------------------------------------------------
 
-test('the mint quota counts per owner per hour and says when it opens again', () => {
+test('the mint quota counts per key (the game wallet) per hour and says when it opens again', () => {
   const q = new Quota({ limit: 3, windowMs: 60_000 });
   const t = 1_000_000;
   assert.ok(q.take('a', 1, t).ok && q.take('a', 2, t + 1).ok);
   const no = q.take('a', 1, t + 10_000);
   assert.equal(no.ok, false);
   assert.equal(no.retryAfterMs, 50_000);
-  assert.ok(q.take('b', 1, t + 10_000).ok, 'another owner has its own quota');
+  assert.ok(q.take('b', 1, t + 10_000).ok, 'another key has its own quota');
   assert.ok(q.take('a', 1, t + 60_000).ok, 'a new window');
   const e = mintLimitError('Mint', 3, 50_000, t);
   assert.equal(e.status, 429);
   assert.deepEqual(e.extra, { code: 'mint-limit', retryAfterMs: 50_000 });
-  assert.match(e.message, /at most 3 per wallet per hour/);
+  assert.match(e.message, /at most 3 per game wallet per hour/);
   assert.ok(MINTS_PER_HOUR >= 120, 'normal play never mints anywhere near this');
 });
 
@@ -443,7 +453,7 @@ for (const [name, makeKv] of [
   ['Redis KV', () => sharedKv().kv()],
   ['memory KV', () => createMemoryKv()],
 ]) {
-  test(`KvQuota (${name}) answers exactly as Quota: per owner, all or nothing, retryAfterMs, a new window`, async () => {
+  test(`KvQuota (${name}) answers exactly as Quota: per key, all or nothing, retryAfterMs, a new window`, async () => {
     const q = new KvQuota({ kv: makeKv(), name: 'mint', limit: 3, windowMs: 60_000 });
     const t = 1_000_000;
     assert.ok((await q.take('a', 1, t)).ok && (await q.take('a', 2, t + 1)).ok);
@@ -451,7 +461,7 @@ for (const [name, makeKv] of [
     assert.equal(no.ok, false);
     assert.equal(no.retryAfterMs, 50_000);
     assert.equal((await q.take('a', 1, t + 59_500)).retryAfterMs, 1000, 'never less than a second, as Quota');
-    assert.ok((await q.take('b', 1, t + 10_000)).ok, 'another owner has its own quota');
+    assert.ok((await q.take('b', 1, t + 10_000)).ok, 'another key has its own quota');
     assert.ok((await q.take('a', 1, t + 60_000)).ok, 'a new window');
     assert.ok((await q.take('a', 2, t + 60_001)).ok, 'the refused takes charged nothing');
     assert.equal((await q.take('a', 1, t + 60_002)).ok, false);
@@ -513,13 +523,26 @@ function collectionAccount(address) {
 
 const PAST_QUOTA = new Error('past the quota (the test stops before building the transaction)');
 
-/** A fish collection as one instance builds it; the blockhash fetch (after the quota) throws PAST_QUOTA. */
-function mintingInstance({ quotaKv, registry = new FishRegistry(), t, mintsPerHour = 3 }) {
+/**
+ * A fish collection as one instance builds it; the blockhash fetch (after the quota) throws
+ * PAST_QUOTA. `assets`: Core asset accounts by address (any other address reads as the
+ * collection); `calls.rpc` counts every RPC.
+ */
+function mintingInstance({ quotaKv, registry = new FishRegistry(), t, mintsPerHour = 3, migrationsPerHour = MIGRATIONS_PER_HOUR, assets = {}, calls = { rpc: 0 } }) {
   const u = {
     identity: { publicKey: { toString: () => MARKET } },
     rpc: {
-      getAccount: async (address) => collectionAccount(address),
+      getAccount: async (address) => {
+        calls.rpc++;
+        return assets[String(address)] ?? collectionAccount(address);
+      },
+      call: async (method) => {
+        calls.rpc++;
+        if (method === 'getSignaturesForAddress') return []; // no history left: an old fish
+        throw new Error(`unexpected rpc ${method}`);
+      },
       getLatestBlockhash: async () => {
+        calls.rpc++;
         throw PAST_QUOTA;
       },
     },
@@ -532,38 +555,259 @@ function mintingInstance({ quotaKv, registry = new FishRegistry(), t, mintsPerHo
     ledger: { records: {} },
     balanceSol: async () => 1,
     log: () => {},
-    limits: { mintsPerHour },
+    limits: { mintsPerHour, migrationsPerHour },
     quotaKv,
     now: () => t.now,
   });
 }
 
+// The game wallet (payer) signs every co-sign request; its quota is the one spent.
+const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex');
+/** An ed25519 test key from a 32-byte seed: its address and a signer of UTF-8 strings (base64), like the game's session key. */
+function testKey(seed) {
+  const priv = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, Buffer.from(seed)]), format: 'der', type: 'pkcs8' });
+  const address = publicKey(new Uint8Array(Buffer.from(createPublicKey(priv).export({ format: 'jwk' }).x, 'base64url'))).toString();
+  return { address, sign: (message) => ed25519Sign(null, Buffer.from(message, 'utf8'), priv).toString('base64') };
+}
+const GAME = testKey(Buffer.alloc(32, 7));
+const GAME2 = testKey(Buffer.alloc(32, 8));
+
+/** A /cosign-mint body as the game sends it: payer = `key`, signed by `signer` (default: the payer). */
+function signedMint(f, { key = GAME, signer = key, ...opts } = {}) {
+  const body = mintBody(f, { ...opts, over: { payer: key.address, ...opts.over } });
+  return { ...body, signature: signer.sign(cosignMintMessage(body)) };
+}
+/** A /cosign-migrate body as the game sends it. */
+function signedMigrate(assetIds, { key = GAME, signer = key, owner = SELLER } = {}) {
+  const body = { owner, payer: key.address, assetIds };
+  return { ...body, signature: signer.sign(cosignMigrateMessage(body)) };
+}
+
 const mintRefused = (retryAfterMs) => (e) => e instanceof HttpError && e.status === 429 && e.extra?.code === 'mint-limit' && e.extra.retryAfterMs === retryAfterMs;
 
-test('cosign-mint on Vercel: two instances sharing Redis share the wallet\'s mint quota, charged before signing', async () => {
+test('cosign-mint on Vercel: two instances sharing Redis share the game wallet\'s mint quota, charged before signing', async () => {
   const { t, redis, kv } = sharedKv();
   const registry = () => new RedisRegistry(redis, 'live:');
   const a = mintingInstance({ quotaKv: kv(), registry: registry(), t });
   const b = mintingInstance({ quotaKv: kv(), registry: registry(), t });
   const start = t.now;
-  for (const fc of [a, b, a]) await assert.rejects(fc.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA);
+  for (const fc of [a, b, a]) await assert.rejects(fc.cosignMint(signedMint(goodFish)), (e) => e === PAST_QUOTA);
   t.now += 10_000;
-  await assert.rejects(b.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000), 'the other instance sees the same count');
-  await assert.rejects(a.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000));
+  await assert.rejects(b.cosignMint(signedMint(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000), 'the other instance sees the same count');
+  await assert.rejects(a.cosignMint(signedMint(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000));
   const c = mintingInstance({ quotaKv: kv(), registry: registry(), t }); // a cold start
-  await assert.rejects(c.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000), 'a cold start does not reset it');
+  await assert.rejects(c.cosignMint(signedMint(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000), 'a cold start does not reset it');
+  assert.ok(redis.data.has(`live:kv:quota:mint:${GAME.address}`), 'counted under the game wallet (payer)');
+  assert.ok(![...redis.data.keys()].some((k) => k.startsWith('live:kv:quota:') && k.endsWith(SELLER)), 'never under the owner');
   t.now = start + MINT_WINDOW_MS;
-  await assert.rejects(b.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA, 'a new window');
+  await assert.rejects(b.cosignMint(signedMint(goodFish)), (e) => e === PAST_QUOTA, 'a new window');
 });
 
 test('cosign-mint on one process (file store): the in-memory quota, unchanged', async () => {
   const t = { now: 1_000_000 };
   const fc = mintingInstance({ t });
-  for (let i = 0; i < 3; i++) await assert.rejects(fc.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA);
+  for (let i = 0; i < 3; i++) await assert.rejects(fc.cosignMint(signedMint(goodFish)), (e) => e === PAST_QUOTA);
   t.now += 10_000;
-  await assert.rejects(fc.cosignMint(mintBody(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000));
+  await assert.rejects(fc.cosignMint(signedMint(goodFish)), mintRefused(MINT_WINDOW_MS - 10_000));
   t.now += MINT_WINDOW_MS;
-  await assert.rejects(fc.cosignMint(mintBody(goodFish)), (e) => e === PAST_QUOTA, 'a new window');
+  await assert.rejects(fc.cosignMint(signedMint(goodFish)), (e) => e === PAST_QUOTA, 'a new window');
+});
+
+// ---- Signed co-sign requests ------------------------------------------------------------------------
+// Both quotas are per game wallet (the payer), so only that wallet may spend them: before this, any
+// stranger could POST 240 mints naming a victim's owner address and stall their queue for an hour.
+
+const VECTOR = JSON.parse(readFileSync(new URL('./test/fixtures/cosign-request-vector.json', import.meta.url), 'utf8'));
+const badSignature = (e) => e instanceof HttpError && e.status === 401 && e.extra?.code === BAD_SIGNATURE_CODE && e.message.includes(VECTOR.staleGamePhrase);
+
+test('the signed request strings and signatures match the vector the game is pinned to (game/tests/fish-cosign.test.mjs)', () => {
+  assert.equal(cosignMintMessage(VECTOR.mint.request), VECTOR.mint.message);
+  assert.equal(cosignMigrateMessage(VECTOR.migrate.request), VECTOR.migrate.message);
+  const key = testKey(Buffer.from(VECTOR.seedHex, 'hex'));
+  assert.equal(key.address, VECTOR.payer);
+  assert.equal(key.sign(VECTOR.mint.message), VECTOR.mint.signature, 'ed25519 is deterministic');
+  assert.equal(key.sign(VECTOR.migrate.message), VECTOR.migrate.signature);
+  assertSignedByPayer(VECTOR.mint.message, VECTOR.payer, VECTOR.mint.signature);
+  assertSignedByPayer(VECTOR.migrate.message, VECTOR.payer, VECTOR.migrate.signature);
+
+  assert.throws(() => assertSignedByPayer(VECTOR.migrate.message, VECTOR.payer, VECTOR.mint.signature), badSignature, 'a mint signature is no migration signature');
+  assert.throws(() => assertSignedByPayer(VECTOR.mint.message, GAME.address, VECTOR.mint.signature), badSignature, 'another payer');
+  assert.throws(() => assertSignedByPayer(`${VECTOR.mint.message} `, VECTOR.payer, VECTOR.mint.signature), badSignature, 'one byte more');
+  const sig = VECTOR.mint.signature;
+  for (const bad of [undefined, null, '', 42, {}, 'A'.repeat(86) + '==', sig.slice(0, 86), `${sig}=`, Buffer.from(sig, 'base64').toString('hex'), Buffer.from(sig, 'base64').toString('base64url')]) {
+    assert.throws(() => assertSignedByPayer(VECTOR.mint.message, VECTOR.payer, bad), badSignature, `signature ${JSON.stringify(bad)?.slice(0, 24)}`);
+  }
+  assert.throws(() => assertSignedByPayer(VECTOR.mint.message, SESSION, sig), badSignature, 'a payer that is no 32-byte key: 401, not 500');
+  assert.throws(() => assertSignedByPayer(VECTOR.mint.message, VECTOR.payer, undefined), /no signature/);
+});
+
+test('a small-order payer key is refused: its "signature" (R = identity, S = 0) would verify for any message', () => {
+  const payer = '4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM'; // the identity point, 01 00..00
+  const sig = `AQ${'A'.repeat(84)}==`;
+  assert.equal(Buffer.from(publicKeyBytes(payer)).toString('hex'), `01${'00'.repeat(31)}`);
+  // node:crypto's own verdict on this pair depends on the OpenSSL build (Node 26 on macOS accepts it
+  // for any message, CI's Node 24 refuses it), so it is not asserted: the blocklist is why our
+  // answer is the same everywhere.
+  assert.throws(() => assertSignedByPayer(VECTOR.mint.message, payer, sig), badSignature);
+  assert.throws(() => assertSignedByPayer('anything at all', payer, sig), badSignature);
+  // The whole torsion subgroup (all 8 points of small order), and the encodings with the sign bit
+  // set or y >= p, as libsodium refuses them.
+  for (const h of [
+    `01${'00'.repeat(31)}`,
+    'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+    `${'00'.repeat(31)}80`,
+    '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+    `ec${'ff'.repeat(30)}7f`,
+    '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+    '00'.repeat(32),
+    'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+    `ed${'ff'.repeat(30)}7f`,
+    `ee${'ff'.repeat(30)}ff`,
+    `01${'00'.repeat(30)}80`,
+  ]) {
+    assert.ok(isSmallOrderKey(Buffer.from(h, 'hex')), h);
+  }
+  assert.ok(!isSmallOrderKey(publicKeyBytes(VECTOR.payer)), 'a real key is not');
+  assert.ok(!isSmallOrderKey(publicKeyBytes(GAME.address)));
+});
+
+test('cosign-mint: a URI the URL parser rejects is a 400, not a 500', () => {
+  const body = mintBody(goodFish, { over: { uri: 'http://[/api/nft/meta/v2/42/x.json' } });
+  assert.throws(() => parseCosignMint(body, { market: MARKET }), (e) => e instanceof HttpError && e.status === 400 && /uri must be/.test(e.message));
+});
+
+test('no field of a signed request can spill into the next: | and \\ are escaped, the route is in the string', () => {
+  const r = VECTOR.mint.request;
+  const m = (name, species) => cosignMintMessage({ ...r, name, fish: { ...r.fish, species } });
+  assert.notEqual(m('a|b', 'c'), m('a', 'b|c'));
+  assert.notEqual(m('a\\', '|c'), m('a\\|', 'c'));
+  assert.notEqual(m('a\\|b', 'c'), m('a\\', 'b|c'));
+  assert.ok(VECTOR.mint.message.startsWith('breathless-cosign-mint|'));
+  assert.ok(VECTOR.migrate.message.startsWith('breathless-cosign-migrate|'));
+  const two = VECTOR.migrate.request;
+  assert.notEqual(cosignMigrateMessage(two), cosignMigrateMessage({ ...two, assetIds: [...two.assetIds].reverse() }), 'the order is signed too');
+});
+
+/** A registry and a KV that log every read and write. */
+function spied() {
+  const log = [];
+  const registry = new FishRegistry();
+  const mem = createMemoryKv();
+  const spy = (name, fn) => (...a) => {
+    log.push(name);
+    return fn(...a);
+  };
+  return {
+    log,
+    registry: { get: spy('registry.get', (...a) => registry.get(...a)), set: spy('registry.set', (...a) => registry.set(...a)) },
+    kv: { ...mem, get: spy('kv.get', mem.get), cas: spy('kv.cas', mem.cas), set: spy('kv.set', mem.set) },
+  };
+}
+
+/** Mint requests a stranger could make with the victim's game wallet named as payer. */
+function forgedMints() {
+  const good = signedMint(goodFish);
+  const { signature, ...unsigned } = good;
+  const next = mintBody(goodFish, { serial: 43 });
+  return [
+    ['unsigned (a game tab from before signatures)', unsigned],
+    ['signed by another key', signedMint(goodFish, { signer: GAME2 })],
+    ['signed by its payer, then the payer swapped', { ...signedMint(goodFish, { key: GAME2 }), payer: GAME.address }],
+    ['the asset changed after signing', { ...good, asset: fishKey(9) }],
+    ['the name and URI changed after signing (still a valid fish)', { ...good, name: next.name, uri: next.uri }],
+    ['the owner changed after signing', { ...good, owner: OWNER_KEY }],
+    ['the migration signature for this asset', { ...good, signature: GAME.sign(cosignMigrateMessage({ owner: good.owner, payer: good.payer, assetIds: [good.asset] })) }],
+    ['a signature that is not base64', { ...good, signature: 'not a signature' }],
+  ];
+}
+
+for (const store of ['in-memory Quota', 'KvQuota']) {
+  test(`cosign-mint (${store}): a request its game wallet did not sign is a 401, before any RPC, registry or quota`, async () => {
+    const t = { now: 1_000_000 };
+    const s = spied();
+    const calls = { rpc: 0 };
+    const fc = mintingInstance({ t, registry: s.registry, quotaKv: store === 'KvQuota' ? s.kv : undefined, calls });
+    for (const [what, body] of forgedMints()) {
+      for (let i = 0; i < 5; i++) await assert.rejects(fc.cosignMint(body), badSignature, what);
+    }
+    assert.equal(calls.rpc, 0, 'no RPC: not even the collection');
+    assert.deepEqual(s.log, [], 'no registry and no quota read or write');
+    // The game wallet's quota is whole: its own signed requests still get all 3.
+    for (let i = 0; i < 3; i++) await assert.rejects(fc.cosignMint(signedMint(goodFish)), (e) => e === PAST_QUOTA, 'correctly signed: works as before');
+    await assert.rejects(fc.cosignMint(signedMint(goodFish)), mintRefused(MINT_WINDOW_MS));
+    assert.ok(calls.rpc > 0 && s.log.includes('registry.get'));
+  });
+
+  test(`cosign-mint (${store}): two game wallets naming the same owner have their own quotas`, async () => {
+    const t = { now: 1_000_000 };
+    const fc = mintingInstance({ t, quotaKv: store === 'KvQuota' ? createMemoryKv() : undefined });
+    for (let i = 0; i < 3; i++) await assert.rejects(fc.cosignMint(signedMint(goodFish)), (e) => e === PAST_QUOTA);
+    await assert.rejects(fc.cosignMint(signedMint(goodFish)), mintRefused(MINT_WINDOW_MS), 'the first game wallet is done for the hour');
+    for (let i = 0; i < 3; i++) await assert.rejects(fc.cosignMint(signedMint(goodFish, { key: GAME2 })), (e) => e === PAST_QUOTA, 'same owner, another game wallet');
+    await assert.rejects(fc.cosignMint(signedMint(goodFish, { key: GAME2 })), mintRefused(MINT_WINDOW_MS));
+  });
+}
+
+// ---- The same for cosign-migrate, with real Core asset accounts (fetchAsset decodes them).
+
+const OWNER_KEY = publicKey(new Uint8Array(32).fill(2)).toString();
+const legacyId = (n) => publicKey(new Uint8Array(32).fill(40 + n)).toString();
+
+/** A Core AssetV1 account with only an Attributes plugin: what the session key minted before the collection. */
+function legacyAssetAccount(address, { owner = OWNER_KEY, authority, attributeList = attributesOf(goodFish) }) {
+  const base = Buffer.concat([
+    Buffer.from([core.Key.AssetV1]),
+    Buffer.from(publicKeyBytes(owner)),
+    Buffer.from(core.getBaseUpdateAuthoritySerializer().serialize({ __kind: 'Address', fields: [publicKey(authority)] })),
+    Buffer.from(string().serialize('Fish')),
+    Buffer.from(string().serialize('https://breathless.gotclass.xyz/api/nft/meta/v1/x.json')),
+    Buffer.from([0]), // seq: None
+  ]);
+  const plugin = Buffer.from(core.getPluginSerializer().serialize({ __kind: 'Attributes', fields: [{ attributeList }] }));
+  const pluginAt = base.length + 9; // after the 9-byte plugin header
+  const registryAt = pluginAt + plugin.length;
+  const header = Buffer.from(core.getPluginHeaderV1AccountDataSerializer().serialize({ key: core.Key.PluginHeaderV1, pluginRegistryOffset: BigInt(registryAt) }));
+  const record = Buffer.from(core.getRegistryRecordSerializer().serialize({ pluginType: core.PluginType.Attributes, authority: { __kind: 'UpdateAuthority' }, offset: BigInt(pluginAt) }));
+  const registry = Buffer.concat([Buffer.from([core.Key.PluginRegistryV1, 1, 0, 0, 0]), record, Buffer.from([0, 0, 0, 0])]);
+  return {
+    exists: true,
+    publicKey: publicKey(address),
+    owner: publicKey(MPL_CORE_PROGRAM),
+    lamports: { basisPoints: 1n },
+    executable: false,
+    data: new Uint8Array(Buffer.concat([base, header, plugin, registry])),
+  };
+}
+
+test('cosign-migrate: unsigned, wrongly signed or a mint signature is a 401 before any RPC, registry or quota; signed, each game wallet has its own quota', async () => {
+  const t = { now: 1_000_000 };
+  const s = spied();
+  const calls = { rpc: 0 };
+  const assets = {
+    [legacyId(1)]: legacyAssetAccount(legacyId(1), { authority: GAME.address }),
+    [legacyId(2)]: legacyAssetAccount(legacyId(2), { authority: GAME2.address }),
+  };
+  const fc = mintingInstance({ t, registry: s.registry, quotaKv: s.kv, calls, assets, migrationsPerHour: 1 });
+  const good = signedMigrate([legacyId(1)], { owner: OWNER_KEY });
+  const { signature, ...unsigned } = good;
+  const mintSig = signedMint(goodFish, { over: { owner: OWNER_KEY, asset: legacyId(1) } }).signature;
+  for (const [what, body] of [
+    ['unsigned', unsigned],
+    ['signed by another key', signedMigrate([legacyId(1)], { owner: OWNER_KEY, signer: GAME2 })],
+    ['another fish listed after signing', { ...good, assetIds: [legacyId(2)] }],
+    ['another owner after signing', { ...good, owner: SELLER }],
+    ['the mint signature of the same wallet', { ...good, signature: mintSig }],
+  ]) {
+    await assert.rejects(fc.cosignMigrate(body), badSignature, what);
+  }
+  assert.equal(calls.rpc, 0, 'no RPC');
+  assert.deepEqual(s.log, [], 'no registry and no quota read or write');
+
+  // Signed: checked like before, then its game wallet's quota (1 here) is charged.
+  await assert.rejects(fc.cosignMigrate(good), (e) => e === PAST_QUOTA, 'correctly signed: works as before');
+  assert.ok(s.log.includes('kv.cas'));
+  await assert.rejects(fc.cosignMigrate(signedMigrate([legacyId(1)], { owner: OWNER_KEY })), (e) => e instanceof HttpError && e.status === 429 && e.extra?.code === 'mint-limit', 'that wallet is done for the hour');
+  await assert.rejects(fc.cosignMigrate(signedMigrate([legacyId(2)], { owner: OWNER_KEY, key: GAME2 })), (e) => e === PAST_QUOTA, 'same owner, another game wallet: its own quota');
 });
 
 test('the daily PEARL cap: per seller, rolling 24 h, cumulative over a quote batch, atomic in the sale desk', async () => {

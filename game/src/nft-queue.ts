@@ -2,6 +2,7 @@ import { fishValue } from './fish';
 import {
   isFundsError,
   isSpentFishError,
+  mintDeferralOf,
   mintPauseOf,
   nextRetryAt,
   nextToMint,
@@ -90,7 +91,7 @@ export class NftQueue {
   /** The player declined the last batch's wallet prompt: shown once, not on every card. */
   declined: number = 0;
   /**
-   * Mints wait until `until`: the market's per-wallet mint limit was reached ('limit'), or the market
+   * Mints wait until `until`: the market's per-game-wallet mint limit was reached ('limit'), or the market
    * or an RPC is down or throttled for now ('busy'; market.ts mintPauseOf). `reason`: the error's message.
    */
   mintPause: { until: number; reason: string; kind: MintPauseKind } | null = null;
@@ -364,6 +365,13 @@ export class NftQueue {
             if (i >= 0) this.bank.splice(i, 1);
             this.sellErrors.delete(f);
             this.save();
+            continue;
+          }
+          const defer = mintDeferralOf(e);
+          if (defer !== null) {
+            // Only this fish waits (an earlier co-sign of it may still land); the others go on.
+            console.warn('mint deferred', f.id, msg);
+            this.apply(f, { type: 'deferred', until: Date.now() + defer });
             continue;
           }
           const pause = mintPauseOf(e);

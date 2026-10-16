@@ -28,7 +28,9 @@ const {
   bulkSellableBelowEpic,
   isRateLimitError,
   isSpentFishError,
+  isUnsignedRequestError,
   migrateBank,
+  mintDeferralOf,
   mintPauseOf,
   needsConfirm,
   nextRetryAt,
@@ -374,10 +376,15 @@ test('transient mint errors pause the whole queue instead of costing the fish an
   assert.deepEqual(mintPauseOf(cosignError(504)), { ms: 30_000, kind: 'busy' });
   assert.deepEqual(mintPauseOf(cosignError(0)), { ms: 30_000, kind: 'busy' });
   assert.deepEqual(mintPauseOf(cosignError(503, 'collection-pending', 60_000)), { ms: 60_000, kind: 'busy' });
-  // An earlier mint of this fish may still land: the server's retryAfterMs is honoured.
-  assert.deepEqual(mintPauseOf(cosignError(409, 'mint-in-flight', 30_000)), { ms: 30_000, kind: 'busy' });
-  assert.deepEqual(mintPauseOf(cosignError(409, 'mint-in-flight', 5_000)), { ms: 5_000, kind: 'busy' });
-  assert.deepEqual(mintPauseOf(cosignError(409, 'mint-in-flight')), { ms: 30_000, kind: 'busy' });
+  // An earlier mint of this fish may still land: only that fish waits (mintDeferralOf), never the queue.
+  assert.equal(mintPauseOf(cosignError(409, 'mint-in-flight', 30_000)), null);
+  assert.equal(mintDeferralOf(cosignError(409, 'mint-in-flight', 30_000)), 30_000, "the server's retryAfterMs is honoured");
+  assert.equal(mintDeferralOf(cosignError(409, 'mint-in-flight', 5_000)), 5_000);
+  assert.equal(mintDeferralOf(cosignError(409, 'mint-in-flight')), 30_000);
+  assert.equal(mintDeferralOf(cosignError(409, 'mint-in-flight', 10 * 60 * 60_000)), 60 * 60_000, 'capped at an hour');
+  assert.equal(mintDeferralOf(cosignError(409, 'already-burned')), null);
+  assert.equal(mintDeferralOf(cosignError(409, 'already-minted')), null, 'adopted by cosignMint, never deferred');
+  assert.equal(mintDeferralOf(cosignError(503)), null);
   // The Solana RPC throttling our own send/confirm (no HTTP status on the error).
   assert.deepEqual(mintPauseOf(new Error('429 Too Many Requests: {"code":429}')), { ms: 30_000, kind: 'busy' });
   assert.deepEqual(mintPauseOf(new Error('Server responded with too many requests')), { ms: 30_000, kind: 'busy' });
@@ -386,6 +393,9 @@ test('transient mint errors pause the whole queue instead of costing the fish an
   assert.deepEqual(mintPauseOf(cosignError(429, 'limit', 120_000)), { ms: 120_000, kind: 'limit' });
   assert.deepEqual(mintPauseOf(cosignError(429, 'limit', 10 * 60 * 60_000)), { ms: 60 * 60_000, kind: 'limit' });
   assert.deepEqual(mintPauseOf(cosignError(503, undefined, -5)), { ms: 30_000, kind: 'busy' }, 'a bad retryAfterMs falls back');
+  // The market refused the request signature (a game/market version mismatch): the fish stays queued.
+  assert.deepEqual(mintPauseOf(cosignError(401, 'bad-request-signature')), { ms: 30_000, kind: 'busy' });
+  assert.equal(mintPauseOf(cosignError(401)), null, 'only that code: any other 401 counts');
   // Genuine failures still count against the fish's MAX_AUTO_MINT_TRIES.
   assert.equal(mintPauseOf(cosignError(400)), null);
   // A 500 is the market's catch-all, possibly a bug with this one fish: retrying it forever would block the queue.
@@ -412,4 +422,75 @@ test('a paused fish keeps its tries; a failed one spends one', () => {
   const failed = nftStep(f, { type: 'failed', error: 'bad request', now: 0 });
   assert.equal(failed.nft, 'failed');
   assert.equal(failed.mintTries, 3);
+});
+
+// A game tab from before the market checked request signatures sent unsigned co-sign requests: the
+// market answers 401 (sensor/fish-trust.mjs assertSignedByPayer), and that old tab counted it as a
+// failed attempt, up to MAX_AUTO_MINT_TRIES, then waited for the player's Retry. This game resets
+// those on load; it signs, so they mint.
+const VECTOR = JSON.parse(await readFile(new URL('../../sensor/test/fixtures/cosign-request-vector.json', import.meta.url), 'utf8'));
+const UNSIGNED_401 = `This market request is not signed by its game wallet (no signature): refresh the page to load the latest game. Your fish stay queued.`;
+
+test('a 401 for an unsigned co-sign request keeps the fish queued: paused now, and reset on reload if an older tab failed it', () => {
+  assert.ok(isUnsignedRequestError(UNSIGNED_401.slice(0, 200)), 'what an old tab saved (mintError is cut at 200 characters)');
+  assert.ok(isUnsignedRequestError(`x ${VECTOR.staleGamePhrase} y`), 'the phrase the market promises to keep (shared fixture)');
+  assert.equal(isUnsignedRequestError('Mint failed on-chain: {"InstructionError":[0,1]}'), false);
+  assert.equal(isUnsignedRequestError(undefined), false);
+
+  // This game: a 401 is a pause, so no attempt is spent and the fish goes back to pending.
+  const minting = { ...bankEntry({ id: 'a', rarity: 'common', value: 1 }), nft: 'minting' };
+  const paused = nftStep(minting, { type: 'paused' });
+  assert.equal(paused.nft, 'pending');
+  assert.equal(paused.mintTries, undefined);
+  assert.equal(nextToMint([paused], Date.now()), paused);
+
+  // An older tab: four failed attempts and no automatic retry left. Reloading puts it back in the queue.
+  const now = Date.now();
+  let f = { ...bankEntry({ id: 'b', rarity: 'rare', value: 25 }), serial: 42 };
+  for (let i = 0; i < MAX_AUTO_MINT_TRIES; i++) f = nftStep(nftStep(f, { type: 'start' }), { type: 'failed', error: UNSIGNED_401.slice(0, 200), now });
+  assert.equal(f.nft, 'failed');
+  assert.equal(f.retryAt, undefined, 'the old tab gave up on it');
+  assert.equal(nextToMint([f], now + 3_600_000), null, 'without the reset it waits for a Retry by hand');
+  const other = nftStep(nftStep({ ...bankEntry({ id: 'c', rarity: 'common', value: 1 }) }, { type: 'start' }), { type: 'failed', error: 'Mint failed on-chain', now });
+  const { bank, changed } = migrateBank(JSON.parse(JSON.stringify([f, other])));
+  assert.equal(changed, true);
+  assert.deepEqual(bank[0], { ...bankEntry({ id: 'b', rarity: 'rare', value: 25 }), serial: 42 }, 'pending again, attempts and error cleared, nothing else lost');
+  assert.equal(nextToMint(bank, now), bank[0]);
+  assert.equal(bank[1].nft, 'failed', 'a real failure stays failed');
+  assert.equal(bank[1].mintTries, 1);
+  assert.equal(migrateBank(JSON.parse(JSON.stringify(bank))).changed, false, 'once is enough');
+});
+
+// 409 mint-in-flight is about one fish (an earlier co-sign of it may still land, or someone who
+// knows its id keeps replaying one): that fish waits, every other fish keeps minting.
+test('a fish stuck "in flight" waits on its own: the queue mints the others, then retries it, losing nothing', () => {
+  const now = 1_000_000;
+  const stuck = { ...bankEntry({ id: 'stuck', rarity: 'rare', value: 25 }), sellQueued: true, serial: 7 };
+  const other = bankEntry({ id: 'other', rarity: 'common', value: 1 });
+  const bank = [stuck, other];
+  assert.equal(nextToMint(bank, now), stuck, 'picked first (queued for sale)');
+  bank[0] = nftStep(nftStep(stuck, { type: 'start' }), { type: 'deferred', until: now + 30_000 });
+  assert.equal(bank[0].nft, 'pending');
+  assert.equal(bank[0].retryAt, now + 30_000);
+  assert.equal(bank[0].mintTries, undefined, 'no attempt counted');
+  assert.equal(bank[0].sellQueued, true, 'still to be sold once minted');
+  assert.equal(bank[0].serial, 7);
+  assert.equal(nextToMint(bank, now), other, 'the queue moves on');
+  assert.equal(nextToMint([bank[0]], now + 29_999), null, 'not before its time');
+  assert.equal(nextRetryAt(bank), now + 30_000, 'the queue wakes for it');
+  assert.equal(nextToMint(bank, now + 30_000), bank[0], 'then it is tried again, first as before');
+  // Held in flight again and again (a replayed co-sign): it keeps waiting, never fails, never blocks.
+  let f = bank[0];
+  for (let i = 0; i < 20; i++) f = nftStep(nftStep(f, { type: 'start' }), { type: 'deferred', until: now + (i + 2) * 30_000 });
+  assert.equal(f.nft, 'pending');
+  assert.equal(f.mintTries, undefined);
+  assert.equal(nextToMint([f, other], now + 30_000), other);
+  // Starting it clears the wait; minting it ends it.
+  const started = nftStep(f, { type: 'start' });
+  assert.equal(started.retryAt, undefined);
+  assert.equal(nftStep(started, { type: 'minted', assetId: 'A', tx: 'T' }).nft, 'minted');
+  // A reload keeps the wait (it is still in the saved bank) and changes nothing else.
+  const { bank: loaded } = migrateBank(JSON.parse(JSON.stringify([f])));
+  assert.deepEqual(loaded[0], f);
+  assert.equal(nftStep(other, { type: 'deferred', until: now }), other, 'only a minting fish can be deferred');
 });

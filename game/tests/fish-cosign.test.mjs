@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createPublicKey, verify as ed25519Verify } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -281,4 +282,50 @@ test('sensor/fish-gen.mjs (the market\'s generator) grows exactly the game\'s fi
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- Signed co-sign requests: the market charges its quotas per game wallet, so the session key
+// signs every request. The string and the signature must be exactly what sensor/fish-trust.mjs
+// checks: both suites assert the same vector (sensor/test/fixtures/cosign-request-vector.json).
+const VECTOR = JSON.parse(readFileSync(new URL('../../sensor/test/fixtures/cosign-request-vector.json', import.meta.url), 'utf8'));
+
+async function vectorSigner() {
+  const { createSignerFromKeypair } = await import('@metaplex-foundation/umi');
+  const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+  const u = createUmi('http://127.0.0.1:1'); // never contacted
+  return createSignerFromKeypair(u, u.eddsa.createKeypairFromSeed(Uint8Array.from(Buffer.from(VECTOR.seedHex, 'hex'))));
+}
+
+test("the signed request strings are the market's, byte for byte (shared vector)", () => {
+  assert.equal(cosign.cosignMintMessage(VECTOR.mint.request), VECTOR.mint.message);
+  assert.equal(cosign.cosignMigrateMessage(VECTOR.migrate.request), VECTOR.migrate.message);
+  const r = VECTOR.mint.request;
+  const m = (name, species) => cosign.cosignMintMessage({ ...r, name, fish: { ...r.fish, species } });
+  assert.notEqual(m('a|b', 'c'), m('a', 'b|c'), 'a | in a field cannot shift the fields');
+  assert.notEqual(m('a\\', '|c'), m('a\\|', 'c'));
+  assert.ok(VECTOR.mint.message.startsWith(`${cosign.COSIGN_MINT_DOMAIN}|`));
+  assert.ok(VECTOR.migrate.message.startsWith(`${cosign.COSIGN_MIGRATE_DOMAIN}|`));
+});
+
+test("the session key (umi signer) signs the request: the vector's signature, which the market verifies", async () => {
+  const { publicKeyBytes } = await import('@metaplex-foundation/umi');
+  const signer = await vectorSigner();
+  assert.equal(signer.publicKey.toString(), VECTOR.payer);
+  const mint = await cosign.signMintRequest(signer, VECTOR.mint.request);
+  assert.equal(mint.signature, VECTOR.mint.signature);
+  const { signature, ...rest } = mint;
+  assert.deepEqual(rest, VECTOR.mint.request, 'every field of the request goes along unchanged');
+  const migrate = await cosign.signMigrateRequest(signer, VECTOR.migrate.request);
+  assert.equal(migrate.signature, VECTOR.migrate.signature);
+  assert.deepEqual(migrate.assetIds, VECTOR.migrate.request.assetIds);
+  // Checked with another ed25519 implementation (node:crypto, as the market does).
+  const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(publicKeyBytes(VECTOR.payer)).toString('base64url') }, format: 'jwk' });
+  assert.ok(ed25519Verify(null, Buffer.from(VECTOR.mint.message), key, Buffer.from(signature, 'base64')));
+  assert.ok(!ed25519Verify(null, Buffer.from(VECTOR.migrate.message), key, Buffer.from(signature, 'base64')), 'a mint signature is no migration one');
+  // The body mintRequest builds, signed, is what /cosign-mint gets.
+  const { fish, ...a } = VECTOR.mint.request;
+  const body = await cosign.signMintRequest(signer, cosign.mintRequest({ ...fish, hue: 3 }, a));
+  assert.equal(body.signature, VECTOR.mint.signature);
+  assert.equal(body.fish.hue, undefined);
+  await assert.rejects(cosign.signMintRequest(signer, { ...VECTOR.mint.request, payer: OWNER }), /signed by its payer/, 'never signs for another payer');
 });

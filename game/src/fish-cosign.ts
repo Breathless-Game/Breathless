@@ -10,6 +10,11 @@
 //            into the collection; the session key signs and pays. A fish whose session key lives on
 //            another device can't be moved from here: it is marked not sellable, with the reason.
 //
+// Both requests are signed by the session key (`signature`, signMintRequest / signMigrateRequest):
+// the market charges its hourly mint and migration quotas per game wallet (the payer), so it only
+// accepts requests that wallet signed; a request from a tab older than this answers 401
+// 'bad-request-signature' and its fish stay queued (market.ts mintPauseOf, migrateBank).
+//
 // The helpers at the top are pure (game/tests/fish-cosign.test.mjs loads this file on its own);
 // the chain libraries are imported lazily inside the flows, as in pearl.ts.
 
@@ -44,7 +49,7 @@ export class CosignError extends Error {
   }
 }
 
-/** A limit the market applies per wallet (mints per hour, PEARL per day): wait, don't retry now. */
+/** A limit the market applies (mints per hour per game wallet, PEARL per day per seller): wait, don't retry now. */
 export const isLimit = (e: unknown): e is CosignError => e instanceof CosignError && e.status === 429;
 
 export async function cosignApi<T>(path: string, body?: unknown): Promise<T> {
@@ -91,9 +96,59 @@ export interface MintFacts {
   value: number;
 }
 
-export function mintRequest(fish: MintFacts, a: { owner: string; payer: string; asset: string; name: string; uri: string }) {
+export interface MintRequest {
+  owner: string;
+  /** Our session key: pays the mint, and signs the request (its quota is the one spent). */
+  payer: string;
+  asset: string;
+  name: string;
+  uri: string;
+  fish: MintFacts;
+}
+
+export function mintRequest(fish: MintFacts, a: { owner: string; payer: string; asset: string; name: string; uri: string }): MintRequest {
   return { ...a, fish: { id: fish.id, rarity: fish.rarity, species: fish.species, depth: fish.depth, value: fish.value } };
 }
+
+export interface MigrateRequest {
+  owner: string;
+  /** Our session key: the fish's update authority, pays, and signs the request. */
+  payer: string;
+  assetIds: string[];
+}
+
+// The strings the session key signs, exactly as sensor/fish-trust.mjs cosignMintMessage /
+// cosignMigrateMessage builds them to check (sensor/test/fixtures/cosign-request-vector.json pins
+// both): a domain tag naming the route, then the fields joined by `|`, each with `\` and `|`
+// escaped by a `\`. No timestamp: a replayed request spends no new quota (see the server's note).
+const esc = (v: string | number) => String(v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
+export const COSIGN_MINT_DOMAIN = 'breathless-cosign-mint';
+export const COSIGN_MIGRATE_DOMAIN = 'breathless-cosign-migrate';
+
+export function cosignMintMessage(r: MintRequest): string {
+  const f = r.fish;
+  return [COSIGN_MINT_DOMAIN, r.owner, r.payer, r.asset, r.name, r.uri, f.id, f.rarity, f.species, f.depth, f.value].map(esc).join('|');
+}
+
+export function cosignMigrateMessage(r: MigrateRequest): string {
+  return [COSIGN_MIGRATE_DOMAIN, r.owner, r.payer, r.assetIds.join(',')].map(esc).join('|');
+}
+
+/** What signs a request: the session key (umi's keypair Signer has signMessage). */
+export type RequestSigner = Pick<Signer, 'publicKey' | 'signMessage'>;
+
+const toBase64 = (b: Uint8Array) => btoa(Array.from(b, (x) => String.fromCharCode(x)).join(''));
+
+async function signed<T extends { payer: string }>(signer: RequestSigner, body: T, message: string): Promise<T & { signature: string }> {
+  if (signer.publicKey.toString() !== body.payer) throw new Error('A market request must be signed by its payer');
+  const sig = await signer.signMessage(new TextEncoder().encode(message));
+  return { ...body, signature: toBase64(sig) };
+}
+
+/** The /cosign-mint body with the session key's ed25519 signature (base64) of cosignMintMessage. */
+export const signMintRequest = (signer: RequestSigner, body: MintRequest) => signed(signer, body, cosignMintMessage(body));
+/** The /cosign-migrate body with the session key's ed25519 signature (base64) of cosignMigrateMessage. */
+export const signMigrateRequest = (signer: RequestSigner, body: MigrateRequest) => signed(signer, body, cosignMigrateMessage(body));
 
 interface MessageLike {
   accounts: readonly unknown[];
@@ -402,7 +457,8 @@ export async function cosignMint(
   const payer = args.session.publicKey.toString();
   let res: { tx: string; lastValidBlockHeight: number };
   try {
-    res = await cosignApi('/cosign-mint', mintRequest(args.fish, { owner: args.owner, payer, asset: asset.publicKey.toString(), name: args.name, uri: args.uri }));
+    const body = mintRequest(args.fish, { owner: args.owner, payer, asset: asset.publicKey.toString(), name: args.name, uri: args.uri });
+    res = await cosignApi('/cosign-mint', await signMintRequest(args.session, body));
   } catch (e) {
     // An earlier attempt landed after all (its confirmation was lost): that asset is this fish.
     if (e instanceof CosignError && e.code === 'already-minted' && e.assetId) return { asset: e.assetId, signature: '', collection };
@@ -463,7 +519,7 @@ export async function makeSellable(
     const ids = toMove.slice(i, i + MIGRATE_BATCH);
     let res: { txs: { tx: string; assetIds: string[]; lastValidBlockHeight: number }[]; rejected: { assetId: string; status: number; error: string }[] };
     try {
-      res = await cosignApi('/cosign-migrate', { owner, payer: ctx.session, assetIds: ids });
+      res = await cosignApi('/cosign-migrate', await signMigrateRequest(session, { owner, payer: ctx.session, assetIds: ids }));
     } catch (e) {
       const c = e instanceof CosignError ? e : null;
       for (const id of ids) out.set(id, { state: 'error', reason: messageOf(e), retryAfterMs: c?.retryAfterMs });
