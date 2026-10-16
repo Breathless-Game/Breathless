@@ -1,0 +1,325 @@
+{
+ "sampleDepth": 350,
+ "specimens": {
+  "Hammerhead Shark": {
+   "seed": 1,
+   "rarity": "epic",
+   "look": "bulky-299-75-57-113-0",
+   "hue": 299.2840575973969,
+   "sat": 0.7532097151502967,
+   "light": 0.5720743141137064,
+   "accentHue": 113.34781376528554,
+   "stripes": 0
+  },
+  "Chambered Nautilus": {
+   "seed": 2,
+   "rarity": "epic",
+   "look": "disc-284-72-54-126-5",
+   "hue": 283.54424359160475,
+   "sat": 0.7248003934160806,
+   "light": 0.5357244655722753,
+   "accentHue": 126.071356049506,
+   "stripes": 5
+  },
+  "Golden Sea Turtle": {
+   "seed": 4,
+   "rarity": "legendary",
+   "look": "disc-34-86-60-224-0",
+   "hue": 33.990022216457874,
+   "sat": 0.8616087232716382,
+   "light": 0.5979089536517859,
+   "accentHue": 223.75302049564198,
+   "stripes": 0
+  },
+  "Ghost Angelfish": {
+   "seed": 5,
+   "rarity": "epic",
+   "look": "disc-279-78-55-132-5",
+   "hue": 279.2845956678502,
+   "sat": 0.7800255614216439,
+   "light": 0.5458104212535545,
+   "accentHue": 131.7343156854622,
+   "stripes": 5
+  },
+  "Atlantic Salmon": {
+   "seed": 7,
+   "rarity": "uncommon",
+   "look": "disc-168-44-47-352-0",
+   "hue": 168.1526106223464,
+   "sat": 0.4432465265039355,
+   "light": 0.47399251859169456,
+   "accentHue": 352.4186589382589,
+   "stripes": 0
+  },
+  "Neon Cardinal": {
+   "seed": 8,
+   "rarity": "rare",
+   "look": "slim-197-81-52-18-4",
+   "hue": 197.026583282277,
+   "sat": 0.8137519105803221,
+   "light": 0.5238814557436854,
+   "accentHue": 17.555996561422944,
+   "stripes": 4
+  },
+  "Green Sea Turtle": {
+   "seed": 9,
+   "rarity": "rare",
+   "look": "bulky-191-70-59-341-0",
+   "hue": 190.67064426839352,
+   "sat": 0.7025436867028475,
+   "light": 0.5919454253045842,
+   "accentHue": 341.1395766027272,
+   "stripes": 0
+  },
+  "Violet Lionfish": {
+   "seed": 11,
+   "rarity": "epic",
+   "look": "perch-305-62-55-133-3",
+   "hue": 304.5277066680137,
+   "sat": 0.620006540347822,
+   "light": 0.5530505511676893,
+   "accentHue": 133.1466333719436,
+   "stripes": 3
+  },
+  "Manta Ray": {
+   "seed": 12,
+   "rarity": "rare",
+   "look": "disc-208-79-56-33-0",
+   "hue": 208.20644265972078,
+   "sat": 0.789200758608058,
+   "light": 0.5640130313811824,
+   "accentHue": 32.5911810528487,
+   "stripes": 0
+  },
+  "Ribbon Moray": {
+   "seed": 15,
+   "rarity": "rare",
+   "look": "slim-201-84-53-346-3",
+   "hue": 201.1118053086102,
+   "sat": 0.8378945888951421,
+   "light": 0.5305531548103317,
+   "accentHue": 346.3568758778274,
+   "stripes": 3
+  },
+  "Moon Jellyfish": {
+   "seed": 16,
+   "rarity": "epic",
+   "look": "long-314-83-55-109-0",
+   "hue": 313.90195706742816,
+   "sat": 0.8344855213887058,
+   "light": 0.5513364028418437,
+   "accentHue": 108.9111489977222,
+   "stripes": 0
+  },
+  "Bluefin Tuna": {
+   "seed": 19,
+   "rarity": "uncommon",
+   "look": "long-126-48-50-309-0",
+   "hue": 126.20131276547909,
+   "sat": 0.48071165615692735,
+   "light": 0.5031277075409889,
+   "accentHue": 308.5772127099335,
+   "stripes": 0
+  },
+  "Azure Tang": {
+   "seed": 21,
+   "rarity": "rare",
+   "look": "disc-196-82-53-12-0",
+   "hue": 196.33136125281453,
+   "sat": 0.824016785575077,
+   "light": 0.5345799895469099,
+   "accentHue": 11.758889965713024,
+   "stripes": 0
+  },
+  "Jade Shell Turtle": {
+   "seed": 24,
+   "rarity": "rare",
+   "look": "long-197-70-55-47-0",
+   "hue": 196.7564235907048,
+   "sat": 0.704147199774161,
+   "light": 0.545944890519604,
+   "accentHue": 46.95463000796735,
+   "stripes": 0
+  },
+  "Lantern Angler": {
+   "seed": 29,
+   "rarity": "rare",
+   "look": "bulky-198-72-53-357-4",
+   "hue": 197.53366432152689,
+   "sat": 0.7216072917450219,
+   "light": 0.5322260953951627,
+   "accentHue": 357.3138095717877,
+   "stripes": 4
+  },
+  "Suncrest Spearfish": {
+   "seed": 30,
+   "rarity": "legendary",
+   "look": "bulky-38-98-56-252-5",
+   "hue": 37.73160734586418,
+   "sat": 0.9804742933134548,
+   "light": 0.5554205808229744,
+   "accentHue": 251.5587920639664,
+   "stripes": 5
+  },
+  "Striped Wrasse": {
+   "seed": 35,
+   "rarity": "uncommon",
+   "look": "slim-148-43-52-357-4",
+   "hue": 147.75837304070592,
+   "sat": 0.4263866500928998,
+   "light": 0.5244925284758211,
+   "accentHue": 356.8165178783238,
+   "stripes": 4
+  },
+  "Prism Crown Jellyfish": {
+   "seed": 36,
+   "rarity": "mythic",
+   "look": "bulky-92-92-70-293-4",
+   "hue": 91.73226211220026,
+   "sat": 0.9170159287750721,
+   "light": 0.6963269811822101,
+   "accentHue": 292.96435464173555,
+   "stripes": 4
+  },
+  "Amethyst Cardinal": {
+   "seed": 37,
+   "rarity": "epic",
+   "look": "slim-267-64-60-98-4",
+   "hue": 266.71020916546695,
+   "sat": 0.6441349913016893,
+   "light": 0.5958397352136672,
+   "accentHue": 97.83500523190014,
+   "stripes": 4
+  },
+  "Vampire Squid": {
+   "seed": 43,
+   "rarity": "mythic",
+   "look": "bulky-191-81-61-41-3",
+   "hue": 190.58970652520657,
+   "sat": 0.8087143837939949,
+   "light": 0.6062027600128204,
+   "accentHue": 40.9602464735508,
+   "stripes": 3
+  },
+  "Sawshark": {
+   "seed": 44,
+   "rarity": "legendary",
+   "look": "long-31-93-55-220-0",
+   "hue": 31.496344122570008,
+   "sat": 0.9288563827518374,
+   "light": 0.550019115936011,
+   "accentHue": 219.88879560260102,
+   "stripes": 0
+  },
+  "Silver Snapper": {
+   "seed": 45,
+   "rarity": "uncommon",
+   "look": "perch-153-36-52-338-0",
+   "hue": 152.93413683772087,
+   "sat": 0.3557385883294046,
+   "light": 0.5226896764943376,
+   "accentHue": 338.34739403799176,
+   "stripes": 0
+  },
+  "Ember Triggerfish": {
+   "seed": 58,
+   "rarity": "epic",
+   "look": "disc-311-72-59-155-5",
+   "hue": 311.20773003203794,
+   "sat": 0.7163444106932729,
+   "light": 0.5902960973326117,
+   "accentHue": 154.75441233022138,
+   "stripes": 5
+  },
+  "Coralback Titan Turtle": {
+   "seed": 67,
+   "rarity": "mythic",
+   "look": "long-205-90-64-41-4",
+   "hue": 205.21738157607615,
+   "sat": 0.9031691533513367,
+   "light": 0.6391786971129476,
+   "accentHue": 40.71860137395561,
+   "stripes": 4
+  },
+  "Reef Octopus": {
+   "seed": 87,
+   "rarity": "uncommon",
+   "look": "perch-123-43-49-306-3",
+   "hue": 122.88347797468305,
+   "sat": 0.43271879097446797,
+   "light": 0.49481504766736184,
+   "accentHue": 305.82125013694167,
+   "stripes": 3
+  },
+  "Whale Shark": {
+   "seed": 88,
+   "rarity": "legendary",
+   "look": "bulky-37-93-55-195-2",
+   "hue": 37.15156412310898,
+   "sat": 0.9279914301005192,
+   "light": 0.5489206360280514,
+   "accentHue": 194.69360035471618,
+   "stripes": 2
+  },
+  "Crowned Sailfish": {
+   "seed": 109,
+   "rarity": "legendary",
+   "look": "long-41-93-53-213-0",
+   "hue": 40.885638958308846,
+   "sat": 0.9316789769101887,
+   "light": 0.5284640001319348,
+   "accentHue": 213.4061188721098,
+   "stripes": 0
+  },
+  "Lionmane Jellyfish": {
+   "seed": 120,
+   "rarity": "legendary",
+   "look": "long-38-86-55-245-0",
+   "hue": 38.19036425370723,
+   "sat": 0.8600512330885977,
+   "light": 0.5524410019256174,
+   "accentHue": 245.22690202388912,
+   "stripes": 0
+  },
+  "Golden Koi Dragon": {
+   "seed": 143,
+   "rarity": "legendary",
+   "look": "long-37-89-59-203-5",
+   "hue": 37.36824952997267,
+   "sat": 0.8887458740733564,
+   "light": 0.5902248402126133,
+   "accentHue": 202.84640763886273,
+   "stripes": 5
+  },
+  "Starcoil Eel": {
+   "seed": 182,
+   "rarity": "mythic",
+   "look": "long-242-89-68-89-5",
+   "hue": 241.99306530877948,
+   "sat": 0.8871464036405087,
+   "light": 0.6840254733571782,
+   "accentHue": 89.47333823889494,
+   "stripes": 5
+  },
+  "Coral Chromis": {
+   "seed": 191,
+   "rarity": "uncommon",
+   "look": "perch-135-50-48-298-3",
+   "hue": 135.33579975366592,
+   "sat": 0.5037038892507554,
+   "light": 0.47725609375629574,
+   "accentHue": 297.7564451470971,
+   "stripes": 3
+  },
+  "Abyssal Giant Octopus": {
+   "seed": 308,
+   "rarity": "mythic",
+   "look": "long-6-90-61-210-0",
+   "hue": 6.032516732811928,
+   "sat": 0.9015606436412782,
+   "light": 0.6118019284680486,
+   "accentHue": 210.40086572989821,
+   "stripes": 0
+  }
+ }
+}

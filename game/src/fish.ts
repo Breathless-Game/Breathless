@@ -196,32 +196,133 @@ export interface FishSpec {
   assetId?: string;
 }
 
+/** A fish's colours: everything fishLook() writes into the NFT URI besides the archetype. */
+export type FishColours = Pick<FishSpec, 'hue' | 'sat' | 'light' | 'accentHue' | 'stripes'>;
+
+// ---- The look stream --------------------------------------------------------------------------
+//
+// Since random colours, a fish's colours come from their own RNG stream, seeded by mixing the fish
+// seed with LOOK_SALT (and a variant, 0 for now), so the main stream (rarity, species, size, weight,
+// name) is untouched and every fish already caught or minted keeps its numbers. Fish caught before
+// this kept the colours the main stream gave them (legacyLook): banked fish store them, and their
+// NFT URIs carry them. sensor/fish-gen.mjs mirrors lookOf and legacyLook exactly.
+
+/** Salt of the look stream. Not 0xabcdef: Fish's behaviour stream uses that (seed ^ 0xabcdef). */
+export const LOOK_SALT = 0xc0105eed;
+
+/** murmur3's 32-bit finaliser: a bijection on 32-bit integers. */
+function fmix32(h: number): number {
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
+ * The look stream's starting state for (seed, salt, variant). For a fixed salt and variant it is a
+ * bijection of the seed (xor, fmix32, add, fmix32), so two seeds never share a look stream; for a
+ * fixed seed, different variants give different states.
+ */
+export function mix32(seed: number, salt: number, variant = 0): number {
+  return fmix32((fmix32((seed ^ salt) >>> 0) + Math.imul(variant >>> 0, 0x9e3779b1)) >>> 0);
+}
+
+/**
+ * An Rng that starts at exactly `state`, 0 included. new Rng(0) would fall back to 0x9e3779b9 and
+ * share that state's stream; instead start one step before 0 (mulberry32 adds 0x6d2b79f5 per draw)
+ * and spend that step.
+ */
+function rngAtState(state: number): Rng {
+  if (state >>> 0 !== 0) return new Rng(state);
+  const rng = new Rng(-0x6d2b79f5 >>> 0);
+  rng.next();
+  return rng;
+}
+
+/** Where a rare-and-up fish's accent hue sits: the middle of its old PALETTE hue band, ±30°. */
+const accentAnchor = (rarity: Rarity) => (PALETTE[rarity].hues[0] + PALETTE[rarity].hues[1]) / 2;
+
+/**
+ * A fish's random colours, from the look stream. Draws, in order (always six, whatever the rarity):
+ *   hue        0..360, any colour
+ *   sat        the rarity's PALETTE band (commons muted, deep fish vivid)
+ *   light      the rarity's PALETTE band
+ *   accentHue  common, uncommon: 0..360. rare, epic, legendary: the PALETTE band's middle ±30°.
+ *              mythic: hue + 140..220 (opposite the body, as before)
+ *   striped    stripes on 55% of fish
+ *   count      2..5 stripes (drawn even when unstriped, so later draws never shift)
+ * A later look field (a shape gene) goes after these, so these never change.
+ */
+export function lookOf(seed: number, rarity: Rarity, variant = 0): FishColours {
+  const rng = rngAtState(mix32(seed, LOOK_SALT, variant));
+  const pal = PALETTE[rarity];
+  const hue = rng.range(0, 360);
+  const sat = rng.range(...pal.sat);
+  const light = rng.range(...pal.light);
+  const a = rng.next();
+  const accentHue =
+    rarity === 'common' || rarity === 'uncommon'
+      ? a * 360
+      : rarity === 'mythic'
+        ? (hue + 140 + 80 * a) % 360
+        : (accentAnchor(rarity) - 30 + 60 * a + 360) % 360;
+  const striped = rng.next() < 0.55;
+  const count = rng.int(2, 5);
+  return { hue, sat, light, accentHue, stripes: striped ? count : 0 };
+}
+
+/**
+ * The colours rollFish gave a fish before random colours: drawn from its main stream, which for
+ * every generator version runs rarity, species, hue, scale, weight, epithet, sat, light, accent,
+ * stripes (weighted() and pick() each take one draw). Fish banked or minted before then carry these.
+ */
+export function legacyLook(seed: number, rarity: Rarity): FishColours {
+  const rng = new Rng(seed);
+  const pal = PALETTE[rarity];
+  rng.next(); // rarity
+  rng.next(); // species
+  const hue = rng.range(...pal.hues);
+  rng.next(); // scale
+  rng.next(); // weight
+  rng.next(); // epithet
+  const sat = rng.range(...pal.sat);
+  const light = rng.range(...pal.light);
+  const accentHue = (hue + rng.range(140, 220)) % 360;
+  const stripes = rng.next() < 0.55 ? rng.int(2, 5) : 0;
+  return { hue, sat, light, accentHue, stripes };
+}
+
 export function rollFish(seed: number, depthM: number, odds = rarityOdds(depthM)): FishSpec {
   const rng = new Rng(seed);
   const rarity = rng.weighted(odds);
   const profile = rng.pick(SPECIES_BY_RARITY[rarity]);
   const { species, archetype } = profile;
-  const pal = PALETTE[rarity];
-  const hue = rng.range(...pal.hues);
+  rng.next(); // the old hue (legacyLook): still drawn, so scale, weight and name stay where they were
   const rarityIdx = RARITY_ORDER.indexOf(rarity);
   const scale = rng.range(0.85, 1.25) * (1 + rarityIdx * 0.12);
   const lengthCm = Math.round(SHAPES[archetype].len * scale * 28);
   const weightKg = +(Math.pow(lengthCm / 30, 3) * SHAPES[archetype].height * rng.range(0.7, 1.1)).toFixed(2);
+  const name = `${rng.pick(EPITHETS[rarity])} ${species}`;
+  // The main stream's remaining draws were the old sat, light, accent and stripes; nothing after
+  // them, so they are no longer drawn. The colours come from the look stream.
+  const look = lookOf(seed, rarity);
   return {
     id: seed.toString(16).padStart(8, '0'),
     seed,
     rarity,
     species,
-    name: `${rng.pick(EPITHETS[rarity])} ${species}`,
+    name,
     archetype,
     lengthCm,
     weightKg,
     depthM: recordedDepth(depthM),
-    hue,
-    sat: rng.range(...pal.sat),
-    light: rng.range(...pal.light),
-    accentHue: (hue + rng.range(140, 220)) % 360,
-    stripes: rng.next() < 0.55 ? rng.int(2, 5) : 0,
+    hue: look.hue,
+    sat: look.sat,
+    light: look.light,
+    accentHue: look.accentHue,
+    stripes: look.stripes,
     scale,
     value: Math.round(RARITY[rarity].value * rewardMultiplierAt(depthM)),
   };

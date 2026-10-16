@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GENERATOR_V1, fishOf, recordedDepth, rollFish } from './fish-gen.mjs';
+import { GENERATOR_V1, fishLook, fishOf, legacyLook, recordedDepth, rollFish, withLegacyLook } from './fish-gen.mjs';
 import {
   DAS_PAGE,
   classifyOwned,
@@ -23,7 +23,11 @@ const COLLECTION = 'AB2Wss9G1w246PoTWc6CQQ4pKnxQKeY1vC6MmyCYvkx5';
 const SESSION = 'SysvarRent111111111111111111111111111111111';
 let n = 0;
 
-function fishAsset(fish, { ua = { type: 'Collection', address: COLLECTION }, owner = OWNER, noValue = false, extra = {} } = {}) {
+/** The metadata URI the game mints a fish with (game/src/nft-uri.ts fishMetaPath), from its bank entry. */
+const metaUri = (f) =>
+  `https://breathless.gotclass.xyz/api/nft/meta/v2/42/${f.id}/${f.rarity}/${f.depthM}-${f.value ?? 1}-${f.lengthCm}-${f.weightKg}/${fishLook(f)}/Reef/${encodeURIComponent(f.name)}.json`;
+
+function fishAsset(fish, { ua = { type: 'Collection', address: COLLECTION }, owner = OWNER, noValue = false, extra = {}, uri = metaUri(fish) } = {}) {
   const list = [
     { key: 'rarity', value: fish.rarity },
     { key: 'species', value: fish.species },
@@ -36,7 +40,7 @@ function fishAsset(fish, { ua = { type: 'Collection', address: COLLECTION }, own
     owner,
     updateAuthority: ua,
     name: `${fish.name} #0042`,
-    uri: `https://breathless.gotclass.xyz/api/nft/meta/v2/42/${fish.id}/x.json`,
+    uri,
     attributes: { authority: { type: 'UpdateAuthority' }, attributeList: list },
     ...extra,
   };
@@ -67,6 +71,25 @@ test('a collection fish comes back as the game rolled it, with its recorded dept
   assert.equal(e.assetId, `Asset${n}`);
   assert.deepEqual(e.spec, fish); // every field: look, size, name, depth, value
   assert.deepEqual(e.facts, { id: fish.id, rarity: fish.rarity, species: fish.species, depth: fish.depthM, value: fish.value });
+});
+
+test('the colours come from the NFT URI: random for a new fish, legacy for an old one or a URI that is neither', () => {
+  const fish = caught(0x00c0ffee);
+  const old = withLegacyLook(fish);
+  assert.notEqual(fishLook(old), fishLook(fish));
+  // Minted since random colours: its URI carries the look stream's colours.
+  assert.deepEqual(classifyOwned(fishAsset(fish), { collection: COLLECTION }).spec, fish);
+  // Banked (and minted) before them: the main stream's colours, exactly as the aquarium drew it.
+  const e = classifyOwned(fishAsset(old), { collection: COLLECTION });
+  assert.deepEqual(e.spec, old);
+  assert.deepEqual(e.spec, { ...fish, ...legacyLook(fish.seed, fish.rarity) });
+  // Irys, garbage, or a look that is neither: legacy, as before.
+  for (const uri of ['https://arweave.net/abc123', 'not a url', '', `https://breathless.gotclass.xyz/api/nft/meta/v2/42/${fish.id}/x.json`, metaUri({ ...fish, hue: fish.hue + 50 })]) {
+    assert.deepEqual(classifyOwned(fishAsset(fish, { uri }), { collection: COLLECTION }).spec, old, uri);
+  }
+  // A v1 fish with its legacy look in the URI rebuilds with it too (legacy trust, session key).
+  const legacyMint = classifyOwned(fishAsset(old, { ua: { type: 'Address', address: SESSION } }), { collection: COLLECTION });
+  assert.deepEqual(legacyMint.spec, old);
 });
 
 test('an older fish minted by a session key passes only the generator check, as legacy', () => {

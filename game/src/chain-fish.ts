@@ -1,4 +1,4 @@
-import type { Archetype, FishSpec, Rarity } from './fish';
+import type { Archetype, FishColours, FishSpec, Rarity } from './fish';
 import type { BankedFish } from './market';
 
 // Rebuilding the bank from the chain: the fish NFTs a wallet owns are the record of what it caught,
@@ -76,6 +76,24 @@ export function zoneOf(uri: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** The look segment (nft-uri.ts fishLook) of one of our metadata URIs, any origin, v1 or v2; else null. */
+export function lookSegmentOf(uri: string): string | null {
+  const m = /\/api\/nft\/meta\/(?:v1|v2\/\d+)\/[0-9a-f]{8}\/[a-z]+\/[^/]+\/([^/]+)\/[^/]+\/[^/]+\.json$/.exec(uri ?? '');
+  return m ? m[1] : null;
+}
+
+/**
+ * The colours an NFT records for the fish `grown` from its seed: its URI's look is the record. A
+ * fish minted since random colours carries the look-stream colours `grown` has; one banked before
+ * them, the main stream's (`legacy`). Anything else (an Irys URI, a look that is neither) gets the
+ * legacy colours, as every such fish was drawn until now. Exact values, not the URI's rounding, so
+ * a fish rebuilds just as it was banked (sensor/fish-owned.mjs colours() agrees).
+ */
+export function coloursFromUri(uri: string, grown: FishSpec, legacy: FishColours, fishLook: (s: FishSpec) => string): FishColours {
+  const from = lookSegmentOf(uri) === fishLook(grown) ? grown : legacy;
+  return { hue: from.hue, sat: from.sat, light: from.light, accentHue: from.accentHue, stripes: from.stripes };
 }
 
 /** The map a zone label belongs to, when exactly one map uses it ("Sunken Forest"); else undefined. */
@@ -156,11 +174,23 @@ export function readFacts(list: readonly { key: string; value: string }[] | unde
  * The asset must still look like a game fish (Attributes held by the collection, no other plugin)
  * and the game's own generator (`grow`, rollFish with the rarity fixed) must give its species for
  * its seed. Older fish outside the collection, and fish from an earlier generator, wait for the
- * server. Returns the owned fish, or null.
+ * server. Its colours are the ones its URI records (coloursFromUri). Returns the owned fish, or null.
  */
 export function entryFromAsset(
   asset: CoreAssetLike,
-  { collection, grow }: { collection: string | null; grow: (seed: number, rarity: Rarity) => FishSpec },
+  {
+    collection,
+    grow,
+    legacyLook,
+    fishLook,
+  }: {
+    collection: string | null;
+    grow: (seed: number, rarity: Rarity) => FishSpec;
+    /** fish.ts legacyLook: the colours a fish had before random colours. */
+    legacyLook: (seed: number, rarity: Rarity) => FishColours;
+    /** nft-uri.ts fishLook. */
+    fishLook: (spec: FishSpec) => string;
+  },
 ): OwnedFish | null {
   if (!collection || !asset) return null;
   const ua = asset.updateAuthority;
@@ -176,12 +206,14 @@ export function entryFromAsset(
   if (facts.value !== undefined && (!Number.isSafeInteger(facts.value) || facts.value < 1)) return null;
   const grown = grow(Number.parseInt(facts.id, 16) >>> 0, facts.rarity as Rarity);
   if (grown.species !== facts.species || grown.id !== facts.id) return null;
-  const spec: FishSpec = { ...grown, depthM: facts.depth };
+  const uri = String(asset.uri ?? '');
+  const colours = coloursFromUri(uri, grown, legacyLook(grown.seed, grown.rarity), fishLook);
+  const spec: FishSpec = { ...grown, ...colours, depthM: facts.depth };
   delete spec.value;
   delete spec.map;
   delete spec.assetId;
   if (facts.value !== undefined) spec.value = facts.value;
-  return { assetId: String(asset.publicKey), name: String(asset.name ?? ''), uri: String(asset.uri ?? ''), trust: 'collection', spec };
+  return { assetId: String(asset.publicKey), name: String(asset.name ?? ''), uri, trust: 'collection', spec };
 }
 
 // ---- Merge ------------------------------------------------------------------------------------

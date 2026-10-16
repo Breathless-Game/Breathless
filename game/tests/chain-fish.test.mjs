@@ -22,6 +22,7 @@ const OWNER = '3bEJ1111111111111111111111111111111111TFfX';
 const SESSION = 'Sess1on1111111111111111111111111111111111';
 const MAPS = { fjord: { zoneLabels: ['Shallows'] }, tianchi: { zoneLabels: ['Shallows', 'Sunken Forest'] }, ocean: { zoneLabels: ['Shallows', 'Reef', 'Abyss'] } };
 const grow = (seed, rarity) => gen.GENERATOR_V2.fishOf(seed, rarity);
+const deps = { grow, legacyLook: gen.legacyLook, fishLook: gen.fishLook };
 let n = 0;
 const assetId = () => `Asset${String(++n).padStart(38, '1')}`;
 
@@ -53,7 +54,7 @@ function mintedAsset(fish, { serial = 42, ua = { type: 'Collection', address: CO
 }
 
 const rebuild = (asset) => {
-  const owned = C.entryFromAsset(asset, { collection: COLLECTION, grow });
+  const owned = C.entryFromAsset(asset, { collection: COLLECTION, ...deps });
   return owned && C.bankedFromChain({ ...owned, trusted: owned.trust === 'collection' }, MAPS);
 };
 
@@ -65,6 +66,27 @@ test('a minted fish rebuilds into the entry it was banked as', () => {
     const original = { ...market.bankEntry({ ...fish, map: 'tianchi' }), nft: 'minted', assetId: asset.publicKey, serial: 42, metaFixed: true, nameFixed: true, trusted: true };
     assert.deepEqual(rebuild(asset), original, `seed ${seed}`);
   }
+});
+
+test('the colours come from the NFT URI: random for a new fish, legacy for an old one, legacy for anything else', () => {
+  const colours = (f) => ({ hue: f.hue, sat: f.sat, light: f.light, accentHue: f.accentHue, stripes: f.stripes });
+  for (const seed of [0x00c0ffee, 0x12345678, 0xdeadbeef, 7]) {
+    const fish = caught(seed);
+    const old = gen.withLegacyLook(fish); // banked before random colours: what the bank (and its URI) holds
+    assert.notEqual(gen.fishLook(old), gen.fishLook(fish));
+    assert.deepEqual(colours(rebuild(mintedAsset(fish))), colours(fish), `new fish ${seed}`);
+    const legacyAsset = mintedAsset(old);
+    const original = { ...market.bankEntry({ ...old, map: 'ocean' }), nft: 'minted', assetId: legacyAsset.publicKey, serial: 42, metaFixed: true, nameFixed: true, trusted: true };
+    assert.deepEqual(rebuild(legacyAsset), original, `old fish ${seed} rebuilds exactly as banked`);
+    for (const uri of ['https://arweave.net/abc', 'garbage', '', gen.fishLook(fish)]) {
+      assert.deepEqual(colours(rebuild({ ...mintedAsset(fish), uri })), colours(old), `${seed}: ${uri || '(empty)'}`);
+    }
+    // A look that is neither this seed's new nor its legacy look.
+    const other = mintedAsset({ ...fish, hue: (fish.hue + 90) % 360 });
+    assert.deepEqual(colours(rebuild(other)), colours(old), `${seed}: foreign look`);
+  }
+  assert.equal(C.lookSegmentOf('https://x.test/api/nft/meta/v1/0000beef/common/1-1-1-1/perch-40-20-50-220-3/Reef/Plain%20Grey%20Perch.json'), 'perch-40-20-50-220-3');
+  assert.equal(C.lookSegmentOf('https://x.test/api/nft/meta/v2/42/0000beef/x.json'), null);
 });
 
 test('rebuild details: number from the name or the URI, the map only when the zone names one, a missing value stays missing', () => {
@@ -106,26 +128,26 @@ test('the fallback takes only fish in the market collection that the generator g
     uri: 'https://breathless.gotclass.xyz/api/nft/gear/boat.json',
     attributes: { authority: { type: 'UpdateAuthority' }, attributeList: [{ key: 'kind', value: 'boat' }, { key: 'schema', value: '1' }] },
   };
-  assert.equal(C.entryFromAsset(gear, { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset(gear, { collection: COLLECTION, ...deps }), null);
   // Gear dressed up with a seed is still not in the collection.
-  assert.equal(C.entryFromAsset({ ...mintedAsset(fish), updateAuthority: { type: 'Address', address: SESSION } }, { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset({ ...mintedAsset(fish), updateAuthority: { type: 'Address', address: SESSION } }, { collection: COLLECTION, ...deps }), null);
   // Another collection's NFT that copies a fish's attributes.
-  assert.equal(C.entryFromAsset(mintedAsset(fish, { ua: { type: 'Collection', address: 'Other1111111111111111111111111111111111111' } }), { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset(mintedAsset(fish, { ua: { type: 'Collection', address: 'Other1111111111111111111111111111111111111' } }), { collection: COLLECTION, ...deps }), null);
   // No collection known (the market has not made it, or /info failed): nothing.
-  assert.equal(C.entryFromAsset(mintedAsset(fish), { collection: null, grow }), null);
+  assert.equal(C.entryFromAsset(mintedAsset(fish), { collection: null, ...deps }), null);
   // Attributes the generator cannot grow from that seed.
   const forged = mintedAsset(fish);
   forged.attributes.attributeList[1] = { key: 'species', value: 'Whale Shark' };
-  assert.equal(C.entryFromAsset(forged, { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset(forged, { collection: COLLECTION, ...deps }), null);
   // A plugin a game fish never has, or Attributes someone else controls.
-  assert.equal(C.entryFromAsset(mintedAsset(fish, { extra: { permanentTransferDelegate: { authority: { type: 'Owner' } } } }), { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset(mintedAsset(fish, { extra: { permanentTransferDelegate: { authority: { type: 'Owner' } } } }), { collection: COLLECTION, ...deps }), null);
   const owned = mintedAsset(fish);
   owned.attributes.authority = { type: 'Owner' };
-  assert.equal(C.entryFromAsset(owned, { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset(owned, { collection: COLLECTION, ...deps }), null);
   // Out-of-range facts.
   const deep = mintedAsset(fish);
   deep.attributes.attributeList[2] = { key: 'depth', value: '5000' };
-  assert.equal(C.entryFromAsset(deep, { collection: COLLECTION, grow }), null);
+  assert.equal(C.entryFromAsset(deep, { collection: COLLECTION, ...deps }), null);
 });
 
 test('merge adds what the bank lacks, by assetId, and running it again changes nothing', () => {

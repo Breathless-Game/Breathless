@@ -18,7 +18,7 @@
 
 import { verify as ed25519Verify } from 'node:crypto';
 import { publicKeyBytes } from '@metaplex-foundation/umi';
-import { CURRENT_GENERATOR, GENERATORS, RARITY_ORDER, Rng, fishLook, seedOfId } from './fish-gen.mjs';
+import { CURRENT_GENERATOR, GENERATORS, RARITY_ORDER, Rng, fishLook, seedOfId, withLegacyLook } from './fish-gen.mjs';
 import {
   DAILY_PEARL_CAP,
   HttpError,
@@ -288,11 +288,14 @@ export function parseCosignMint(body, { market, tolerance } = {}) {
     value: facts.value,
     lengthCm: spec.lengthCm,
     weightKg: spec.weightKg,
-    lookPath: fishLook(spec),
     name: spec.name,
     serial,
   };
+  // The look: this fish's random colours, or the colours it had before them (a fish banked before
+  // random colours, or a tab on an older build). Both follow from the seed; nothing else does.
+  const looks = [fishLook(spec), fishLook(withLegacyLook(spec))];
   const wrong = !meta ? ['path'] : Object.keys(expected).filter((k) => meta[k] !== expected[k]);
+  if (meta && !looks.includes(meta.lookPath)) wrong.push('lookPath');
   if (wrong.length) throw new HttpError(422, `The metadata URI does not match this fish (${wrong.join(', ')})`, { code: 'invalid-fish' });
 
   return {

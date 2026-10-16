@@ -91,6 +91,21 @@ export function fishLook(spec: LookFields): string {
   return [spec.archetype, deg(spec.hue), pct(spec.sat), pct(spec.light), deg(spec.accentHue), nat(spec.stripes, 9)].join('-');
 }
 
+const ARCHETYPES: readonly string[] = ['slim', 'perch', 'disc', 'long', 'bulky'];
+const lookInt = (s: string | undefined, max: number) => (s !== undefined && /^\d{1,7}$/.test(s) && Number(s) <= max ? Number(s) : null);
+
+/**
+ * The look segment back into fields (sensor/nft-meta.mjs parseLook): sat and light as 0..1. Null
+ * unless it is exactly what fishLook writes (six parts, a known archetype, whole numbers in range).
+ */
+export function parseLook(s: string): LookFields | null {
+  const p = String(s ?? '').split('-');
+  if (p.length !== 6 || !ARCHETYPES.includes(p[0])) return null;
+  const [hue, sat, light, accentHue, stripes] = [lookInt(p[1], 360), lookInt(p[2], 100), lookInt(p[3], 100), lookInt(p[4], 360), lookInt(p[5], 9)];
+  if (hue === null || sat === null || light === null || accentHue === null || stripes === null) return null;
+  return { archetype: p[0] as FishSpec['archetype'], hue, sat: sat / 100, light: light / 100, accentHue, stripes };
+}
+
 /** "v2/<serial>/" for a numbered fish, else "v1/". */
 const version = (spec: Numbered) => (isSerial(spec.serial) ? `v2/${spec.serial}/` : 'v1/');
 

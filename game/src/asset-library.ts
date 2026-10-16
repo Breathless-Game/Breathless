@@ -3,7 +3,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import fishingNetGlbUrl from '../../assets/gear/fishing-net-faceted.glb?url';
 import fishingNetPreviewUrl from '../../assets/gear/fishing-net-faceted-preview.png?url';
 import { RARITY_BY_DEPTH } from './depth-odds';
-import { RARITY, RARITY_ORDER, rollFish, speciesProfile, type FishSpec, type SpeciesProfile } from './fish';
+import { RARITY, RARITY_ORDER, legacyLook, rollFish, speciesProfile, type FishSpec, type SpeciesProfile } from './fish';
 import { buildFishingNetMesh } from './gear';
 import { fishCard, fishSprite } from './portrait';
 
@@ -32,11 +32,16 @@ function slugOf(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
-/** The lowest seed that rolls each species at SAMPLE_DEPTH. Striped species wait for a roll that has stripes. */
+/**
+ * The lowest seed that rolls each species at SAMPLE_DEPTH. Striped species wait for a roll that has
+ * stripes. The field guide shows each species' standard look, so the specimens keep the colours
+ * they had before fish got random colours (legacyLook), and the sprites stay as they were.
+ */
 function findSpecimens(): Specimen[] {
   const found = new Map<string, Specimen>();
   for (let seed = 1; seed <= 4000; seed++) {
-    const spec = rollFish(seed, SAMPLE_DEPTH);
+    const rolled = rollFish(seed, SAMPLE_DEPTH);
+    const spec: FishSpec = { ...rolled, ...legacyLook(seed, rolled.rarity) };
     if (found.has(spec.species)) continue;
     const profile = speciesProfile(spec);
     if (profile.pattern === 'stripes' && spec.stripes === 0) continue;

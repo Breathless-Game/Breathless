@@ -217,32 +217,107 @@ export function recordedDepth(depthM) {
   return Math.min(MAX_RECORDED_DEPTH_M, Math.max(0, Math.round(depthM)));
 }
 
+// ---- The look stream (fish.ts lookOf / legacyLook) ---------------------------------------------
+//
+// Since random colours, a fish's colours come from their own RNG stream (the seed mixed with
+// LOOK_SALT), so rarity, species, size, weight and name, which checkFish relies on, are drawn
+// exactly as before by every generator version: no new generator version. Fish caught before
+// random colours carry the main stream's colours (legacyLook) in their bank entries and NFT URIs.
+
+/** fish.ts LOOK_SALT. */
+export const LOOK_SALT = 0xc0105eed;
+
+/** murmur3's 32-bit finaliser (fish.ts fmix32): a bijection on 32-bit integers. */
+function fmix32(h) {
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/** fish.ts mix32: the look stream's starting state, a bijection of the seed for a fixed salt and variant. */
+export function mix32(seed, salt, variant = 0) {
+  return fmix32((fmix32((seed ^ salt) >>> 0) + Math.imul(variant >>> 0, 0x9e3779b1)) >>> 0);
+}
+
+/** fish.ts rngAtState: an Rng starting at exactly `state`, 0 included (new Rng(0) would fall back to 0x9e3779b9). */
+function rngAtState(state) {
+  if (state >>> 0 !== 0) return new Rng(state);
+  const rng = new Rng(-0x6d2b79f5 >>> 0);
+  rng.next();
+  return rng;
+}
+
+const accentAnchor = (rarity) => (PALETTE[rarity].hues[0] + PALETTE[rarity].hues[1]) / 2;
+
+/** fish.ts lookOf: { hue, sat, light, accentHue, stripes } from the look stream (always six draws). */
+export function lookOf(seed, rarity, variant = 0) {
+  const rng = rngAtState(mix32(seed, LOOK_SALT, variant));
+  const pal = PALETTE[rarity];
+  const hue = rng.range(0, 360);
+  const sat = rng.range(...pal.sat);
+  const light = rng.range(...pal.light);
+  const a = rng.next();
+  const accentHue =
+    rarity === 'common' || rarity === 'uncommon'
+      ? a * 360
+      : rarity === 'mythic'
+        ? (hue + 140 + 80 * a) % 360
+        : (accentAnchor(rarity) - 30 + 60 * a + 360) % 360;
+  const striped = rng.next() < 0.55;
+  const count = rng.int(2, 5);
+  return { hue, sat, light, accentHue, stripes: striped ? count : 0 };
+}
+
+/** fish.ts legacyLook: the colours the main stream gave a fish before random colours (same for every generator version). */
+export function legacyLook(seed, rarity) {
+  const rng = new Rng(seed);
+  const pal = PALETTE[rarity];
+  rng.next(); // rarity
+  rng.next(); // species
+  const hue = rng.range(...pal.hues);
+  rng.next(); // scale
+  rng.next(); // weight
+  rng.next(); // epithet
+  const sat = rng.range(...pal.sat);
+  const light = rng.range(...pal.light);
+  const accentHue = (hue + rng.range(140, 220)) % 360;
+  const stripes = rng.next() < 0.55 ? rng.int(2, 5) : 0;
+  return { hue, sat, light, accentHue, stripes };
+}
+
+/** A fish with its colours put back to the legacy ones (how it looked before random colours). */
+export const withLegacyLook = (spec) => ({ ...spec, ...legacyLook(spec.seed, spec.rarity) });
+
 /** rollFish(seed, depthM, odds) from fish.ts, with a given roster. */
 function roll(species, seed, depthM, odds) {
   const rng = new Rng(seed);
   const rarity = rng.weighted(odds);
   const [name, archetype] = rng.pick(species[rarity]);
-  const pal = PALETTE[rarity];
-  const hue = rng.range(...pal.hues);
+  rng.next(); // the old hue (legacyLook): still drawn, so scale, weight and name stay where they were
   const rarityIdx = RARITY_ORDER.indexOf(rarity);
   const scale = rng.range(0.85, 1.25) * (1 + rarityIdx * 0.12);
   const lengthCm = Math.round(SHAPES[archetype].len * scale * 28);
   const weightKg = +(Math.pow(lengthCm / 30, 3) * SHAPES[archetype].height * rng.range(0.7, 1.1)).toFixed(2);
+  const epithet = rng.pick(EPITHETS[rarity]);
+  const look = lookOf(seed, rarity);
   return {
     id: seed.toString(16).padStart(8, '0'),
     seed,
     rarity,
     species: name,
-    name: `${rng.pick(EPITHETS[rarity])} ${name}`,
+    name: `${epithet} ${name}`,
     archetype,
     lengthCm,
     weightKg,
     depthM: recordedDepth(depthM),
-    hue,
-    sat: rng.range(...pal.sat),
-    light: rng.range(...pal.light),
-    accentHue: (hue + rng.range(140, 220)) % 360,
-    stripes: rng.next() < 0.55 ? rng.int(2, 5) : 0,
+    hue: look.hue,
+    sat: look.sat,
+    light: look.light,
+    accentHue: look.accentHue,
+    stripes: look.stripes,
     scale,
     value: Math.round(RARITY_VALUE[rarity] * rewardMultiplierAt(depthM)),
   };

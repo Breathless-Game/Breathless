@@ -1,4 +1,5 @@
-import { rollFish } from './fish';
+import { legacyLook, rollFish } from './fish';
+import { fishLook } from './nft-uri';
 import { cosignInfo } from './fish-cosign';
 import { MAPS } from './maps';
 import { isRateLimitError as isRateLimit, type BankedFish } from './market';
@@ -74,7 +75,7 @@ async function fromRpc(owner: string, loadChain: () => Promise<ChainModule>): Pr
     }
   }
   const grow = (seed: number, rarity: BankedFish['rarity']) => rollFish(seed, 0, [[rarity, 1]]);
-  return assets.map((a) => entryFromAsset(a as CoreAssetLike, { collection, grow })).filter((x): x is OwnedFish => x !== null);
+  return assets.map((a) => entryFromAsset(a as CoreAssetLike, { collection, grow, legacyLook, fishLook })).filter((x): x is OwnedFish => x !== null);
 }
 
 export class ChainFishSync {

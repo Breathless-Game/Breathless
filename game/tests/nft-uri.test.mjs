@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
+import * as gen from '../../sensor/fish-gen.mjs';
 import { formatSerial as serverFormatSerial, imagePath, metadataJson, parseImagePath, parseMetaPath } from '../../sensor/nft-meta.mjs';
 
 // The game builds NFT metadata paths (src/nft-uri.ts); the server parses them (sensor/nft-meta.mjs).
@@ -10,7 +11,7 @@ const source = await readFile(new URL('../src/nft-uri.ts', import.meta.url), 'ut
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
 });
-const { DEFAULT_NFT_ORIGIN, fishImagePath, fishMetaPath, formatSerial, isHostedMetaUri, isSerial, nftName, nftOrigin } = await import(
+const { DEFAULT_NFT_ORIGIN, fishImagePath, fishLook, fishMetaPath, formatSerial, isHostedMetaUri, isSerial, nftName, nftOrigin, parseLook } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 
@@ -48,6 +49,26 @@ test('the server parses what the game builds', () => {
   assert.equal(parseImagePath(fishImagePath(fish)).species, 'Striped Wrasse');
   assert.ok(isHostedMetaUri(DEFAULT_NFT_ORIGIN + path));
   assert.ok(!isHostedMetaUri('https://gateway.irys.xyz/EJGxHmBxmzBu21SCSVKbqNhGEzeEwqhZdS1FS6LVynQb'));
+});
+
+test('parseLook reads back what fishLook writes, as the server does', () => {
+  for (let i = 0; i < 600; i++) {
+    const seed = Math.imul(i + 1, 2654435761) >>> 0;
+    const f = gen.fishOf(seed, ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'][i % 6]);
+    for (const spec of [f, gen.withLegacyLook(f)]) {
+      const look = fishLook(spec);
+      const parsed = parseLook(look);
+      assert.ok(parsed, look);
+      assert.equal(fishLook(parsed), look, 'round trip');
+      // The server's parser (sensor/nft-meta.mjs) reads the same fields.
+      assert.deepEqual(parsed, parseImagePath(`/api/nft/img/v1/${f.id}/${f.rarity}/${look}/X.png`).look);
+    }
+  }
+  assert.deepEqual(parseLook('slim-130-45-50-310-3'), { archetype: 'slim', hue: 130, sat: 0.45, light: 0.5, accentHue: 310, stripes: 3 });
+  for (const bad of ['', 'slim-130-45-50-310', 'eel-130-45-50-310-3', 'slim-361-45-50-310-3', 'slim-130-101-50-310-3', 'slim-130-45-50-310-10', 'slim-1.5-45-50-310-3', 'slim--1-45-50-310-3', 'slim-130-45-50-310-3-7']) {
+    assert.equal(parseLook(bad), null, bad);
+    assert.equal(parseImagePath(`/api/nft/img/v1/0000beef/rare/${bad}/X.png`), null, `server agrees: ${bad}`);
+  }
 });
 
 test('odd values still make a valid path', () => {
