@@ -68,6 +68,11 @@ jobs:
           node --check sensor/fish-collection.mjs
           node --check sensor/market-balance.mjs
           node --check sensor/fish-owned.mjs
+          node --check scripts/health-check.mjs
+
+      # The production health check's logic (.github/workflows/health.yml), with fetch faked: no network.
+      - name: Test health check
+        run: node --test scripts/health-check.test.mjs
 
       - name: Install sensor dependencies
         working-directory: sensor
