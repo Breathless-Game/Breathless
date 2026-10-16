@@ -485,8 +485,8 @@ export class RateLimiter {
 // collection's update authority) can put a fish there: by co-signing a mint whose attributes it
 // re-derived from the game's generator (fish-gen.mjs), or by co-signing the migration of a fish
 // minted before this check existed. The game is still client-authoritative (a cheater can claim
-// catches that are plausible for their seed), so mints per owner and PEARL per owner are capped
-// too. The defaults sit far above what a person holding their breath can reach.
+// catches that are plausible for their seed), so mints per game wallet and PEARL per seller are
+// capped too. The defaults sit far above what a person holding their breath can reach.
 
 /** The Core collection every sellable fish belongs to; the market wallet is its update authority. */
 export const FISH_COLLECTION_NAME = 'Breathless Fish';
@@ -500,7 +500,11 @@ export const FISH_COLLECTION_NAME = 'Breathless Fish';
 export const SPAWN_TOLERANCE_M = 30;
 
 /**
- * Co-signed mints per owner per hour. A dive banks at most a net (a dozen fish) and takes a
+ * Co-signed mints per game wallet per hour: per session key (the `payer` of POST /cosign-mint, which
+ * must sign the request, fish-trust.mjs assertSignedByPayer), not per owner, so nobody can spend
+ * another player's quota by naming their wallet. That bounds a forger per session key, no weaker
+ * than the old per-owner count since owner wallets were always free to create too; the per-seller
+ * DAILY_PEARL_CAP below is unchanged. A dive banks at most a net (a dozen fish) and takes a
  * real held breath plus recovery, so play stays well under one fish a minute; 240 also lets a
  * long-queued backlog (e.g. while the game wallet had no SOL) drain in one sitting. Over the
  * limit the game pauses its mint queue until the hour rolls over, nothing is lost.
@@ -508,7 +512,10 @@ export const SPAWN_TOLERANCE_M = 30;
 export const MINTS_PER_HOUR = 240;
 export const MINT_WINDOW_MS = 60 * 60_000;
 
-/** Legacy fish moved into the collection per owner per hour (one-time; a wallet holds a few dozen). */
+/**
+ * Legacy fish moved into the collection per game wallet (the signed `payer` of POST /cosign-migrate,
+ * which is also the fish's update authority) per hour; one-time, a wallet holds a few dozen.
+ */
 export const MIGRATIONS_PER_HOUR = 600;
 
 /** Most fish in one POST /api/market/cosign-migrate request (they go into a few transactions). */

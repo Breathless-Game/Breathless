@@ -149,3 +149,124 @@ test('the game refuses a migration that touches anything but the fish it asked t
   assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA], { newAuthority: publicKey(gear) }), migrateExpect([fishA])), /someone other than the market/);
   assert.match(cosign.cosignedTxProblem(serverMigrateTx([fishA], { collection: gear }), migrateExpect([fishA])), /outside the Breathless collection/);
 });
+
+// ---- The requests the real flows send (cosignMint, makeSellable), checked by the market's real
+// verifier (sensor/fish-trust.mjs assertSignedByPayer): the session key signs exactly what the
+// market rebuilds. And a 401 (a tab from before signatures) never costs a fish.
+const trust = await import(new URL('fish-trust.mjs', SENSOR).href);
+const rules = await import(await transpile('market.ts'));
+const flows = await (async () => {
+  const source = await readFile(new URL('../src/fish-cosign.ts', import.meta.url), 'utf8');
+  let { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
+  for (const s of ['@metaplex-foundation/umi', '@metaplex-foundation/umi/serializers', '@metaplex-foundation/mpl-core']) outputText = outputText.replaceAll(`import('${s}')`, `import('${import.meta.resolve(s)}')`);
+  return import(dataUrl(outputText));
+})();
+const { createSignerFromKeypair } = await import('@metaplex-foundation/umi');
+const { string } = await import('@metaplex-foundation/umi/serializers');
+const { getBaseUpdateAuthoritySerializer } = await import('@metaplex-foundation/mpl-core');
+
+/**
+ * Stand in for the market: `fetch` answers each POST as `answer(route, body)` says, after checking
+ * its signature with the market's own code (`strip`: as if the tab sent none, a bundle from before).
+ */
+async function againstMarket(fn, { strip = false } = {}) {
+  const seen = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const route = String(url).split('/').pop();
+    const body = JSON.parse(init.body);
+    seen.push({ route, body });
+    const { signature, ...fields } = body;
+    const message = route === 'cosign-mint' ? trust.cosignMintMessage(fields) : trust.cosignMigrateMessage(fields);
+    try {
+      trust.assertSignedByPayer(message, fields.payer, strip ? undefined : signature);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message, ...e.extra }), { status: e.status });
+    }
+    return new Response(JSON.stringify({ error: 'signature accepted; the test stops here', code: 'test-stop' }), { status: 503 });
+  };
+  try {
+    return { seen, error: await fn().then(() => null, (e) => e) };
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+const sessionSigner = createSignerFromKeypair(client, client.eddsa.generateKeypair());
+const info = { mode: 'server', market: market.publicKey.toString(), cosign: true, fishCollection: collectionKey };
+const mintArgs = {
+  info,
+  owner,
+  session: sessionSigner,
+  fish: { id: '00c0ffee', rarity: 'legendary', species: 'Giant Pacific Octopus', depth: 120, value: fish.value },
+  name: 'Giant | Pacific Octopus #0042',
+  uri: 'https://breathless.gotclass.xyz/api/nft/meta/v2/42/00c0ffee/legendary/abyss/x.json',
+};
+
+test('cosignMint sends a request signed by the session key, and the market accepts that signature', async () => {
+  const { seen, error } = await againstMarket(() => flows.cosignMint(client, mintArgs));
+  assert.equal(seen.length, 1);
+  const { route, body } = seen[0];
+  assert.equal(route, 'cosign-mint');
+  assert.equal(body.payer, sessionSigner.publicKey.toString());
+  assert.match(body.signature, /^[A-Za-z0-9+/]{86}==$/);
+  assert.deepEqual(body.fish, mintArgs.fish);
+  assert.equal(error.status, 503, `past the signature check: ${error.message}`);
+  assert.equal(error.code, 'test-stop');
+});
+
+test('an unsigned request (a tab from before signatures) gets 401 and its fish stays queued, now and after a reload', async () => {
+  const { error } = await againstMarket(() => flows.cosignMint(client, mintArgs), { strip: true });
+  assert.ok(error instanceof flows.CosignError);
+  assert.equal(error.status, 401);
+  assert.equal(error.code, trust.BAD_SIGNATURE_CODE);
+  // This game: a pause, no attempt spent, the fish back to pending.
+  assert.deepEqual(rules.mintPauseOf(error), { ms: 30_000, kind: 'busy' });
+  const minting = { ...rules.bankEntry({ id: 'a', rarity: 'legendary', value: fish.value }), nft: 'minting' };
+  assert.equal(rules.nftStep(minting, { type: 'paused' }).nft, 'pending');
+  // An old tab counted it as failed attempts, saving the market's message: this game requeues those.
+  const now = Date.now();
+  let f = rules.bankEntry({ id: 'b', rarity: 'legendary', value: fish.value });
+  for (let i = 0; i < rules.MAX_AUTO_MINT_TRIES; i++) f = rules.nftStep(rules.nftStep(f, { type: 'start' }), { type: 'failed', error: error.message.slice(0, 200), now });
+  assert.equal(f.nft, 'failed');
+  const { bank } = rules.migrateBank(JSON.parse(JSON.stringify([f])));
+  assert.equal(bank[0].nft, 'pending');
+  assert.equal(bank[0].mintTries, undefined);
+  assert.equal(rules.nextToMint(bank, now), bank[0]);
+});
+
+/** A bare Core AssetV1 account (no plugins) owned by `owner`, its update authority the session key. */
+function legacyAccount(address) {
+  const data = new Uint8Array([
+    1, // Key::AssetV1
+    ...publicKeyBytes(owner),
+    ...getBaseUpdateAuthoritySerializer().serialize({ __kind: 'Address', fields: [sessionSigner.publicKey] }),
+    ...string().serialize('Fish'),
+    ...string().serialize('https://x/y.json'),
+    0, // seq: None
+  ]);
+  return { exists: true, publicKey: publicKey(address), owner: publicKey(cosign.CORE_PROGRAM), lamports: { basisPoints: 1n }, executable: false, data };
+}
+
+test('makeSellable sends a signed migration; a 401 leaves the fish to retry (error), never blocked', async () => {
+  const u = offline();
+  u.rpc = { ...client.rpc, getAccount: async (address) => legacyAccount(address) };
+  const ids = [fishA, fishB];
+  const args = { info, owner, session: sessionSigner, assetIds: ids };
+  let out = null;
+  const signed = await againstMarket(async () => (out = await flows.makeSellable(u, args)));
+  assert.equal(signed.error, null);
+  assert.equal(signed.seen.length, 1);
+  assert.equal(signed.seen[0].route, 'cosign-migrate');
+  assert.deepEqual(signed.seen[0].body.assetIds, ids);
+  assert.equal(signed.seen[0].body.payer, sessionSigner.publicKey.toString());
+  assert.match(signed.seen[0].body.signature, /^[A-Za-z0-9+/]{86}==$/);
+  for (const id of ids) assert.match(out.get(id).reason, /signature accepted/, 'the market took the signature (then the test stopped it)');
+
+  const unsigned = await againstMarket(async () => (out = await flows.makeSellable(u, args)), { strip: true });
+  assert.equal(unsigned.error, null);
+  for (const id of ids) {
+    assert.equal(out.get(id).state, 'error', 'temporary: tried again on the next sync, not blocked');
+    assert.match(out.get(id).reason, /not signed by its game wallet/);
+  }
+});

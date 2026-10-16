@@ -1,7 +1,7 @@
 import { fishValue, zoneForDepth } from './fish';
 import { onLangChange, pickName, t } from './i18n';
 import { MAPS, type MapId } from './maps';
-import { bulkSelectable, bulkSelectBlock, bulkSellable, bulkSellableBelowEpic, isFundsError, needsConfirm, pearls, pruneSelection, selectionRange, selectionSummary, sellQuote, type BankedFish } from './market';
+import { bulkSelectable, bulkSelectBlock, bulkSellable, bulkSellableBelowEpic, isFundsError, isUnsignedRequestError, needsConfirm, pearls, pruneSelection, selectionRange, selectionSummary, sellQuote, type BankedFish } from './market';
 import type { NftQueue } from './nft-queue';
 import { formatSerial, nftName } from './nft-uri';
 import { fishCard } from './portrait';
@@ -247,9 +247,11 @@ export class Vault {
     } else if (q.mintPause && q.mintPause.until > Date.now() && queued) {
       const busy = q.mintPause.kind === 'busy';
       const at = new Date(q.mintPause.until).toLocaleTimeString([], busy ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
-      box = busy
+      box = isUnsignedRequestError(q.mintPause.reason)
+        ? notice('warn', t('Minting paused: reload the page to update the game.', '铸造已暂停：请刷新页面以更新游戏。'), t(`Nothing is lost: ${queued} NFT${queued > 1 ? 's' : ''} stay queued.`, `不会丢失：${queued} 个 NFT 仍在排队。`))
+        : busy
         ? notice('warn', t('Minting paused: the PEARL market or Solana devnet is busy.', '铸造已暂停：PEARL 市场或 Solana devnet 繁忙。'), t(`Nothing is lost: ${queued} NFT${queued > 1 ? 's' : ''} stay queued and retry at ${at}.`, `不会丢失：${queued} 个 NFT 仍在排队，将于 ${at} 重试。`))
-        : notice('warn', `Minting paused until ${at}: this wallet reached the market's hourly mint limit.`, `Nothing is lost: ${queued} NFT${queued > 1 ? 's' : ''} stay queued and mint on their own.`);
+        : notice('warn', `Minting paused until ${at}: this game wallet reached the market's hourly mint limit.`, `Nothing is lost: ${queued} NFT${queued > 1 ? 's' : ''} stay queued and mint on their own.`);
     } else if (q.funds === 'needs-sol' && waiting) {
       // Fund sits on the game wallet card just above: one button, not two.
       box = notice('warn', t('Minting paused: the game wallet needs devnet SOL.', '铸造已暂停：游戏钱包需要 devnet SOL。'), t(`Fund it above. Checking again every minute.${more ? ` ${more}.` : ''}`, `请在上方充值，每分钟重新检查一次。${more ? `${more}。` : ''}`));

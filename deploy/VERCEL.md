@@ -171,7 +171,7 @@ An Instant Rollback reuses the old build as it was, with its baked-in `VITE_*` v
 ### Known limits on Vercel
 
 - **Per instance, not per deployment.** These are in each instance's memory:
-  - the HTTP rate limiters, and the fish mint and migration quotas;
+  - the HTTP rate limiters;
   - the NFT render limit (40/min);
   - the rpc-guard concurrency limit and 429 backoff;
   - the balance and owned-fish caches.
@@ -179,7 +179,7 @@ An Instant Rollback reuses the old build as it was, with its baked-in `VITE_*` v
   `process-guard` is not installed on Vercel. A stray rejection there is up to Vercel's runtime: at worst it ends that one instance, and the others keep serving.
 
   Under load Vercel runs several instances, so each limit is that many times looser.
-- **What must hold across instances is in Redis:** one payout per fish (SET NX), gapless fish numbers (one Lua script), one PEARL mint and one collection (a lock), and the registry.
+- **What must hold across instances is in Redis:** one payout per fish (SET NX), gapless fish numbers (one Lua script), one PEARL mint and one collection (a lock), the registry, and the fish mint and migration quotas (counted per game wallet, the session key that must sign each co-sign request).
 - **The 50,000 PEARL daily cap.** It is checked against Redis just before each sale. Two sales by one seller on two instances at the same moment can both pass, so a seller can go over the cap by at most one sale per instance.
 - **Burn retries.** A payout whose burn failed is no longer retried in memory. The fish waits in the market wallet for the next sweep: after the next sale (10-min throttle), or at the daily cron.
 - **Fish numbers.** Redis keeps every (owner, fish) → number pair. The file store (`npm start`) keeps the last 20,000.
@@ -356,7 +356,7 @@ Instant Rollback 原样复用旧的构建，包括当时打进去的 `VITE_*` �
 ### Vercel 上的已知局限
 
 - **按实例计算，而不是按部署。** 下面这些都在各实例自己的内存里：
-  - HTTP 限流，以及铸鱼和迁移配额；
+  - HTTP 限流；
   - NFT 渲染限制（每分钟 40 次）；
   - rpc-guard 的并发上限和 429 退避；
   - 余额和持有鱼的缓存。
@@ -364,7 +364,7 @@ Instant Rollback 原样复用旧的构建，包括当时打进去的 `VITE_*` �
   Vercel 上不装 `process-guard`。偶发的未处理拒绝交给 Vercel 运行时处理：最坏结束那一个实例，其他实例照常服务。
 
   负载高时 Vercel 会开多个实例，每个限制就相应放宽几倍。
-- **必须跨实例成立的都在 Redis 里：** 每条鱼只付一次钱（SET NX）、鱼编号连续无空号（一个 Lua 脚本）、只有一个 PEARL 币和一个集合（锁），以及登记表。
+- **必须跨实例成立的都在 Redis 里：** 每条鱼只付一次钱（SET NX）、鱼编号连续无空号（一个 Lua 脚本）、只有一个 PEARL 币和一个集合（锁）、登记表，以及铸鱼和迁移配额（按游戏钱包计，即每个 co-sign 请求必须由其签名的会话密钥）。
 - **每日 50,000 PEARL 上限。** 每次成交前都会对照 Redis 检查。同一卖家在两个实例上同时成交时，两笔可能都通过，所以最多会超出「每个实例一笔」。
 - **销毁重试。** 付款后销毁失败的鱼不再在内存里重试，而是留在市场钱包里，等下一次清扫：下一次卖鱼之后（10 分钟节流），或每天的 cron。
 - **鱼编号。** Redis 保留所有 (owner, fish) → 编号；文件存储（`npm start`）只保留最近 20,000 条。

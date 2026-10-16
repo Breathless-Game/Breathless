@@ -1,18 +1,23 @@
 // Server mode's fish collection: the Metaplex Core collection "Breathless Fish" whose update
 // authority is the market wallet, and the two co-signed routes that are the only way into it.
 //
-//   POST /api/market/cosign-mint     { owner, payer, asset, name, uri, fish }
+//   POST /api/market/cosign-mint     { owner, payer, asset, name, uri, fish, signature }
 //       The game asks before minting a fish. We re-derive the fish from its seed (fish-trust.mjs),
 //       build the Core create with collection = ours plus player_state record_catch (the fish's
 //       value onto the owner's lifetime banked value, buildMintTx), and sign it as collection
 //       authority and player_state oracle. The
 //       game's session key (payer) and the new asset sign and send it, so the game wallet still
 //       pays the mint; the market only signs. -> { tx (base64), lastValidBlockHeight, collection }
-//   POST /api/market/cosign-migrate  { owner, payer, assetIds }
+//   POST /api/market/cosign-migrate  { owner, payer, assetIds, signature }
 //       Fish minted before the collection (update authority = the game's session key). Each one is
 //       checked like a new mint, then one transaction per few fish: the session key hands its
 //       update authority to the market, and the market moves the fish into the collection. The
 //       session key pays. -> { txs: [{ tx, assetIds, lastValidBlockHeight }], rejected: [{ assetId, error }] }
+//
+// `signature`: the payer's (session key's) ed25519 signature, base64, of the request's fields
+// (fish-trust.mjs cosignMintMessage / cosignMigrateMessage), checked before anything else is read
+// or written: both routes charge their hourly quota (MINTS_PER_HOUR, MIGRATIONS_PER_HOUR) to that
+// game wallet, so only its holder can spend it. 401 'bad-request-signature' otherwise.
 //
 // State: the collection address and its creation slot in .market-state.json (beside the PEARL
 // mint), and <dir>/.market-fish.jsonl, the (owner, fish id) -> asset registry (fish-trust.mjs
@@ -34,9 +39,12 @@ import {
 import {
   KvQuota,
   Quota,
+  assertSignedByPayer,
   assertTrustedFish,
   capQuotes,
   checkPayoutCap,
+  cosignMigrateMessage,
+  cosignMintMessage,
   isLegacyEra,
   migrationProblem,
   mintLimitError,
@@ -139,6 +147,7 @@ export function createFishCollection({
   const migrationsPerHour = limits.migrationsPerHour ?? MIGRATIONS_PER_HOUR;
   const capOpts = limits.dailyPearls ? { cap: limits.dailyPearls } : {};
   // One process: in memory. Several instances (quotaKv, the Redis store's KV): one count for all of them.
+  // Keyed by the game wallet (payer) that signed the request, never by the owner it names.
   const quota = (name, limit) => (quotaKv ? new KvQuota({ kv: quotaKv, name, limit, windowMs: MINT_WINDOW_MS }) : new Quota({ limit, windowMs: MINT_WINDOW_MS }));
   const mintQuota = quota('mint', mintsPerHour);
   const migrateQuota = quota('migrate', migrationsPerHour);
@@ -263,6 +272,14 @@ export function createFishCollection({
    * again, so that mint fails on chain), or throws 409: already-minted (the NFT exists),
    * already-burned (it existed and was sold or burned: the fish is spent for good), mint-in-flight.
    */
+  // Keyed per owner, and unsigned by the owner (only the payer signs), so anyone can claim an
+  // (owner, fish id) with an asset of their own. That needs the fish id, a random 32-bit seed only
+  // the player's game knows. Whoever has one can hold it as long as they like: their claim answers
+  // 409 mint-in-flight until its lastValid, and replaying their own signed request comes back
+  // 'same' and refreshes lastValid (registry.set below), every minute, indefinitely. The game only
+  // defers that one fish and mints the rest (game/src/market.ts mintDeferralOf). The real fix is a
+  // claim bound to the owner (the owner's signature, or claims only through the owner's session
+  // key), which this change does not make.
   async function claim(owner, fishId, asset) {
     const prior = await registry.get(owner, fishId);
     if (!prior || prior.asset === asset) return prior ? 'same' : 'free';
@@ -285,9 +302,12 @@ export function createFishCollection({
   // ---- POST /api/market/cosign-mint
   async function cosignMint(body) {
     const m = parseCosignMint(body, { market });
+    // First, before any RPC, registry or quota: the game wallet whose quota this spends signed it.
+    assertSignedByPayer(cosignMintMessage(m), m.payer, body.signature);
     const collection = await readyCollection();
+    // A replay of this signed request after its answer went out reads 'same' here: no quota taken.
     if ((await claim(m.owner, m.fishId, m.asset)) === 'free') {
-      const q = await mintQuota.take(m.owner, 1, now());
+      const q = await mintQuota.take(m.payer, 1, now());
       if (!q.ok) throw mintLimitError('Mint', mintsPerHour, q.retryAfterMs, now());
     }
     const blockhash = await u.rpc.getLatestBlockhash({ commitment: 'confirmed' });
@@ -300,6 +320,8 @@ export function createFishCollection({
   // ---- POST /api/market/cosign-migrate
   async function cosignMigrate(body) {
     const { owner, payer, assetIds } = parseCosignMigrate(body, { market });
+    // First, before any RPC, registry or quota: the game wallet whose quota this spends signed it.
+    assertSignedByPayer(cosignMigrateMessage({ owner, payer, assetIds }), payer, body.signature);
     const collection = await readyCollection();
     const rejected = [];
     const ok = [];
@@ -325,8 +347,9 @@ export function createFishCollection({
     }
     if (ok.length) {
       const priors = await Promise.all(ok.map((f) => registry.get(owner, f.fishId)));
+      // A replayed request finds its fish already registered to these assets: fresh = 0, nothing taken.
       const fresh = ok.filter((f, i) => priors[i]?.asset !== f.assetId).length;
-      const q = await migrateQuota.take(owner, fresh, now());
+      const q = await migrateQuota.take(payer, fresh, now());
       if (!q.ok) throw mintLimitError('Migration', migrationsPerHour, q.retryAfterMs, now());
     }
 
