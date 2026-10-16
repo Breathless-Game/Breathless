@@ -184,6 +184,31 @@ An Instant Rollback reuses the old build as it was, with its baked-in `VITE_*` v
 - **Burn retries.** A payout whose burn failed is no longer retried in memory. The fish waits in the market wallet for the next sweep: after the next sale (10-min throttle), or at the daily cron.
 - **Fish numbers.** Redis keeps every (owner, fish) → number pair. The file store (`npm start`) keeps the last 20,000.
 
+### Health check
+
+Hobby keeps runtime logs for about an hour, so `.github/workflows/health.yml` checks production every hour (minute 23) with `scripts/health-check.mjs`. It uses only public endpoints and the public devnet RPC: no secrets, no repo settings.
+
+| Check | Passes when |
+| --- | --- |
+| `site` | `GET /` is 200 HTML with `<canvas id="scene">` and the title. |
+| `market-info` | `GET /api/market/info` is 200 JSON with `mode: "server"`, `market`, `pearlMint`, `fishCollection`, `tokenProgram`, and `funded: true`. |
+| `market-sol` | The market wallet holds ≥ 0.5 SOL. **Warn** below 0.5 (the server's own airdrop level, `AIRDROP_BELOW_SOL`; the airdrop rarely works, so top it up by hand). **Critical** below 0.02 (`FUNDED_SOL`: info says `funded: false` and setup refuses to run). A sale costs the market about 0.002 SOL (the seller's PEARL account rent, first sale only) plus a few transaction fees, so 0.5 SOL is a couple of hundred new sellers. |
+| `pearl-mint` | The PEARL mint is an SPL Token (not Token-2022) mint and its mint authority is the market. The market mints each payout; it holds no PEARL, so there is no PEARL balance to watch. |
+| `fish-collection` | The fish collection is a Metaplex Core account. |
+| `nft-meta`, `nft-image` | Venomous Hammerhead Shark #0026's on-chain metadata URI is 200 `application/json` with that name, and its `image` is 200 `image/png`. |
+| `cron-route` | `GET /api/cron/sweep` without auth is 401 (the function is up and the route exists; the sweep itself needs `CRON_SECRET`). |
+
+Each request is tried up to 3 times (on a network error, a timeout of 20 s, a 429 or a 5xx). The three chain checks share one `getMultipleAccounts` call. When the RPC still does not answer they show `rpc-unreachable`, which does not count as a failure.
+
+**The issue.** On a failure or a warning it opens one issue labelled `health`, assigned to Bowen1314 (GitHub emails the assignee), titled `Production health check failing: market-sol:warn, …`. The body has the table of all checks. While it stays open:
+- a change in the set of failing checks gets a comment at once;
+- the same set gets a reminder comment at most every 6 h;
+- full recovery gets a "Recovered" comment and closes the issue.
+
+The run stays green either way; it goes red only when the script itself breaks. Each run's table is also in its job summary.
+
+**By hand.** Actions → Health → Run workflow (tick `dry_run` to only print). Locally, `node scripts/health-check.mjs` only prints (dry run is the default outside Actions). GitHub turns off scheduled workflows in a public repo after 60 days without activity; if the runs stop, re-enable the workflow in the Actions tab.
+
 ---
 
 ## 中文
@@ -368,3 +393,28 @@ Instant Rollback 原样复用旧的构建，包括当时打进去的 `VITE_*` �
 - **每日 50,000 PEARL 上限。** 每次成交前都会对照 Redis 检查。同一卖家在两个实例上同时成交时，两笔可能都通过，所以最多会超出「每个实例一笔」。
 - **销毁重试。** 付款后销毁失败的鱼不再在内存里重试，而是留在市场钱包里，等下一次清扫：下一次卖鱼之后（10 分钟节流），或每天的 cron。
 - **鱼编号。** Redis 保留所有 (owner, fish) → 编号；文件存储（`npm start`）只保留最近 20,000 条。
+
+### 健康检查
+
+Hobby 计划的运行日志只保留约一小时，所以 `.github/workflows/health.yml` 每小时（第 23 分钟）用 `scripts/health-check.mjs` 检查一次生产环境。只用公开接口和公共 devnet RPC：不需要任何机密，也不用改仓库设置。
+
+| 检查 | 通过条件 |
+| --- | --- |
+| `site` | `GET /` 回 200 HTML，含 `<canvas id="scene">` 和标题。 |
+| `market-info` | `GET /api/market/info` 回 200 JSON：`mode: "server"`，有 `market`、`pearlMint`、`fishCollection`、`tokenProgram`，且 `funded: true`。 |
+| `market-sol` | 市场钱包至少 0.5 SOL。低于 0.5 是**警告**（服务器自己的空投线 `AIRDROP_BELOW_SOL`；空投基本领不到，要手动充值）。低于 0.02 是**严重**（`FUNDED_SOL`：info 显示 `funded: false`，初始化也会拒绝执行）。每笔成交市场大约花 0.002 SOL（卖家 PEARL 账户的租金，只在第一次卖时）加几笔手续费，所以 0.5 SOL 够两百来个新卖家。 |
+| `pearl-mint` | PEARL 币是 SPL Token（不是 Token-2022），铸币权限是市场钱包。市场每次付款都是现铸，自己不持有 PEARL，所以没有 PEARL 余额可看。 |
+| `fish-collection` | 鱼集合是 Metaplex Core 账户。 |
+| `nft-meta`、`nft-image` | Venomous Hammerhead Shark #0026 链上的元数据 URI 回 200 `application/json` 且名字对得上，它的 `image` 回 200 `image/png`。 |
+| `cron-route` | 不带授权的 `GET /api/cron/sweep` 回 401（说明函数在跑、路由还在；真正的清扫需要 `CRON_SECRET`）。 |
+
+每个请求最多试 3 次（网络错误、20 秒超时、429 或 5xx 时重试）。三项链上检查共用一次 `getMultipleAccounts`。RPC 一直不应答时显示 `rpc-unreachable`，不算失败。
+
+**Issue。** 有失败或警告时，开一个带 `health` 标签、指派给 Bowen1314 的 issue（GitHub 会给被指派人发邮件），标题形如 `Production health check failing: market-sol:warn, …`，正文是全部检查的表格。issue 开着的时候：
+- 失败的检查集合一变，马上评论；
+- 集合没变，最多每 6 小时提醒一次；
+- 全部恢复后评论 "Recovered" 并关闭 issue。
+
+无论检查结果如何，运行本身都是绿的；只有脚本自己出错才会变红。每次运行的表格也在它的 job summary 里。
+
+**手动运行。** Actions → Health → Run workflow（勾上 `dry_run` 就只打印）。在本地运行 `node scripts/health-check.mjs` 只会打印（不在 Actions 里时默认 dry run）。公开仓库 60 天没有活动时，GitHub 会停用定时 workflow；定时运行停了的话，到 Actions 页面重新启用。
