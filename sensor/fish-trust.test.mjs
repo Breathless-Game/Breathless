@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createPrivateKey, createPublicKey, sign as ed25519Sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, legacyLook, lookOf, rarityAt, rollFish, withLegacyLook } from './fish-gen.mjs';
+import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, legacyLook, lookOf, rarityAt, rollFish, withLegacyLook, withoutGene } from './fish-gen.mjs';
 import { publicKey, publicKeyBytes } from '@metaplex-foundation/umi';
 import { createFishCollection } from './fish-collection.mjs';
 import {
@@ -363,14 +363,32 @@ test('cosign-mint accepts a fish banked before the 35-species roster, with its o
   assert.throws(() => parseCosignMint(mintBody({ ...oldFish, name: twin.name }), { market: MARKET }), (e) => e.status === 422 && /NFT name/.test(e.message));
 });
 
-test('cosign-mint accepts the fish\'s random look or its legacy look, and no other', () => {
+test('cosign-mint accepts the fish\'s random look (with or without its shape gene) or its legacy look, and no other', () => {
   const ok = (f) => parseCosignMint(mintBody(goodFish, { over: { uri: mintBody(f).uri } }), { market: MARKET });
   const legacy = withLegacyLook(goodFish);
-  assert.notEqual(fishLook(legacy), fishLook(goodFish), 'the two looks differ for this seed');
-  assert.ok(ok(goodFish), 'random colours (a fish caught on this build)');
+  const plain = withoutGene(goodFish);
+  assert.match(goodFish.gene, /^[0-9a-f]{16}$/);
+  assert.equal(fishLook(goodFish).split('-').length, 7);
+  assert.equal(fishLook(goodFish), `${fishLook(plain)}-${goodFish.gene}`);
+  assert.equal(new Set([fishLook(goodFish), fishLook(plain), fishLook(legacy)]).size, 3, 'the three looks differ for this seed');
+  assert.ok(ok(goodFish), 'random colours and shape gene (a fish caught on this build)');
+  assert.ok(ok(plain), 'random colours, no gene (banked between random colours and random shapes, or a tab on that build)');
   assert.ok(ok(legacy), 'legacy colours (banked before random colours, or an older tab)');
-  assert.deepEqual(legacy, { ...goodFish, ...legacyLook(goodFish.seed, goodFish.rarity) });
+  assert.deepEqual(legacy, { ...plain, ...legacyLook(goodFish.seed, goodFish.rarity) });
+  assert.equal('gene' in legacy, false);
+  // A gene that is not this fish's, or on the wrong colours, or not canonical, is refused.
+  const otherGene = lookOf(goodFish.seed + 1, goodFish.rarity).gene;
+  refusedUri(`${fishLook(plain)}-${otherGene}`);
+  refusedUri(`${fishLook(plain)}-${lookOf(goodFish.seed, goodFish.rarity, 1).gene}`);
+  refusedUri(`${fishLook(legacy)}-${goodFish.gene}`, 'legacy colours never had a gene');
+  refusedUri(`${fishLook(plain)}-${goodFish.gene.toUpperCase()}`, 'not canonical', /path/);
+  refusedUri(`${fishLook(plain)}-${goodFish.gene.slice(1)}`, 'too short', /path/);
+  refusedUri(`${fishLook(goodFish)}-0`, 'eight fields', /path/);
   // Any other look, even one mixing the two, is refused.
+  function refusedUri(look, why = look, re = /lookPath/) {
+    const uri = mintBody(goodFish).uri.replace(`/${fishLook(goodFish)}/`, `/${look}/`);
+    assert.throws(() => parseCosignMint(mintBody(goodFish, { over: { uri } }), { market: MARKET }), (e) => e instanceof HttpError && e.status === 422 && re.test(e.message), why);
+  }
   const refused = (f) => assert.throws(() => ok(f), (e) => e instanceof HttpError && e.status === 422 && /lookPath/.test(e.message), fishLook(f));
   refused({ ...goodFish, hue: (goodFish.hue + 40) % 360 });
   refused({ ...goodFish, hue: legacy.hue });

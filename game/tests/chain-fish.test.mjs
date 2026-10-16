@@ -78,6 +78,18 @@ test('the colours come from the NFT URI: random for a new fish, legacy for an ol
     const legacyAsset = mintedAsset(old);
     const original = { ...market.bankEntry({ ...old, map: 'ocean' }), nft: 'minted', assetId: legacyAsset.publicKey, serial: 42, metaFixed: true, nameFixed: true, trusted: true };
     assert.deepEqual(rebuild(legacyAsset), original, `old fish ${seed} rebuilds exactly as banked`);
+    // Caught since random shapes: its seven-field URI gives back its shape gene too.
+    assert.match(fish.gene, /^[0-9a-f]{16}$/);
+    assert.equal(rebuild(mintedAsset(fish)).gene, fish.gene, `new fish ${seed}: its gene`);
+    // Banked between random colours and random shapes: its colours, and no gene (six-field URI).
+    const plain = gen.withoutGene(fish);
+    const plainAsset = mintedAsset(plain);
+    const between = { ...market.bankEntry({ ...plain, map: 'ocean' }), nft: 'minted', assetId: plainAsset.publicKey, serial: 42, metaFixed: true, nameFixed: true, trusted: true };
+    assert.deepEqual(rebuild(plainAsset), between, `fish ${seed} banked before random shapes rebuilds exactly as banked`);
+    assert.equal('gene' in rebuild(mintedAsset(plain)), false);
+    // Another fish's gene on its colours, or a gene on its legacy colours: neither, so legacy.
+    assert.deepEqual(colours(rebuild(mintedAsset({ ...fish, gene: gen.lookOf(seed + 1, fish.rarity).gene }))), colours(old));
+    assert.equal('gene' in rebuild(mintedAsset({ ...old, gene: fish.gene })), false);
     for (const uri of ['https://arweave.net/abc', 'garbage', '', gen.fishLook(fish)]) {
       assert.deepEqual(colours(rebuild({ ...mintedAsset(fish), uri })), colours(old), `${seed}: ${uri || '(empty)'}`);
     }

@@ -223,6 +223,8 @@ export function recordedDepth(depthM) {
 // LOOK_SALT), so rarity, species, size, weight and name, which checkFish relies on, are drawn
 // exactly as before by every generator version: no new generator version. Fish caught before
 // random colours carry the main stream's colours (legacyLook) in their bank entries and NFT URIs.
+// Since random shapes the stream goes on to a shape gene (fish.ts geneOf) after the colours,
+// so the colours of every seed are what they were; fish banked before it have no gene.
 
 /** fish.ts LOOK_SALT. */
 export const LOOK_SALT = 0xc0105eed;
@@ -252,7 +254,14 @@ function rngAtState(state) {
 
 const accentAnchor = (rarity) => (PALETTE[rarity].hues[0] + PALETTE[rarity].hues[1]) / 2;
 
-/** fish.ts lookOf: { hue, sat, light, accentHue, stripes } from the look stream (always six draws). */
+/** fish.ts GENE_RE: a canonical shape gene, 16 lowercase hex digits. */
+export const GENE_RE = /^[0-9a-f]{16}$/;
+export const isGene = (g) => typeof g === 'string' && GENE_RE.test(g);
+
+/** fish.ts geneOf: two 32-bit draws as 16 hex digits. */
+const geneOf = (hi, lo) => (hi >>> 0).toString(16).padStart(8, '0') + (lo >>> 0).toString(16).padStart(8, '0');
+
+/** fish.ts lookOf: { hue, sat, light, accentHue, stripes, gene } from the look stream (always eight draws). */
 export function lookOf(seed, rarity, variant = 0) {
   const rng = rngAtState(mix32(seed, LOOK_SALT, variant));
   const pal = PALETTE[rarity];
@@ -268,7 +277,9 @@ export function lookOf(seed, rarity, variant = 0) {
         : (accentAnchor(rarity) - 30 + 60 * a + 360) % 360;
   const striped = rng.next() < 0.55;
   const count = rng.int(2, 5);
-  return { hue, sat, light, accentHue, stripes: striped ? count : 0 };
+  const hi = Math.floor(rng.next() * 0x100000000);
+  const lo = Math.floor(rng.next() * 0x100000000);
+  return { hue, sat, light, accentHue, stripes: striped ? count : 0, gene: geneOf(hi, lo) };
 }
 
 /** fish.ts legacyLook: the colours the main stream gave a fish before random colours (same for every generator version). */
@@ -288,8 +299,14 @@ export function legacyLook(seed, rarity) {
   return { hue, sat, light, accentHue, stripes };
 }
 
-/** A fish with its colours put back to the legacy ones (how it looked before random colours). */
-export const withLegacyLook = (spec) => ({ ...spec, ...legacyLook(spec.seed, spec.rarity) });
+/** fish.ts withoutGene: the fish without its shape gene (its species' standard shape; a six-field NFT look). */
+export function withoutGene(spec) {
+  const { gene: _gene, ...rest } = spec;
+  return rest;
+}
+
+/** A fish with its look put back to the legacy one (how it looked before random colours): legacy colours, no gene. */
+export const withLegacyLook = (spec) => ({ ...withoutGene(spec), ...legacyLook(spec.seed, spec.rarity) });
 
 /** rollFish(seed, depthM, odds) from fish.ts, with a given roster. */
 function roll(species, seed, depthM, odds) {
@@ -320,6 +337,7 @@ function roll(species, seed, depthM, odds) {
     stripes: look.stripes,
     scale,
     value: Math.round(RARITY_VALUE[rarity] * rewardMultiplierAt(depthM)),
+    gene: look.gene,
   };
 }
 
@@ -369,7 +387,17 @@ const deg = (x) => Math.round(((x % 360) + 360) % 360) % 360;
 const pct = (x) => Math.round(Math.min(1, Math.max(0, x)) * 100);
 const nat = (x, max) => Math.min(max, Math.max(0, Math.round(Number(x) || 0)));
 
-/** fishLook() in nft-uri.ts: "<archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>". */
+/** fishLook() in nft-uri.ts: "<archetype>-<hue>-<sat%>-<light%>-<accentHue>-<stripes>[-<gene>]". */
 export function fishLook(spec) {
-  return [spec.archetype, deg(spec.hue), pct(spec.sat), pct(spec.light), deg(spec.accentHue), nat(spec.stripes, 9)].join('-');
+  const fields = [spec.archetype, deg(spec.hue), pct(spec.sat), pct(spec.light), deg(spec.accentHue), nat(spec.stripes, 9)];
+  if (isGene(spec.gene)) fields.push(spec.gene);
+  return fields.join('-');
 }
+
+/**
+ * Every look path a fish may carry in its NFT URI, newest first: its colours and shape gene (caught
+ * since random shapes), its colours without a gene (banked between random colours and random
+ * shapes, or a tab on that build), and its legacy colours (banked before random colours). All three
+ * follow from the seed; nothing else does.
+ */
+export const lookPaths = (spec) => [fishLook(spec), fishLook(withoutGene(spec)), fishLook(withLegacyLook(spec))];

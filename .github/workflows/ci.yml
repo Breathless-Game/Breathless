@@ -35,6 +35,14 @@ jobs:
         working-directory: game
         run: npm ci --no-audit --no-fund
 
+      # The server draws NFT images with sensor/fish-card.gen.mjs, a committed esbuild bundle of the
+      # game's fish code (game/scripts/build-fish-card.mjs). Rebuild it and fail if it differs, so a
+      # change to fish.ts / marine.ts can never ship with images that no longer match the game.
+      - name: Check the NFT card bundle is current
+        run: |
+          npm --prefix game run build:fish-card
+          git diff --exit-code -- sensor/fish-card.gen.mjs
+
       - name: Test game
         working-directory: game
         run: npm test

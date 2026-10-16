@@ -1,4 +1,4 @@
-import type { Archetype, FishColours, FishSpec, Rarity } from './fish';
+import type { Archetype, FishColours, FishLook, FishSpec, Rarity } from './fish';
 import type { BankedFish } from './market';
 
 // Rebuilding the bank from the chain: the fish NFTs a wallet owns are the record of what it caught,
@@ -36,6 +36,8 @@ export interface CoreAssetLike {
 }
 
 const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+/** fish.ts isGene, inlined: no runtime imports here. */
+const isGene = (g: unknown): g is string => typeof g === 'string' && /^[0-9a-f]{16}$/.test(g);
 
 /** The look and numbers a fish needs to render and be valued; anything else is not a fish. */
 export function validSpec(s: unknown): s is FishSpec {
@@ -56,6 +58,7 @@ export function validSpec(s: unknown): s is FishSpec {
     f.depthM >= 0 &&
     f.depthM <= MAX_DEPTH_M &&
     (f.value === undefined || (Number.isSafeInteger(f.value) && f.value >= 1)) &&
+    (f.gene === undefined || isGene(f.gene)) &&
     [f.lengthCm, f.weightKg, f.hue, f.sat, f.light, f.accentHue, f.stripes, f.scale].every(finite)
   );
 }
@@ -85,15 +88,24 @@ export function lookSegmentOf(uri: string): string | null {
 }
 
 /**
- * The colours an NFT records for the fish `grown` from its seed: its URI's look is the record. A
- * fish minted since random colours carries the look-stream colours `grown` has; one banked before
- * them, the main stream's (`legacy`). Anything else (an Irys URI, a look that is neither) gets the
- * legacy colours, as every such fish was drawn until now. Exact values, not the URI's rounding, so
- * a fish rebuilds just as it was banked (sensor/fish-owned.mjs colours() agrees).
+ * The look an NFT records for the fish `grown` from its seed: its URI's look is the record. Three
+ * forms follow from the seed:
+ *   - a fish minted since random shapes: the look-stream colours and the shape gene `grown` has
+ *     (a seven-field look);
+ *   - one banked between random colours and random shapes: those colours, no gene (six fields);
+ *   - one banked before random colours: the main stream's colours (`legacy`), no gene.
+ * Anything else (an Irys URI, a look that is none of these) gets the legacy colours and no gene, as
+ * every such fish was drawn until now. Exact values, not the URI's rounding, so a fish rebuilds just
+ * as it was banked (sensor/fish-owned.mjs colours() agrees). No `gene` key unless it has one.
  */
-export function coloursFromUri(uri: string, grown: FishSpec, legacy: FishColours, fishLook: (s: FishSpec) => string): FishColours {
-  const from = lookSegmentOf(uri) === fishLook(grown) ? grown : legacy;
-  return { hue: from.hue, sat: from.sat, light: from.light, accentHue: from.accentHue, stripes: from.stripes };
+export function coloursFromUri(uri: string, grown: FishSpec, legacy: FishColours, fishLook: (s: FishSpec) => string): FishLook {
+  const look = lookSegmentOf(uri);
+  const { gene, ...plain } = grown;
+  const shaped = isGene(gene) && look === fishLook(grown);
+  const from = shaped || look === fishLook(plain) ? grown : legacy;
+  const out: FishLook = { hue: from.hue, sat: from.sat, light: from.light, accentHue: from.accentHue, stripes: from.stripes };
+  if (shaped) out.gene = gene;
+  return out;
 }
 
 /** The map a zone label belongs to, when exactly one map uses it ("Sunken Forest"); else undefined. */
@@ -135,6 +147,7 @@ export function bankedFromChain(
     assetId: o.assetId,
     nft: 'minted',
   };
+  if (s.gene !== undefined) f.gene = s.gene;
   if (s.value !== undefined) f.value = s.value;
   const map = mapOfZone(zoneOf(o.uri), maps);
   if (map) f.map = map;
@@ -174,7 +187,7 @@ export function readFacts(list: readonly { key: string; value: string }[] | unde
  * The asset must still look like a game fish (Attributes held by the collection, no other plugin)
  * and the game's own generator (`grow`, rollFish with the rarity fixed) must give its species for
  * its seed. Older fish outside the collection, and fish from an earlier generator, wait for the
- * server. Its colours are the ones its URI records (coloursFromUri). Returns the owned fish, or null.
+ * server. Its colours and shape gene are the ones its URI records (coloursFromUri). Returns the owned fish, or null.
  */
 export function entryFromAsset(
   asset: CoreAssetLike,
@@ -207,8 +220,9 @@ export function entryFromAsset(
   const grown = grow(Number.parseInt(facts.id, 16) >>> 0, facts.rarity as Rarity);
   if (grown.species !== facts.species || grown.id !== facts.id) return null;
   const uri = String(asset.uri ?? '');
-  const colours = coloursFromUri(uri, grown, legacyLook(grown.seed, grown.rarity), fishLook);
-  const spec: FishSpec = { ...grown, ...colours, depthM: facts.depth };
+  const look = coloursFromUri(uri, grown, legacyLook(grown.seed, grown.rarity), fishLook);
+  const spec: FishSpec = { ...grown, ...look, depthM: facts.depth };
+  if (look.gene === undefined) delete spec.gene;
   delete spec.value;
   delete spec.map;
   delete spec.assetId;

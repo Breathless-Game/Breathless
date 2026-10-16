@@ -194,10 +194,105 @@ export interface FishSpec {
   map?: string;
   /** Metaplex Core asset address once minted on devnet. */
   assetId?: string;
+  /**
+   * Shape gene (GENE_RE below): 16 hex digits from the look stream, set on every fish caught since
+   * random shapes. Missing on older fish, the field guide's and anything rebuilt from a six-field
+   * URI: those keep the species' standard shape.
+   */
+  gene?: string;
 }
 
-/** A fish's colours: everything fishLook() writes into the NFT URI besides the archetype. */
+/** A fish's colours: everything fishLook() writes into the NFT URI besides the archetype and the gene. */
 export type FishColours = Pick<FishSpec, 'hue' | 'sat' | 'light' | 'accentHue' | 'stripes'>;
+
+/** A fish's whole look: its colours and, since random shapes, its shape gene. */
+export type FishLook = FishColours & Pick<FishSpec, 'gene'>;
+
+// ---- The shape gene -----------------------------------------------------------------------------
+//
+// A fish's shape gene: 64 random bits from the end of its look stream (lookOf), written as 16
+// lowercase hex digits. It rides in the NFT URI as the look segment's seventh field (nft-uri.ts
+// fishLook), so the card the server draws and the fish the game draws read the same bits. No gene
+// (a fish caught before shapes, the field guide, a six-field URI) means neutral: the species' own
+// proportions and colours, exactly as before. sensor/fish-gen.mjs, nft-uri.ts, chain-fish.ts and
+// sensor/nft-meta.mjs check the same canonical form (GENE_RE).
+//
+// The eight bytes, each read as a signed unit u = byte / 127.5 - 1 in [-1, 1]:
+//   generic fish (buildFishMesh)   0 tailTaper  1 headVolume  2 bodyWidth  3 dorsal  4 pectoral  5 tailSpread
+//   marine creatures (marine.ts)   0 length  1 height  2 girth  3 limbs (tail, arms, tentacles, flippers)
+//                                  4 hue shift  5 saturation  6 lightness  7 where in the rarity's hue band
+
+/** A canonical gene: exactly 16 lowercase hex digits. */
+export const GENE_RE = /^[0-9a-f]{16}$/;
+
+export const isGene = (s: unknown): s is string => typeof s === 'string' && GENE_RE.test(s);
+
+/** Two 32-bit draws (each `Math.floor(rng.next() * 2 ** 32)`, exact for mulberry32) as a gene. */
+export function geneOf(hi: number, lo: number): string {
+  return (hi >>> 0).toString(16).padStart(8, '0') + (lo >>> 0).toString(16).padStart(8, '0');
+}
+
+/** Byte `i` of the gene as a signed unit in [-1, 1]. */
+function unit(gene: string, i: number): number {
+  return Number.parseInt(gene.slice(i * 2, i * 2 + 2), 16) / 127.5 - 1;
+}
+
+/** The six generic-body knobs of a SpeciesProfile, as multipliers. */
+export interface ShapeMultipliers {
+  tailTaper: number;
+  headVolume: number;
+  bodyWidth: number;
+  dorsal: number;
+  pectoral: number;
+  tailSpread: number;
+}
+
+export const NEUTRAL_SHAPE: Readonly<ShapeMultipliers> = Object.freeze({ tailTaper: 1, headVolume: 1, bodyWidth: 1, dorsal: 1, pectoral: 1, tailSpread: 1 });
+
+/** How far each knob may move, as a fraction of the species' value. */
+export const SHAPE_RANGE: Readonly<ShapeMultipliers> = Object.freeze({ tailTaper: 0.15, headVolume: 0.12, bodyWidth: 0.18, dorsal: 0.2, pectoral: 0.2, tailSpread: 0.18 });
+
+const KNOBS = ['tailTaper', 'headVolume', 'bodyWidth', 'dorsal', 'pectoral', 'tailSpread'] as const;
+
+/** The gene's multipliers for the six knobs; all exactly 1 without a (valid) gene. */
+export function geneMultipliers(gene: string | undefined | null): ShapeMultipliers {
+  if (!isGene(gene)) return { ...NEUTRAL_SHAPE };
+  const m = { ...NEUTRAL_SHAPE };
+  KNOBS.forEach((k, i) => (m[k] = 1 + SHAPE_RANGE[k] * unit(gene, i)));
+  return m;
+}
+
+/** What the gene does to a marine creature (marine.ts buildMarineCreature). */
+export interface MarineGene {
+  /** Whole-body scale in the creature's own frame: x length, y height, z girth. */
+  length: number;
+  height: number;
+  girth: number;
+  /** Uniform scale of the tail rig (tail, arms, tentacles) and the turtle's flippers, about their roots. */
+  limbs: number;
+  /** Colour offsets around the species' own colours: hue in turns, saturation added, lightness multiplied. */
+  hueShift: number;
+  satShift: number;
+  lightScale: number;
+  /** For species whose base hue came from the fish's hue: a hue in the rarity's old band, degrees. */
+  bandHue: number;
+}
+
+export const MARINE_RANGE = Object.freeze({ length: 0.12, height: 0.12, girth: 0.14, limbs: 0.18, hueShift: 0.035, satShift: 0.07, lightScale: 0.1 });
+
+/** The marine gene, with `band` the rarity's legacy hue band in degrees (PALETTE). */
+export function marineGene(gene: string, band: readonly [number, number]): MarineGene {
+  return {
+    length: 1 + MARINE_RANGE.length * unit(gene, 0),
+    height: 1 + MARINE_RANGE.height * unit(gene, 1),
+    girth: 1 + MARINE_RANGE.girth * unit(gene, 2),
+    limbs: 1 + MARINE_RANGE.limbs * unit(gene, 3),
+    hueShift: MARINE_RANGE.hueShift * unit(gene, 4),
+    satShift: MARINE_RANGE.satShift * unit(gene, 5),
+    lightScale: 1 + MARINE_RANGE.lightScale * unit(gene, 6),
+    bandHue: band[0] + ((band[1] - band[0]) * Number.parseInt(gene.slice(14, 16), 16)) / 255,
+  };
+}
 
 // ---- The look stream --------------------------------------------------------------------------
 //
@@ -253,9 +348,9 @@ const accentAnchor = (rarity: Rarity) => (PALETTE[rarity].hues[0] + PALETTE[rari
  *              mythic: hue + 140..220 (opposite the body, as before)
  *   striped    stripes on 55% of fish
  *   count      2..5 stripes (drawn even when unstriped, so later draws never shift)
- * A later look field (a shape gene) goes after these, so these never change.
+ *   gene       two 32-bit draws: the shape gene (geneOf), after the colours so they never move
  */
-export function lookOf(seed: number, rarity: Rarity, variant = 0): FishColours {
+export function lookOf(seed: number, rarity: Rarity, variant = 0): Required<FishLook> {
   const rng = rngAtState(mix32(seed, LOOK_SALT, variant));
   const pal = PALETTE[rarity];
   const hue = rng.range(0, 360);
@@ -270,7 +365,15 @@ export function lookOf(seed: number, rarity: Rarity, variant = 0): FishColours {
         : (accentAnchor(rarity) - 30 + 60 * a + 360) % 360;
   const striped = rng.next() < 0.55;
   const count = rng.int(2, 5);
-  return { hue, sat, light, accentHue, stripes: striped ? count : 0 };
+  const hi = Math.floor(rng.next() * 0x100000000);
+  const lo = Math.floor(rng.next() * 0x100000000);
+  return { hue, sat, light, accentHue, stripes: striped ? count : 0, gene: geneOf(hi, lo) };
+}
+
+/** The fish without its shape gene: the species' standard shape (and a six-field NFT look). */
+export function withoutGene<T extends { gene?: string }>(spec: T): Omit<T, 'gene'> {
+  const { gene: _gene, ...rest } = spec;
+  return rest;
 }
 
 /**
@@ -325,6 +428,7 @@ export function rollFish(seed: number, depthM: number, odds = rarityOdds(depthM)
     stripes: look.stripes,
     scale,
     value: Math.round(RARITY[rarity].value * rewardMultiplierAt(depthM)),
+    gene: look.gene,
   };
 }
 
@@ -489,12 +593,36 @@ export interface FishDetail {
 
 export const LOW_POLY: FishDetail = { rings: 6, sides: 6 };
 
+/**
+ * The species' profile with the fish's shape gene applied to the six body knobs (geneMultipliers). A
+ * copy: speciesProfile() hands out the shared table entry. Without a gene, the profile itself.
+ */
+function shapedProfile(spec: FishSpec): SpeciesProfile {
+  const profile = speciesProfile(spec);
+  if (!isGene(spec.gene)) return profile;
+  const m = geneMultipliers(spec.gene);
+  return {
+    ...profile,
+    // The taper is a fraction of the body at the tail root: never wider than the body.
+    tailTaper: Math.min(1, profile.tailTaper * m.tailTaper),
+    headVolume: profile.headVolume * m.headVolume,
+    bodyWidth: profile.bodyWidth * m.bodyWidth,
+    dorsal: profile.dorsal * m.dorsal,
+    pectoral: profile.pectoral * m.pectoral,
+    tailSpread: profile.tailSpread * m.tailSpread,
+  };
+}
+
 export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): FishMesh {
-  const marine = buildMarineCreature(spec, RARITY[spec.rarity].emissive);
+  const marine = buildMarineCreature(
+    spec,
+    RARITY[spec.rarity].emissive,
+    isGene(spec.gene) ? marineGene(spec.gene, PALETTE[spec.rarity].hues) : undefined,
+  );
   if (marine) return marine;
 
   const shape = SHAPES[spec.archetype];
-  const profile = speciesProfile(spec);
+  const profile = shapedProfile(spec);
   const L = shape.len;
   const body = hsl(spec.hue, spec.sat * 0.65, spec.light * 0.9);
   const back = hsl(spec.hue, spec.sat * 0.65, spec.light * 0.63);

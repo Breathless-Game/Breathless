@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FishMesh, FishSpec } from './fish';
+import type { FishMesh, FishSpec, MarineGene } from './fish';
 
 type Architecture = 'salmon' | 'tuna' | 'octopus' | 'ray' | 'angler' | 'eel' | 'hammerhead' | 'jelly' | 'nautilus' | 'sawshark' | 'turtle' | 'squid' | 'whaleshark';
 const ARCHITECTURES: Record<string, Architecture> = {
@@ -13,8 +13,13 @@ const ARCHITECTURES: Record<string, Architecture> = {
   'Suncrest Spearfish':'hammerhead','Jade Shell Turtle':'turtle',
 };
 
-/** Independent body architectures; +X is forward, +Y up, Z is lateral. */
-export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | undefined {
+/**
+ * Independent body architectures; +X is forward, +Y up, Z is lateral. `gene`: the fish's shape gene
+ * (fish.ts marineGene), or undefined for the species' standard creature, drawn exactly as
+ * before genes. With one, the body's proportions and limbs are rescaled (baked into the geometry, so
+ * the card's pose and every view keep them) and its colours move a little around the species' own.
+ */
+export function buildMarineCreature(spec: FishSpec, glow: number, gene?: MarineGene): FishMesh | undefined {
   const kind = ARCHITECTURES[spec.species];
   if (!kind) return undefined;
   const flippers: { pivot: THREE.Group; side: number; front: boolean }[] = [];
@@ -22,8 +27,10 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
   const tail = new THREE.Group();
   const high = spec.rarity === 'mythic';
   const golden = spec.rarity === 'legendary';
+  // With a gene, a species that took the fish's hue takes one from its rarity's old hue band instead
+  // (the range its fish had before random colours), so it stays in its palette.
   const hue = kind === 'salmon' ? 0.55 : kind === 'tuna' || kind.includes('shark') ? 0.57
-    : kind === 'turtle' && !golden && !high ? 0.27 : spec.hue / 360;
+    : kind === 'turtle' && !golden && !high ? 0.27 : (gene ? gene.bandHue : spec.hue) / 360;
   const mythicHue = kind === 'squid' ? 0.97 : kind === 'turtle' ? 0.48 : 0.65;
   const color = new THREE.Color().setHSL(high ? mythicHue : hue, golden || high ? 0.52 : 0.32, high ? 0.24 : 0.4);
   let material = new THREE.MeshStandardMaterial({
@@ -409,6 +416,14 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
     crescentTail(-0.72,0.34);
   }
   group.add(tail);
+  const hsl = { h: 0, s: 0, l: 0 };
+  /** The gene's small colour offset around the species' own colour. */
+  const jitter = (c: THREE.Color) => {
+    if (!gene) return;
+    c.getHSL(hsl);
+    c.setHSL(THREE.MathUtils.euclideanModulo(hsl.h + gene.hueShift, 1), THREE.MathUtils.clamp(hsl.s + gene.satShift, 0, 1), THREE.MathUtils.clamp(hsl.l * gene.lightScale, 0, 1));
+  };
+  if (gene) { jitter(luminous.color); luminous.emissive.copy(luminous.color); }
   {
     // All bodies use baked, seeded pigmentation; luminous organs are kept separate.
     group.updateMatrixWorld(true);
@@ -449,6 +464,7 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
             else c.setHSL(0.1,0.07,0.64+noise*0.06);
           }
         }
+        if(gene)jitter(c);
         for(let j=0;j<3;j++)colors.push(c.r,c.g,c.b);
       }
       geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
@@ -471,6 +487,7 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
   const primary=group.children.find(object=>object instanceof THREE.Mesh);
   if(primary)primary.userData.bodySurface=true;
   batchMarineMeshes(group);
+  if (gene) shapeByGene(group, tail, flippers.map(f => f.pivot), gene);
   group.userData.swimPhase=((Math.imul(spec.seed>>>0,0x9e3779b1)>>>0)/0x100000000)*Math.PI*2;
   group.scale.setScalar(spec.scale*0.9*(kind==='turtle'?1:0.97)*(kind==='octopus'?0.95:1)*(kind==='turtle'?1.04*(high?0.62:0.45):kind==='eel'?0.75:1));
   group.name=spec.species;
@@ -491,6 +508,47 @@ export function buildMarineCreature(spec: FishSpec, glow: number): FishMesh | un
   // Cephalopods are built arms-forward (+x) but jet mantle- or shell-first, arms trailing.
   const swimYaw=kind==='octopus'||kind==='squid'||kind==='nautilus'?Math.PI:0;
   return {group,tail,material,animate,body,size:{len:3,height:1,width:1},swimYaw};
+}
+
+/**
+ * Bake the gene's proportions into the creature's geometry (each mesh has its own; nothing is
+ * shared): the limbs (the tail rig, the turtle's flipper pivots) scale about their roots, then the
+ * whole body by length × height × girth in the creature's frame, with the rigs' roots moved along
+ * so they stay attached. Baked rather than set on group.scale, which the card pose and the views
+ * overwrite; run once at build time, before swimmingAnimation records the rest pose.
+ */
+function shapeByGene(group: THREE.Group, tail: THREE.Object3D, pivots: THREE.Object3D[], gene: MarineGene) {
+  group.updateMatrixWorld(true);
+  const toGroup = group.matrixWorld.clone().invert();
+  const body = new THREE.Matrix4().makeScale(gene.length, gene.height, gene.girth);
+  const rigs = [tail, ...pivots];
+  const rigOf = (o: THREE.Object3D) => {
+    for (let p: THREE.Object3D | null = o; p && p !== group; p = p.parent) if (rigs.includes(p)) return p;
+    return null;
+  };
+  // Each mesh's matrix in the group's frame, and the gene's transform of the group's frame for it.
+  const meshes: { mesh: THREE.Mesh; before: THREE.Matrix4; change: THREE.Matrix4 }[] = [];
+  group.traverse(o => {
+    if (!(o instanceof THREE.Mesh)) return;
+    const rig = rigOf(o);
+    const change = body.clone();
+    if (rig) {
+      const root = rig.position; // rigs are the group's children: their position is in its frame
+      change.multiply(new THREE.Matrix4().makeTranslation(root.x, root.y, root.z))
+        .multiply(new THREE.Matrix4().makeScale(gene.limbs, gene.limbs, gene.limbs))
+        .multiply(new THREE.Matrix4().makeTranslation(-root.x, -root.y, -root.z));
+    }
+    meshes.push({ mesh: o, before: toGroup.clone().multiply(o.matrixWorld), change });
+  });
+  for (const rig of rigs) if (rig.parent === group) rig.position.applyMatrix4(body);
+  group.updateMatrixWorld(true);
+  const seen = new Set<THREE.BufferGeometry>();
+  for (const { mesh, before, change } of meshes) {
+    if (seen.has(mesh.geometry)) mesh.geometry = mesh.geometry.clone();
+    seen.add(mesh.geometry);
+    const after = toGroup.clone().multiply(mesh.matrixWorld);
+    mesh.geometry.applyMatrix4(after.invert().multiply(change).multiply(before));
+  }
 }
 
 /** Deform in a shared bind space, keeping eyes, markings and fins attached. */
