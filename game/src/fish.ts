@@ -219,8 +219,10 @@ export type FishLook = FishColours & Pick<FishSpec, 'gene'>;
 //
 // The eight bytes, each read as a signed unit u = byte / 127.5 - 1 in [-1, 1]:
 //   generic fish (buildFishMesh)   0 tailTaper  1 headVolume  2 bodyWidth  3 dorsal  4 pectoral  5 tailSpread
+//                                  6 body height (to length)  7 where the body is deepest (hump)
 //   marine creatures (marine.ts)   0 length  1 height  2 girth  3 limbs (tail, arms, tentacles, flippers)
-//                                  4 hue shift  5 saturation  6 lightness  7 where in the rarity's hue band
+//                                  4 hue shift  5 saturation  6 lightness
+//                                  7 high hex digit: accent hue (against the body), low: taper (front/back-heavy)
 
 /** A canonical gene: exactly 16 lowercase hex digits. */
 export const GENE_RE = /^[0-9a-f]{16}$/;
@@ -237,7 +239,12 @@ function unit(gene: string, i: number): number {
   return Number.parseInt(gene.slice(i * 2, i * 2 + 2), 16) / 127.5 - 1;
 }
 
-/** The six generic-body knobs of a SpeciesProfile, as multipliers. */
+/** Hex digit `i` of the gene (half a byte) as a signed unit in [-1, 1]. */
+function nibble(gene: string, i: number): number {
+  return Number.parseInt(gene[i], 16) / 7.5 - 1;
+}
+
+/** The generic-body knobs, as multipliers: the six of a SpeciesProfile, then the body's height and hump. */
 export interface ShapeMultipliers {
   tailTaper: number;
   headVolume: number;
@@ -245,16 +252,20 @@ export interface ShapeMultipliers {
   dorsal: number;
   pectoral: number;
   tailSpread: number;
+  /** Body height (the archetype's SHAPES height) against an unchanged length: deeper or more slender. */
+  height: number;
+  /** Scales the exponent that places the body's deepest point: below 1 further back, above 1 further forward. */
+  hump: number;
 }
 
-export const NEUTRAL_SHAPE: Readonly<ShapeMultipliers> = Object.freeze({ tailTaper: 1, headVolume: 1, bodyWidth: 1, dorsal: 1, pectoral: 1, tailSpread: 1 });
+export const NEUTRAL_SHAPE: Readonly<ShapeMultipliers> = Object.freeze({ tailTaper: 1, headVolume: 1, bodyWidth: 1, dorsal: 1, pectoral: 1, tailSpread: 1, height: 1, hump: 1 });
 
 /** How far each knob may move, as a fraction of the species' value. */
-export const SHAPE_RANGE: Readonly<ShapeMultipliers> = Object.freeze({ tailTaper: 0.15, headVolume: 0.12, bodyWidth: 0.18, dorsal: 0.2, pectoral: 0.2, tailSpread: 0.18 });
+export const SHAPE_RANGE: Readonly<ShapeMultipliers> = Object.freeze({ tailTaper: 0.3, headVolume: 0.3, bodyWidth: 0.3, dorsal: 0.5, pectoral: 0.45, tailSpread: 0.45, height: 0.3, hump: 0.35 });
 
-const KNOBS = ['tailTaper', 'headVolume', 'bodyWidth', 'dorsal', 'pectoral', 'tailSpread'] as const;
+const KNOBS = ['tailTaper', 'headVolume', 'bodyWidth', 'dorsal', 'pectoral', 'tailSpread', 'height', 'hump'] as const;
 
-/** The gene's multipliers for the six knobs; all exactly 1 without a (valid) gene. */
+/** The gene's multipliers for the eight knobs; all exactly 1 without a (valid) gene. */
 export function geneMultipliers(gene: string | undefined | null): ShapeMultipliers {
   if (!isGene(gene)) return { ...NEUTRAL_SHAPE };
   const m = { ...NEUTRAL_SHAPE };
@@ -274,11 +285,20 @@ export interface MarineGene {
   hueShift: number;
   satShift: number;
   lightScale: number;
-  /** For species whose base hue came from the fish's hue: a hue in the rarity's old band, degrees. */
+  /** A further hue offset, in turns, for the accent colours alone, so body and accent pair differently. */
+  accentShift: number;
+  /** Front- or back-heaviness: height and girth × (1 ± taper) at the two ends of the body. */
+  taper: number;
+  /**
+   * For species whose base hue came from the fish's hue: a hue around the middle of the rarity's old
+   * hue band, in degrees, moved by the same byte as hueShift but by bandSpread × the band's width, so
+   * a narrow band (legendary gold) stays narrow and a wide one (epic violet) reaches its neighbours.
+   * marine.ts uses it in place of hueShift for those species. May leave [0, 360): setHSL wraps it.
+   */
   bandHue: number;
 }
 
-export const MARINE_RANGE = Object.freeze({ length: 0.12, height: 0.12, girth: 0.14, limbs: 0.18, hueShift: 0.035, satShift: 0.07, lightScale: 0.1 });
+export const MARINE_RANGE = Object.freeze({ length: 0.25, height: 0.25, girth: 0.25, limbs: 0.3, hueShift: 0.1, satShift: 0.15, lightScale: 0.2, accentShift: 0.08, taper: 0.25, bandSpread: 0.9 });
 
 /** The marine gene, with `band` the rarity's legacy hue band in degrees (PALETTE). */
 export function marineGene(gene: string, band: readonly [number, number]): MarineGene {
@@ -290,7 +310,9 @@ export function marineGene(gene: string, band: readonly [number, number]): Marin
     hueShift: MARINE_RANGE.hueShift * unit(gene, 4),
     satShift: MARINE_RANGE.satShift * unit(gene, 5),
     lightScale: 1 + MARINE_RANGE.lightScale * unit(gene, 6),
-    bandHue: band[0] + ((band[1] - band[0]) * Number.parseInt(gene.slice(14, 16), 16)) / 255,
+    accentShift: MARINE_RANGE.accentShift * nibble(gene, 14),
+    taper: MARINE_RANGE.taper * nibble(gene, 15),
+    bandHue: (band[0] + band[1]) / 2 + MARINE_RANGE.bandSpread * (band[1] - band[0]) * unit(gene, 4),
   };
 }
 
@@ -621,7 +643,10 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
   );
   if (marine) return marine;
 
-  const shape = SHAPES[spec.archetype];
+  // The gene's body height and hump, against the archetype's own length (lengthCm and the tank's sizing).
+  const m = geneMultipliers(spec.gene);
+  const shape = isGene(spec.gene) ? { ...SHAPES[spec.archetype], height: SHAPES[spec.archetype].height * m.height } : SHAPES[spec.archetype];
+  const hump = 0.78 * m.hump;
   const profile = shapedProfile(spec);
   const L = shape.len;
   const body = hsl(spec.hue, spec.sat * 0.65, spec.light * 0.9);
@@ -637,7 +662,7 @@ export function buildFishMesh(spec: FishSpec, detail: FishDetail = LOW_POLY): Fi
   for (let i = 0; i <= RINGS; i++) {
     const t = i / RINGS;
     const x = -L / 2 + t * L;
-    const baseProfile = Math.sin(Math.PI * Math.pow(t, 0.78)) * 0.88 + 0.12;
+    const baseProfile = Math.sin(Math.PI * Math.pow(t, hump)) * 0.88 + 0.12;
     const tailTaper = THREE.MathUtils.lerp(profile.tailTaper, 1, Math.min(1, t / 0.35));
     const headVolume = t < 0.58 ? 1 : THREE.MathUtils.lerp(1, profile.headVolume, (t - 0.58) / 0.42);
     const ring: THREE.Vector3[] = [];

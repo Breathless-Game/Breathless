@@ -9,8 +9,8 @@ import { cardSpecFor, renderFishPng } from '../../sensor/fish-png.mjs';
 import * as card from '../../sensor/fish-card.gen.mjs';
 
 // Random fish shapes (src/fish.ts geneOf / geneMultipliers / marineGene): every new catch carries a
-// 64-bit shape gene from the end of its look stream. The generic body's six knobs and a marine
-// creature's proportions, limbs and colours (within the species' palette) follow it; no gene (older
+// 64-bit shape gene from the end of its look stream. The generic body's eight knobs and a marine
+// creature's proportions, limbs, taper and colours (within the species' palette) follow it; no gene (older
 // fish, the field guide, a six-field URI) is exactly the species' standard shape. The gene rides in
 // the NFT URI, so the card and the game draw the same fish.
 
@@ -75,7 +75,7 @@ test('every new fish has a canonical gene, drawn after the colours (which are un
 });
 
 test('no gene means neutral: multipliers exactly 1, and the very same mesh', () => {
-  assert.deepEqual(F.geneMultipliers(undefined), { tailTaper: 1, headVolume: 1, bodyWidth: 1, dorsal: 1, pectoral: 1, tailSpread: 1 });
+  assert.deepEqual(F.geneMultipliers(undefined), { tailTaper: 1, headVolume: 1, bodyWidth: 1, dorsal: 1, pectoral: 1, tailSpread: 1, height: 1, hump: 1 });
   assert.deepEqual(F.geneMultipliers('NOT-A-GENE'), F.geneMultipliers(null));
   for (const species of ['Grey Perch', 'Azure Tang', 'Golden Koi Dragon', 'Reef Octopus', 'Green Sea Turtle', 'Moon Jellyfish', 'Hammerhead Shark', 'Atlantic Salmon']) {
     const f = specimen(species);
@@ -95,8 +95,9 @@ test('no gene means neutral: multipliers exactly 1, and the very same mesh', () 
   }
 });
 
-test('the generic body\'s six knobs move within their bounds', () => {
-  const range = { tailTaper: 0.15, headVolume: 0.12, bodyWidth: 0.18, dorsal: 0.2, pectoral: 0.2, tailSpread: 0.18 };
+test('the generic body\'s eight knobs move within their bounds', () => {
+  const range = { tailTaper: 0.3, headVolume: 0.3, bodyWidth: 0.3, dorsal: 0.5, pectoral: 0.45, tailSpread: 0.45, height: 0.3, hump: 0.35 };
+  assert.deepEqual({ ...F.SHAPE_RANGE }, range);
   const lo = {}, hi = {};
   for (let i = 0; i < 4000; i++) {
     const m = F.geneMultipliers(F.lookOf(seedAt(i), 'common').gene);
@@ -107,64 +108,115 @@ test('the generic body\'s six knobs move within their bounds', () => {
     }
   }
   for (const [k, r] of Object.entries(range)) assert.ok(lo[k] < 1 - r * 0.9 && hi[k] > 1 + r * 0.9, `${k} spans its range`);
-  assert.deepEqual(F.geneMultipliers('00ff000000000000').headVolume, 1.12);
-  assert.deepEqual(F.geneMultipliers('ff00000000000000').tailTaper, 1.15);
+  assert.equal(F.geneMultipliers('00ff000000000000').headVolume, 1.3);
+  assert.equal(F.geneMultipliers('ff00000000000000').tailTaper, 1.3);
+  assert.equal(F.geneMultipliers('000000000000ff00').height, 1.3);
+  assert.equal(F.geneMultipliers('00000000000000ff').hump, 1.35);
+});
+
+test('the generic body\'s height gene: deeper or slimmer at the same length', () => {
+  const f = F.withoutGene(specimen('Grey Perch'));
+  const body = (gene) => {
+    const mesh = F.buildFishMesh(gene ? { ...f, gene } : f);
+    mesh.body.geometry.computeBoundingBox();
+    return mesh.body.geometry.boundingBox.getSize(new THREE.Vector3());
+  };
+  // Only byte 6 (height) away from the middle; the other knobs at 0x80 (+0.4% of their range).
+  const plain = body(), deep = body('808080808080ff80'), slim = body('8080808080800080');
+  assert.ok(deep.y > plain.y * 1.25 && slim.y < plain.y * 0.75, `height ${slim.y} < ${plain.y} < ${deep.y}`);
+  assert.ok(Math.abs(deep.x - plain.x) < 1e-6 && Math.abs(slim.x - plain.x) < 1e-6, 'length kept');
 });
 
 test('marine creatures: the gene rescales the body (baked into the geometry) and limbs', () => {
-  // Byte 0 at its maximum (length +12%), the rest at the middle (128: ~+0.4% of their range).
-  const longer = 'ff80808080808080';
+  // Byte 0 at its maximum (length +25%), the rest at the middle (0x80: ~+0.4% of their range; the
+  // last byte's two hex digits 8: accent and taper +6.7% of theirs, so height and girth ±1.7% at the tips).
+  const longer = 'ff80808080808088';
   for (const species of ['Atlantic Salmon', 'Hammerhead Shark', 'Whale Shark', 'Manta Ray', 'Green Sea Turtle']) {
     const f = F.withoutGene(specimen(species));
     const base = localBox(F.buildFishMesh(f)).getSize(new THREE.Vector3());
     const mesh = F.buildFishMesh({ ...f, gene: longer });
     const size = localBox(mesh).getSize(new THREE.Vector3());
-    assert.ok(Math.abs(size.x / base.x - 1.12) < 0.015, `${species}: length ×${(size.x / base.x).toFixed(3)}`);
-    assert.ok(Math.abs(size.y / base.y - 1) < 0.015 && Math.abs(size.z / base.z - 1) < 0.015, `${species}: height and girth kept ${size.y / base.y} ${size.z / base.z}`);
+    assert.ok(Math.abs(size.x / base.x - 1.25) < 0.015, `${species}: length ×${(size.x / base.x).toFixed(3)}`);
+    assert.ok(Math.abs(size.y / base.y - 1) < 0.03 && Math.abs(size.z / base.z - 1) < 0.03, `${species}: height and girth kept ${size.y / base.y} ${size.z / base.z}`);
     // Not on group.scale (the card pose resets it): the card sees the longer fish too.
     assert.equal(mesh.group.scale.x, mesh.group.scale.y);
   }
   // Limbs: an octopus's arms (the tail rig) grow about their root.
   const octo = F.withoutGene(specimen('Reef Octopus'));
   const arms = (gene) => localBox(F.buildFishMesh(gene ? { ...octo, gene } : octo)).max.x;
-  assert.ok(arms('808080ff80808080') > arms(undefined) + 0.15, 'longer arms');
-  assert.ok(arms('8080800080808080') < arms(undefined) - 0.15, 'shorter arms');
+  assert.ok(arms('808080ff80808088') > arms(undefined) + 0.25, 'longer arms');
+  assert.ok(arms('8080800080808088') < arms(undefined) - 0.25, 'shorter arms');
   const m = F.marineGene('00ff00ff00ff00ff', [90, 170]);
-  assert.deepEqual([m.length, m.height, m.girth, m.limbs], [0.88, 1.12, 0.86, 1.18]);
-  assert.equal(m.bandHue, 170);
-  assert.equal(F.marineGene('0000000000000000', [90, 170]).bandHue, 90);
+  assert.deepEqual([m.length, m.height, m.girth, m.limbs, m.accentShift, m.taper], [0.75, 1.25, 0.75, 1.3, 0.08, 0.25]);
+  // A band species' hue: around the band's middle, by up to 0.9 × its width (byte 4).
+  assert.equal(m.bandHue, 58);
+  assert.equal(F.marineGene('00000000ff000000', [90, 170]).bandHue, 202);
+  assert.ok(Math.abs(F.marineGene('0000000000000000', [30, 48]).bandHue - 22.8) < 1e-9, 'legendary gold stays gold');
+});
+
+test('marine creatures: the taper makes one end heavier; a jellyfish (radial) ignores it', () => {
+  // Same gene but the taper digit (the last): 0 → −25%, f → +25%.
+  const heavy = (species, digit) => {
+    const f = F.withoutGene(specimen(species));
+    const mesh = F.buildFishMesh({ ...f, gene: `808080808080808${digit}` });
+    mesh.group.scale.setScalar(1);
+    mesh.group.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(mesh.group, true);
+    const mid = (box.min.x + box.max.x) / 2;
+    // The tallest point on each half.
+    let front = 0, back = 0;
+    const p = new THREE.Vector3();
+    for (const o of meshes(mesh)) {
+      const pos = o.geometry.getAttribute('position');
+      for (let i = 0; i < pos.count; i++) {
+        p.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+        if (p.x > mid) front = Math.max(front, Math.abs(p.y)); else back = Math.max(back, Math.abs(p.y));
+      }
+    }
+    return { front, back, positions: attr(mesh, 'position') };
+  };
+  for (const species of ['Atlantic Salmon', 'Bluefin Tuna', 'Whale Shark', 'Ribbon Moray']) {
+    const a = heavy(species, '0'), b = heavy(species, 'f');
+    assert.ok(b.front / b.back > (a.front / a.back) * 1.15, `${species}: f is front-heavier than 0 (${a.front / a.back} → ${b.front / b.back})`);
+  }
+  assert.deepEqual(heavy('Moon Jellyfish', '0').positions, heavy('Moon Jellyfish', 'f').positions);
 });
 
 test('marine creatures: colours stay within the species\' palette', () => {
   const hueOf = (r, g, b) => new THREE.Color(r, g, b).getHSL({}).h;
   const gap = (a, b) => Math.min(Math.abs(a - b), 1 - Math.abs(a - b));
   for (const species of ['Atlantic Salmon', 'Bluefin Tuna', 'Whale Shark', 'Sawshark', 'Green Sea Turtle', 'Chambered Nautilus', 'Manta Ray', 'Ribbon Moray', 'Lantern Angler']) {
-    // Fixed-colour species: every face moves by at most the gene's small hue shift.
+    // Fixed-colour species: every face moves by at most the gene's hue shift (±36°), plus the
+    // accent's own offset (±29°) on accent faces.
     const f = F.withoutGene(specimen(species));
     for (let i = 0; i < 8; i++) {
       const gene = F.lookOf(seedAt(i), f.rarity).gene;
-      const shift = Math.abs(F.marineGene(gene, [0, 0]).hueShift);
-      assert.ok(shift <= 0.035 + 1e-12);
+      const g = F.marineGene(gene, [0, 0]);
+      assert.ok(Math.abs(g.hueShift) <= 0.1 + 1e-12 && Math.abs(g.accentShift) <= 0.08 + 1e-12);
+      const shift = Math.max(Math.abs(g.hueShift), Math.abs(g.hueShift + g.accentShift));
       const a = attr(F.buildFishMesh(f), 'color');
       const b = attr(F.buildFishMesh({ ...f, gene }), 'color');
       assert.equal(a.length, b.length);
       for (let k = 0; k < a.length; k += 3) {
         const sa = new THREE.Color(a[k], a[k + 1], a[k + 2]).getHSL({}).s;
-        if (sa < 0.05 || Math.max(a[k], a[k + 1], a[k + 2]) < 0.02) continue; // greys have no hue to keep
+        const sb = new THREE.Color(b[k], b[k + 1], b[k + 2]).getHSL({}).s;
+        if (sa < 0.05 || sb < 0.05 || Math.max(a[k], a[k + 1], a[k + 2], b[k], b[k + 1], b[k + 2]) < 0.02) continue; // greys (before or after) have no hue to keep
         assert.ok(gap(hueOf(a[k], a[k + 1], a[k + 2]), hueOf(b[k], b[k + 1], b[k + 2])) <= shift + 0.01, `${species} face ${k / 3} ${[a[k], a[k + 1], a[k + 2]]} -> ${[b[k], b[k + 1], b[k + 2]]} shift ${shift}`);
       }
     }
   }
-  // Species that took the fish's free hue now take one from their rarity's old band: the free hue
-  // no longer shows, and the band holds.
+  // Species that took the fish's free hue now take one around their rarity's old band: the free hue
+  // no longer shows, the hue stays near the band, and different genes spread across it.
   const bands = { uncommon: [90, 170], epic: [265, 330], legendary: [30, 48] };
   for (const species of ['Reef Octopus', 'Hammerhead Shark', 'Moon Jellyfish', 'Golden Sea Turtle']) {
     const f = specimen(species);
     const a = attr(F.buildFishMesh({ ...f, hue: 0 }), 'color');
     const b = attr(F.buildFishMesh({ ...f, hue: 200 }), 'color');
     assert.deepEqual(a, b, `the free hue does not reach a ${species} with a gene`);
-    const band = F.marineGene(f.gene, bands[f.rarity]);
-    assert.ok(band.bandHue >= bands[f.rarity][0] && band.bandHue <= bands[f.rarity][1], species);
+    const [lo, hi] = bands[f.rarity];
+    const hues = Array.from({ length: 400 }, (_, i) => F.marineGene(F.lookOf(seedAt(i), f.rarity).gene, [lo, hi]).bandHue);
+    for (const h of hues) assert.ok(Math.abs(h - (lo + hi) / 2) <= 0.9 * (hi - lo) + 1e-9, `${species} ${h}`);
+    assert.ok(Math.max(...hues) - Math.min(...hues) > 1.6 * (hi - lo), `${species}: genes spread across the band`);
     // Without a gene the free hue still shows, exactly as before (fish banked since random colours).
     const plain = F.withoutGene(f);
     assert.notDeepEqual(attr(F.buildFishMesh({ ...plain, hue: 0 }), 'color'), attr(F.buildFishMesh({ ...plain, hue: 200 }), 'color'), species);
