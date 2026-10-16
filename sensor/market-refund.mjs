@@ -10,13 +10,16 @@
 //
 // The rule that keeps one fish from being sent twice (harmless on chain, a second transfer would
 // just fail, but a fee) or, worse, sent back after the player handed it over AGAIN: before any
-// resend, ask the chain (resolveRefund):
-//   - the market no longer holds the fish        -> it went back: refunded
-//   - it does, and the recorded refund landed     -> it went back and the seller has handed it over
-//                                                    again (a new sale): refunded
-//   - it does, and the refund failed, or expired  -> forget it (refundDropped): send again
-//     unseen (finalized height > lastValid)
+// resend, ask the chain (resolveRefund). A refund on record is looked up first, by its signature:
+//   - it landed                                   -> it went back: refunded (whatever became of the
+//                                                    fish since: handed over again, or burned by its
+//                                                    owner, which no asset fetch could tell)
+//   - it failed, or expired unseen                -> forget it (refundDropped), then as below
+//     (finalized height > lastValid)
 //   - anything else                               -> in flight: wait
+// With no refund on record (none sent, or forgotten), ask about the fish:
+//   - the market no longer holds it               -> it went back: refunded
+//   - it does                                     -> send it
 // As for payouts (market-payout.mjs), a send the node refused before forwarding is forgotten at once.
 //
 // A round is the refund of one transfer (the record's transferTx): the fish handed over again under
@@ -38,9 +41,12 @@ const LANDED = new Set(['confirmed', 'finalized']);
  * deps:
  *   ledger                    SoldLedger, or the Redis store's ledger (refundPending, refundDropped, refunded)
  *   market                    the market wallet's address
- *   loadAsset(assetId)        -> the Core asset, or null only when the account definitely does not
- *                                exist; throws on any other error (assetOrNull, market-server-mode.mjs)
- *   build(asset, seller)      -> { tx, sig, lastValid, ... }  a signed, unsent transfer of `asset` to `seller`
+ *   loadAsset(assetId)        -> the Core asset, or null only when the fish definitely does not exist
+ *                                (no account, or a burned one); throws on any other error (assetOrNull,
+ *                                market-server-mode.mjs)
+ *   build(asset, seller, transferTx)  -> { tx, sig, lastValid, ... }  a signed, unsent transfer of
+ *                                `asset` to `seller` that names its round (transferTx), so no two
+ *                                rounds ever share a signature
  *   send(built)               submits it; throws on any failure (see rejectedBeforeSubmit)
  *   confirm(built)            waits for it: the on-chain error (null when it succeeded); throws on timeout/expiry
  *   getSignatureStatus(sig)   -> null | { error, commitment }  (searching history)
@@ -65,7 +71,7 @@ export function createRefund({ ledger, market, loadAsset, build, send, confirm, 
       if (!(await ledger.refunded(assetId, transferTx))) throw anotherRound();
       return '';
     }
-    const built = await build(asset, r.seller);
+    const built = await build(asset, r.seller, transferTx);
     await ledger.refundPending(assetId, transferTx, built.sig, built.lastValid); // 409 if the round moved on meanwhile
     try {
       await send(built);
@@ -96,28 +102,26 @@ export function createRefund({ ledger, market, loadAsset, build, send, confirm, 
     if (r?.status !== 'refunding') return 'in-flight'; // not a refund (never asked of one): send nothing
     const round = r.transferTx;
     const done = async () => ((await ledger.refunded(assetId, round)) ? 'refunded' : 'in-flight');
-    const asset = await loadAsset(assetId); // throws on any RPC error but "no such account"
-    // Only a refund moves a fish out of the market without paying for it (a paid one is burned, never this record).
-    if (!marketHolds(asset)) return done();
-    if (!r.refundTx) return 'unrefunded';
-    // The height is read BEFORE the status: past the blockhash's last valid height on the finalized
-    // chain, a lookup made afterwards that finds nothing means it never landed (market-payout.mjs).
-    const height = await getBlockHeight();
-    const status = await getSignatureStatus(r.refundTx);
-    if (status) {
-      if (!LANDED.has(status.commitment)) return 'in-flight';
-      if (status.error) {
-        await ledger.refundDropped(assetId, r.refundTx);
-        return 'unrefunded';
-      }
-      // It went back, and the market holds the fish again: the seller handed it over anew.
-      return done();
+    if (r.refundTx) {
+      // The signature first: once it landed, the fish may have moved on (handed over again, or
+      // burned by its owner: an account no fetch decodes), and the round is done all the same.
+      // The height is read BEFORE the status: past the blockhash's last valid height on the finalized
+      // chain, a lookup made afterwards that finds nothing means it never landed (market-payout.mjs).
+      const height = await getBlockHeight();
+      const status = await getSignatureStatus(r.refundTx);
+      if (status) {
+        if (!LANDED.has(status.commitment)) return 'in-flight';
+        if (!status.error) return done();
+        await ledger.refundDropped(assetId, r.refundTx); // landed and failed: it moved nothing
+      } else if (Number.isSafeInteger(r.refundLastValid) && height > r.refundLastValid) {
+        await ledger.refundDropped(assetId, r.refundTx); // expired and not on chain: it can never land now
+      } else return 'in-flight';
     }
-    if (Number.isSafeInteger(r.refundLastValid) && height > r.refundLastValid) {
-      await ledger.refundDropped(assetId, r.refundTx); // expired and not on chain: it can never land now
-      return 'unrefunded';
-    }
-    return 'in-flight';
+    // No transfer back went (or none is on record any more): the market still holds the fish, unless
+    // the chain says otherwise. Only a refund moves a fish out of the market without paying for it
+    // (a paid one is burned, never this record).
+    const asset = await loadAsset(assetId); // throws on any RPC error but "no such fish"
+    return marketHolds(asset) ? 'unrefunded' : done();
   }
 
   return { refund, resolveRefund };

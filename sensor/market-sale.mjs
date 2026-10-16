@@ -126,7 +126,12 @@ export function createSaleDesk({
   async function sendBack(assetId, seller, transferTx, deadline, recorded = false) {
     let r = await ledger.get(assetId);
     if (r?.status === 'refunding' && r.transferTx !== transferTx) {
-      if ((await resolveRefund(assetId)) !== 'refunded') throw busyReturning();
+      // The chain unreadable counts as "not back yet": try again later, the record is left for the sweep.
+      const state = await resolveRefund(assetId).catch((e) => {
+        log(`[market] could not tell whether ${assetId} went back to ${r.seller}: ${short(e)}`);
+        return 'in-flight';
+      });
+      if (state !== 'refunded') throw busyReturning();
       r = await ledger.get(assetId);
     }
     const plan = planFor(r, seller, transferTx);

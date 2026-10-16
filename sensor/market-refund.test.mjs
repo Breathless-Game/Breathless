@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AccountNotFoundError, publicKey as umiKey } from '@metaplex-foundation/umi';
+import { deserializeAssetV1, transfer } from '@metaplex-foundation/mpl-core';
+import { AccountNotFoundError, keypairIdentity, sol, publicKey as umiKey } from '@metaplex-foundation/umi';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { checkPayoutCap, paidInWindow } from './fish-trust.mjs';
 import { SWEEP_RESUME_AFTER_MS, createSweep } from './market-burn.mjs';
 import { createPayout } from './market-payout.mjs';
 import { createRefund } from './market-refund.mjs';
 import { HttpError, MPL_CORE_PROGRAM, SoldLedger, appraise } from './market-rules.mjs';
 import { createSaleDesk } from './market-sale.mjs';
-import { assetOrNull, createSellerLock } from './market-server-mode.mjs';
+import * as serverMode from './market-server-mode.mjs';
 import { createRedisStore } from './market-store.mjs';
 import { createFakeRedis } from './test/fake-redis.mjs';
 
@@ -25,6 +27,9 @@ const fishId = (i) => `Fish${'ABCDEFGH'[i]}`.padEnd(43, '1');
 const [F0, F1, F2] = [0, 1, 2].map(fishId);
 const tick = () => new Promise((r) => setImmediate(r));
 const OLD_ENOUGH = SWEEP_RESUME_AFTER_MS + 1000;
+const { assetOrNull, createSellerLock } = serverMode;
+/** What a Core burn leaves at the fish's address (fish-collection.mjs assetState): 1 byte, 00, still Core's. */
+const burnedStub = (id) => ({ publicKey: umiKey(id), executable: false, owner: umiKey(MPL_CORE_PROGRAM), lamports: sol(0.001), data: Uint8Array.of(0), exists: true });
 
 const plainPrice = (asset) => {
   const a = appraise(asset.attributes?.attributeList);
@@ -50,6 +55,8 @@ function world({ values = {}, cap = 15, refundSends = [] } = {}) {
     payouts: [],
     burns: [],
     backs: [], // transfers back sent: assetId per send
+    burnedByPlayer: new Set(), // fish the player burned from their wallet after they came back
+    rounds: [], // the transfer each transfer back was built for
     priced: 0,
     seq: 0,
   };
@@ -94,16 +101,22 @@ function world({ values = {}, cap = 15, refundSends = [] } = {}) {
     const refunds = createRefund({
       ledger,
       market: MARKET,
-      // As market-server-mode.mjs loads it for a refund: umi's fetch, null only for an account that is not there.
+      // As market-server-mode.mjs loads it for a refund: umi's fetch, null only for an account that is
+      // not there, or the 1-byte account a Core burn leaves (which fetchAsset fails to decode).
       loadAsset: (id) =>
-        assetOrNull(async () => {
-          await tick();
-          if (w.rpcError) throw w.rpcError;
-          const a = w.asset(id);
-          if (!a) throw Object.assign(new Error(`The account of type [AssetV1] was not found at the provided address [${id}].`), { name: 'AccountNotFoundError' });
-          return a;
-        }),
-      build: async (asset, seller) => {
+        assetOrNull(
+          async () => {
+            await tick();
+            if (w.rpcError) throw w.rpcError;
+            if (w.burnedByPlayer.has(id)) return deserializeAssetV1(burnedStub(id)); // throws, as fetchAsset does
+            const a = w.asset(id);
+            if (!a) throw new AccountNotFoundError(umiKey(id), 'AssetV1');
+            return a;
+          },
+          async () => (w.burnedByPlayer.has(id) ? burnedStub(id) : { exists: w.owners.has(id), owner: umiKey(MPL_CORE_PROGRAM), data: Uint8Array.of(1) }),
+        ),
+      build: async (asset, seller, transferTx) => {
+        w.rounds.push(transferTx); // each transfer back names its round (refundTransfer's memo)
         await w.onBuild?.(asset, seller);
         return { sig: `back${++w.seq}`, lastValid: w.height + 150, assetId: asset.publicKey, seller };
       },
@@ -291,6 +304,7 @@ each('handed over again with a new transfer after the refund: a new sale, paid o
   await capAnswer(m.sell(F1, t2), true);
   assert.deepEqual((await m.ledger.get(F1)).refundedTransfers, [t1]);
   assert.equal(w.sentBack(F1), 2);
+  assert.deepEqual(w.rounds, [t1, t2], 'each transfer back built for its own round');
   // The window rolled on: the fish sells under a third transfer, on another instance (Redis), twice at once.
   w.cap = 1_000;
   const t3 = w.handOver([F1]);
@@ -717,4 +731,80 @@ test('assetOrNull: null only for a fish account that does not exist', async () =
       (x) => x === e,
     );
   }
+});
+
+each('fish that went back unseen and that the player then burned are finished by the sweep, and starve no other', async (kind) => {
+  const ids = [1, 2, 3, 4].map(fishId);
+  const w = world({ refundSends: ids.map(() => 'timeout-landed') });
+  const k = KINDS[kind](w);
+  const m = await k.make();
+  await soldOne(w, m);
+  for (const id of ids) await capAnswer(m.sell(id, w.handOver([id])), 'pending'); // each back with the seller, its round still 'refunding'
+  for (const id of ids) assert.equal(w.owners.get(id), SELLER);
+  // The player burns the three oldest from their wallet before the sweep gets to them.
+  for (const id of ids.slice(0, 3)) {
+    w.burnedByPlayer.add(id);
+    w.owners.delete(id);
+  }
+  const runs = [];
+  for (let i = 0; i < 2; i++) runs.push(await (await k.make()).sweep.run());
+  assert.deepEqual(
+    runs.map((r) => [r.refunded, r.failed]),
+    [
+      [3, 0],
+      [1, 0],
+    ],
+    "three a run (the sweep's resume budget), none failing",
+  );
+  for (const id of ids) assert.equal((await m.ledger.get(id)).status, 'refunded', id);
+  assert.equal(w.sentBack(ids[0]), 1, 'nothing sent again');
+  await capAnswer(m.sell(ids[0], (await m.ledger.get(ids[0])).transferTx), true);
+});
+
+test('assetOrNull: a burned fish (the 1-byte account a Core burn leaves) is null; any other undecodable account throws', async () => {
+  const id = fishId(1);
+  const decode = (acct) => () => Promise.resolve().then(() => deserializeAssetV1(acct));
+  assert.equal(await assetOrNull(decode(burnedStub(id)), async () => burnedStub(id)), null);
+  const junk = { ...burnedStub(id), data: Uint8Array.of(7, 7) }; // a live Core account that does not decode as an asset
+  await assert.rejects(assetOrNull(decode(junk), async () => junk), (e) => e.name === 'UnexpectedAccountError');
+  await assert.rejects(assetOrNull(decode(burnedStub(id))), (e) => e.name === 'UnexpectedAccountError', 'no raw read to check with: throws');
+  const down = new Error('Node is behind');
+  await assert.rejects(
+    assetOrNull(decode(burnedStub(id)), async () => {
+      throw down;
+    }),
+    (e) => e === down,
+  );
+});
+
+test('two refund rounds of one fish to one seller under one blockhash are two different transactions', async () => {
+  const u = createUmi('http://127.0.0.1:1'); // offline: nothing here touches the RPC
+  u.use(keypairIdentity(u.eddsa.generateKeypair()));
+  const seller = u.eddsa.generateKeypair().publicKey; // the wallet the fish goes back to
+  const asset = { publicKey: umiKey(fishId(1)), owner: u.identity.publicKey, updateAuthority: { type: 'Address', address: u.identity.publicKey } };
+  const blockhash = { blockhash: '4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM', lastValidBlockHeight: 100 };
+  const sig = async (builder) => (await builder.setBlockhash(blockhash).buildAndSign(u)).signatures[0].join(',');
+  assert.equal(typeof serverMode.refundTransfer, 'function', 'market-server-mode.mjs builds the transfer back with refundTransfer');
+  const round = (transferTx) => sig(serverMode.refundTransfer(u, { asset, seller, transferTx }));
+  // The bare transfer is the same bytes, so the same signature, every time: a second round's would be "already processed".
+  const bare = () => sig(transfer(u, { asset, newOwner: seller }));
+  assert.equal(await bare(), await bare());
+  const [t1, t2] = ['A'.repeat(88), 'B'.repeat(88)];
+  assert.notEqual(await round(t1), await round(t2), 'each names its own transfer');
+  assert.equal(await round(t1), await round(t1), 'a rebuild of one round is the same transaction');
+});
+
+each('the chain unreadable while a new transfer waits on the last refund: a 409 to try again, not a 500', async (kind) => {
+  const w = world({ refundSends: ['rejected'] }); // never submitted: no signature on record, so the fish is looked up
+  const m = await KINDS[kind](w).make();
+  await soldOne(w, m);
+  const t1 = w.handOver([F1]);
+  await capAnswer(m.sell(F1, t1), 'pending');
+  w.rpcError = Object.assign(new Error('Node is behind'), { code: -32005 });
+  const t2 = w.handOver([F1]);
+  await assert.rejects(m.sell(F1, t2), (e) => e.status === 409 && /on its way back/.test(e.message));
+  const { results } = await m.desk.sellBatch({ seller: SELLER, sales: [{ assetId: F1, transferTx: t2 }] });
+  assert.equal(results[0].status, 409, results[0].error);
+  assert.deepEqual([(await m.ledger.get(F1)).status, (await m.ledger.get(F1)).transferTx], ['refunding', t1], 'left for the sweep');
+  assert.equal(w.paidFor(F1), 0);
 });
