@@ -318,6 +318,29 @@ export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | n
   return { ms, kind };
 }
 
+/**
+ * What to tell the player about a fish the daily PEARL cap refused after it was already transferred
+ * to the market: the market sends it back to their wallet (sensor/market-refund.mjs). `refunded` is
+ * true once that transfer landed, 'pending' while it is still on its way. Null for any other outcome.
+ * The time is when the cap takes this fish again (`retryAfterMs` from `now`), in UTC like the server's.
+ */
+export function returnedFishNote(
+  o: { code?: string; refunded?: true | 'pending'; retryAfterMs?: number },
+  now: number,
+): { en: string; zh: string } | null {
+  if (o.code !== 'daily-cap' || !o.refunded) return null;
+  const at = new Date(now + Math.max(0, o.retryAfterMs ?? 0)).toISOString().slice(11, 16);
+  return o.refunded === true
+    ? {
+        en: `Daily PEARL limit reached — your fish was returned to your wallet; you can sell it again after ${at} UTC.`,
+        zh: `已达每日 PEARL 上限——这条鱼已退回你的钱包，${at} UTC 之后可以再次出售。`,
+      }
+    : {
+        en: `Daily PEARL limit reached — your fish is being returned to your wallet; you can sell it again after ${at} UTC.`,
+        zh: `已达每日 PEARL 上限——这条鱼正在退回你的钱包，${at} UTC 之后可以再次出售。`,
+      };
+}
+
 /** Errors that mean the burner wallet cannot pay (for the upload or the transaction). */
 export function isFundsError(message: string): boolean {
   return /insufficient|0x1\b|debit an account|not enough (balance|funds|sol)/i.test(message);

@@ -123,6 +123,9 @@ function market(chain, { limit = 3 } = {}) {
     resolvePending: payout.resolvePending,
     pay: payout.pay,
     log: (m) => process.env.DEBUG_429 && console.log(m),
+    // No daily cap here, so no fish is ever sent back (market-refund.test.mjs covers that).
+    refund: async () => assert.fail('nothing is sent back here'),
+    resolveRefund: async () => assert.fail('nothing is sent back here'),
     burnSold: async (id) => {
       try {
         await burnOnce(id);

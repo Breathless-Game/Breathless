@@ -467,10 +467,14 @@ export function mintLimitError(what, limit, retryAfterMs, now = Date.now()) {
 
 // ---- Daily payout cap ------------------------------------------------------------------------------
 
-/** Payments to `seller` in the window ending `now`, oldest first: [{ at, pearls }]. Every ledger record counts (paying, paid, burned). */
+/**
+ * Payments to `seller` in the window ending `now`, oldest first: [{ at, pearls }]. Every sale record
+ * counts (paying, paid, burned); a fish the market sent back (refunding, refunded) was never paid.
+ */
 function recentPayments(records, seller, now, windowMs) {
   const out = [];
   for (const r of Object.values(records ?? {})) {
+    if (r?.status === 'refunding' || r?.status === 'refunded') continue;
     if (r?.seller === seller && now - r.at < windowMs) out.push({ at: r.at, pearls: Number(r.pearls) || 0 });
   }
   return out.sort((x, y) => x.at - y.at);

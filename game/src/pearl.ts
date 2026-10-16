@@ -54,6 +54,12 @@ export interface SellOutcome {
   code?: string;
   /** How long until the market takes this fish again, when it says (the daily cap does). */
   retryAfterMs?: number;
+  /**
+   * The daily cap refused a fish the market already held, so it sends the fish back to the player's
+   * wallet: true once that transfer landed (`refundTx`), 'pending' while it is still on its way.
+   */
+  refunded?: true | 'pending';
+  refundTx?: string;
 }
 export interface SellResult {
   pearls: number;
@@ -100,7 +106,9 @@ export class InsufficientPearlsError extends Error {
 
 /**
  * A market answer that was not OK, from its JSON: e.g. 429 { code: 'daily-cap', retryAfterMs } when
- * paying a fish would take the seller over the daily PEARL limit (sensor/fish-trust.mjs).
+ * paying a fish would take the seller over the daily PEARL limit (sensor/fish-trust.mjs). When the
+ * market already held that fish it sends it back, and says so: `refunded` (true or 'pending') and
+ * `refundTx` (sensor/market-sale.mjs).
  */
 export class MarketError extends Error {
   constructor(
@@ -108,14 +116,26 @@ export class MarketError extends Error {
     readonly status: number,
     readonly code?: string,
     readonly retryAfterMs?: number,
+    readonly refunded?: true | 'pending',
+    readonly refundTx?: string,
   ) {
     super(message);
     this.name = 'MarketError';
   }
 }
 /** One fish refused inside a /quote-batch or /sell-batch answer: the error a /quote or /sell of it alone throws. */
-export const refusalOf = (r: MarketRefusal) => new MarketError(r.error, r.status ?? 500, r.code, r.retryAfterMs);
-type MarketRefusal = { error: string; status?: number; code?: string; retryAfterMs?: number };
+export const refusalOf = (r: MarketRefusal) => new MarketError(r.error, r.status ?? 500, r.code, r.retryAfterMs, r.refunded, r.refundTx);
+type MarketRefusal = { error: string; status?: number; code?: string; retryAfterMs?: number; refunded?: true | 'pending'; refundTx?: string };
+/**
+ * The market sent this fish back to the player's wallet (a daily-cap refusal after the transfer): the
+ * transfer remembered for it is spent, so it is forgotten and the next sale of the fish starts afresh.
+ * While the fish is still on its way back ('pending') the transfer stays: the next try asks the market again.
+ */
+export function forgetReturned(assetId: string, e: unknown): boolean {
+  if (!(e instanceof MarketError && e.code === 'daily-cap' && e.refunded === true)) return false;
+  setPending(assetId, null);
+  return true;
+}
 
 const API = '/api/market';
 /**
@@ -161,7 +181,7 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   // No JSON at all (a proxy error page, or a static server answering with index.html) means no market.
   const json = (await res.json().catch(() => null)) as (T & Partial<MarketRefusal>) | null;
   if (!json || typeof json !== 'object') throw offline();
-  if (!res.ok) throw new MarketError(json.error ?? `PEARL market error ${res.status}`, res.status, json.code, json.retryAfterMs);
+  if (!res.ok) throw new MarketError(json.error ?? `PEARL market error ${res.status}`, res.status, json.code, json.retryAfterMs, json.refunded, json.refundTx);
   return json;
 }
 
@@ -290,6 +310,8 @@ export const failure = (assetId: string, e: unknown): SellOutcome => ({
   ...(rejectedByUser(e) ? { rejected: true } : {}),
   ...(e instanceof MarketError && e.code !== undefined ? { code: e.code } : {}),
   ...(e instanceof MarketError && e.retryAfterMs !== undefined ? { retryAfterMs: e.retryAfterMs } : {}),
+  ...(e instanceof MarketError && e.refunded !== undefined ? { refunded: e.refunded } : {}),
+  ...(e instanceof MarketError && e.refundTx !== undefined ? { refundTx: e.refundTx } : {}),
 });
 const chunks = <T>(list: T[], size: number) =>
   Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, i * size + size));
@@ -538,7 +560,11 @@ async function sellManyViaServer(info: LiveInfo, assetIds: string[], onProgress?
   if (sales.length) {
     onProgress?.({ step: 'confirm', fish: sales.length });
     const settle = (id: string, r: SellResult | Error) => {
-      if (r instanceof Error) return fail(id, r); // the transfer stays pending: the next try resumes it
+      if (r instanceof Error) {
+        forgetReturned(id, r); // otherwise the transfer stays pending: the next try resumes it
+        fail(id, r);
+        return;
+      }
       setPending(id, null);
       done.set(id, { assetId: id, result: r });
     };

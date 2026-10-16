@@ -109,6 +109,9 @@ function boot(chain, disk) {
     resolvePending: payout.resolvePending,
     pay: payout.pay,
     burnSold: async (id) => ledger.burned(id, `burn-${id}`),
+    // No daily cap here, so no fish is ever sent back (market-refund.test.mjs covers that).
+    refund: async () => assert.fail('nothing is sent back here'),
+    resolveRefund: async () => assert.fail('nothing is sent back here'),
   });
   const sell = (assetId = A) => desk.sell({ assetId, seller: SELLER, transferTx: TX });
   return { ledger, desk, sell };

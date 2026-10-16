@@ -213,15 +213,65 @@ export function checkTransferTx(tx, { assetId, seller, market }) {
   return moves.some((ix) => authorityOf(ix) === seller) ? null : 'The seller did not transfer this fish';
 }
 
-/** On the sweep's work list (SoldLedger.unburned, RedisLedger.unburned): paying, or paid and not set aside. */
-export const isUnfinished = (r) => r?.status === 'paying' || (r?.status === 'paid' && !r.burnSkipped);
+/**
+ * On the sweep's work list (SoldLedger.unburned, RedisLedger.unburned): paying, paid and not set
+ * aside, or refunding (a fish the market is sending back, see SoldLedger). Never a refunded one.
+ */
+export const isUnfinished = (r) => r?.status === 'paying' || r?.status === 'refunding' || (r?.status === 'paid' && !r.burnSkipped);
+
+/** A fish the market sends (or sent) back: never paid, never burned, never counted toward the daily cap. */
+export const isRefund = (r) => r?.status === 'refunding' || r?.status === 'refunded';
+
+/**
+ * The transfers of this fish the market already sent back. The fish sells again only under a new
+ * transfer, never under one of these: once it is back in the market, an old one would verify again.
+ */
+export const returnedTransfers = (r) => [...(r?.refundedTransfers ?? []), ...(r?.status === 'refunded' ? [r.transferTx] : [])];
+
+/**
+ * The record a new sale or refund of a fish writes over `prev` (its record, or null): `rec` itself
+ * when there is none; over a refunded fish (handed over again with a new transfer), `rec` keeping
+ * the transfers already sent back. null when `prev` must stay: a sale or refund still under way,
+ * or `rec` names a transfer that was already sent back.
+ */
+export function recordOver(prev, rec) {
+  if (!prev) return rec;
+  if (prev.status !== 'refunded') return null;
+  const returned = returnedTransfers(prev);
+  if (returned.includes(rec.transferTx)) return null;
+  return { ...rec, refundedTransfers: returned };
+}
+
+/** SoldLedger.plan on one record (RedisLedger reads it first): see there. */
+export function planFor(r, seller, transferTx) {
+  if (!r) return 'new';
+  if (r.status === 'refunded') {
+    // A transfer already sent back never sells again; any other is the fish handed over anew.
+    if (!returnedTransfers(r).includes(transferTx)) return 'new';
+    return r.seller === seller ? 'refunded' : 'conflict';
+  }
+  // Under way: only its own seller's transfer is refused outright; anything else waits for it (the desk).
+  if (r.status === 'refunding') return r.seller !== seller && r.transferTx === transferTx ? 'conflict' : 'refund';
+  if (r.seller !== seller) return 'conflict';
+  if (r.status === 'paying') return 'resume';
+  if (r.status === 'paid') return 'burn';
+  return 'done';
+}
 
 /**
  * Server mode's sold set, keyed by asset id. A record moves paying -> paid ->
  * burned and is persisted after every step (via `persist`), so a retried
  * request returns the stored result instead of paying again.
  *
- * record: { seller, transferTx, pearls, status, payTx?, payLastValid?, burnTx?, at }
+ * A fish the market holds but will not pay for (the daily cap was reached after the player had
+ * transferred it, market-sale.mjs) goes refunding -> refunded instead: the market transfers it
+ * back to the seller. 'refunding' is written before anything is sent, the refund's signature
+ * before it is sent (one in flight per fish), 'refunded' once it landed (or the market no longer
+ * holds the fish). A refunded fish may be handed over again with a new transfer: the new sale's
+ * record then replaces it (recordOver).
+ *
+ * record: { seller, transferTx, pearls, status, payTx?, payLastValid?, burnTx?, at, refundedTransfers? }
+ * refund: { seller, transferTx, status, reason, retryAt, at, refundTx?, refundLastValid?, refundedTransfers? }
  */
 export class SoldLedger {
   constructor(records = {}, persist = () => {}) {
@@ -234,25 +284,23 @@ export class SoldLedger {
   }
 
   /**
-   * What to do with a sell request:
-   *   new      - never seen: verify, then pay
+   * What to do with a sell request (its seller and transfer):
+   *   new      - never seen, or sent back and now handed over again: verify, then pay
    *   resume   - paying but not confirmed paid (re-check the pay tx)
    *   burn     - paid, burn still pending
    *   done     - paid and burned: return the stored result
    *   conflict - sold by a different wallet
+   *   refund   - being sent back: finish that first, never pay
+   *   refunded - this transfer's fish was sent back: answer so, never pay
    */
-  plan(assetId, seller) {
-    const r = this.get(assetId);
-    if (!r) return 'new';
-    if (r.seller !== seller) return 'conflict';
-    if (r.status === 'paying') return 'resume';
-    if (r.status === 'paid') return 'burn';
-    return 'done';
+  plan(assetId, seller, transferTx) {
+    return planFor(this.get(assetId), seller, transferTx);
   }
 
   begin(assetId, { seller, transferTx, pearls }, now = Date.now()) {
-    if (this.records[assetId]) throw new Error(`Asset ${assetId} already in the ledger`);
-    this.records[assetId] = { seller, transferTx, pearls, status: 'paying', at: now };
+    const rec = recordOver(this.records[assetId], { seller, transferTx, pearls, status: 'paying', at: now });
+    if (!rec) throw new Error(`Asset ${assetId} already in the ledger`);
+    this.records[assetId] = rec;
     this.persist();
   }
 
@@ -282,10 +330,61 @@ export class SoldLedger {
   }
 
   /**
+   * Record that the market sends this fish back, before anything is sent. `reason` and `retryAt`
+   * (a time, ms) are the daily cap's answer, kept for the retries. false when the fish has a record
+   * that must stay (recordOver), as RedisLedger's SET NX answers when another instance was first.
+   */
+  refunding(assetId, { seller, transferTx, reason, retryAt }, now = Date.now()) {
+    const rec = recordOver(this.records[assetId], { seller, transferTx, status: 'refunding', reason, retryAt, at: now });
+    if (!rec) return false;
+    this.records[assetId] = rec;
+    this.persist();
+    return true;
+  }
+
+  /**
+   * Persist the refund's signature BEFORE sending it. Another refund already on record, or none due
+   * for `transferTx` (the fish was handed over again meanwhile: another round): 409, send nothing.
+   */
+  refundPending(assetId, transferTx, refundTx, refundLastValid) {
+    const r = this.records[assetId];
+    if (r?.status !== 'refunding' || r.transferTx !== transferTx) throw new HttpError(409, 'This fish is not being returned');
+    if (r.refundTx !== undefined && r.refundTx !== refundTx) throw new HttpError(409, 'This fish is already on its way back, retry in a minute');
+    Object.assign(r, { refundTx, refundLastValid });
+    this.persist();
+  }
+
+  /** The refund `refundTx` is known not to have landed: forget it (only that one), so the fish can be sent again. */
+  refundDropped(assetId, refundTx) {
+    const r = this.records[assetId];
+    if (r?.status !== 'refunding' || (refundTx !== undefined && r.refundTx !== refundTx)) return;
+    delete r.refundTx;
+    delete r.refundLastValid;
+    this.persist();
+  }
+
+  /**
+   * The fish sent back for `transferTx` is back with the seller (or anyway no longer the market's):
+   * that round is finished, off the work list. true when it is (now, or already); false when the
+   * record is another round's (the fish was handed over again meanwhile), which stays as it is.
+   */
+  refunded(assetId, transferTx) {
+    const r = this.records[assetId];
+    if (r?.transferTx !== transferTx) return false;
+    if (r.status === 'refunded') return true;
+    if (r.status !== 'refunding') return false;
+    r.status = 'refunded';
+    delete r.refundLastValid;
+    this.persist();
+    return true;
+  }
+
+  /**
    * The sweep's work list: every sale not finished yet, oldest first, at most `limit`: fish paid
-   * for but not burned (and not set aside by skipBurn), and sales still `paying` (the sweep resumes
-   * those once they are old enough that no request can still be working on them, see market-burn.mjs).
-   * The ledger is the source of truth, so no chain scan is needed.
+   * for but not burned (and not set aside by skipBurn), sales still `paying` and fish still being
+   * sent back (`refunding`). The sweep resumes those last two once they are old enough that no
+   * request can still be working on them, see market-burn.mjs. The ledger is the source of truth,
+   * so no chain scan is needed.
    */
   unburned(limit = Infinity) {
     return Object.entries(this.records)

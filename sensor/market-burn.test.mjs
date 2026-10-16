@@ -168,7 +168,7 @@ test('the sweep burns paid-unburned fish from the ledger and settles the rest wi
   });
   const chain = fakeChain([asset('Paid'), asset('PlayerOwned', { owner: PLAYER }), asset('OtherColl', { coll: OTHER_COLL }), asset('Paying'), asset('Done')]);
   const { sweep, burned, logs } = sweepOver(ledger, chain);
-  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, settled: 1, skipped: 2, failed: 0, waiting: 1, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, refunded: 0, settled: 1, skipped: 2, failed: 0, waiting: 1, left: 0, rateLimited: false });
   assert.deepEqual(burned, ['Paid']);
   assert.deepEqual(chain.fetched, ['Paid', 'Gone', 'PlayerOwned', 'OtherColl'], 'one fetch per candidate, nothing else');
   assert.equal(ledger.get('Gone').status, 'burned');
@@ -180,10 +180,10 @@ test('the sweep burns paid-unburned fish from the ledger and settles the rest wi
   const raced = ledgerWith({ Raced: 'paid' });
   const racedChain = fakeChain([], (id) => raced.burned(id, 'desk-sig'));
   const r2 = sweepOver(raced, racedChain);
-  assert.deepEqual(await r2.sweep.run(), { burned: 0, resumed: 0, settled: 1, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
+  assert.deepEqual(await r2.sweep.run(), { burned: 0, resumed: 0, refunded: 0, settled: 1, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   assert.equal(raced.get('Raced').burnTx, 'desk-sig');
   // Nothing to do next time: no fetch at all.
-  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
   assert.equal(chain.fetched.length, 4);
 });
 
@@ -208,10 +208,10 @@ test('a sweep burns at most maxPerRun, keeps going past a failed burn, spaces it
       ledger.burned(id, 'sig');
     },
   });
-  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   assert.equal(chain.fetched.length, 0);
   coll = COLL;
-  assert.deepEqual(await sweep.run(), { burned: 2, resumed: 0, settled: 0, skipped: 0, failed: 1, waiting: 0, left: 1, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 2, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 1, waiting: 0, left: 1, rateLimited: false });
   assert.deepEqual(burned, ['F0', 'F2']);
   assert.deepEqual(sleeps, [7, 7], 'a gap between fish, none before the first');
   // The failed one stays on the list (oldest first) and is tried again with the rest.
@@ -229,7 +229,7 @@ test('a 429 mid-sweep stops it early without throwing; the rest wait for the nex
     },
   );
   const { sweep, burned, logs } = sweepOver(ledger, chain);
-  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 3, rateLimited: true });
+  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 3, rateLimited: true });
   assert.deepEqual(burned, ['A']);
   assert.deepEqual(chain.fetched, ['A', 'B'], 'nothing after the 429');
   assert.ok(logs.some((l) => l.includes('rate limited') && l.includes('left for the next sweep')));
@@ -243,9 +243,9 @@ test('a 429 mid-sweep stops it early without throwing; the rest wait for the nex
       ledger.burned(id, 'sig');
     },
   });
-  assert.deepEqual(await r2.sweep.run(), { burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 2, rateLimited: true });
+  assert.deepEqual(await r2.sweep.run(), { burned: 1, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 2, rateLimited: true });
   const r3 = sweepOver(ledger, chain);
-  assert.deepEqual(await r3.sweep.run(), { burned: 2, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
+  assert.deepEqual(await r3.sweep.run(), { burned: 2, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false });
   assert.deepEqual(ledger.unburned(), []);
 });
 
@@ -274,7 +274,7 @@ test('stalled paying sales: resumed through resumeSale once old enough, young on
       return ledger.result(id);
     },
   });
-  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 1, settled: 0, skipped: 0, failed: 1, waiting: 1, left: 1, rateLimited: false });
+  assert.deepEqual(await sweep.run(), { burned: 1, resumed: 1, refunded: 0, settled: 0, skipped: 0, failed: 1, waiting: 1, left: 1, rateLimited: false });
   assert.deepEqual(calls, [['S1', PLAYER, 'tx-S1'], ['S2', PLAYER, 'tx-S2']], "the record's own seller and transfer; S3 over the cap");
   assert.deepEqual(burned, ['Paid']);
   assert.deepEqual(chain.fetched, ['Paid'], 'a paying sale costs no getAccount here');
@@ -293,7 +293,7 @@ test('stalled paying sales: resumed through resumeSale once old enough, young on
       ledger.burned(id, 'sig');
     },
   });
-  assert.deepEqual(await r2.sweep.run(), { burned: 0, resumed: 2, settled: 0, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
+  assert.deepEqual(await r2.sweep.run(), { burned: 0, resumed: 2, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 1, left: 0, rateLimited: false });
   assert.deepEqual(calls, ['S2', 'S3']);
 });
 
@@ -311,14 +311,14 @@ test('a 429 while resuming a stalled sale stops the sweep; without resumeSale pa
       throw new Error('429 Too Many Requests');
     },
   });
-  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 3, rateLimited: true });
+  assert.deepEqual(await sweep.run(), { burned: 0, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 3, rateLimited: true });
   assert.deepEqual(calls, ['S1'], 'nothing after the 429');
   assert.deepEqual(burned, []);
   assert.deepEqual(chain.fetched, []);
   assert.ok(logs.some((l) => l.includes('rate limited')));
   // No resume path (a test double, an older wiring): the paid fish is burned, the paying ones wait.
   const plain = sweepOver(ledger, chain);
-  assert.deepEqual(await plain.sweep.run(), { burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 2, left: 0, rateLimited: false });
+  assert.deepEqual(await plain.sweep.run(), { burned: 1, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 2, left: 0, rateLimited: false });
   assert.equal(ledger.get('S1').status, 'paying');
 });
 
@@ -369,9 +369,9 @@ test('a sweep with a deadline starts no burn after it, and says so in its result
       ledger.burned(id, `sig-${id}`);
     },
   });
-  assert.deepEqual(await sweep.run({ deadlineMs: 240_000 }), { burned: 3, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 1, rateLimited: false, outOfTime: true });
+  assert.deepEqual(await sweep.run({ deadlineMs: 240_000 }), { burned: 3, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 1, rateLimited: false, outOfTime: true });
   assert.deepEqual(burned, ['A', 'B', 'C'], 'the third began before the deadline and was finished');
   assert.ok(logs.some((l) => l.includes('out of time, stopped early') && l.includes('more left for the next sweep')));
-  assert.deepEqual(await sweep.run({ deadlineMs: 240_000 }), { burned: 1, resumed: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, outOfTime: false });
+  assert.deepEqual(await sweep.run({ deadlineMs: 240_000 }), { burned: 1, resumed: 0, refunded: 0, settled: 0, skipped: 0, failed: 0, waiting: 0, left: 0, rateLimited: false, outOfTime: false });
   assert.deepEqual(ledger.unburned(), []);
 });
