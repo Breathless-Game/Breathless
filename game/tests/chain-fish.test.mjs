@@ -216,6 +216,31 @@ test('merge adopts a local fish still waiting to mint instead of duplicating it,
   assert.equal(market.nftStep(old, { type: 'sell' }), old);
 });
 
+test('an adopted fish takes its look from the NFT: gene or none, and the colours the URI carries', () => {
+  const fish = caught(0x4a4a4a4a);
+  assert.match(fish.gene, /^[0-9a-f]{16}$/);
+  const colours = (f) => ({ hue: f.hue, sat: f.sat, light: f.light, accentHue: f.accentHue, stripes: f.stripes });
+  const adopt = (minted) => {
+    const pending = { ...market.bankEntry(fish), nft: 'failed' };
+    assert.equal(pending.gene, fish.gene);
+    C.mergeChainFish([pending], [rebuild(mintedAsset(minted))]);
+    assert.equal(pending.nft, 'minted');
+    return pending;
+  };
+  // Minted with the full look: the twin keeps its gene and colours.
+  const full = adopt(fish);
+  assert.equal(full.gene, fish.gene);
+  assert.deepEqual(colours(full), colours(fish));
+  // Minted by an older build with a six-field URI: the NFT draws no gene, so neither does the vault.
+  const six = adopt(gen.withoutGene(fish));
+  assert.equal('gene' in six, false);
+  assert.deepEqual(colours(six), colours(fish));
+  // Minted before random colours: the legacy colours, and no gene.
+  const old = adopt(gen.withLegacyLook(fish));
+  assert.equal('gene' in old, false);
+  assert.deepEqual(colours(old), colours(gen.legacyLook(fish.seed, fish.rarity)));
+});
+
 test('merge never brings back a fish this page just sold', () => {
   const a = rebuild(mintedAsset(caught(0x55555555)));
   const bank = [];

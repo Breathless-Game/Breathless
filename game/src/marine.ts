@@ -20,7 +20,8 @@ const ARCHITECTURES: Record<string, Architecture> = {
  * the card's pose and every view keep them) and its colours move around the species' own.
  */
 export function buildMarineCreature(spec: FishSpec, glow: number, gene?: MarineGene): FishMesh | undefined {
-  const kind = ARCHITECTURES[spec.species];
+  // Own keys only: a species named after an Object.prototype key (constructor, toString) is no architecture.
+  const kind = Object.hasOwn(ARCHITECTURES, spec.species) ? ARCHITECTURES[spec.species] : undefined;
   if (!kind) return undefined;
   const flippers: { pivot: THREE.Group; side: number; front: boolean }[] = [];
   const group = new THREE.Group();

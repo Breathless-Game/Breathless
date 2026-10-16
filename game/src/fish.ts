@@ -529,7 +529,7 @@ export function rarityLabel(r: Rarity): string {
 }
 /** Species name in the player's language. */
 export function speciesName(species: string): string {
-  return lang() === 'zh' ? SPECIES_ZH[species] ?? species : species;
+  return lang() === 'zh' && Object.hasOwn(SPECIES_ZH, species) ? SPECIES_ZH[species] : species;
 }
 /** A generated fish's name in the player's language; 中文 is epithet + species with no space. */
 export function fishDisplayName(fish: { name: string; species: string }): string {

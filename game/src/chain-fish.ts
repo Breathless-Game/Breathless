@@ -277,6 +277,15 @@ export function mergeChainFish(
       if (c.metaFixed) twin.metaFixed = true;
       if (c.nameFixed) twin.nameFixed = true;
       if (c.trusted) twin.trusted = true;
+      // Its look is the NFT's, from the chain URI (an older build may have minted it with fewer
+      // look fields): its colours, and its gene or none (no key), so the vault draws what the card shows.
+      twin.hue = c.hue;
+      twin.sat = c.sat;
+      twin.light = c.light;
+      twin.accentHue = c.accentHue;
+      twin.stripes = c.stripes;
+      if (c.gene !== undefined) twin.gene = c.gene;
+      else delete twin.gene;
       adopted.push(twin);
       continue;
     }
