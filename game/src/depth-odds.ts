@@ -16,16 +16,21 @@ type Weights = [common: number, uncommon: number, rare: number, epic: number, le
 //
 // Gates: rare below 18 m, epic below 40 m, legendary below 80 m,
 // mythic below 80 m. Higher tiers require progressively deeper dives.
+//
+// Legendary and mythic were halved at every depth (generator v3), the
+// freed weight going to rare and epic. Fish rolled with the earlier tables are still
+// on-chain: sensor/fish-gen.mjs keeps every version (v1, v2, v3) so the market can verify them.
+// Change this table again only together with a new generator version there.
 export const RARITY_BY_DEPTH: [depthM: number, weights: Weights][] = [
   [0, [92, 8, 0, 0, 0, 0]],
   [18, [75, 25, 0, 0, 0, 0]],
   [40, [55, 32, 13, 0, 0, 0]],
   [50, [48, 33, 16, 3, 0, 0]],
   [80, [35, 34, 24, 7, 0, 0]],
-  [120, [9, 27, 30, 17, 12, 5]],
-  [150, [3, 24, 33, 20.6, 14, 5.4]],
-  [200, [0, 17, 34, 26, 17, 6]],
-  [350, [0, 6, 30, 31, 23, 10]],
+  [120, [9, 27, 35, 20.5, 6, 2.5]],
+  [150, [3, 24, 38.5, 24.8, 7, 2.7]],
+  [200, [0, 17, 40, 31.5, 8.5, 3]],
+  [350, [0, 6, 38, 39.5, 11.5, 5]],
 ];
 
 function weightsAt(depthM: number): readonly number[] {

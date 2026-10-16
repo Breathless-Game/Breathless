@@ -86,7 +86,21 @@ test('weights interpolate linearly between anchors', () => {
   for (let k = 0; k < ORDER.length; k++) {
     assert.ok(Math.abs(w65[k] - (w50[k] + w80[k]) / 2) < EPS, `${ORDER[k]} at 65 m`);
   }
-  assert.ok(Math.abs(weights(275)[5] - 8) < EPS);
+  assert.ok(Math.abs(weights(275)[5] - 4) < EPS);
+});
+
+test('legendary and mythic are half the v2 odds (PR #102 table) at every deep anchor; rare and epic took the rest', () => {
+  // [depth, v2 legendary, v2 mythic]; sensor/fish-gen.mjs keeps the full v2 table for old fish.
+  const v2 = [[120, 12, 5], [150, 14, 5.4], [200, 17, 6], [350, 23, 10]];
+  const v2RareEpic = { 120: [30, 17], 150: [33, 20.6], 200: [34, 26], 350: [30, 31] };
+  for (const [depth, leg, myth] of v2) {
+    const w = weights(depth);
+    assert.ok(Math.abs(w[4] - leg / 2) < EPS, `legendary at ${depth} m`);
+    assert.ok(Math.abs(w[5] - myth / 2) < EPS, `mythic at ${depth} m`);
+    const [rare, epic] = v2RareEpic[depth];
+    assert.ok(w[2] > rare && w[3] > epic, `rare and epic grew at ${depth} m`);
+    assert.ok(Math.abs(w[2] - rare + (w[3] - epic) - (leg + myth) / 2) < EPS, `freed weight at ${depth} m`);
+  }
 });
 
 test('zone names follow the depth bands, with no bottom below the Trench', () => {
