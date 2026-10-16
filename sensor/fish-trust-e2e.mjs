@@ -8,7 +8,8 @@
 //      retry of the same fish adopts the minted asset instead of minting it twice;
 //   3. a fish minted before the collection existed migrates into it and then sells; a forged old fish
 //      and one created after the collection are refused;
-//   4. the per-wallet mint limit and daily PEARL cap answer 429 with their codes.
+//   4. the per-game-wallet mint limit and daily PEARL cap answer 429 with their codes; a co-sign
+//      request the game wallet did not sign answers 401.
 //
 //   solana-test-validator --clone-upgradeable-program CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d \
 //     --clone-upgradeable-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s --url https://api.devnet.solana.com
@@ -189,10 +190,12 @@ let before = await pearlNow();
 let out = await sell([forgedAsset]);
 check(!out[0].result && /collection/i.test(out[0].error ?? ''), `selling it fails: "${out[0].error}"`);
 check((await pearlNow()) === before, 'no PEARL paid');
-const mintReq = (f, serial) => cosign.mintRequest({ id: f.id, rarity: f.rarity, species: f.species, depth: f.depthM, value: f.value }, { owner, payer: session.publicKey.toString(), asset: generateSigner(u).publicKey.toString(), ...nftOf(f, serial) });
-q = await post('cosign-mint', mintReq({ ...forged, id: forgedSeed.toString(16).padStart(8, '0') }));
+// Signed by the session key (the game wallet whose quota it spends), as the game sends it.
+const unsignedMintReq = (f, serial) => cosign.mintRequest({ id: f.id, rarity: f.rarity, species: f.species, depth: f.depthM, value: f.value }, { owner, payer: session.publicKey.toString(), asset: generateSigner(u).publicKey.toString(), ...nftOf(f, serial) });
+const mintReq = (f, serial) => cosign.signMintRequest(session, unsignedMintReq(f, serial));
+q = await post('cosign-mint', await mintReq({ ...forged, id: forgedSeed.toString(16).padStart(8, '0') }));
 check(q.status === 422 && q.body.code === 'invalid-fish', `co-sign of the forged mythic refused: ${q.status} "${q.body.error}"`);
-q = await post('cosign-mint', mintReq({ ...cosignedFish, value: cosignedFish.value * 10 }));
+q = await post('cosign-mint', await mintReq({ ...cosignedFish, value: cosignedFish.value * 10 }));
 check(q.status === 422, `co-sign of a real seed with its value inflated x10 refused: ${q.status} "${q.body.error}"`);
 
 step('2. a co-signed mint lands in the collection and sells');
@@ -233,10 +236,12 @@ const capped = await cosign.cosignMint(u, {
   ...nftOf(cappedFish),
 });
 check(!!capped.signature, `a second fish minted (${capped.asset})`);
-q = await post('cosign-mint', mintReq(catchAt(0x0a11ce00, 5)));
+q = await post('cosign-mint', await mintReq(catchAt(0x0a11ce00, 5)));
 check(q.status === 200, `the third mint this hour is co-signed (${q.status})`);
-q = await post('cosign-mint', mintReq(catchAt(0x0a11ce01, 5)));
+q = await post('cosign-mint', await mintReq(catchAt(0x0a11ce01, 5)));
 check(q.status === 429 && q.body.code === 'mint-limit' && q.body.retryAfterMs > 0, `the fourth is refused: ${q.status} ${q.body.code} "${q.body.error}"`);
+q = await post('cosign-mint', unsignedMintReq(catchAt(0x0a11ce02, 5)));
+check(q.status === 401 && q.body.code === 'bad-request-signature', `an unsigned request is refused before the quota: ${q.status} ${q.body.code} "${q.body.error}"`);
 q = await post('quote-batch', { seller: owner, assetIds: [capped.asset] });
 check(!q.body.quotes?.[0]?.pearls, `over the daily cap (${DAILY}), quote-batch refuses: ${JSON.stringify(q.body).slice(0, 200)}`);
 before = await pearlNow();

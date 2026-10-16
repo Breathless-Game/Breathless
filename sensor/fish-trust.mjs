@@ -8,12 +8,16 @@
 //       rarity and catch value must be reachable from some spawn depth near the recorded depth,
 //       under one of the generator versions that has minted fish (fish-gen.mjs GENERATORS).
 //   parseCosignMint(body, ...)     what a co-signed mint may write on-chain.
+//   assertSignedByPayer(...)       a co-sign request is signed by its game wallet (payer), whose
+//       quota it spends (cosignMintMessage / cosignMigrateMessage: the signed strings).
 //   checkMigratable(asset, ...)    whether a fish minted before the collection may move into it.
 //   payout cap helpers             DAILY_PEARL_CAP per wallet per 24 h, from the sale ledger.
 //
 // Boat / Dive Kit gear NFTs (and anything else the session key mints) are never in the fish
 // collection, so assertTrustedFish refuses them: the market can never buy one.
 
+import { verify as ed25519Verify } from 'node:crypto';
+import { publicKeyBytes } from '@metaplex-foundation/umi';
 import { CURRENT_GENERATOR, GENERATORS, RARITY_ORDER, Rng, fishLook, seedOfId, withLegacyLook } from './fish-gen.mjs';
 import {
   DAILY_PEARL_CAP,
@@ -114,12 +118,15 @@ function valueRange(rarity, a, b) {
  *     formula (rarity value x zone multiplier) or its plain rarity value, and a missing value.
  * Nothing on-chain records the generator version, so every version is tried (newest first). That
  * is no wider for a forger than one version: any seed is theirs to pick and every version reaches
- * the same top value (a mythic below 235 m); the per-wallet limits bound what a forger can take.
+ * the same top value (a mythic below 235 m); the limits bound what a forger can take: the mint
+ * quota per game wallet and the daily PEARL cap per seller.
  * The same holds for player_state's lifetime banked value (record_catch rides in every co-signed
  * mint): a client picks its seeds, so it can mint only top-value fish and inflate lifetime_value,
- * opening maps and ships sooner. An accepted hackathon limitation, bounded by the per-wallet mint
- * quota (MINTS_PER_HOUR, 240 an hour; one count across all instances on a serverless host, KvQuota);
- * there is no backfill and no separate value cap.
+ * opening maps and ships sooner. An accepted hackathon limitation, bounded by the mint quota per
+ * game wallet (MINTS_PER_HOUR, 240 an hour per session key that signed the request,
+ * assertSignedByPayer; one count across all instances on a serverless host, KvQuota). That bounds
+ * a forger per session key, which is no weaker than the old per-owner count: owner wallets were
+ * already free to create, like session keys. There is no backfill and no separate value cap.
  * Returns { ok: true, fish, version } (fish = that version's fish for this seed and rarity) or { ok: false, reason }.
  */
 export function checkFish(facts, { legacy = false, tolerance = SPAWN_TOLERANCE_M } = {}) {
@@ -233,7 +240,8 @@ const SERIAL_NAME = /^(.*) #(\d{4,9})$/;
 const MAX_URI = 300;
 
 /**
- * POST /api/market/cosign-mint: { owner, payer, asset, name, uri, fish: { id, rarity, species, depth, value } }.
+ * POST /api/market/cosign-mint: { owner, payer, asset, name, uri, fish: { id, rarity, species, depth, value }, signature }.
+ * (`signature`: checked by assertSignedByPayer, not here.)
  * Validates everything that will go on-chain against the generator and returns what to mint:
  * { owner, payer, asset, name, uri, fishId, attributeList }. Throws HttpError(400 | 422).
  */
@@ -266,7 +274,13 @@ export function parseCosignMint(body, { market, tolerance } = {}) {
   if (typeof uri !== 'string' || uri.length > MAX_URI || !/^https?:\/\/[^/\s?#]+\/api\/nft\/meta\//.test(uri)) {
     throw new HttpError(400, 'uri must be the fish metadata URL (/api/nft/meta/...)');
   }
-  const meta = parseMetaPath(new URL(uri).pathname);
+  let path;
+  try {
+    path = new URL(uri).pathname;
+  } catch {
+    throw new HttpError(400, 'uri must be the fish metadata URL (/api/nft/meta/...)');
+  }
+  const meta = parseMetaPath(path);
   const expected = {
     id: facts.id,
     rarity: facts.rarity,
@@ -290,6 +304,8 @@ export function parseCosignMint(body, { market, tolerance } = {}) {
     asset,
     name,
     uri,
+    /** The fish as checked (depth and value as numbers): what cosignMintMessage signs. */
+    fish: facts,
     fishId: facts.id,
     /** The catch value checkFish accepted: what record_catch adds to the owner's lifetime value. */
     value: facts.value,
@@ -305,7 +321,7 @@ export function parseCosignMint(body, { market, tolerance } = {}) {
 
 // ---- Legacy migration ----------------------------------------------------------------------------
 
-/** POST /api/market/cosign-migrate: { owner, payer, assetIds: [...] }. Throws HttpError(400). */
+/** POST /api/market/cosign-migrate: { owner, payer, assetIds: [...], signature }. Throws HttpError(400). */
 export function parseCosignMigrate(body, { market } = {}) {
   if (!body || typeof body !== 'object') throw new HttpError(400, 'Expected a JSON object');
   const { owner, payer, assetIds } = body;
@@ -318,6 +334,95 @@ export function parseCosignMigrate(body, { market } = {}) {
   if (new Set(assetIds).size !== assetIds.length) throw new HttpError(400, 'The same fish is listed twice');
   if (assetIds.includes(payer) || assetIds.includes(market)) throw new HttpError(400, 'assetIds must be fish');
   return { owner, payer, assetIds: [...assetIds] };
+}
+
+// ---- Who asks: the game wallet's signature on a co-sign request -----------------------------------
+
+/**
+ * Both co-sign routes charge a quota per game wallet (the session key named as `payer`: the fee
+ * payer and a required signer of every transaction they return). So the request itself must be
+ * signed by that key, or anyone could name someone else's key and spend their quota without
+ * signing anything. The signed bytes are the UTF-8 of one of these strings: a domain tag naming
+ * the route (a mint signature never verifies as a migration), then the request's fields joined by
+ * `|`, each with `\` and `|` escaped by a `\`, so no field can spill into the next. The game builds
+ * the same strings (game/src/fish-cosign.ts); sensor/test/fixtures/cosign-request-vector.json pins
+ * both sides to one vector.
+ *
+ * No timestamp or nonce: a replayed request spends nothing new in the common case. A replayed mint
+ * whose answer was issued finds its own asset in the registry (claim -> 'same': no quota taken); a
+ * replayed migration finds its fish registered to the same assets (fresh = 0). Not airtight: the
+ * game signs a fresh asset on each retry of a fish, so an older captured request for a fish that
+ * never landed reads as 'free' again once the newer one's blockhash expired (one take per fish per
+ * blockhash lifetime, ~1-2 minutes), and so does a request that failed between its quota take and
+ * its registry write. Either way only the signer's own quota is spent, and only by whoever holds
+ * its signed requests (sent over TLS to us). (Replays of one's own request for someone else's fish
+ * id are another matter: see claim in fish-collection.mjs.)
+ */
+const esc = (v) => String(v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
+
+export const COSIGN_MINT_DOMAIN = 'breathless-cosign-mint';
+export const COSIGN_MIGRATE_DOMAIN = 'breathless-cosign-migrate';
+
+/** The string the payer signs for POST /cosign-mint (fields as parseCosignMint returns them). */
+export function cosignMintMessage({ owner, payer, asset, name, uri, fish }) {
+  return [COSIGN_MINT_DOMAIN, owner, payer, asset, name, uri, fish.id, fish.rarity, fish.species, fish.depth, fish.value].map(esc).join('|');
+}
+
+/** The string the payer signs for POST /cosign-migrate: the asset ids in request order, comma-separated (base58: no `,` or `|`). */
+export function cosignMigrateMessage({ owner, payer, assetIds }) {
+  return [COSIGN_MIGRATE_DOMAIN, owner, payer, assetIds.join(',')].map(esc).join('|');
+}
+
+/**
+ * Encodings of the ed25519 points of small order (the identity, the point of order 2, the four of
+ * order 4 and 8), and the non-canonical ones (y = p, p + 1), compared without the sign bit: the
+ * blocklist libsodium uses (crypto_sign_verify_detached refuses these public keys). With one as the
+ * public key, a signature like R = identity, S = 0 verifies for every message (node:crypto accepts
+ * it), so a "signature" by such a key proves nothing. Refused before verifying.
+ */
+const SMALL_ORDER = [
+  '0000000000000000000000000000000000000000000000000000000000000000',
+  '0100000000000000000000000000000000000000000000000000000000000000',
+  '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+  'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+  'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+  'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+  'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+].map((h) => Buffer.from(h, 'hex'));
+
+/** Is this 32-byte public key a small-order point (in any encoding, either sign)? */
+export function isSmallOrderKey(bytes) {
+  return SMALL_ORDER.some((b) => b.every((x, i) => (i === 31 ? (bytes[31] & 0x7f) === x : bytes[i] === x)));
+}
+
+/** A 64-byte ed25519 signature in standard base64. */
+const SIGNATURE_B64 = /^[A-Za-z0-9+/]{86}==$/;
+
+/** The HttpError code of a missing or bad request signature (a game bundle from before it, or a forger). */
+export const BAD_SIGNATURE_CODE = 'bad-request-signature';
+
+/**
+ * Throws HttpError(401, code bad-request-signature) unless `signature` (base64) is `payer`'s
+ * ed25519 signature of `message`. Pure (node:crypto). A game tab from before this check sends no
+ * signature: the message says to refresh, and the game keeps the fish queued (game/src/market.ts
+ * mintPauseOf, migrateBank: they match "not signed by its game wallet", keep that phrase).
+ */
+export function assertSignedByPayer(message, payer, signature) {
+  let ok = false;
+  if (typeof signature === 'string' && SIGNATURE_B64.test(signature)) {
+    try {
+      const key = publicKeyBytes(payer);
+      const x = Buffer.from(key).toString('base64url');
+      ok = !isSmallOrderKey(key) && ed25519Verify(null, Buffer.from(message, 'utf8'), { key: { kty: 'OKP', crv: 'Ed25519', x }, format: 'jwk' }, Buffer.from(signature, 'base64'));
+    } catch {
+      ok = false; // payer is not 32 bytes, or not a curve point
+    }
+  }
+  if (ok) return;
+  const why = signature === undefined ? 'no signature' : 'the signature does not match';
+  throw new HttpError(401, `This market request is not signed by its game wallet (${why}): refresh the page to load the latest game. Your fish stay queued.`, {
+    code: BAD_SIGNATURE_CODE,
+  });
 }
 
 /**
@@ -382,7 +487,7 @@ export function parseRegistry(text) {
   return out;
 }
 
-// ---- Per-owner quota ---------------------------------------------------------------------------
+// ---- Quotas (per game wallet: the co-sign routes key them by the signed payer) ----------------------
 
 /** Fixed window per key that can say when it opens again. */
 export class Quota {
@@ -463,7 +568,7 @@ const clock = (ms) => new Date(ms).toISOString().slice(11, 16);
 export function mintLimitError(what, limit, retryAfterMs, now = Date.now()) {
   return new HttpError(
     429,
-    `${what} limit reached: at most ${limit} per wallet per hour. Your fish stay queued; this continues at ${clock(now + retryAfterMs)} UTC.`,
+    `${what} limit reached: at most ${limit} per game wallet per hour. Your fish stay queued; this continues at ${clock(now + retryAfterMs)} UTC.`,
     { code: 'mint-limit', retryAfterMs },
   );
 }

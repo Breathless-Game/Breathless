@@ -64,8 +64,13 @@ export type NftEvent =
   | { type: 'failed'; error: string; now: number }
   /** The wallet ran out of SOL mid-mint: not the fish's fault, so no attempt is counted. */
   | { type: 'no-funds' }
-  /** The market's per-wallet mint limit: back to the queue, no attempt counted, the queue waits. */
+  /** The market's per-game-wallet mint limit: back to the queue, no attempt counted, the queue waits. */
   | { type: 'paused' }
+  /**
+   * This one fish can't be minted yet (409 'mint-in-flight': an earlier co-sign of it may still
+   * land): back to the queue until `until`, no attempt counted; the queue moves on to other fish.
+   */
+  | { type: 'deferred'; until: number }
   /** The player's Retry on a failed mint. */
   | { type: 'retry' }
   /** The player's Mint on a legacy fish. */
@@ -92,6 +97,8 @@ export function nftStep(f: BankedFish, e: NftEvent): BankedFish {
     case 'no-funds':
     case 'paused':
       return s === 'minting' ? { ...f, nft: 'pending' } : f;
+    case 'deferred':
+      return s === 'minting' ? { ...f, nft: 'pending', retryAt: e.until } : f;
     case 'retry':
       return s === 'failed' ? { ...f, nft: 'pending', mintTries: undefined, mintError: undefined, retryAt: undefined } : f;
     case 'enqueue':
@@ -106,9 +113,19 @@ export function nftStep(f: BankedFish, e: NftEvent): BankedFish {
 }
 
 /**
+ * The market's answer to a co-sign request it would not take because it was not signed by our game
+ * wallet (sensor/fish-trust.mjs assertSignedByPayer, 401 'bad-request-signature'), read from the
+ * error text alone: a game tab loaded before the market began checking signatures counted that 401
+ * as a failed attempt and saved only the message (BankedFish.mintError).
+ */
+export const isUnsignedRequestError = (message: unknown) => typeof message === 'string' && /not signed by its game wallet/.test(message);
+
+/**
  * Bring a saved bank up to date. Fish with no NFT status were banked by the old rule, which paid
  * their Pearls on surfacing: they become legacy (paid out, not sellable, not auto-minted). A mint cut
- * off by a reload goes back to the queue. Nothing is dropped except entries that are not fish at all.
+ * off by a reload goes back to the queue. A mint that failed only because an older game tab sent
+ * the market an unsigned request (isUnsignedRequestError) goes back to the queue too, its attempts
+ * reset: this game signs, so it will go through. Nothing is dropped except entries that are not fish at all.
  */
 export function migrateBank(saved: unknown): { bank: BankedFish[]; changed: boolean } {
   if (!Array.isArray(saved)) return { bank: [], changed: false };
@@ -124,6 +141,12 @@ export function migrateBank(saved: unknown): { bank: BankedFish[]; changed: bool
     if (f.nft !== undefined && !(['pending', 'minting', 'minted', 'failed'] as unknown[]).includes(f.nft)) f.nft = 'pending';
     if (f.assetId) f.nft = 'minted';
     else if (f.nft === 'minting' || f.nft === 'minted') f.nft = 'pending';
+    else if (f.nft === 'failed' && !f.mintTx && isUnsignedRequestError(f.mintError)) {
+      f.nft = 'pending';
+      delete f.mintTries;
+      delete f.mintError;
+      delete f.retryAt;
+    }
     if (f.legacy && f.sellQueued) delete f.sellQueued;
     if (f.serial !== undefined && !validSerial(f.serial)) delete f.serial;
     if (
@@ -139,8 +162,10 @@ export function migrateBank(saved: unknown): { bank: BankedFish[]; changed: bool
   return { bank, changed };
 }
 
+/** Queued and due: a pending fish (unless deferred until later) or a failed one whose retry time came. */
 function mintable(f: BankedFish, now: number): boolean {
-  return f.nft === 'pending' || (f.nft === 'failed' && f.retryAt !== undefined && f.retryAt <= now);
+  if (f.nft === 'pending') return f.retryAt === undefined || f.retryAt <= now;
+  return f.nft === 'failed' && f.retryAt !== undefined && f.retryAt <= now;
 }
 
 /** The next fish to mint, one at a time: fish the player wants to sell first, then oldest first. */
@@ -151,7 +176,7 @@ export function nextToMint(bank: readonly BankedFish[], now: number): BankedFish
 /** When the queue should wake for the earliest automatic retry, if any. */
 export function nextRetryAt(bank: readonly BankedFish[]): number | null {
   let at: number | null = null;
-  for (const f of bank) if (f.nft === 'failed' && f.retryAt !== undefined && (at === null || f.retryAt < at)) at = f.retryAt;
+  for (const f of bank) if ((f.nft === 'failed' || f.nft === 'pending') && f.retryAt !== undefined && (at === null || f.retryAt < at)) at = f.retryAt;
   return at;
 }
 
@@ -270,7 +295,7 @@ export function isRateLimitError(e: unknown): boolean {
   return /\b429\b|too many requests/i.test(e instanceof Error ? e.message : String(e));
 }
 
-/** 'limit': the market's per-wallet mint limit. 'busy': the market, its RPC or ours is down or throttled for now. */
+/** 'limit': the market's per-game-wallet mint limit. 'busy': the market, its RPC or ours is down or throttled for now. */
 export type MintPauseKind = 'limit' | 'busy';
 
 const MINT_LIMIT_PAUSE_MS = 60_000;
@@ -286,11 +311,14 @@ const MAX_MINT_PAUSE_MS = 60 * 60_000;
  *   chain.ts throws 503 'collection-pending' while the market's fish collection is still being
  *   created). A 500 (or any other 5xx) is the market's catch-all and may be a bug tied to this one
  *   fish: it counts as a failed attempt, or that fish (always picked first) would block the queue forever;
- * - 409 'mint-in-flight': an earlier mint of this fish may still land (sensor/fish-collection.mjs);
+ * - 401 'bad-request-signature': the market did not accept the session key's request signature
+ *   (sensor/fish-trust.mjs assertSignedByPayer). A version mismatch, not the fish's fault: it stays
+ *   queued; reloading the page loads a game that signs the way this market checks;
  * - the Solana RPC throttling our own send/confirm (429 / "Too Many Requests" in the message; only
  *   for errors with no HTTP status, so a market 4xx is never misread as throttling).
  * Returns how long to wait (the server's retryAfterMs when it gives one, capped at an hour), else null.
- * Everything else (4xx validation errors, 500, failed transactions, 409 'already-burned') is not a pause.
+ * Everything else (4xx validation errors, 500, failed transactions, 409 'already-burned', and
+ * 409 'mint-in-flight', which is about one fish: mintDeferralOf) is not a pause.
  */
 export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | null {
   const x = e as { status?: unknown; code?: unknown; retryAfterMs?: unknown } | null;
@@ -305,7 +333,7 @@ export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | n
     status === 502 ||
     status === 503 ||
     status === 504 ||
-    (status === 409 && x?.code === 'mint-in-flight') ||
+    (status === 401 && x?.code === 'bad-request-signature') ||
     (status === null && e != null && isRateLimitError(e))
   ) {
     kind = 'busy';
@@ -316,6 +344,22 @@ export function mintPauseOf(e: unknown): { ms: number; kind: MintPauseKind } | n
   const after = x?.retryAfterMs;
   const ms = typeof after === 'number' && after > 0 ? Math.min(after, MAX_MINT_PAUSE_MS) : fallback;
   return { ms, kind };
+}
+
+const MINT_IN_FLIGHT_MS = 30_000;
+
+/**
+ * 409 'mint-in-flight' (sensor/fish-collection.mjs claim): an earlier co-sign of this fish may still
+ * land. That is about this one fish, so only it waits (nftStep 'deferred': the server's retryAfterMs,
+ * capped at an hour) and the queue mints the others meanwhile. A whole-queue pause would let one
+ * stuck fish, always picked first, hold up every other fish for as long as it stays stuck (someone
+ * who knew its id could keep it "in flight" by replaying an old co-sign of it). Returns ms, or null.
+ */
+export function mintDeferralOf(e: unknown): number | null {
+  const x = e as { status?: unknown; code?: unknown; retryAfterMs?: unknown } | null;
+  if (x?.status !== 409 || x.code !== 'mint-in-flight') return null;
+  const after = x.retryAfterMs;
+  return typeof after === 'number' && after > 0 ? Math.min(after, MAX_MINT_PAUSE_MS) : MINT_IN_FLIGHT_MS;
 }
 
 /**
