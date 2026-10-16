@@ -51,13 +51,19 @@ export class Rng {
 
 // ---- Generator versions -----------------------------------------------------------------------
 //
-// The game changed its generator once since fish went on-chain, and fish from both are out there:
+// The game changed its generator twice since fish went on-chain, and fish from all three are out
+// there:
 //   v1  17 species, the first rarity-by-depth table (plus, on the very first day, LEGACY_ZONES).
 //       Every fish minted before PR #102 ("35-species marine roster ... depth balance", a84c64d).
-//   v2  35 species and the rebalanced table (game/src/fish.ts and depth-odds.ts today).
+//   v2  35 species and the table PR #102 rebalanced. Every fish minted after #102 and before v3.
+//   v3  The same 35-species roster; legendary and mythic halved at every depth, the freed weight
+//       moved to rare and epic (the "rarer legendary and mythic" PR). game/src/fish.ts and
+//       depth-odds.ts today.
 // Nothing on-chain says which one rolled a fish (the attributes are rarity / species / depth /
-// value / seed), so the market accepts a fish that either generator grows from its seed
-// (fish-trust.mjs checkFish). Each version is frozen: a later change to the game adds a v3 here.
+// value / seed), so the market accepts a fish that any generator grows from its seed
+// (fish-trust.mjs checkFish). Each version is frozen: a later change to the game adds a v4 here.
+// The gates are the same in v2 and v3 (legendary and mythic below 80 m) and v1's are shallower,
+// so the top value a forger can claim is unchanged: every version reaches a mythic below 235 m.
 
 /** depth-odds.ts RARITY_BY_DEPTH before PR #102 (v1). */
 const RARITY_BY_DEPTH_V1 = Object.freeze([
@@ -71,7 +77,7 @@ const RARITY_BY_DEPTH_V1 = Object.freeze([
   [350, [22, 26, 25, 16.5, 7.5, 3]],
 ]);
 
-/** depth-odds.ts RARITY_BY_DEPTH today (v2). */
+/** depth-odds.ts RARITY_BY_DEPTH from PR #102 until v3 (v2). */
 const RARITY_BY_DEPTH_V2 = Object.freeze([
   [0, [92, 8, 0, 0, 0, 0]],
   [18, [75, 25, 0, 0, 0, 0]],
@@ -82,6 +88,19 @@ const RARITY_BY_DEPTH_V2 = Object.freeze([
   [150, [3, 24, 33, 20.6, 14, 5.4]],
   [200, [0, 17, 34, 26, 17, 6]],
   [350, [0, 6, 30, 31, 23, 10]],
+]);
+
+/** depth-odds.ts RARITY_BY_DEPTH today (v3): v2 with legendary and mythic halved at every depth. */
+const RARITY_BY_DEPTH_V3 = Object.freeze([
+  [0, [92, 8, 0, 0, 0, 0]],
+  [18, [75, 25, 0, 0, 0, 0]],
+  [40, [55, 32, 13, 0, 0, 0]],
+  [50, [48, 33, 16, 3, 0, 0]],
+  [80, [35, 34, 24, 7, 0, 0]],
+  [120, [9, 27, 35, 20.5, 6, 2.5]],
+  [150, [3, 24, 38.5, 24.8, 7, 2.7]],
+  [200, [0, 17, 40, 31.5, 8.5, 3]],
+  [350, [0, 6, 38, 39.5, 11.5, 5]],
 ]);
 
 /** weightsAt() in depth-odds.ts: linear between anchors, constant past the last, clamped at 0 m. */
@@ -142,8 +161,8 @@ const SPECIES_V1 = freezeRoster({
 });
 
 /**
- * v2 SPECIES_BY_RARITY (fish.ts today), in its order, including the three species fish.ts appends
- * after the literal (a copy of another species' profile under a new name, so its archetype).
+ * v2 and v3 SPECIES_BY_RARITY (fish.ts today; v3 kept the roster), in its order, including the
+ * three species fish.ts appends after the literal (a copy of another species' profile under a new name, so its archetype).
  */
 const SPECIES_V2 = freezeRoster({
   common: [['Sand Minnow', 'slim'], ['Grey Perch', 'perch'], ['Mud Goby', 'slim']],
@@ -250,12 +269,13 @@ function generator(version, species, rarityByDepth, legacyZones = []) {
 
 export const GENERATOR_V1 = generator(1, SPECIES_V1, RARITY_BY_DEPTH_V1, LEGACY_ZONES);
 export const GENERATOR_V2 = generator(2, SPECIES_V2, RARITY_BY_DEPTH_V2);
+export const GENERATOR_V3 = generator(3, SPECIES_V2, RARITY_BY_DEPTH_V3);
 
 /** The generator the game runs today. */
-export const CURRENT_GENERATOR = GENERATOR_V2;
+export const CURRENT_GENERATOR = GENERATOR_V3;
 
 /** Every generator a fish on-chain may have come from, newest first. */
-export const GENERATORS = Object.freeze([GENERATOR_V2, GENERATOR_V1]);
+export const GENERATORS = Object.freeze([GENERATOR_V3, GENERATOR_V2, GENERATOR_V1]);
 
 // The current generator under the names the rest of the market (and the parity tests) use.
 export const RARITY_BY_DEPTH = CURRENT_GENERATOR.RARITY_BY_DEPTH;

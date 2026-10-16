@@ -63,7 +63,7 @@ test('a collection fish comes back as the game rolled it, with its recorded dept
   const fish = caught(0x00c0ffee);
   const e = classifyOwned(fishAsset(fish), { collection: COLLECTION });
   assert.equal(e.trust, 'collection');
-  assert.equal(e.version, 2);
+  assert.equal(e.version, 3);
   assert.equal(e.assetId, `Asset${n}`);
   assert.deepEqual(e.spec, fish); // every field: look, size, name, depth, value
   assert.deepEqual(e.facts, { id: fish.id, rarity: fish.rarity, species: fish.species, depth: fish.depthM, value: fish.value });

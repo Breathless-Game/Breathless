@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GENERATORS, GENERATOR_V1, GENERATOR_V2, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
+import { GENERATORS, GENERATOR_V1, GENERATOR_V2, GENERATOR_V3, LEGACY_ZONES, Rng, fishLook, fishOf, rarityAt, rollFish } from './fish-gen.mjs';
 import { publicKey } from '@metaplex-foundation/umi';
 import { createFishCollection } from './fish-collection.mjs';
 import {
@@ -102,10 +102,11 @@ const facts = (f) => ({ id: f.id, rarity: f.rarity, species: f.species, depth: f
 // ---- The generator check ----------------------------------------------------------------------
 
 test('honest catches pass the strict check, wherever in its roaming range the fish was caught, from either generator', () => {
-  // v2: today's game. v1: fish caught before the 35-species roster (banked, still to be minted,
-  // or already minted): they keep their old species and odds and must stay mintable and sellable.
-  assert.deepEqual(GENERATORS, [GENERATOR_V2, GENERATOR_V1]);
-  for (const gen of [GENERATOR_V2, GENERATOR_V1]) {
+  // v3: today's game. v2: fish caught before legendary and mythic were halved. v1: fish caught
+  // before the 35-species roster (banked, still to be minted, or already minted): they keep their
+  // old species and odds and must stay mintable and sellable.
+  assert.deepEqual(GENERATORS, [GENERATOR_V3, GENERATOR_V2, GENERATOR_V1]);
+  for (const gen of [GENERATOR_V3, GENERATOR_V2, GENERATOR_V1]) {
     let n = 0;
     for (let s = 1; n < 3000; s += 7919) {
       const spawn = (s % 997) / 1.7; // 0 .. ~586 m, fractional like the game's spawn depths
@@ -132,7 +133,7 @@ test('for one seed the rolled rarity never drops with depth, in every generator 
       }
     }
   }
-  assert.equal(rarityAt, GENERATOR_V2.rarityAt, 'the default is today\'s generator');
+  assert.equal(rarityAt, GENERATOR_V3.rarityAt, 'the default is today\'s generator');
 });
 
 test('generator versions are not mixed: a species from one with odds only the other gives is refused', () => {
@@ -211,7 +212,8 @@ test('fish from the generator before the 35-species roster stay sellable at thei
   assert.ok(!checkFish({ ...facts(oldFish), species: GENERATOR_V2.fishOf(oldFish.seed, 'legendary').species }).ok, 'today\'s generator alone would refuse it');
   assert.equal(assertTrustedFish(asset({ attributeList: attributesOf(oldFish) }), { collection: COLLECTION }), oldFish.value);
   assert.equal(checkFish(facts(oldFish)).version, 1);
-  assert.equal(checkFish(facts(goodFish)).version, 2);
+  // A rare at 70 m: v2 and v3 have the same roster and the same odds above 80 m, so the newest wins.
+  assert.equal(checkFish(facts(goodFish)).version, 3);
 });
 
 test('assertTrustedFish refuses forged fish: no collection, the wrong collection, tampered attributes, plugins', () => {

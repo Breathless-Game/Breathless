@@ -500,22 +500,23 @@ Pictures and per-species numbers for all 17 fish species and the fishing rod are
 
 Fjord has a finite seabed around 138 m; Heaven Lake's is around 269 m. Only the Open Ocean continues forever below its 300 m shelf. Each map's last named zone extends to 2 m above its nominal floor: Kelp Forest is 18–136 m and Deep Basin is 38–267 m. Shelf fish load in fixed depth slices around the diver, with a wider retention range to avoid visible pop-in while descending or returning. This keeps encounters stocked without generating fish for the entire water column. Drop rates and catch value still depend on absolute depth: 30 m in Fjord's Kelp Forest rolls exactly like 30 m on the Open Ocean's reef.
 
-Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Epic only appears below 15 m, legendary below 30 m, mythic below 50 m. The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
+Rarity is a smooth function of the depth a fish is caught at: percent weights at these anchor depths, linearly interpolated in between, and constant below 350 m. Rare only appears below 18 m, epic below 40 m, legendary and mythic below 80 m. Legendary and mythic were halved at every depth (generator v3), the freed weight going to rare and epic; fish rolled with the earlier tables stay valid (`sensor/fish-gen.mjs` keeps every generator version). The spacing comes from the measured swim speed of ~7.75 m/s: a 30 s hold reaches ~115 m and back with no fishing, 60 s ~230 m.
 
 | Depth | common | uncommon | rare | epic | legendary | mythic |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 m | 90 | 9.5 | 0.5 | – | – | – |
-| 15 m | 80 | 17 | 3 | – | – | – |
-| 30 m | 68 | 24 | 7 | 1 | – | – |
-| 50 m | 58 | 28 | 10.5 | 3 | 0.5 | – |
-| 80 m | 48 | 31 | 14 | 5.5 | 1.3 | 0.2 |
-| 120 m | 39 | 32 | 18 | 8 | 2.4 | 0.6 |
-| 200 m | 30 | 30 | 22 | 12 | 4.5 | 1.5 |
-| 350 m+ | 22 | 26 | 25 | 16.5 | 7.5 | 3 |
+| 0 m | 92 | 8 | – | – | – | – |
+| 18 m | 75 | 25 | – | – | – | – |
+| 40 m | 55 | 32 | 13 | – | – | – |
+| 50 m | 48 | 33 | 16 | 3 | – | – |
+| 80 m | 35 | 34 | 24 | 7 | – | – |
+| 120 m | 9 | 27 | 35 | 20.5 | 6 | 2.5 |
+| 150 m | 3 | 24 | 38.5 | 24.8 | 7 | 2.7 |
+| 200 m | – | 17 | 40 | 31.5 | 8.5 | 3 |
+| 350 m+ | – | 6 | 38 | 39.5 | 11.5 | 5 |
 
 At night every fish rolls twice and keeps the rarer result (`rollFor` in `main.ts`).
 
-Per net of 6 fish (the Lv1 net; day, expected count = 6 × P(legendary or mythic)): at 80 m that is 6 × 1.5% = 0.09, about 1 legendary-or-better per ~11 nets; at 120 m 6 × 3.0% = 0.18, about 1 per ~5.6 nets.
+Per net of 6 fish (the Lv1 net; day, expected count = 6 × P(legendary or mythic)): none at 80 m (both start below it); at 120 m 6 × 8.5% = 0.51, about 1 legendary-or-better per ~2 nets; at 200 m 6 × 11.5% = 0.69, about 1 per ~1.4 nets.
 
 ### Catch value (`rewardMultiplierAt` in `fish.ts`)
 
